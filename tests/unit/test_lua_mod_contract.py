@@ -22,6 +22,7 @@ from typing import Final
 import pytest
 
 from pz_agent_core.ipc import layout
+from pz_agent_core.ipc.journal import HEADER_TYPE, ROTATED_TYPE
 from pz_agent_core.protocol.enums import (
     ActionName,
     ActionOwnership,
@@ -182,8 +183,6 @@ def test_ipc_never_offers_the_sidecar_lock(ipc_lua: str) -> None:
 
 
 def test_journal_record_types_match(ipc_lua: str) -> None:
-    from pz_agent_core.ipc.journal import HEADER_TYPE, ROTATED_TYPE
-
     assert _scalar(ipc_lua, "Ipc.HEADER_TYPE") == HEADER_TYPE
     assert _scalar(ipc_lua, "Ipc.ROTATED_TYPE") == ROTATED_TYPE
 

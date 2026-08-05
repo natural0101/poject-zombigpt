@@ -198,6 +198,14 @@ do
   ok(handle:requestPanicStop("PANIC_STOP") ~= nil, "the mod can raise a request of its own")
   ok(handle:panicStopRequested(), "which reads back as a request")
   equal(Json.decode(fs:lines(path("panic_stop"))[1]).source, "mod", "and records where it came from")
+
+  handle:clearPanicStop()
+  ok(handle:requestPanicStop() ~= nil, "a request with no reason given still writes")
+  equal(
+    Json.decode(fs:lines(path("panic_stop"))[1]).reason,
+    "PANIC_STOP",
+    "and defaults to the panic stop reason code"
+  )
 end
 
 Harness.group("reads are bounded")
