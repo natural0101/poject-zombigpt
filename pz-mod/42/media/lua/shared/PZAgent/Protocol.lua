@@ -97,6 +97,14 @@ Protocol.MUTATING_MODES = toSet({
   Protocol.MODE.EXPERIMENTAL_INPUT,
 })
 
+--- Which side of the exchange wrote a document. Mirrors
+--- pz_agent_core.session.heartbeat.Peer, which refuses a heartbeat file whose
+--- `peer` does not match the file it was found in.
+Protocol.PEER = {
+  GAME = "game",
+  SIDECAR = "sidecar",
+}
+
 Protocol.DANGER = {
   NONE = "none",
   LOW = "low",

@@ -275,6 +275,27 @@ end
 -- journals
 -- ---------------------------------------------------------------------------
 
+--- Size of the journal already on disk, or nil when it could not be measured.
+---
+--- The engine exposes no stat call, so the file is measured by reading it. That
+--- is the only way the size cap can hold across a mod reload: a handle that
+--- started counting at zero would let the file grow by another whole cap every
+--- time the mod is reloaded, which is unbounded growth on a long-running game.
+--- The read is itself bounded -- `readLines` refuses past MAX_DOCUMENT_BYTES --
+--- and a file too large to measure is over any cap this module would set, which
+--- is why nil is treated as "rotate now" by the caller.
+local function measureJournal(self, role)
+  local lines, err = self:readLines(role, math.huge)
+  if lines == nil then
+    return nil, err
+  end
+  local bytes = 0
+  for index = 1, #lines do
+    bytes = bytes + #lines[index] + 1
+  end
+  return bytes
+end
+
 local function journalState(self, role)
   local state = self.journals[role]
   if state ~= nil then
@@ -290,6 +311,9 @@ local function journalState(self, role)
     if type(header) == "table" and header.type == Ipc.HEADER_TYPE and type(header.serial) == "number" then
       state.serial = header.serial
       state.started = true
+      -- Adopt the size too, not just the serial: the cap is on the file, not on
+      -- what this handle happens to have appended to it.
+      state.bytes = measureJournal(self, role) or self.maxJournalBytes
     end
   end
   return state

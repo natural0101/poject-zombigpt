@@ -154,7 +154,11 @@ do
   equal(plan.mod_owned, Ownership.MAX_ENTRIES, "only scanned entries can be ours")
   equal(plan.foreign, 5, "the unscanned tail counts as foreign")
   ok(not plan.whole_queue, "an unscanned tail forbids a wholesale clear")
-  equal(#plan.clear + #plan.keep, Ownership.MAX_ENTRIES + 5, "every entry is accounted for")
+  -- The diagnostic lists are bounded by the scan, not by how long the queue
+  -- happens to be: a 10,000-entry queue must not produce a 10,000-entry plan.
+  -- `total` is what accounts for the unscanned tail.
+  equal(#plan.clear + #plan.keep, Ownership.MAX_ENTRIES, "the plan lists stay bounded by the scan")
+  equal(plan.total, Ownership.MAX_ENTRIES + 5, "but the count still accounts for every entry")
 end
 
 Harness.group("no input makes a player entry clearable")

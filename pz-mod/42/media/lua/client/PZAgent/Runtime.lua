@@ -58,6 +58,13 @@ function Runtime.readSidecarHeartbeat(agent, nowMs)
   if type(document) ~= "table" then
     return false
   end
+  if document.peer ~= PZAgent.Protocol.PEER.SIDECAR then
+    -- A document in the sidecar's file that does not claim to be the sidecar's
+    -- is not evidence a sidecar is running -- a copy of the mod's own heartbeat
+    -- would otherwise supervise the mod. The sidecar refuses the mirror image of
+    -- this, so the two sides agree about what liveness means.
+    return false
+  end
   local marker = string.format(
     "%s/%s/%s",
     tostring(document.seq),
@@ -87,8 +94,12 @@ function Runtime.refresh(agent, nowMs)
   agent.queue_capability = capability
   if entries == nil then
     -- The queue could not be read. It is reported as ambiguous rather than
-    -- empty, so nothing treats it as safe to clear or safe to add to.
+    -- empty, so nothing treats it as safe to clear or safe to add to. The
+    -- entries from the last successful read are dropped with it: a description
+    -- of the queue as it was some ticks ago is not an observation of the queue
+    -- as it is.
     agent.queue_description = PZAgent.Ownership.describe(nil, nil)
+    agent.queue_entries = nil
     agent.queue_readable = false
     if detail ~= nil then
       agent.safety.last_error = detail
@@ -123,7 +134,10 @@ function Runtime.stop(agent, nowMs, reason)
     player = Runtime.currentPlayer()
     agent.player = player
   end
-  local entries = PZAgent.Safety.describeQueue(player)
+  local entries, _, queueDetail = PZAgent.Safety.describeQueue(player)
+  if entries == nil and queueDetail ~= nil then
+    agent.safety.last_error = queueDetail
+  end
   local sessionId = agent.session:id()
   local outcome = PZAgent.Safety.panicStop(agent.safety, entries, sessionId, nowMs, reason)
   local applied = PZAgent.Safety.applyStop(player, outcome.plan, sessionId)
@@ -134,6 +148,11 @@ function Runtime.stop(agent, nowMs, reason)
     session_id = sessionId,
     reason_code = outcome.reason_code,
     was_armed = outcome.was_armed,
+    -- A stop over a queue nobody could read reports zero of everything; without
+    -- this flag that record is indistinguishable from a stop over an empty
+    -- queue, and the sidecar would draw the opposite conclusion.
+    queue_readable = outcome.plan.readable == true,
+    queue_truncated = outcome.plan.truncated == true,
     mod_owned = outcome.plan.mod_owned,
     foreign = outcome.plan.foreign,
     cleared = applied.cleared,
@@ -141,7 +160,13 @@ function Runtime.stop(agent, nowMs, reason)
     capability = applied.capability,
     detail = applied.detail,
   })
-  agent.ipc:clearPanicStop()
+  local cleared, clearError = agent.ipc:clearPanicStop()
+  if cleared == nil then
+    -- The stop happened; the request file outliving it only means the next tick
+    -- stops again. Still reported: a request that cannot be cleared is a disk
+    -- problem the player needs to see on the HUD.
+    agent.safety.last_error = clearError
+  end
   outcome.applied = applied
   return outcome
 end
@@ -165,7 +190,17 @@ end
 --- One agent tick: refresh state, honour a pending stop request, heartbeat.
 function Runtime.tick(agent, nowMs)
   Runtime.refresh(agent, nowMs)
-  if agent.ipc:panicStopRequested() then
+  local requested, requestError = agent.ipc:panicStopRequested()
+  if requestError ~= nil then
+    -- The stop channel is unreadable. That is not "no stop was requested": the
+    -- mod cannot tell, so it says so and gives up whatever authority it still
+    -- has, which is the only harmless direction to be wrong in. Gated on being
+    -- armed so a permanently unreadable file disarms once instead of writing a
+    -- stop event on every tick forever.
+    agent.safety.last_error = requestError
+    requested = agent.safety.armed == true
+  end
+  if requested then
     Runtime.stop(agent, nowMs, PZAgent.Protocol.REASON.PANIC_STOP)
   end
   local document, err = PZAgent.Heartbeat.tick(agent, nowMs)
