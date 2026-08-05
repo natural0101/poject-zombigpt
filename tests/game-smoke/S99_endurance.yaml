@@ -1,0 +1,39 @@
+id: S99
+title: Thirty-minute endurance run
+requires_live_session: true
+priority: blocking
+duration_minutes: 30
+
+purpose: >
+  Assert ABSENCES. Every failure mode here looks fine for the first five
+  minutes: a ring buffer that grows by one per rotation, a retry loop with an
+  off-by-one budget, a memory store with a retention policy that never runs.
+
+preconditions:
+  - safe test world, low zombie population
+  - session armed in AUTONOMOUS
+  - food and water available so maintenance behaviours actually trigger
+  - backup taken
+
+steps:
+  - {id: 1, manual: false, action: run unattended for at least 30 minutes of real time}
+  - {id: 2, manual: false, action: sample memory, log size and action counts every minute}
+
+evidence:
+  - {field: log directory size, assertion: bounded — rotation observed, oldest files deleted}
+  - {field: sidecar RSS, assertion: flat after warm-up, no monotonic climb}
+  - {field: observation store, assertion: entry count never exceeds the configured cap}
+  - {field: command journal, assertion: no idempotency key reaches a terminal result twice}
+  - field: action results
+    assertion: every succeeded result carries postcondition evidence
+    why: the one assertion that must hold across every single action of the run
+  - {field: control, assertion: manual takeover still works at minute 30}
+  - {field: save, assertion: loads cleanly afterwards; compare against the backup manifest}
+  - {field: repeated needs, assertion: anti-loop rate limiting engaged rather than thrashing}
+
+fails_if:
+  - any unbounded growth
+  - any command replayed
+  - any success without evidence
+  - the agent stops yielding to the player
+  - the save fails to load afterwards

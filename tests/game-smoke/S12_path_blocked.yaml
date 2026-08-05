@@ -1,0 +1,26 @@
+id: S12
+title: Blocked path fails honestly with bounded replanning
+requires_live_session: true
+priority: high
+
+preconditions: [session armed, a destination behind a closed door or a wall]
+
+steps:
+  - {id: 1, manual: false, action: request movement to the unreachable square}
+  - {id: 2, manual: false, action: observe replanning attempts and the terminal result}
+
+evidence:
+  - {field: action_result.reason_code, assertion: PATH_NOT_FOUND or PATH_STUCK}
+  - field: replanning attempts
+    assertion: bounded and counted in the result
+    why: unbounded replanning is how an agent spends an in-game day against a wall
+  - {field: character position, assertion: safe; not stuck against geometry, not on another floor}
+  - {field: elapsed, assertion: fails via NO_PROGRESS before the full timeout when it is clearly stuck}
+
+variants:
+  - id: S12b
+    change: path crosses a closed window that would require climbing
+    assertion: not traversed automatically
+  - {id: S12c, change: path would require a drop from height, assertion: refused}
+
+fails_if: [unbounded retries, the character is left in an unsafe position, a fall is taken automatically]

@@ -1,0 +1,30 @@
+id: S03
+title: Movement verified by arrival, not by dispatch
+requires_live_session: true
+priority: blocking
+
+purpose: >
+  Prove movement success is measured at the destination. "We sent a walk
+  command" is the easiest false success in the whole system to write.
+
+preconditions: [session armed, clear indoor floor, character idle]
+
+steps:
+  - {id: 1, manual: false, action: agent issues movement.move_to three tiles away on the same floor}
+  - {id: 2, manual: false, action: observe position across the action}
+
+evidence:
+  - {field: action_result.evidence.start_position, assertion: present}
+  - {field: action_result.evidence.end_position, assertion: within the target radius of the requested square}
+  - {field: action_result.evidence.end_position.z, assertion: equals the requested floor}
+  - field: action_result.reason_code
+    assertion: POSTCONDITION_MET only when the radius check passes
+    why: arriving on the wrong floor at the right x/y is a different tile entirely
+
+variants:
+  - {id: S03b, change: target square is not loaded, assertion: TARGET_NOT_LOADED, no movement attempted}
+  - {id: S03c, change: target beyond the single-command range cap, assertion: TARGET_OUT_OF_RANGE}
+
+fails_if:
+  - success reported while the character is still walking
+  - floor is ignored in the radius check

@@ -1,0 +1,162 @@
+"""The two-slot snapshot exchange, especially when a write is caught mid-flight."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from pz_agent_core.ipc.atomic import DocumentError
+from pz_agent_core.ipc.layout import SnapshotSlot
+from pz_agent_core.ipc.snapshot import SnapshotMiss, SnapshotRead, SnapshotReader, SnapshotWriter
+from tests.fixtures.ipc_builders import FakeClock, make_layout
+
+
+def _document(seq: int) -> dict[str, object]:
+    return {"seq": seq, "full": True, "player": {"present": True}}
+
+
+def test_publish_alternates_slots_and_moves_the_pointer(tmp_path: Path) -> None:
+    layout = make_layout(tmp_path)
+    writer = SnapshotWriter(layout, clock=FakeClock())
+
+    assert writer.publish(_document(1)) is SnapshotSlot.A
+    assert writer.publish(_document(2)) is SnapshotSlot.B
+    assert writer.publish(_document(3)) is SnapshotSlot.A
+    assert writer.current_slot is SnapshotSlot.A
+    # Both slots exist: the reader always has a previous snapshot to fall back on.
+    assert layout.snapshot_slot(SnapshotSlot.A).exists()
+    assert layout.snapshot_slot(SnapshotSlot.B).exists()
+
+
+def test_reader_follows_the_pointer(tmp_path: Path) -> None:
+    layout = make_layout(tmp_path)
+    SnapshotWriter(layout).publish(_document(1))
+    SnapshotWriter(layout).publish(_document(2))
+
+    read = SnapshotReader(layout).read()
+    assert isinstance(read, SnapshotRead)
+    assert read.seq == 2
+    assert read.slot is SnapshotSlot.B
+    assert read.from_pointer
+    assert not read.recovered
+
+
+def test_a_torn_slot_falls_back_to_the_other_one(tmp_path: Path) -> None:
+    layout = make_layout(tmp_path)
+    writer = SnapshotWriter(layout)
+    writer.publish(_document(1))
+    writer.publish(_document(2))
+
+    # Simulate the mod dying halfway through rewriting the pointed-at slot.
+    pointed = layout.snapshot_slot(SnapshotSlot.B)
+    pointed.write_text('{"seq": 3, "full": tr', encoding="utf-8")
+
+    read = SnapshotReader(layout).read()
+    assert isinstance(read, SnapshotRead)
+    assert read.slot is SnapshotSlot.A
+    assert read.seq == 1
+    assert read.recovered
+    assert any("slot b" in diagnostic for diagnostic in read.diagnostics)
+
+
+def test_a_torn_pointer_probes_both_slots_and_takes_the_newer(tmp_path: Path) -> None:
+    layout = make_layout(tmp_path)
+    writer = SnapshotWriter(layout)
+    writer.publish(_document(1))
+    writer.publish(_document(2))
+    layout.snapshot_pointer.write_text("{", encoding="utf-8")
+
+    read = SnapshotReader(layout).read()
+    assert isinstance(read, SnapshotRead)
+    assert read.seq == 2
+    assert not read.from_pointer
+    assert any("pointer" in diagnostic for diagnostic in read.diagnostics)
+
+
+def test_a_pointer_naming_an_unknown_slot_is_not_trusted(tmp_path: Path) -> None:
+    layout = make_layout(tmp_path)
+    SnapshotWriter(layout).publish(_document(1))
+    layout.snapshot_pointer.write_text('{"slot": "c", "seq": 9}', encoding="utf-8")
+
+    read = SnapshotReader(layout).read()
+    assert isinstance(read, SnapshotRead)
+    assert read.slot is SnapshotSlot.A
+    assert read.seq == 1
+
+
+def test_no_snapshot_at_all_is_a_miss_not_an_exception(tmp_path: Path) -> None:
+    layout = make_layout(tmp_path)
+    read = SnapshotReader(layout).read()
+    assert isinstance(read, SnapshotMiss)
+    assert read.diagnostics
+
+
+def test_both_slots_unreadable_is_a_miss(tmp_path: Path) -> None:
+    layout = make_layout(tmp_path)
+    SnapshotWriter(layout).publish(_document(1))
+    layout.snapshot_slot(SnapshotSlot.A).write_text("garbage", encoding="utf-8")
+
+    read = SnapshotReader(layout).read()
+    assert isinstance(read, SnapshotMiss)
+    assert len(read.diagnostics) >= 1
+
+
+def test_a_slot_without_a_sequence_is_refused(tmp_path: Path) -> None:
+    layout = make_layout(tmp_path)
+    SnapshotWriter(layout).publish(_document(1))
+    layout.snapshot_slot(SnapshotSlot.A).write_text('{"full": true}', encoding="utf-8")
+
+    read = SnapshotReader(layout).read()
+    assert isinstance(read, SnapshotMiss)
+    assert any("seq" in diagnostic for diagnostic in read.diagnostics)
+
+
+def test_the_reader_refuses_to_rewind(tmp_path: Path) -> None:
+    """A fallback must not hand the world model an older state than it has."""
+    layout = make_layout(tmp_path)
+    writer = SnapshotWriter(layout)
+    writer.publish(_document(1))
+    writer.publish(_document(5))
+    reader = SnapshotReader(layout)
+    assert isinstance(reader.read(), SnapshotRead)
+    assert reader.last_seq == 5
+
+    layout.snapshot_slot(SnapshotSlot.B).write_text('{"seq": 6, "trunc', encoding="utf-8")
+    read = reader.read()
+    assert isinstance(read, SnapshotMiss)
+    assert any("older than the accepted 5" in diagnostic for diagnostic in read.diagnostics)
+
+
+def test_re_reading_the_same_snapshot_is_allowed(tmp_path: Path) -> None:
+    layout = make_layout(tmp_path)
+    SnapshotWriter(layout).publish(_document(4))
+    reader = SnapshotReader(layout)
+    assert isinstance(reader.read(), SnapshotRead)
+    again = reader.read()
+    assert isinstance(again, SnapshotRead)
+    assert again.seq == 4
+
+
+def test_a_document_without_a_sequence_cannot_be_published(tmp_path: Path) -> None:
+    layout = make_layout(tmp_path)
+    with pytest.raises(DocumentError, match="seq"):
+        SnapshotWriter(layout).publish({"full": True})
+
+
+def test_the_pointer_is_written_after_the_slot(tmp_path: Path) -> None:
+    """Ordering is the commit rule: a pointer must never outrun its payload."""
+    layout = make_layout(tmp_path)
+    writer = SnapshotWriter(layout)
+    writer.publish(_document(1))
+    slot_mtime = layout.snapshot_slot(SnapshotSlot.A).stat().st_mtime_ns
+    pointer_mtime = layout.snapshot_pointer.stat().st_mtime_ns
+    assert pointer_mtime >= slot_mtime
+
+
+def test_a_restarted_writer_does_not_overwrite_the_live_slot(tmp_path: Path) -> None:
+    layout = make_layout(tmp_path)
+    SnapshotWriter(layout).publish(_document(1))
+    # A fresh writer object, as after a sidecar restart: it must read the
+    # pointer rather than assume it starts at slot a again.
+    assert SnapshotWriter(layout).next_slot() is SnapshotSlot.B

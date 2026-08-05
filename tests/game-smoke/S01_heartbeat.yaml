@@ -1,0 +1,43 @@
+id: S01
+title: Heartbeat
+requires_live_session: true
+priority: blocking          # nothing else can be trusted until this passes
+
+purpose: >
+  Confirm the bridge is loaded, talking, and reporting the build actually
+  installed — not a build the sidecar assumed.
+
+preconditions:
+  - mod installed and enabled in the mod list
+  - a save is loaded and a character exists
+  - sidecar not yet started
+
+steps:
+  - id: 1
+    action: start sidecar
+    manual: false
+  - id: 2
+    action: wait for heartbeat.game.json to appear and update twice
+    manual: false
+  - id: 3
+    action: read the reported build, mod version and protocol version
+    manual: false
+
+evidence:
+  - field: heartbeat.game.build
+    assertion: equals the build reported by `pz-agent doctor`
+    why: >
+      A mismatch means the sidecar is guessing. Every capability probe is
+      stamped with a build, so a wrong build silently invalidates all of them.
+  - field: heartbeat.game.protocol_version
+    assertion: major matches PROTOCOL_VERSION in version.py
+  - field: heartbeat.game.armed
+    assertion: false
+    why: the mod must load in the OFF state, always
+  - field: heartbeat.game.seq
+    assertion: strictly increasing across two reads
+
+fails_if:
+  - heartbeat never appears (mod not loaded, or no save open — doctor tells them apart)
+  - armed is true on load
+  - seq does not advance

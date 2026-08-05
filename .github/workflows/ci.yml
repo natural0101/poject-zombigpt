@@ -80,11 +80,13 @@ jobs:
           sudo luarocks install luacheck
 
       - name: Luacheck
-        run: luacheck pz-mod --config .luacheckrc
+        run: luacheck pz-mod tests/lua --config .luacheckrc
 
       - name: Lua unit tests
         run: |
-          for test in tests/lua/*.lua; do
+          # The harness exits non-zero when any assertion fails, and the shell
+          # runs with -e, so a failing suite fails the job.
+          for test in tests/lua/test_*.lua; do
             echo "--- $test"
             lua5.4 "$test"
           done

@@ -1,0 +1,32 @@
+id: S04
+title: Transfer from a worn container to the main inventory
+requires_live_session: true
+priority: blocking
+
+purpose: >
+  Verify the transfer is a real timed action and that success is confirmed by
+  the item's location, not by the absence of an error.
+
+preconditions: [session armed, backpack worn containing a small item]
+
+steps:
+  - {id: 1, manual: false, action: agent enumerates nested containers and picks the item}
+  - {id: 2, manual: false, action: agent issues inventory.transfer to player-main}
+  - {id: 3, manual: false, action: re-observe the inventory}
+
+evidence:
+  - field: action_result.evidence.destination_container_ref
+    assertion: contains the item ref after the action
+    why: the only definition of a completed transfer that cannot be faked
+  - {field: item count, assertion: unchanged in total — the item moved, it was not duplicated}
+  - {field: action_result.evidence.origin_container_ref, assertion: recorded, so the item can be put back}
+
+variants:
+  - {id: S04b, change: destination is over capacity, assertion: CONTAINER_FULL before anything is queued}
+  - {id: S04c, change: item is equipped, assertion: refused or explicitly unequipped first, never silently moved}
+  - {id: S04d, change: item ref from a previous session, assertion: INVALID_REF}
+
+fails_if:
+  - the item appears in both containers
+  - success is reported while the transfer animation is still running
+  - a direct container mutation is used instead of the timed action

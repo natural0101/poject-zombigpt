@@ -1,0 +1,41 @@
+id: S09
+title: Manual takeover cancels automation immediately
+requires_live_session: true
+priority: blocking
+
+purpose: >
+  The player always wins. This is the guarantee people actually care about, and
+  it must hold on the first input, not after the current step finishes.
+
+preconditions:
+  - session armed in ASSISTED or AUTONOMOUS
+  - agent executing a multi-second action (movement over several tiles is easiest to observe)
+
+steps:
+  - id: 1
+    action: agent begins movement.move_to across several tiles
+    manual: false
+  - id: 2
+    action: press a movement key while the agent is moving
+    manual: true
+  - id: 3
+    action: observe how quickly automation yields
+    manual: false
+
+evidence:
+  - field: action_result.reason_code
+    assertion: USER_TAKEOVER
+  - field: observation.safety.manual_takeover
+    assertion: true within one observation interval of the keypress
+    why: >
+      "Eventually" is not the requirement. A guard that yields at the end of the
+      current step is a guard that fights the player for several seconds.
+  - field: observation.action.ownership
+    assertion: not "mod"
+  - field: subsequent commands
+    assertion: rejected or deferred while takeover is active
+
+fails_if:
+  - the agent continues moving after the keypress
+  - takeover is detected only after the action completes
+  - the agent silently re-takes control without a new arm

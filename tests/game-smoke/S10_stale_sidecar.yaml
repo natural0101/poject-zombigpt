@@ -1,0 +1,27 @@
+id: S10
+title: Losing the sidecar stops new work
+requires_live_session: true
+priority: blocking
+
+preconditions: [session armed, sidecar running, no action in flight]
+
+steps:
+  - {id: 1, manual: true, action: kill the sidecar process}
+  - {id: 2, manual: false, action: wait past the heartbeat timeout}
+  - {id: 3, manual: false, action: observe the mod's safety state}
+
+evidence:
+  - {field: observation.safety.sidecar_stale, assertion: true after the timeout}
+  - field: new actions
+    assertion: none started while stale
+    why: >
+      An armed mod with no supervisor is the worst state in the system. It must
+      go quiet rather than continue on its last instruction.
+  - {field: HUD, assertion: shows the stale state so the player is not guessing}
+
+variants:
+  - id: S10b
+    change: an action IS in flight when the sidecar dies
+    assertion: the in-flight action finishes or is cancelled, and closes as lost — never left dangling
+
+fails_if: [any new action starts while stale, the mod silently stays armed with no indication]

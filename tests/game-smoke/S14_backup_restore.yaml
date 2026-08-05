@@ -1,0 +1,32 @@
+id: S14
+title: Backup and restore, with restore refused while the game runs
+requires_live_session: true
+priority: blocking
+
+purpose: The last line of defence. It is tested as one.
+
+preconditions: [a save exists, game running]
+
+steps:
+  - {id: 1, manual: false, action: pz-agent backup-save}
+  - {id: 2, manual: false, action: inspect the manifest}
+  - {id: 3, manual: false, action: attempt a restore WHILE the game is running}
+  - {id: 4, manual: true, action: close the game}
+  - {id: 5, manual: false, action: restore, then reopen the save}
+
+evidence:
+  - {field: manifest, assertion: per-file sha256, sizes, total bytes, save id, timestamp}
+  - {field: manifest.source, assertion: home directory redacted to a placeholder}
+  - field: step 3
+    assertion: refused with a specific exception, not a warning
+    why: >
+      Restoring under a running game is how a save gets corrupted. There is no
+      override flag, and this step confirms there is no accidental path around it.
+  - {field: step 5, assertion: save loads and matches the pre-backup state}
+  - {field: hashes, assertion: all verified BEFORE any file is written}
+
+variants:
+  - {id: S14b, change: corrupt one byte in a backup file, assertion: restore refuses, nothing written}
+  - {id: S14c, change: prune with keep=1, assertion: the newest survives}
+
+fails_if: [restore proceeds while the game is open, a partial restore is left behind after an abort]
