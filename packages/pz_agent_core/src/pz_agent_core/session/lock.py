@@ -12,6 +12,15 @@ Staleness is therefore decided by the heartbeat the holder keeps refreshing,
 not by asking the operating system whether the pid still exists: on Windows
 ``os.kill(pid, 0)`` does not probe, it calls ``TerminateProcess``, and a pid
 that has been recycled would be killed by the check itself.
+
+``O_EXCL`` alone is not the whole guarantee. The file exists, and is empty, for
+as long as it takes to write the record into it, so two starting sidecars can
+still collide: one sees an unusable lock and breaks it. What closes that is the
+read-back in :meth:`SidecarLock._claim` — a claim counts only once our own
+record is what is on disk — together with :meth:`SidecarLock._break_stale`
+refusing to delete a file that became readable while it was being judged. The
+loser of such a race reports a failed acquisition; it never proceeds as a
+second sidecar.
 """
 
 from __future__ import annotations
