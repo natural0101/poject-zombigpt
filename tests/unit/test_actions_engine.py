@@ -31,6 +31,7 @@ from pz_agent_core.protocol import (
     Observation,
     ReasonCode,
 )
+from pz_agent_core.protocol.messages import MAX_IDEMPOTENCY_KEY_LEN
 from tests.fixtures import (
     DEFAULT_SESSION,
     make_action_state,
