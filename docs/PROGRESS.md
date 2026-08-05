@@ -203,6 +203,21 @@ T003's probes before it can be.
 No scenario has been run — there is no installed game in this environment. The
 sixteen definitions in `tests/game-smoke/` name what closes each one.
 
+Two non-scenario items also need a real installation:
+
+- **Which file Build 42.20 ships its version in.** Only the `versionNumber=`
+  header in `console.txt` is confirmed. The install-side candidates
+  (`version.txt`, `version`, `media/version.txt`) are unverified guesses. The
+  behaviour is honest either way — an unreadable or absent file reports
+  `known=False` with the reason recorded, never a substituted `TARGET_BUILD` —
+  but which path actually exists is unknown until someone runs `pz-agent
+  doctor` against the game.
+- **A real "is the game running" probe.** `BackupManager.restore` requires
+  `game_running` as a keyword with no default and no override, so the rule
+  cannot be bypassed by accident. Nothing yet supplies it from an actual
+  process check; whoever wires the CLI must, and a wrong answer here is the one
+  that corrupts a save.
+
 | Scenario | Status | Blocked on |
 | --- | --- | --- |
 | S01 heartbeat | not run | a live session |
