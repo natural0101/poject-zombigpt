@@ -107,6 +107,50 @@ do
   ok(Ownership.blocksAutomation(unreadable), "so it blocks automation")
   ok(not Ownership.blocksAutomation(empty), "while an observed-empty queue does not")
   ok(Ownership.blocksAutomation("not a description"), "a description that is not a table blocks automation")
+  ok(
+    Ownership.blocksAutomation({ modEntry(1) }),
+    "a raw entry list handed in by mistake is not an observation, so it blocks too"
+  )
+  ok(
+    Ownership.blocksAutomation({ ownership = OWNERSHIP.NONE, busy = false }),
+    "and so does a description that never claims to have been read"
+  )
+end
+
+Harness.group("a queue the reader could not fully describe is never ours")
+do
+  -- The queue reader is bounded, so it can hand over a list it has already cut
+  -- short. It says so on the list itself; ignoring that would turn "the first
+  -- entries are ours" into "the queue is ours" and authorise a wholesale clear
+  -- over entries nobody looked at.
+  local cut = { modEntry(1), modEntry(2) }
+  cut.truncated = true
+  cut.dropped = 40
+
+  local description = Ownership.describe(cut, SESSION)
+  equal(description.ownership, OWNERSHIP.AMBIGUOUS, "a truncated read is ambiguous, never mod-owned")
+  equal(description.total, 42, "the entries left behind are still counted")
+  equal(description.mod_owned, 2, "only the described entries can be ours")
+  equal(description.foreign, 40, "and every entry left behind is foreign")
+  ok(description.truncated, "the description says the read was cut short")
+  ok(Ownership.blocksAutomation(description), "so nothing may be enqueued")
+
+  local plan = Ownership.panicPlan(cut, SESSION)
+  equal(plan.mod_owned, 2, "the plan still knows which entries are ours")
+  equal(plan.foreign, 40, "and that the rest are not")
+  ok(plan.truncated, "the plan reports the truncation")
+  ok(not plan.whole_queue, "and a wholesale clear is never equivalent to it")
+
+  local vague = { modEntry(1) }
+  vague.truncated = true
+  local vaguePlan = Ownership.panicPlan(vague, SESSION)
+  equal(vaguePlan.foreign, 1, "a reader that dropped an unknown number counts as having dropped one")
+  ok(not vaguePlan.whole_queue, "which is enough to forbid a wholesale clear")
+
+  local nonsense = { modEntry(1) }
+  nonsense.truncated = true
+  nonsense.dropped = -3
+  ok(not Ownership.panicPlan(nonsense, SESSION).whole_queue, "a nonsensical dropped count fails the same way")
 end
 
 Harness.group("a panic stop clears only what the mod owns")
@@ -141,6 +185,12 @@ do
 
   local empty = Ownership.panicPlan({}, SESSION)
   ok(not empty.whole_queue, "an empty queue needs no clear at all")
+
+  -- Both plans count zero mod-owned entries and mean opposite things, so the
+  -- plan has to carry which of the two it is.
+  equal(empty.mod_owned, unreadable.mod_owned, "an empty queue and an unreadable one plan the same counts")
+  equal(empty.readable, true, "but the empty one was observed")
+  equal(unreadable.readable, false, "and the unreadable one was not")
 end
 
 Harness.group("an over-long queue fails safe")

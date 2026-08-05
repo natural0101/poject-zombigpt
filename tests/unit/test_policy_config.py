@@ -75,7 +75,7 @@ def test_a_zero_normalisation_reference_is_rejected() -> None:
 
 
 def test_the_rejection_report_must_be_able_to_hold_something() -> None:
-    with pytest.raises(ValueError, match="at least 1"):
+    with pytest.raises(ValueError, match="between 1 and 256"):
         PolicyConfig(max_reported_rejections=0)
 
 

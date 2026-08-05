@@ -86,7 +86,7 @@ do
   local agent, fs = newAgent()
   ok(Safety.sidecarStale(agent.safety, NOW), "with no sidecar heartbeat seen, the sidecar is stale")
 
-  fs:put(PZ.Ipc.pathFor("sidecar_heartbeat"), '{"seq":1,"session_id":"s","timestamp_ms":1}')
+  fs:put(PZ.Ipc.pathFor("sidecar_heartbeat"), '{"peer":"sidecar","seq":1,"session_id":"s","timestamp_ms":1}')
   ok(Runtime.readSidecarHeartbeat(agent, NOW), "a new heartbeat document counts as a sign of life")
   ok(not Safety.sidecarStale(agent.safety, NOW), "so the sidecar is no longer stale")
 
@@ -96,11 +96,21 @@ do
     "so a sidecar that stopped updating goes stale on schedule"
   )
 
-  fs:put(PZ.Ipc.pathFor("sidecar_heartbeat"), '{"seq":2,"session_id":"s","timestamp_ms":2}')
+  fs:put(PZ.Ipc.pathFor("sidecar_heartbeat"), '{"peer":"sidecar","seq":2,"session_id":"s","timestamp_ms":2}')
   ok(Runtime.readSidecarHeartbeat(agent, NOW + 2000), "an updated document revives it")
 
   fs:put(PZ.Ipc.pathFor("sidecar_heartbeat"), "{torn")
   ok(not Runtime.readSidecarHeartbeat(agent, NOW + 3000), "a torn document is not a sign of life")
+
+  -- The mod's own heartbeat, copied into the sidecar's file, must not be able
+  -- to supervise the mod.
+  local stale = NOW + Safety.SIDECAR_MAX_AGE_MS * 10
+  fs:put(PZ.Ipc.pathFor("sidecar_heartbeat"), '{"peer":"game","seq":99,"session_id":"s","timestamp_ms":99}')
+  ok(not Runtime.readSidecarHeartbeat(agent, stale), "a document claiming the wrong peer is not a sign of life")
+  ok(Safety.sidecarStale(agent.safety, stale), "so the sidecar is still counted as gone")
+
+  fs:put(PZ.Ipc.pathFor("sidecar_heartbeat"), '{"seq":100,"session_id":"s","timestamp_ms":100}')
+  ok(not Runtime.readSidecarHeartbeat(agent, stale), "and a document claiming no peer at all is not one either")
 end
 
 Harness.group("a panic stop request in the exchange directory is honoured")

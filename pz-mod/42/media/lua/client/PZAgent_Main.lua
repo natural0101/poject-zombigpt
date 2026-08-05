@@ -79,7 +79,10 @@ local function shutdown()
     return
   end
   PZAgent.Runtime.stop(agent, now(), PZAgent.Protocol.REASON.SESSION_TERMINATED)
-  PZAgent.Hud.destroy(agent.hud)
+  local removed, removeError = PZAgent.Hud.destroy(agent.hud)
+  if not removed and agent.hud ~= nil then
+    agent.safety.last_error = removeError
+  end
   agent = nil
 end
 

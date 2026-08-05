@@ -276,10 +276,15 @@ do
   equal(#sessionless.plan.clear, 0, "with no session, a stop cancels nothing")
   equal(noSession.armed, false, "but it still disarms")
 
+  equal(state.stops[1].mod_owned, 2, "the history records what the plan proposed, not what was cancelled")
+  equal(state.stops[1].queue_readable, true, "and that the queue it planned over had been read")
+
   local unreadable = Safety.newState()
   local blind = Safety.panicStop(unreadable, nil, SESSION, NOW)
   equal(#blind.plan.clear, 0, "an unreadable queue cancels nothing")
   equal(unreadable.armed, false, "and the disarm happens anyway")
+  equal(blind.plan.readable, false, "and the plan says the queue was never read")
+  equal(unreadable.stops[1].queue_readable, false, "which the stop history records too")
 
   local repeated = liveState()
   for index = 1, Safety.STOP_HISTORY + 4 do
@@ -416,6 +421,72 @@ do
   local blind = Safety.applyStop(Mock.newPlayer(), Ownership.panicPlan({ modEntry(1) }, SESSION), SESSION)
   equal(blind.cleared, 0, "with no queue API at all, nothing is claimed to be cleared")
   equal(blind.capability, CAPABILITY.UNSUPPORTED, "and the capability is unsupported")
+end
+
+Harness.group("a queue that could not be read is never reported as clear")
+do
+  -- This is the branch the mod actually takes on a build with no queue API: the
+  -- read fails, the plan counts nothing of ours, and the counts are identical
+  -- to those of an observed-empty queue. Calling that "verified: nothing of
+  -- mine was queued" would be a postcondition claimed without an observation.
+  Mock.removeActionQueue()
+  local player = Mock.newPlayer()
+  local entries, capability = Safety.describeQueue(player)
+  isNil(entries, "the queue could not be read")
+  equal(capability, CAPABILITY.UNSUPPORTED, "which is reported as unsupported")
+
+  local blindPlan = Ownership.panicPlan(entries, SESSION)
+  equal(blindPlan.mod_owned, 0, "the plan can name nothing of ours")
+  equal(blindPlan.readable, false, "but it records that it never saw the queue")
+
+  local applied = Safety.applyStop(player, blindPlan, SESSION)
+  equal(applied.cleared, 0, "nothing is claimed to have been cleared")
+  equal(applied.capability, CAPABILITY.UNSUPPORTED, "and the outcome is not verified")
+  Harness.contains(applied.detail, "could not be read", "with a detail saying the queue was never read")
+
+  -- The contrast that gives the branch its meaning.
+  Mock.installActionQueue({})
+  local seen = Safety.applyStop(player, Ownership.panicPlan(Safety.describeQueue(player), SESSION), SESSION)
+  equal(seen.capability, CAPABILITY.VERIFIED, "an observed-empty queue is verified")
+
+  local missing = Safety.applyStop(player, nil, SESSION)
+  equal(missing.capability, CAPABILITY.UNSUPPORTED, "no plan at all is not a success either")
+  Harness.contains(missing.detail, "no stop plan", "and says so")
+end
+
+Harness.group("a queue longer than the mod can read is left alone")
+do
+  -- The scenario that makes the bound dangerous: every entry the reader looks
+  -- at is ours, and the player's is past the bound. Clearing wholesale here
+  -- would delete work the player queued by hand.
+  local entries = {}
+  for index = 1, Ownership.MAX_ENTRIES do
+    entries[index] = modEntry(index)
+  end
+  entries[Ownership.MAX_ENTRIES + 1] = playerAction(Ownership.MAX_ENTRIES + 1)
+  entries[Ownership.MAX_ENTRIES + 2] = playerAction(Ownership.MAX_ENTRIES + 2)
+  local queue = Mock.installActionQueue(entries)
+  local player = Mock.newPlayer()
+
+  local described = Safety.describeQueue(player)
+  equal(#described, Ownership.MAX_ENTRIES, "the read stops at the scan bound")
+  equal(described.truncated, true, "and declares that it stopped early")
+  equal(described.dropped, 2, "naming how many entries it never looked at")
+
+  local plan = Ownership.panicPlan(described, SESSION)
+  ok(plan.truncated, "so the plan knows the queue was not fully seen")
+  ok(not plan.whole_queue, "and refuses to call a wholesale clear equivalent")
+
+  local applied = Safety.applyStop(player, plan, SESSION)
+  equal(applied.cleared, 0, "nothing was cleared")
+  equal(applied.capability, CAPABILITY.UNSUPPORTED, "the outcome is unsupported")
+  equal(#queue.queue, Ownership.MAX_ENTRIES + 2, "and the player's entries past the bound survive")
+
+  local shortQueue = Mock.installActionQueue({ modEntry(1) })
+  local shortRead = Safety.describeQueue(player)
+  isNil(shortRead.truncated, "a queue inside the bound is not marked truncated")
+  equal(Safety.applyStop(player, Ownership.panicPlan(shortRead, SESSION), SESSION).cleared, 1, "and clears normally")
+  equal(#shortQueue.queue, 0, "leaving the queue empty")
 end
 
 Harness.finish("test_safety")
