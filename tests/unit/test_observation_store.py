@@ -131,9 +131,10 @@ def test_a_new_session_discards_history_and_demands_a_full_snapshot() -> None:
     assert store.needs_full_snapshot
     assert store.latest() is None
 
+    # The change is reported once, on the tick it is detected; by the time the
+    # replacement snapshot lands the store has no old session left to compare to.
     accepted = store.push(make_observation(session_id=other, seq=3, full=True))
     assert accepted.accepted
-    assert accepted.session_changed
     assert store.session_id == other
     # History from the previous session is gone: its refs no longer resolve.
     assert store.size == 1

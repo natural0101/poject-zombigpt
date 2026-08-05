@@ -341,6 +341,80 @@ def test_reading_a_journal_that_does_not_exist_yet_is_not_an_error(tmp_path: Pat
     assert read.offset == 0
 
 
+def test_one_poll_delivers_at_most_max_records(tmp_path: Path) -> None:
+    """The per-poll budget is what keeps a backlog from arriving as one heap."""
+    layout = make_layout(tmp_path)
+    writer = JournalWriter(layout, layout.command_ack)
+    for index in range(10):
+        writer.append({"n": index})
+    writer.close()
+
+    reader = JournalReader(layout, layout.command_ack, max_records=3)
+    delivered: list[int] = []
+    polls = 0
+    while polls < 10:
+        read = reader.read()
+        assert len(read.records) <= 3
+        if not read.records:
+            break
+        delivered.extend(int(record.payload["n"]) for record in read.records)
+        polls += 1
+    # Bounded per poll, and nothing is lost or repeated across the polls.
+    assert delivered == list(range(10))
+    assert polls == 4
+
+
+def test_a_record_budget_of_zero_is_refused(tmp_path: Path) -> None:
+    layout = make_layout(tmp_path)
+    with pytest.raises(ValueError, match="max_records"):
+        JournalReader(layout, layout.command_ack, max_records=0)
+
+
+def test_an_unreadable_journal_is_reported_not_answered_with_silence(tmp_path: Path) -> None:
+    """An I/O failure must not look like "the stream is quiet"."""
+    layout = make_layout(tmp_path)
+    layout.command_ack.mkdir()  # something is occupying the name; opening it fails
+    read = JournalReader(layout, layout.command_ack).read()
+
+    assert read.records == ()
+    assert len(read.diagnostics) == 1
+    assert "unreadable" in read.diagnostics[0].detail
+
+
+def test_a_file_that_never_had_a_header_is_reported(tmp_path: Path) -> None:
+    layout = make_layout(tmp_path)
+    layout.command_ack.write_text('{"n": 1}\n', encoding="utf-8")
+    read = JournalReader(layout, layout.command_ack).read()
+
+    assert read.records == ()
+    assert any("header" in diagnostic.detail for diagnostic in read.diagnostics)
+
+
+def test_a_half_written_first_line_is_still_silent(tmp_path: Path) -> None:
+    """The transient case stays quiet: it resolves itself on the next poll."""
+    layout = make_layout(tmp_path)
+    layout.command_ack.write_text('{"type": "journal.hea', encoding="utf-8")
+    assert JournalReader(layout, layout.command_ack).read().diagnostics == ()
+
+
+def test_seek_to_end_refuses_to_promise_a_skip_it_cannot_make(tmp_path: Path) -> None:
+    """Silently starting at zero would replay the previous run's commands."""
+    layout = make_layout(tmp_path)
+    layout.command_queue.mkdir()
+    reader = JournalReader(layout, layout.command_queue)
+    with pytest.raises(JournalError, match="cannot skip to the end"):
+        reader.seek_to_end()
+    assert reader.offset == 0
+
+
+def test_seek_to_end_on_a_journal_that_does_not_exist_is_fine(tmp_path: Path) -> None:
+    layout = make_layout(tmp_path)
+    reader = JournalReader(layout, layout.command_queue)
+    reader.seek_to_end()
+    assert reader.offset == 0
+    assert reader.serial is None
+
+
 def test_header_carries_the_writer_clock(tmp_path: Path) -> None:
     layout = make_layout(tmp_path)
     clock = FakeClock()

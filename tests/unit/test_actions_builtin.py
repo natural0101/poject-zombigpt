@@ -127,6 +127,29 @@ def test_wait_treats_a_backwards_world_clock_as_unmeasurable() -> None:
     assert adapter.progress(command, before, after) is None
 
 
+def test_wait_treats_a_changed_world_clock_format_as_unmeasurable() -> None:
+    """Mid-action the mod starts stamping an offset; that is not a measurable span.
+
+    Subtracting an aware datetime from a naive one raises, and this runs inside
+    the engine's poll loop — an unmeasurable wait must read as "not yet", never
+    as a crash and never as elapsed time nobody observed.
+    """
+    adapter = WaitAdapter()
+    command = a_command(ActionName.ACTION_WAIT, {"game_seconds": 60})
+    before = at_world_time(1, WORLD_START)
+    after = at_world_time(2, "1993-07-09T18:20:00+02:00")
+
+    assert adapter.verify(command, before, after) is None
+    assert adapter.progress(command, before, after) is None
+    assert adapter.verify(command, after, before) is None
+
+
+def test_wait_verify_is_unmeasurable_once_the_clock_stops_being_reported() -> None:
+    adapter = WaitAdapter()
+    command = a_command(ActionName.ACTION_WAIT, {"game_seconds": 60})
+    assert adapter.verify(command, at_world_time(1, WORLD_START), at_world_time(2, None)) is None
+
+
 def test_wait_reports_bounded_progress() -> None:
     adapter = WaitAdapter()
     command = a_command(ActionName.ACTION_WAIT, {"game_seconds": 60})

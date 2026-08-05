@@ -1,3 +1,126 @@
-"""pz-agent core: capabilities."""
+"""pz-agent core: capabilities.
+
+What the agent is allowed to claim about the game's API, and the read-only
+machinery that establishes those claims from the user's own installation
+(docs/blueprint/12_COMPATIBILITY_AND_RESEARCH.md, §3.8).
+
+The one invariant the whole package exists for: a capability reaches
+``verified`` only through a live runtime confirmation. A static scan of the
+installed Lua can raise a capability to ``available_unverified`` and no higher.
+"""
 
 from __future__ import annotations
+
+from .model import (
+    MAX_CAPABILITIES,
+    MAX_EVIDENCE_PER_CAPABILITY,
+    REASON_BUILD_CHANGED,
+    REASON_EXPERIMENTAL_API,
+    REASON_NO_VERIFIED_API,
+    REASON_POLICY_DISABLED,
+    REASON_PROBE_NOT_CONFIRMED,
+    REASON_SYMBOL_MISSING,
+    Capability,
+    CapabilityError,
+    CapabilityReport,
+    Evidence,
+    EvidenceKind,
+    utc_now_iso,
+)
+from .probes import (
+    AUTONOMOUS_ATTACK,
+    DRINK_CARRIED,
+    DRINK_WORLD_SOURCE,
+    EAT_PERCENTAGE,
+    INVENTORY_TRANSFER,
+    MOVE_TO_SQUARE,
+    PROBES,
+    PROBES_BY_NAME,
+    READ_LITERATURE,
+    ProbeDefinition,
+    RuntimeConfirmation,
+    confirm,
+    missing_symbols,
+    probe_for,
+    resolve_all,
+    resolve_static,
+)
+from .report_io import (
+    DEFAULT_REPORT_PATH,
+    MAX_REPORT_BYTES,
+    LoadedReport,
+    ReportIOError,
+    load_or_empty,
+    load_report,
+    save_report,
+)
+from .scanner import (
+    LUA_SUBPATH,
+    ScanError,
+    ScanLimits,
+    ScanResult,
+    SymbolIndex,
+    SymbolKind,
+    SymbolRecord,
+    WriteRefused,
+    extract_symbols,
+    is_inside,
+    lua_root,
+    normalise_symbol,
+    refuse_write,
+    scan_lua_tree,
+)
+
+__all__ = [
+    "AUTONOMOUS_ATTACK",
+    "DEFAULT_REPORT_PATH",
+    "DRINK_CARRIED",
+    "DRINK_WORLD_SOURCE",
+    "EAT_PERCENTAGE",
+    "INVENTORY_TRANSFER",
+    "LUA_SUBPATH",
+    "MAX_CAPABILITIES",
+    "MAX_EVIDENCE_PER_CAPABILITY",
+    "MAX_REPORT_BYTES",
+    "MOVE_TO_SQUARE",
+    "PROBES",
+    "PROBES_BY_NAME",
+    "READ_LITERATURE",
+    "REASON_BUILD_CHANGED",
+    "REASON_EXPERIMENTAL_API",
+    "REASON_NO_VERIFIED_API",
+    "REASON_POLICY_DISABLED",
+    "REASON_PROBE_NOT_CONFIRMED",
+    "REASON_SYMBOL_MISSING",
+    "Capability",
+    "CapabilityError",
+    "CapabilityReport",
+    "Evidence",
+    "EvidenceKind",
+    "LoadedReport",
+    "ProbeDefinition",
+    "ReportIOError",
+    "RuntimeConfirmation",
+    "ScanError",
+    "ScanLimits",
+    "ScanResult",
+    "SymbolIndex",
+    "SymbolKind",
+    "SymbolRecord",
+    "WriteRefused",
+    "confirm",
+    "extract_symbols",
+    "is_inside",
+    "load_or_empty",
+    "load_report",
+    "lua_root",
+    "missing_symbols",
+    "normalise_symbol",
+    "probe_for",
+    "refuse_write",
+    "resolve_all",
+    "resolve_static",
+    "save_report",
+    "scan_lua_tree",
+    "utc_now_iso",
+]

@@ -40,9 +40,30 @@ LOGS_DIR: Final = "logs"
 #: directory so that removing the exchange directory removes the lock with it.
 SIDECAR_LOCK_FILE: Final = "sidecar.lock"
 
-#: Suffix used by the atomic-replace helper and by snapshot writes. Temporary
-#: files are managed paths too, otherwise the write guard would reject them.
+#: Suffix used by the atomic-replace helper and by snapshot writes. §3.5 names
+#: the temporary file ``filename.tmp.<pid>.<seq>`` so two writers can never
+#: share one scratch file; the bare ``.tmp`` twin is accepted as well because
+#: older files may still be lying around. Temporary files are managed paths
+#: too, otherwise the write guard would reject them.
 TEMP_SUFFIX: Final = ".tmp"
+
+
+def temp_name(name: str, pid: int, seq: int) -> str:
+    """The §3.5 temporary filename for *name*."""
+    return f"{name}{TEMP_SUFFIX}.{pid}.{seq}"
+
+
+def _strip_temp_suffix(name: str) -> str:
+    """Remove a ``.tmp`` or ``.tmp.<pid>.<seq>`` suffix, if present."""
+    if name.endswith(TEMP_SUFFIX):
+        return name[: -len(TEMP_SUFFIX)]
+    head, _, seq = name.rpartition(".")
+    if not seq.isdigit():
+        return name
+    head, _, pid = head.rpartition(".")
+    if pid.isdigit() and head.endswith(TEMP_SUFFIX):
+        return head[: -len(TEMP_SUFFIX)]
+    return name
 
 
 class SnapshotSlot(StrEnum):
@@ -165,9 +186,7 @@ class IpcLayout:
             return True
         if candidate.parent != root:
             return False
-        stem = candidate.name
-        if stem.endswith(TEMP_SUFFIX):
-            stem = stem[: -len(TEMP_SUFFIX)]
+        stem = _strip_temp_suffix(candidate.name)
         base, _, rotation = stem.rpartition(".")
         if base and rotation.isdigit():
             stem = base

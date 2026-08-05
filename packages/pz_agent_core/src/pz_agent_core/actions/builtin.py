@@ -137,6 +137,11 @@ class WaitAdapter:
         end = _parse_world_time(after.game.world_time)
         if start is None or end is None:
             return None
+        if (start.tzinfo is None) != (end.tzinfo is None):
+            # The mod changed how it stamps the world clock mid-action. Python
+            # refuses to subtract these two, and guessing an offset would
+            # invent the very number this adapter exists to measure.
+            return None
         elapsed = (end - start).total_seconds()
         return None if elapsed < 0 else elapsed
 

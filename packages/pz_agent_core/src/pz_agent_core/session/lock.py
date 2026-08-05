@@ -146,6 +146,7 @@ class SidecarLock:
         """Claim the lock, taking over a stale one if necessary."""
         self.layout.ensure()
         recovered = False
+        obstacle: str | None = None
         for _ in range(MAX_ACQUIRE_ATTEMPTS):
             now = self.clock()
             claimed = self._claim(now)
@@ -173,10 +174,11 @@ class SidecarLock:
                     blocked_by=holder,
                 )
             recovered = True
-            self._break_stale(holder)
+            obstacle = self._break_stale(holder)
+        detail = f"could not claim the lock in {MAX_ACQUIRE_ATTEMPTS} attempts"
         return LockOutcome(
             acquired=False,
-            detail=f"could not claim the lock in {MAX_ACQUIRE_ATTEMPTS} attempts",
+            detail=detail if obstacle is None else f"{detail}: {obstacle}",
             blocked_by=self.read(),
             recovered_stale=recovered,
         )
@@ -205,19 +207,34 @@ class SidecarLock:
         return refreshed
 
     def release(self) -> bool:
-        """Remove our lock. Returns False when it was not ours to remove."""
+        """Remove our lock. Returns False when it was not ours to remove.
+
+        The held flag is only cleared once the file is actually gone: if the
+        unlink fails we still hold the lock, and saying otherwise would leave
+        the directory guarded by a record this process no longer refreshes.
+        """
         current = self._held
-        self._held = None
         if current is None:
             return False
         on_disk = self.read()
         if on_disk is not None and on_disk.owner_id != current.owner_id:
+            self._held = None
             return False
         self.layout.sidecar_lock.unlink(missing_ok=True)
+        self._held = None
         return True
 
     def _claim(self, now_ms: int) -> LockInfo | None:
-        """Create the lock file exclusively, or None when it already exists."""
+        """Create the lock file exclusively and verify we still own it.
+
+        ``O_EXCL`` makes the *creation* exclusive but not the whole claim: the
+        file is visible, and empty, for as long as it takes to write the record
+        into it. A contender that reads it during that window sees an unusable
+        lock and may break it (see :meth:`_break_stale`). Reading our own record
+        back is what turns "we wrote a lock file" into "we hold the lock" — if
+        somebody else's name is in there, we lost the race and say so rather
+        than proceeding as a second sidecar.
+        """
         info = LockInfo(
             owner_id=self.owner_id,
             pid=os.getpid(),
@@ -234,24 +251,40 @@ class SidecarLock:
             json.dump(info.to_dict(), stream, sort_keys=True)
             stream.flush()
             os.fsync(stream.fileno())
-        return info
+        confirmed = self.read()
+        if confirmed is None or confirmed.owner_id != self.owner_id:
+            return None
+        return confirmed
 
-    def _break_stale(self, holder: LockInfo | None) -> None:
-        """Remove a lock we judged stale, if it has not changed meanwhile.
+    def _break_stale(self, holder: LockInfo | None) -> str | None:
+        """Remove a lock we judged stale. Returns why it was left in place.
 
         Re-reading before unlinking closes the common race: the holder woke up
-        and refreshed between our read and our removal. It does not close every
-        race — two sidecars starting in the same millisecond can both break the
-        same dead lock — which is why :meth:`acquire` re-checks the owner after
-        claiming and why the retry count is bounded.
+        and refreshed between our read and our removal. It also covers the
+        narrower one where *holder* was None because the file was mid-creation —
+        by the time we get here it may carry a perfectly good record, and
+        deleting that would hand the directory to two sidecars at once.
+
+        What is deliberately still removed is a lock that stays unreadable: it
+        names nobody, so nobody can refresh or release it, and leaving it would
+        wedge the directory with no way out for the user.
         """
         current = self.read()
-        if holder is not None and current is not None:
+        if current is not None:
+            if holder is None:
+                return f"lock became readable while being broken (owner {current.owner_id})"
             if current.refreshed_at_ms != holder.refreshed_at_ms:
-                return
+                return f"lock was refreshed by {current.owner_id} while being broken"
             if current.owner_id != holder.owner_id:
-                return
-        self.layout.sidecar_lock.unlink(missing_ok=True)
+                return f"lock was taken over by {current.owner_id} while being broken"
+        try:
+            self.layout.sidecar_lock.unlink(missing_ok=True)
+        except OSError as exc:
+            # Windows refuses to unlink a file another process still has open,
+            # which is exactly the case where the "stale" holder is alive after
+            # all. Report it; the caller reports a failed acquisition.
+            return f"stale lock could not be removed: {exc}"
+        return None
 
     def __enter__(self) -> SidecarLock:
         outcome = self.acquire()

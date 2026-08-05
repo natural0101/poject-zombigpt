@@ -11,6 +11,8 @@ from __future__ import annotations
 from .backup import (
     DEFAULT_MAX_BACKUP_BYTES,
     DEFAULT_MAX_BACKUP_FILES,
+    MAX_BACKUP_DIRS,
+    MAX_MANIFEST_BYTES,
     BackupCorruptError,
     BackupError,
     BackupFile,
@@ -24,7 +26,9 @@ from .backup import (
 )
 from .discovery import (
     GAME_DIR_NAMES,
+    MAX_LIBRARIES,
     MAX_METADATA_BYTES,
+    MAX_PROBLEMS,
     BuildInfo,
     Discovery,
     DiscoveryContext,
@@ -46,7 +50,11 @@ __all__ = [
     "DEFAULT_MAX_BACKUP_BYTES",
     "DEFAULT_MAX_BACKUP_FILES",
     "GAME_DIR_NAMES",
+    "MAX_BACKUP_DIRS",
+    "MAX_LIBRARIES",
+    "MAX_MANIFEST_BYTES",
     "MAX_METADATA_BYTES",
+    "MAX_PROBLEMS",
     "BackupCorruptError",
     "BackupError",
     "BackupFile",

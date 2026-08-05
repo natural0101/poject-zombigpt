@@ -132,7 +132,11 @@ def test_a_corrupt_heartbeat_file_is_not_alive(tmp_path: Path) -> None:
     layout.game_heartbeat.write_text("{ truncated", encoding="utf-8")
     monitor = HeartbeatMonitor(layout, clock=FakeClock())
     assert monitor.read(Peer.GAME) is None
-    assert not monitor.liveness(Peer.GAME).alive
+    liveness = monitor.liveness(Peer.GAME)
+    assert not liveness.alive
+    # A corrupt file and an absent one are both "not alive" but not the same
+    # problem, and whoever has to diagnose a silent game needs to know which.
+    assert "malformed JSON" in liveness.detail
 
 
 def test_a_heartbeat_naming_the_wrong_peer_is_refused(tmp_path: Path) -> None:
@@ -143,6 +147,7 @@ def test_a_heartbeat_naming_the_wrong_peer_is_refused(tmp_path: Path) -> None:
         layout.sidecar_heartbeat.read_text(encoding="utf-8"), encoding="utf-8"
     )
     assert monitor.read(Peer.GAME) is None
+    assert "belong to sidecar" in monitor.liveness(Peer.GAME).detail
 
 
 def test_liveness_reports_the_silence_it_measured(tmp_path: Path) -> None:

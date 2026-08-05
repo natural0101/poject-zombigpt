@@ -426,8 +426,9 @@ class SessionManager:
         """Reattach to the session already on disk after a sidecar restart.
 
         A new sidecar nonce is minted and published so the mod can tell this is
-        a new process. Nothing is replayed: callers hand the command stream to
-        :meth:`~pz_agent_core.ipc.queue.CommandQueue.skip_pending_commands`
+        a new process. Nothing is replayed: callers take their command-stream
+        consumer from
+        :meth:`~pz_agent_core.ipc.queue.CommandQueue.command_reader_at_end`
         precisely so that the commands of the previous run are never executed
         a second time.
         """
@@ -518,13 +519,20 @@ class SessionManager:
         if session.save_id == save_id:
             return None
         previous = session.save_id
+        if previous is None:
+            # First observation of the save: no reference was ever minted
+            # against a *different* world, so this is not a recovery event — and
+            # the generation must stay where it is. Bumping it here would
+            # invalidate every ref already handed out for this very save while
+            # reporting that nothing happened, which is the silent kind of
+            # failure this module exists to avoid.
+            updated = session.with_save_id(save_id)
+            self._session = updated
+            write_json_atomic(self.layout, self.layout.session, updated.to_dict())
+            return None
         updated = session.with_save_id(save_id).with_generation(session.generation + 1)
         self._session = updated
         write_json_atomic(self.layout, self.layout.session, updated.to_dict())
-        if previous is None:
-            # First observation of the save: nothing was minted against another
-            # world, so this is not a recovery event.
-            return None
         self._refs_valid = False
         self._requires_rearm = True
         return RecoveryOutcome(

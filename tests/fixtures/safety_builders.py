@@ -67,12 +67,17 @@ def bleeding_wound(severity: float = 0.6) -> Wound:
     )
 
 
+#: The "now" every safety test shares, so a fixture default and a test-supplied
+#: timestamp cannot silently disagree about which side of a deadline they are on.
+NOW_MS = 1_700_000_000_000
+
+
 def in_flight(
     command_id: str = "cmd-1",
     *,
     action: str = "consume.eat",
-    deadline_ms: int = 2_000_000,
-    last_progress_ms: int = 1_000_000,
+    deadline_ms: int = NOW_MS + 30_000,
+    last_progress_ms: int = NOW_MS,
     moves_character: bool = False,
 ) -> InFlightCommand:
     return InFlightCommand(

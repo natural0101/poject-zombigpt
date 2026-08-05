@@ -169,6 +169,73 @@ def test_the_context_manager_refuses_to_start_when_blocked(tmp_path: Path) -> No
         pass  # pragma: no cover - the context manager raises on entry
 
 
+def _foreign(now_ms: int) -> LockInfo:
+    return LockInfo(
+        owner_id="somebody-else",
+        pid=4321,
+        session_id=IPC_SESSION_ID,
+        acquired_at_ms=now_ms,
+        refreshed_at_ms=now_ms,
+    )
+
+
+def test_a_claim_that_lost_the_race_is_not_reported_as_acquired(tmp_path: Path) -> None:
+    """``O_EXCL`` makes the creation exclusive, not the whole claim: the file is
+    empty until the record is written, and a contender may break it in between.
+    The claim is only real once our own record is what is on disk."""
+    layout = make_layout(tmp_path)
+    clock = FakeClock()
+
+    class _Overtaken(SidecarLock):
+        def read(self) -> LockInfo | None:
+            return _foreign(clock.now)
+
+    lock = _Overtaken(layout, session_id=IPC_SESSION_ID, clock=clock)
+    outcome = lock.acquire()
+
+    assert not outcome.acquired
+    assert not lock.held
+    assert outcome.blocked_by is not None
+    assert outcome.blocked_by.owner_id == "somebody-else"
+
+
+def test_a_lock_that_becomes_readable_while_being_broken_is_left_alone(tmp_path: Path) -> None:
+    """An unreadable lock file may simply be one that is still being written."""
+    layout = make_layout(tmp_path)
+    clock = FakeClock()
+    layout.sidecar_lock.write_bytes(b"")  # a claim caught mid-creation
+
+    class _RaceLoser(SidecarLock):
+        calls = 0
+
+        def read(self) -> LockInfo | None:
+            _RaceLoser.calls += 1
+            # The first look finds the empty file; by the second the owner has
+            # finished writing its record.
+            return None if _RaceLoser.calls == 1 else _foreign(clock.now)
+
+    outcome = _RaceLoser(layout, session_id=IPC_SESSION_ID, clock=clock).acquire()
+
+    assert not outcome.acquired
+    assert layout.sidecar_lock.exists()
+    assert outcome.blocked_by is not None
+    assert outcome.blocked_by.owner_id == "somebody-else"
+
+
+def test_a_permanently_unreadable_lock_is_still_broken(tmp_path: Path) -> None:
+    """The other half of the rule: a lock nobody can refresh must not wedge the
+    directory forever."""
+    layout = make_layout(tmp_path)
+    layout.sidecar_lock.write_bytes(b"")
+    lock = _lock(layout, FakeClock())
+    outcome = lock.acquire()
+
+    assert outcome.acquired
+    assert outcome.recovered_stale
+    stored = lock.read()
+    assert stored is not None and stored.owner_id == lock.owner_id
+
+
 def test_lock_staleness_is_measured_from_the_refresh(tmp_path: Path) -> None:
     info = LockInfo(
         owner_id="o",

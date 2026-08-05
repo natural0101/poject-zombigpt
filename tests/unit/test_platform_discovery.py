@@ -9,6 +9,7 @@ import pytest
 from pz_agent_core.platform.discovery import (
     MAX_LIBRARIES,
     MAX_METADATA_BYTES,
+    MAX_PROBLEMS,
     BuildInfo,
     DiscoveryContext,
     DiscoveryError,
@@ -272,11 +273,29 @@ def test_library_count_is_bounded(tmp_path: Path) -> None:
     assert any("stopped after" in problem for problem in scan.problems)
 
 
+def test_problem_list_is_bounded(tmp_path: Path) -> None:
+    """One corrupt file can name thousands of dead paths; doctor output cannot.
+
+    The count is still reported, so bounding the list does not turn "37 broken
+    entries" into "32 broken entries".
+    """
+    steam_root = make_steam_root(tmp_path)
+    dead = [tmp_path / "gone" / f"lib{index:03d}" for index in range(MAX_PROBLEMS + 5)]
+    write_modern_libraryfolders(steam_root, dead)
+
+    scan = find_steam_libraries(DiscoveryContext(root=tmp_path))
+
+    assert scan.paths == (steam_root,)
+    assert len(scan.problems) == MAX_PROBLEMS + 1
+    assert scan.problems[-1] == "... and 5 further problem(s), not listed"
+
+
 def test_no_steam_at_all_reports_where_it_looked(tmp_path: Path) -> None:
     scan = find_steam_libraries(DiscoveryContext(root=tmp_path))
 
     assert not scan.found
-    assert scan.searched
+    assert str(tmp_path / "Program Files (x86)" / "Steam" / "steamapps") in scan.searched
+    assert str(tmp_path / "Steam" / "steamapps" / "libraryfolders.vdf") in scan.searched
 
 
 # ---------------------------------------------------------------------------
@@ -542,6 +561,40 @@ def test_console_log_is_only_read_up_to_the_cap(tmp_path: Path) -> None:
     build = detect_build(install_dir=None, user_dir=user_dir)
 
     assert not build.known
+    assert any("no versionNumber=" in problem for problem in build.problems)
+
+
+def test_an_unreadable_version_file_is_reported_not_passed_over(tmp_path: Path) -> None:
+    """ "File absent" and "file present but unreadable" need different remedies.
+
+    Reporting the second as the first sends the user to reinstall a game that is
+    fine, so the read failure has to survive into the result.
+    """
+    library = make_library(tmp_path, "lib")
+    install = install_game(library)
+    (install / "version.txt").write_bytes(b"\xff\xfe not utf-8")
+    (install / "version").write_text("y" * (MAX_METADATA_BYTES + 1), encoding="utf-8")
+
+    build = detect_build(install_dir=install, user_dir=None)
+
+    assert not build.known
+    assert build.version is None
+    assert any("not valid UTF-8" in problem for problem in build.problems)
+    assert any("refusing to parse" in problem for problem in build.problems)
+    assert build.note
+
+
+def test_a_version_file_without_a_version_says_so(tmp_path: Path) -> None:
+    library = make_library(tmp_path, "lib")
+    install = install_game(library, version="unreleased build\n")
+    user_dir = make_user_dir(tmp_path / "home")
+    console = write_console_log(user_dir, "42.20.0")
+
+    build = detect_build(install_dir=install, user_dir=user_dir)
+
+    # The console log still answers the question; the useless file is recorded.
+    assert build.source == console
+    assert any("no version number in it" in problem for problem in build.problems)
 
 
 def test_build_matches_compares_major_and_minor_only() -> None:

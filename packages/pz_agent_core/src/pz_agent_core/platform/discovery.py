@@ -42,6 +42,11 @@ MAX_VDF_BYTES: Final = 1 * 1024 * 1024
 #: corrupt file loop than a real setup.
 MAX_LIBRARIES: Final = 32
 
+#: Diagnostics are for a human to read in ``doctor`` output, and one corrupt
+#: ``libraryfolders.vdf`` can name thousands of dead paths. Past this many the
+#: list is closed with a count, so the accumulated text stays bounded.
+MAX_PROBLEMS: Final = 32
+
 #: Steam's ``common`` directory name for the game. The spaced variant appears on
 #: installs restored from older backups and manual copies.
 GAME_DIR_NAMES: Final = ("ProjectZomboid", "Project Zomboid")
@@ -235,6 +240,7 @@ class BuildInfo:
     version: tuple[int, int] | None = None
     source: Path | None = None
     searched: tuple[str, ...] = ()
+    problems: tuple[str, ...] = ()
     note: str = ""
 
     @property
@@ -341,6 +347,34 @@ def _parse_version(raw: str) -> tuple[int, int] | None:
     return int(match.group(1)), int(match.group(2))
 
 
+class _Problems:
+    """A bounded, duplicate-free list of human-readable diagnostics."""
+
+    def __init__(self, limit: int = MAX_PROBLEMS) -> None:
+        self._limit = limit
+        self._items: list[str] = []
+        self._seen: set[str] = set()
+        self._dropped = 0
+
+    def add(self, problem: str) -> None:
+        if problem in self._seen:
+            return
+        self._seen.add(problem)
+        if len(self._items) >= self._limit:
+            self._dropped += 1
+            return
+        self._items.append(problem)
+
+    def extend(self, problems: Sequence[str]) -> None:
+        for problem in problems:
+            self.add(problem)
+
+    def as_tuple(self) -> tuple[str, ...]:
+        if not self._dropped:
+            return tuple(self._items)
+        return (*self._items, f"... and {self._dropped} further problem(s), not listed")
+
+
 def _dedupe(paths: Iterator[Path]) -> tuple[Path, ...]:
     """Preserve order while dropping paths that differ only in case/separator."""
     seen: set[str] = set()
@@ -417,7 +451,7 @@ def find_steam_libraries(ctx: DiscoveryContext) -> SteamLibraries:
     install with a single library.
     """
     searched: list[str] = []
-    problems: list[str] = []
+    problems = _Problems()
     libraries: list[SteamLibrary] = []
     seen: set[str] = set()
 
@@ -426,16 +460,14 @@ def find_steam_libraries(ctx: DiscoveryContext) -> SteamLibraries:
         if key in seen:
             return
         if len(libraries) >= MAX_LIBRARIES:
-            problem = f"stopped after {MAX_LIBRARIES} Steam libraries"
-            if problem not in problems:
-                problems.append(problem)
+            problems.add(f"stopped after {MAX_LIBRARIES} Steam libraries")
             return
         if not (path / "steamapps").is_dir():
             # Recorded as seen as well: several libraryfolders.vdf copies list
             # the same dead entry, and repeating the diagnostic per copy would
             # bury the readable libraries in doctor output.
             seen.add(key)
-            problems.append(f"{path}: listed as a Steam library but has no steamapps/")
+            problems.add(f"{path}: listed as a Steam library but has no steamapps/")
             return
         seen.add(key)
         libraries.append(SteamLibrary(path=path, source=source, label=label))
@@ -452,12 +484,12 @@ def find_steam_libraries(ctx: DiscoveryContext) -> SteamLibraries:
                 continue
             text, problem = _read_whole(vdf_path, MAX_VDF_BYTES)
             if text is None:
-                problems.append(problem)
+                problems.add(problem)
                 continue
             try:
                 document = parse_vdf(text)
             except VdfError as exc:
-                problems.append(f"{vdf_path}: malformed VDF ({exc})")
+                problems.add(f"{vdf_path}: malformed VDF ({exc})")
                 continue
             for path, label in _library_entries(document):
                 _add(path, vdf_path, label)
@@ -465,7 +497,7 @@ def find_steam_libraries(ctx: DiscoveryContext) -> SteamLibraries:
     return SteamLibraries(
         libraries=tuple(libraries),
         searched=tuple(searched),
-        problems=tuple(problems),
+        problems=problems.as_tuple(),
     )
 
 
@@ -495,7 +527,8 @@ def find_install(
     """
     scan = find_steam_libraries(ctx) if libraries is None else libraries
     searched: list[str] = []
-    problems: list[str] = list(scan.problems)
+    problems = _Problems()
+    problems.extend(scan.problems)
 
     if ctx.install_override is not None:
         override = ctx.install_override
@@ -506,9 +539,9 @@ def find_install(
                 path=override,
                 searched=tuple(searched),
                 libraries=scan.libraries,
-                problems=tuple(problems),
+                problems=problems.as_tuple(),
             )
-        problems.append(f"{override}: install override does not contain media/")
+        problems.add(f"{override}: install override does not contain media/")
 
     for library in scan.libraries:
         for name in GAME_DIR_NAMES:
@@ -522,19 +555,19 @@ def find_install(
                     path=candidate,
                     searched=tuple(searched),
                     libraries=scan.libraries,
-                    problems=tuple(problems),
+                    problems=problems.as_tuple(),
                 )
-            problems.append(f"{candidate}: directory exists but has no media/; not an install")
+            problems.add(f"{candidate}: directory exists but has no media/; not an install")
 
     if not scan.libraries:
-        problems.append("no Steam library folder was found")
+        problems.add("no Steam library folder was found")
 
     return InstallLocation(
         found=False,
         path=None,
         searched=tuple(searched),
         libraries=scan.libraries,
-        problems=tuple(problems),
+        problems=problems.as_tuple(),
     )
 
 
@@ -611,10 +644,16 @@ def detect_build(
     last *ran*, which can predate an update, while the install directory
     describes what is on disk right now.
 
+    A metadata file that exists but cannot be read is recorded in ``problems``
+    rather than being passed over in silence: "the file is not there" and "the
+    file is there and unreadable" call for different remediation, and reporting
+    the second as the first sends the user to reinstall something that is fine.
+
     Returns a :class:`BuildInfo` with ``known=False`` when nothing yields a
     version. No default is substituted.
     """
     searched: list[str] = []
+    problems = _Problems()
 
     if install_dir is not None:
         for parts in _INSTALL_VERSION_FILES:
@@ -622,37 +661,52 @@ def detect_build(
             searched.append(str(path))
             if not path.is_file():
                 continue
-            text, _ = _read_whole(path, max_bytes)
+            text, problem = _read_whole(path, max_bytes)
             if text is None:
+                problems.add(problem)
                 continue
             version = _parse_version(text)
-            if version is not None:
-                match = _VERSION_RE.search(text)
-                raw = text.strip() if match is None else match.group(0)
-                return BuildInfo(
-                    known=True,
-                    raw=raw,
-                    version=version,
-                    source=path,
-                    searched=tuple(searched),
-                )
+            if version is None:
+                problems.add(f"{path}: no version number in it")
+                continue
+            match = _VERSION_RE.search(text)
+            raw = text.strip() if match is None else match.group(0)
+            return BuildInfo(
+                known=True,
+                raw=raw,
+                version=version,
+                source=path,
+                searched=tuple(searched),
+                problems=problems.as_tuple(),
+            )
 
     if user_dir is not None:
         console = user_dir / "console.txt"
         searched.append(str(console))
         head = _read_head(console, max_bytes)
-        if head is not None:
+        if head is None:
+            if console.exists():
+                problems.add(f"{console}: exists but could not be read")
+        else:
             match = _CONSOLE_VERSION_RE.search(head)
-            if match is not None:
+            if match is None:
+                if console.is_file():
+                    problems.add(
+                        f"{console}: no versionNumber= header in its first {max_bytes} bytes"
+                    )
+            else:
                 raw = match.group(1)
                 version = _parse_version(raw)
-                if version is not None:
+                if version is None:
+                    problems.add(f"{console}: unparseable versionNumber {raw!r}")
+                else:
                     return BuildInfo(
                         known=True,
                         raw=raw,
                         version=version,
                         source=console,
                         searched=tuple(searched),
+                        problems=problems.as_tuple(),
                     )
 
     return BuildInfo(
@@ -661,6 +715,7 @@ def detect_build(
         version=None,
         source=None,
         searched=tuple(searched),
+        problems=problems.as_tuple(),
         note=(
             "no local metadata reported a build; launch the game once so it writes "
             "console.txt, or read the build from the mod's observation stream"

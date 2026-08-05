@@ -17,8 +17,8 @@ Three rules shape the whole file:
   over a failure ack, because both directions follow from the same rule.
 * **Everything is bounded.** The poll loop has a computed iteration ceiling as
   well as a deadline, so a clock that stops moving cannot make it spin; retries
-  are bounded by the command policy *and* by the retryable-code set; the
-  diagnostics attached to a failure are truncated.
+  are bounded by the command policy, by the protocol's own retry ceiling and by
+  the retryable-code set; the diagnostics attached to a failure are truncated.
 """
 
 from __future__ import annotations
@@ -43,7 +43,7 @@ from ..protocol import (
     Observation,
     ReasonCode,
 )
-from ..protocol.messages import MAX_LEASE_MS, MIN_LEASE_MS
+from ..protocol.messages import MAX_LEASE_MS, MAX_RETRIES, MIN_LEASE_MS
 from .adapter import (
     ActionAdapter,
     AdapterRegistry,
@@ -257,9 +257,11 @@ class ActionEngine:
         """Run *request* to a terminal result.
 
         Always returns; never raises. Retries are bounded by
-        ``request.policy.max_retries`` and are only attempted for codes in
-        :data:`RETRYABLE_CODES` — retrying an ``INVALID_REF`` or a
-        ``POLICY_DENIED`` just spends the budget on the same refusal.
+        ``request.policy.max_retries`` *and* by the protocol's
+        :data:`~pz_agent_core.protocol.messages.MAX_RETRIES`, and are only
+        attempted for codes in :data:`RETRYABLE_CODES` — retrying an
+        ``INVALID_REF`` or a ``POLICY_DENIED`` just spends the budget on the
+        same refusal.
         """
         try:
             adapter = self.registry.get(request.action)
@@ -273,7 +275,11 @@ class ActionEngine:
                 status=ActionStatus.REJECTED,
             )
 
-        max_attempts = 1 + max(0, request.policy.max_retries)
+        # ``CommandPolicy`` only enforces the ceiling when it is parsed off the
+        # wire, so an in-process caller can hand over any number. The engine
+        # clamps rather than trusts it: an unbounded retry budget is an
+        # unbounded loop against the game.
+        max_attempts = 1 + min(MAX_RETRIES, max(0, request.policy.max_retries))
         attempt = 1
         result = self._run_attempt(adapter, request, attempt)
         while (
@@ -371,8 +377,52 @@ class ActionEngine:
 
         dispatch = self.sink.send(prepared)
         if dispatch.rejection is not None:
-            return replace(dispatch.rejection, attempt=attempt)
-        return self._observe(adapter, request, dispatch.command, before, attempt)
+            return self._sink_refusal(request, dispatch.rejection, command_id, attempt)
+
+        shipped = dispatch.command
+        try:
+            return self._observe(adapter, request, shipped, before, attempt)
+        except Exception as exc:
+            # The command is already with the mod. Whatever went wrong while
+            # watching it — a crashing adapter, a port that raised — the action
+            # must not be left running after the caller has been told the
+            # attempt is over.
+            self.sink.cancel(shipped, ReasonCode.INTERNAL_ERROR)
+            return self._failure(
+                request,
+                shipped.command_id,
+                ReasonCode.INTERNAL_ERROR,
+                f"{type(exc).__name__}: {exc}",
+                attempt=attempt,
+                evidence=self._world_evidence(before),
+            )
+
+    def _sink_refusal(
+        self,
+        request: ActionRequest,
+        rejection: ActionResult,
+        command_id: str,
+        attempt: int,
+    ) -> ActionResult:
+        """Adopt the sink's refusal — once it has been checked to be one.
+
+        The sink is another subsystem's code, and "the only route to success is
+        :meth:`_success`" is worth nothing if a port can hand back a ready-made
+        ``succeeded`` result instead of a rejection. A non-terminal one is
+        refused for the same reason: ``execute`` promises exactly one terminal
+        result, so an ``accepted`` reported as a refusal is a defect, not an
+        answer to relay.
+        """
+        if rejection.status is ActionStatus.SUCCEEDED or not rejection.is_terminal:
+            return self._failure(
+                request,
+                command_id,
+                ReasonCode.INTERNAL_ERROR,
+                f"the sink refused the command with a non-terminal or successful "
+                f"result ({rejection.status.value})",
+                attempt=attempt,
+            )
+        return replace(rejection, attempt=attempt)
 
     # -- the observe / verify loop ----------------------------------------
 
@@ -406,8 +456,14 @@ class ActionEngine:
             if observation is not None:
                 latest = observation
             for ack in self.sink.poll_acks():
-                if ack.command_id == command.command_id:
-                    last_ack = ack
+                if ack.command_id != command.command_id:
+                    continue
+                if last_ack is not None and last_ack.is_terminal:
+                    # Nothing follows a terminal ack. Letting a late progress
+                    # frame overwrite one would turn a reported failure into a
+                    # timeout — the engine would stop knowing why it failed.
+                    continue
+                last_ack = ack
 
             now = self.clock()
             if latest.game.paused:
@@ -429,7 +485,7 @@ class ActionEngine:
                     message,
                     attempt=attempt,
                     status=ActionStatus.CANCELLED,
-                    evidence=self._world_evidence(latest),
+                    evidence=self._world_evidence(latest, before=before),
                     started_at_ms=started_at,
                     last_ack=last_ack,
                 )
@@ -450,11 +506,11 @@ class ActionEngine:
                     return self._failure(
                         request,
                         command.command_id,
-                        last_ack.reason_code,
+                        self._failure_code(last_ack),
                         last_ack.message or f"mod reported {last_ack.status.value}",
                         attempt=attempt,
                         status=ActionStatus.FAILED,
-                        evidence=self._world_evidence(latest),
+                        evidence=self._world_evidence(latest, before=before),
                         started_at_ms=started_at,
                         last_ack=last_ack,
                     )
@@ -464,6 +520,14 @@ class ActionEngine:
                 deadline = min(deadline, now + self.post_ack_grace_ms)
                 continue
 
+            # The window is refreshed *before* it is judged: an iteration that
+            # both saw the action advance and reached the old deadline is
+            # progress, not a stall, and reporting NO_PROGRESS for it would be
+            # a claim contradicted by the observation just processed.
+            current = self._fingerprint(reporter, command, before, latest, last_ack)
+            if current != fingerprint:
+                fingerprint = current
+                stuck_deadline = now + self.no_progress_ms
             if now >= stuck_deadline:
                 self.sink.cancel(command, ReasonCode.NO_PROGRESS)
                 return self._failure(
@@ -473,24 +537,52 @@ class ActionEngine:
                     f"nothing observable changed for {self.no_progress_ms} ms",
                     attempt=attempt,
                     status=ActionStatus.FAILED,
-                    evidence=self._world_evidence(latest),
+                    evidence=self._world_evidence(latest, before=before),
                     started_at_ms=started_at,
                     last_ack=last_ack,
                 )
-            current = self._fingerprint(reporter, command, before, latest, last_ack)
-            if current != fingerprint:
-                fingerprint = current
-                stuck_deadline = now + self.no_progress_ms
 
-        # Budget spent. Whether the mod claimed success decides which lie we
-        # refuse to tell: "it worked" or "it is still going".
+        return self._budget_spent(
+            adapter,
+            request,
+            command,
+            before,
+            latest,
+            attempt=attempt,
+            started_at=started_at,
+            last_ack=last_ack,
+            mod_claimed_success=mod_claimed_success,
+        )
+
+    def _budget_spent(
+        self,
+        adapter: ActionAdapter,
+        request: ActionRequest,
+        command: Command,
+        before: Observation,
+        latest: Observation,
+        *,
+        attempt: int,
+        started_at: int,
+        last_ack: ActionResult | None,
+        mod_claimed_success: bool,
+    ) -> ActionResult:
+        """The poll loop ended without evidence — either exit says so plainly.
+
+        Whether the mod claimed success decides which lie is refused: "it
+        worked" or "it is still going". The elapsed time is measured rather than
+        assumed to be the configured timeout, because a paused game extends the
+        deadline (§ 4.14) and the loop then ends on its iteration ceiling
+        instead, having run far longer than the budget.
+        """
+        elapsed = self.clock() - started_at
         reason = (
             ReasonCode.POSTCONDITION_FAILED if mod_claimed_success else ReasonCode.ACTION_TIMEOUT
         )
         message = (
-            "the mod reported success but the postcondition was never observed"
+            f"the mod reported success but the postcondition was never observed in {elapsed} ms"
             if mod_claimed_success
-            else f"postcondition not observed within {adapter.timeout_ms} ms"
+            else f"postcondition not observed after {elapsed} ms (budget {adapter.timeout_ms} ms)"
         )
         if last_ack is None or not last_ack.is_terminal:
             self.sink.cancel(command, reason)
@@ -501,7 +593,7 @@ class ActionEngine:
             message,
             attempt=attempt,
             status=ActionStatus.FAILED,
-            evidence=self._world_evidence(latest),
+            evidence=self._world_evidence(latest, before=before),
             started_at_ms=started_at,
             last_ack=last_ack,
         )
@@ -725,20 +817,40 @@ class ActionEngine:
             lines.append(f"save_id={self.expected_save_id}")
         return lines[:MAX_DIAGNOSTICS]
 
-    def _world_evidence(self, observation: Observation) -> JsonDict:
+    @staticmethod
+    def _failure_code(ack: ActionResult) -> ReasonCode:
+        """The reason to report for a non-successful terminal ack.
+
+        A mod that lost track of itself can send ``failed`` while still naming
+        ``POSTCONDITION_MET``. Relaying that would put the one code reserved
+        for observed success on a result the engine could not verify, so it is
+        reported as what it actually is.
+        """
+        if ack.reason_code is ReasonCode.POSTCONDITION_MET:
+            return ReasonCode.POSTCONDITION_FAILED
+        return ack.reason_code
+
+    def _world_evidence(
+        self, observation: Observation, *, before: Observation | None = None
+    ) -> JsonDict:
         """What was observed at the moment of the refusal.
 
         Attached to failures only. It is deliberately not shaped like postcondition
-        evidence: it explains a refusal, it never proves one happened.
+        evidence: it explains a refusal, it never proves one happened. ``before``
+        supplies the other half of § 4.15's "observation seq before/after".
         """
-        return {
+        payload: JsonDict = {
             "observation_seq": observation.seq,
             "danger_level": observation.safety.danger_level.value,
             "manual_takeover": observation.safety.manual_takeover,
             "action_ownership": observation.action.ownership.value,
             "action_busy": observation.action.busy,
+            "action_type": observation.action.type,
             "save_id": observation.game.save_id,
         }
+        if before is not None:
+            payload["observation_seq_before"] = before.seq
+        return payload
 
     def _next_seq(self) -> int:
         """Sequence numbers for results this process synthesised itself.
