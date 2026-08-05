@@ -135,6 +135,8 @@ binding on humans too.
 | [`docs/TESTING.md`](docs/TESTING.md) | Unit, contract, Lua harness, game smoke |
 | [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) | Doctor codes and remedies |
 | [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md) | What this cannot do, and why |
+| [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) | Layout, the three CI gates, adding an action |
+| [`docs/RELEASE.md`](docs/RELEASE.md) | Version rules and the release gate |
 | [`docs/PROGRESS.md`](docs/PROGRESS.md) | Live task-graph status |
 | [`docs/blueprint/`](docs/blueprint/) | The original specification this implements |
 
