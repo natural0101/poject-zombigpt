@@ -80,6 +80,11 @@ REDACTED_PATH: Final = "[path-redacted]"
 #: those positions is supposed to be a token and a sentence there is a red flag.
 _TOKEN: Final = re.compile(r"^[A-Za-z0-9_.\-]{1,64}$")
 
+#: In-game clock, as the mod formats it. Kept separate from :data:`_TOKEN`
+#: because a timestamp legitimately contains colons, and widening the token
+#: pattern to admit them would widen it for item categories too.
+_WORLD_TIME: Final = re.compile(r"^[0-9T:\-. ]{1,32}$")
+
 _CONTROL: Final = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 
 #: Windows drive paths, UNC paths, POSIX home/system paths, and environment
@@ -255,8 +260,14 @@ def _compact_game(observation: Observation) -> JsonDict:
         "save_scope": save_scope(observation.game.save_id),
         "paused": observation.game.paused,
         "speed": observation.game.speed,
-        "world_time": _token(observation.game.world_time),
+        "world_time": _world_time(observation.game.world_time),
     }
+
+
+def _world_time(value: str | None) -> str | None:
+    if value is None or not _WORLD_TIME.match(value):
+        return None
+    return value
 
 
 def _compact_player(player: PlayerState) -> JsonDict:
