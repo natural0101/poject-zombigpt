@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/pz-agent/event.schema.json",
+  "title": "PZ Agent Event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "session_id",
+    "seq",
+    "timestamp_ms",
+    "type",
+    "data"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "session_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "timestamp_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "type": {
+      "enum": [
+        "heartbeat",
+        "observation_diff",
+        "action_ack",
+        "action_progress",
+        "action_terminal",
+        "danger_changed",
+        "need_changed",
+        "manual_takeover",
+        "panic_stop",
+        "session_changed",
+        "plan_changed",
+        "voice_input",
+        "voice_output",
+        "diagnostic"
+      ]
+    },
+    "data": {
+      "type": "object"
+    }
+  }
+}

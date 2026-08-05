@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/pz-agent/config.schema.json",
+  "title": "PZ Agent Configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "game",
+    "session",
+    "safety",
+    "planner",
+    "voice"
+  ],
+  "properties": {
+    "game": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "install_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "user_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "expected_build": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "expected_build"
+      ]
+    },
+    "session": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "default_mode": {
+          "enum": [
+            "OFF",
+            "OBSERVE",
+            "ASSISTED",
+            "AUTONOMOUS",
+            "REFLEX_ONLY"
+          ]
+        },
+        "require_backup": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "default_mode",
+        "require_backup"
+      ]
+    },
+    "safety": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "panic_hotkey": {
+          "type": "string"
+        },
+        "manual_takeover": {
+          "type": "boolean"
+        },
+        "allow_multiplayer": {
+          "type": "boolean"
+        },
+        "max_autonomous_radius": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "panic_hotkey",
+        "manual_takeover",
+        "allow_multiplayer"
+      ]
+    },
+    "planner": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "enum": [
+            "none",
+            "openai",
+            "anthropic",
+            "local",
+            "teamon"
+          ]
+        },
+        "max_steps": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10
+        }
+      },
+      "required": [
+        "provider",
+        "max_steps"
+      ]
+    },
+    "voice": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "adapter": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "enabled",
+        "adapter"
+      ]
+    }
+  }
+}

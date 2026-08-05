@@ -1,0 +1,20 @@
+{
+  "protocol_version": "1.0",
+  "session_id": "11111111-1111-4111-8111-111111111111",
+  "seq": 12,
+  "command_id": "22222222-2222-4222-8222-222222222222",
+  "idempotency_key": "goal-eat-step1-attempt1",
+  "issued_at_ms": 1770000001000,
+  "lease_ms": 15000,
+  "expected_observation_seq": 55,
+  "action": "consume.eat",
+  "args": {
+    "item_ref": "item:11111111-1111-4111-8111-111111111111:9002:1",
+    "fraction": 1.0
+  },
+  "policy": {
+    "allow_interrupt": true,
+    "max_retries": 1,
+    "risk_permission": "P2"
+  }
+}

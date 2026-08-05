@@ -1,0 +1,14 @@
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.zip binary
+*.ico binary
+
+# The game reads these; keep them LF and UTF-8 without a BOM.
+*.lua text eol=lf
+mod.info text eol=lf
+
+# Generated, but tracked — reviewers should see them collapsed.
+schemas/*.schema.json linguist-generated=false
+docs/blueprint/** linguist-documentation=true

@@ -1,0 +1,128 @@
+[build-system]
+requires = ["hatchling>=1.21"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pz-agent"
+version = "0.1.0"
+description = "Local AI agent for Project Zomboid Build 42.20: structured observation, verified action engine, MCP boundary, voice companion."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+authors = [{ name = "pz-agent contributors" }]
+keywords = ["project-zomboid", "agent", "mcp", "game-automation"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Operating System :: Microsoft :: Windows",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Games/Entertainment",
+]
+# The core package is deliberately dependency-free: it must import and run on a
+# bare CPython so that `provider = "none"` works with no network and no wheels.
+dependencies = []
+
+[project.optional-dependencies]
+mcp = ["mcp>=1.2"]
+dev = [
+  "jsonschema>=4.21",
+  "mypy>=1.9",
+  "pytest>=8.0",
+  "pytest-asyncio>=0.23",
+  "ruff>=0.4",
+  "types-PyYAML>=6.0",
+  "PyYAML>=6.0",
+]
+
+[project.scripts]
+pz-agent = "pz_agent_cli.__main__:main"
+pz-agent-mcp = "pz_agent_mcp.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/natural0101/poject-zombigpt"
+Issues = "https://github.com/natural0101/poject-zombigpt/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = [
+  "packages/pz_agent_core/src/pz_agent_core",
+  "packages/pz_agent_mcp/src/pz_agent_mcp",
+  "packages/pz_agent_cli/src/pz_agent_cli",
+  "packages/pz_agent_voice/src/pz_agent_voice",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = [
+  "packages/pz_agent_core/src",
+  "packages/pz_agent_mcp/src",
+  "packages/pz_agent_cli/src",
+  "packages/pz_agent_voice/src",
+  "tests",
+]
+
+[tool.ruff.lint]
+select = [
+  "E",    # pycodestyle
+  "F",    # pyflakes
+  "I",    # isort
+  "B",    # bugbear
+  "UP",   # pyupgrade
+  "SIM",  # simplify
+  "RUF",  # ruff rules
+  "S",    # bandit — security
+  "T20",  # no stray print outside the CLI
+  "PL",   # pylint subset
+]
+ignore = [
+  "PLR0911", # multiple returns are idiomatic in validators
+  "PLR0912", # branch count — decision tables are inherently branchy
+  "PLR0913", # argument count — protocol envelopes carry many fields
+  "PLR2004", # magic values are readable in policy scoring code
+  "S101",    # assert is allowed; tests and internal invariants use it
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S", "PLR"]
+"packages/pz_agent_cli/**" = ["T20"]  # the CLI is the one place that prints
+"scripts/**" = ["T20", "S"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unreachable = true
+mypy_path = [
+  "packages/pz_agent_core/src",
+  "packages/pz_agent_mcp/src",
+  "packages/pz_agent_cli/src",
+  "packages/pz_agent_voice/src",
+]
+files = [
+  "packages/pz_agent_core/src",
+  "packages/pz_agent_mcp/src",
+  "packages/pz_agent_cli/src",
+  "packages/pz_agent_voice/src",
+  "tests",
+]
+
+[[tool.mypy.overrides]]
+module = ["mcp.*", "jsonschema.*", "yaml.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+pythonpath = [
+  "packages/pz_agent_core/src",
+  "packages/pz_agent_mcp/src",
+  "packages/pz_agent_cli/src",
+  "packages/pz_agent_voice/src",
+]
+addopts = "-q --strict-markers --strict-config"
+markers = [
+  "contract: wire-format conformance against schemas/",
+  "integration: exercises more than one subsystem end to end",
+  "game_smoke: requires a running Project Zomboid session; skipped by default",
+]
+filterwarnings = ["error"]

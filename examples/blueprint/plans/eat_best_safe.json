@@ -1,0 +1,23 @@
+{
+  "schema_version": "1.0",
+  "goal_id": "33333333-3333-4333-8333-333333333333",
+  "summary": "Снизить голод безопасной едой из переносимого инвентаря",
+  "risk_class": "P2",
+  "confidence": 0.98,
+  "steps": [
+    {
+      "step_id": "s1",
+      "action": "consume.eat",
+      "args": {
+        "selection": "best_safe",
+        "target_hunger": 0.15
+      },
+      "success": {
+        "type": "hunger_at_most",
+        "value": 0.15
+      },
+      "on_failure": "ask_user",
+      "requires_confirmation": false
+    }
+  ]
+}

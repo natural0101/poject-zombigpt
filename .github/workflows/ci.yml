@@ -1,0 +1,109 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev, "claude/**"]
+  pull_request:
+    branches: [main, dev]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: Create environment
+        run: |
+          uv venv .venv --python ${{ matrix.python-version }}
+          uv pip install --python .venv/bin/python -e ".[dev]"
+
+      - name: Ruff format
+        run: .venv/bin/python -m ruff format --check .
+
+      - name: Ruff lint
+        run: .venv/bin/python -m ruff check --output-format=github .
+
+      - name: Mypy
+        run: .venv/bin/python -m mypy
+
+      - name: Forbidden patterns and secrets
+        run: .venv/bin/python scripts/check_forbidden.py
+
+      - name: Version sync
+        run: .venv/bin/python scripts/check_versions.py
+
+      - name: Schema validity
+        run: .venv/bin/python scripts/check_schemas.py
+
+      - name: Tests
+        run: .venv/bin/python -m pytest --junitxml=pytest-${{ matrix.python-version }}.xml
+
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-${{ matrix.python-version }}
+          path: pytest-${{ matrix.python-version }}.xml
+          if-no-files-found: ignore
+
+  lua:
+    name: lua
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Lua and luacheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lua5.4 luarocks
+          sudo luarocks install luacheck
+
+      - name: Luacheck
+        run: luacheck pz-mod --config .luacheckrc
+
+      - name: Lua unit tests
+        run: |
+          for test in tests/lua/*.lua; do
+            echo "--- $test"
+            lua5.4 "$test"
+          done
+
+  build:
+    name: build artifact
+    runs-on: ubuntu-latest
+    needs: [python, lua]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Build wheel and sdist
+        run: uv build --out-dir dist
+
+      - name: Upload distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: pz-agent-dist
+          path: dist/*

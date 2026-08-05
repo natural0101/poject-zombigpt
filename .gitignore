@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# pz-agent runtime state — never commit local session data
+.pz-agent/
+*.session.json
+compat/generated_api_report.json
+logs/
+*.jsonl
+!tests/fixtures/**/*.jsonl
+!examples/**/*.jsonl
+
+# Never commit game data, saves or Steam material
+Zomboid/
+saves/
+*.pzsave
+media/lua/vanilla/
+
+# Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets.toml
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

@@ -1,0 +1,32 @@
+id: eat-from-backpack
+title: Достать безопасную еду из надетого рюкзака и поесть
+mode: ASSISTED
+fixture:
+  hunger: 0.42
+  main_inventory: []
+  worn_backpack:
+    - Base.Apple
+    - Base.WaterBottleFull
+preconditions:
+  - session_connected
+  - session_armed
+  - no_danger
+steps:
+  - tool: pz_observe_inventory
+    args:
+      scope: carried
+      include_nested: true
+      category: food
+      safe_only: true
+  - tool: pz_action_eat
+    args:
+      selection: best_safe
+      target_hunger: 0.15
+assertions:
+  - terminal_status: succeeded
+  - hunger_decreased: true
+  - no_direct_container_mutation: true
+  - no_false_success: true
+interruptions:
+  manual_takeover: cancel
+  danger_high: cancel

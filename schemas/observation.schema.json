@@ -1,0 +1,511 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/pz-agent/observation.schema.json",
+  "title": "Project Zomboid Agent Observation",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "session_id",
+    "seq",
+    "timestamp_ms",
+    "game",
+    "player",
+    "safety",
+    "action"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "session_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "timestamp_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "full": {
+      "type": "boolean",
+      "default": true
+    },
+    "game": {
+      "type": "object",
+      "required": [
+        "build",
+        "save_id",
+        "paused",
+        "speed"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "build": {
+          "type": "string",
+          "minLength": 1
+        },
+        "save_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "paused": {
+          "type": "boolean"
+        },
+        "speed": {
+          "type": "number",
+          "minimum": 0
+        },
+        "world_time": {
+          "type": "string"
+        }
+      }
+    },
+    "player": {
+      "type": "object",
+      "required": [
+        "present",
+        "alive",
+        "position",
+        "stats",
+        "moodles"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "present": {
+          "type": "boolean"
+        },
+        "alive": {
+          "type": "boolean"
+        },
+        "position": {
+          "type": "object",
+          "required": [
+            "x",
+            "y",
+            "z"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "x": {
+              "type": "number"
+            },
+            "y": {
+              "type": "number"
+            },
+            "z": {
+              "type": "integer"
+            },
+            "direction": {
+              "type": "string"
+            }
+          }
+        },
+        "stats": {
+          "type": "object",
+          "additionalProperties": {
+            "type": [
+              "number",
+              "integer",
+              "boolean",
+              "null"
+            ]
+          },
+          "properties": {
+            "health": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "endurance": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "hunger": {
+              "type": "number",
+              "minimum": 0
+            },
+            "thirst": {
+              "type": "number",
+              "minimum": 0
+            },
+            "fatigue": {
+              "type": "number",
+              "minimum": 0
+            }
+          }
+        },
+        "moodles": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "wounds": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "ref",
+              "kind",
+              "severity"
+            ],
+            "properties": {
+              "ref": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string"
+              },
+              "severity": {
+                "type": "number"
+              },
+              "bleeding": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": true
+          }
+        },
+        "hands": {
+          "type": "object",
+          "properties": {
+            "primary": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "secondary": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    "inventory": {
+      "type": "object",
+      "properties": {
+        "containers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/container"
+          }
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/item"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "nearby": {
+      "type": "object",
+      "properties": {
+        "objects": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "ref",
+              "kind",
+              "distance"
+            ],
+            "properties": {
+              "ref": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string"
+              },
+              "distance": {
+                "type": "number",
+                "minimum": 0
+              },
+              "position": {
+                "$ref": "#/$defs/position"
+              },
+              "semantics": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "additionalProperties": true
+          }
+        },
+        "zombies": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "ref",
+              "distance"
+            ],
+            "properties": {
+              "ref": {
+                "type": "string"
+              },
+              "distance": {
+                "type": "number",
+                "minimum": 0
+              },
+              "visible": {
+                "type": "boolean"
+              },
+              "chasing": {
+                "type": "boolean"
+              },
+              "position": {
+                "$ref": "#/$defs/position"
+              }
+            },
+            "additionalProperties": true
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "action": {
+      "type": "object",
+      "required": [
+        "ownership",
+        "busy"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "busy": {
+          "type": "boolean"
+        },
+        "ownership": {
+          "enum": [
+            "none",
+            "mod",
+            "manual",
+            "ambiguous"
+          ]
+        },
+        "action_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "progress": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1
+        }
+      }
+    },
+    "safety": {
+      "type": "object",
+      "required": [
+        "armed",
+        "mode",
+        "danger_level",
+        "manual_takeover"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "armed": {
+          "type": "boolean"
+        },
+        "mode": {
+          "enum": [
+            "OFF",
+            "OBSERVE",
+            "ASSISTED",
+            "AUTONOMOUS",
+            "REFLEX_ONLY",
+            "EXPERIMENTAL_INPUT"
+          ]
+        },
+        "danger_level": {
+          "enum": [
+            "none",
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ]
+        },
+        "manual_takeover": {
+          "type": "boolean"
+        },
+        "sidecar_stale": {
+          "type": "boolean"
+        }
+      }
+    },
+    "capability_revision": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "active_goal_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "$defs": {
+    "position": {
+      "type": "object",
+      "required": [
+        "x",
+        "y",
+        "z"
+      ],
+      "properties": {
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        },
+        "z": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false
+    },
+    "container": {
+      "type": "object",
+      "required": [
+        "ref",
+        "kind",
+        "name",
+        "parent_ref"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "ref": {
+          "type": "string",
+          "pattern": "^container:"
+        },
+        "kind": {
+          "enum": [
+            "player_main",
+            "carried",
+            "worn",
+            "world",
+            "vehicle",
+            "floor"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "parent_ref": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "capacity": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "used_capacity": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "accessible": {
+          "type": "boolean"
+        }
+      }
+    },
+    "item": {
+      "type": "object",
+      "required": [
+        "ref",
+        "container_ref",
+        "full_type",
+        "display_name",
+        "category",
+        "weight"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "ref": {
+          "type": "string",
+          "pattern": "^item:"
+        },
+        "container_ref": {
+          "type": "string",
+          "pattern": "^container:"
+        },
+        "full_type": {
+          "type": "string"
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "category": {
+          "type": "string"
+        },
+        "weight": {
+          "type": "number",
+          "minimum": 0
+        },
+        "favorite": {
+          "type": "boolean"
+        },
+        "equipped": {
+          "type": "boolean"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "food": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "literature": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "fluid": {
+          "type": [
+            "object",
+            "null"
+          ]
+        }
+      }
+    }
+  }
+}

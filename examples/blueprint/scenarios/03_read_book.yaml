@@ -1,0 +1,23 @@
+id: read-suitable-book
+title: Найти подходящую литературу и начать подтверждённое чтение
+mode: ASSISTED
+fixture:
+  traits: []
+  worn_backpack:
+    - type: Base.BookCarpentry1
+      pages_read: 0
+steps:
+  - tool: pz_action_read
+    args:
+      selection: best_for_goal
+      goal: carpentry
+      until:
+        type: minutes
+        value: 10
+assertions:
+  - reading_started: true
+  - progress_observed: true
+  - terminal_status: succeeded
+interruptions:
+  danger_high: cancel
+  manual_takeover: cancel

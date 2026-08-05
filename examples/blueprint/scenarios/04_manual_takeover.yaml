@@ -1,0 +1,21 @@
+id: manual-takeover
+title: Пользователь мгновенно перехватывает управление
+mode: ASSISTED
+fixture:
+  safe_corridor_length: 10
+steps:
+  - tool: pz_action_move_to
+    args:
+      target:
+        relative:
+          direction: east
+          tiles: 8
+  - inject_user_input:
+      key: W
+      after_ms: 500
+assertions:
+  - event: manual_takeover
+  - action_terminal: cancelled
+  - reason_code: USER_TAKEOVER
+  - session_state: suspended
+  - no_automatic_resume: true

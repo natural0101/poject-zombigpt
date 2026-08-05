@@ -1,0 +1,147 @@
+{
+  "schema_version": "1.0",
+  "session_id": "11111111-1111-4111-8111-111111111111",
+  "seq": 55,
+  "timestamp_ms": 1770000000000,
+  "full": true,
+  "game": {
+    "build": "42.20",
+    "save_id": "safe-house-fixture",
+    "paused": false,
+    "speed": 1.0,
+    "world_time": "1993-07-10T09:00:00"
+  },
+  "player": {
+    "present": true,
+    "alive": true,
+    "position": {
+      "x": 10600.5,
+      "y": 9600.5,
+      "z": 0,
+      "direction": "S"
+    },
+    "stats": {
+      "health": 1.0,
+      "endurance": 0.82,
+      "hunger": 0.42,
+      "thirst": 0.18,
+      "fatigue": 0.12
+    },
+    "moodles": {
+      "hungry": 2,
+      "thirsty": 0,
+      "tired": 0,
+      "panic": 0
+    },
+    "wounds": [],
+    "hands": {
+      "primary": null,
+      "secondary": null
+    }
+  },
+  "inventory": {
+    "containers": [
+      {
+        "ref": "container:11111111-1111-4111-8111-111111111111:player-main",
+        "kind": "player_main",
+        "name": "Main Inventory",
+        "parent_ref": null,
+        "capacity": 50,
+        "used_capacity": 5.0,
+        "accessible": true
+      },
+      {
+        "ref": "container:11111111-1111-4111-8111-111111111111:worn:Back:9001",
+        "kind": "worn",
+        "name": "Large Backpack",
+        "parent_ref": "container:11111111-1111-4111-8111-111111111111:player-main",
+        "capacity": 27,
+        "used_capacity": 4.2,
+        "accessible": true
+      }
+    ],
+    "items": [
+      {
+        "ref": "item:11111111-1111-4111-8111-111111111111:9001:1",
+        "container_ref": "container:11111111-1111-4111-8111-111111111111:player-main",
+        "full_type": "Base.Bag_BigHikingBag",
+        "display_name": "Large Backpack",
+        "category": "Container",
+        "weight": 1.0,
+        "favorite": false,
+        "equipped": true,
+        "tags": [
+          "container"
+        ],
+        "food": null,
+        "literature": null,
+        "fluid": null
+      },
+      {
+        "ref": "item:11111111-1111-4111-8111-111111111111:9002:1",
+        "container_ref": "container:11111111-1111-4111-8111-111111111111:worn:Back:9001",
+        "full_type": "Base.Apple",
+        "display_name": "Apple",
+        "category": "Food",
+        "weight": 0.2,
+        "favorite": false,
+        "equipped": false,
+        "tags": [
+          "food",
+          "fresh"
+        ],
+        "food": {
+          "safe": true,
+          "hunger_change": -0.15,
+          "calories": 95,
+          "freshness": "fresh",
+          "poisonous": false,
+          "raw_risk": false
+        },
+        "literature": null,
+        "fluid": null
+      },
+      {
+        "ref": "item:11111111-1111-4111-8111-111111111111:9003:1",
+        "container_ref": "container:11111111-1111-4111-8111-111111111111:worn:Back:9001",
+        "full_type": "Base.WaterBottleFull",
+        "display_name": "Water Bottle",
+        "category": "Drainable",
+        "weight": 0.8,
+        "favorite": false,
+        "equipped": false,
+        "tags": [
+          "drink",
+          "water"
+        ],
+        "food": null,
+        "literature": null,
+        "fluid": {
+          "kind": "water",
+          "tainted": false,
+          "fraction": 0.8
+        }
+      }
+    ]
+  },
+  "nearby": {
+    "objects": [],
+    "zombies": []
+  },
+  "action": {
+    "busy": false,
+    "ownership": "none",
+    "action_id": null,
+    "type": null,
+    "progress": null
+  },
+  "safety": {
+    "armed": true,
+    "mode": "ASSISTED",
+    "danger_level": "none",
+    "manual_takeover": false,
+    "sidecar_stale": false
+  },
+  "capability_revision": 1,
+  "active_goal_id": null
+}

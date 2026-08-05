@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/pz-agent/command.schema.json",
+  "title": "PZ Agent Command",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocol_version",
+    "session_id",
+    "seq",
+    "command_id",
+    "idempotency_key",
+    "issued_at_ms",
+    "lease_ms",
+    "action",
+    "args"
+  ],
+  "properties": {
+    "protocol_version": {
+      "const": "1.0"
+    },
+    "session_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "command_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "idempotency_key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "issued_at_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "lease_ms": {
+      "type": "integer",
+      "minimum": 100,
+      "maximum": 300000
+    },
+    "expected_observation_seq": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0
+    },
+    "action": {
+      "enum": [
+        "session.arm",
+        "session.disarm",
+        "safety.stop",
+        "action.wait",
+        "movement.move_to",
+        "movement.move_near",
+        "inventory.transfer",
+        "inventory.ensure_main",
+        "inventory.equip",
+        "inventory.unequip",
+        "consume.eat",
+        "consume.drink",
+        "literature.read",
+        "world.inspect",
+        "plan.cancel"
+      ]
+    },
+    "args": {
+      "type": "object"
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "allow_interrupt": {
+          "type": "boolean"
+        },
+        "max_retries": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3
+        },
+        "risk_permission": {
+          "enum": [
+            "P0",
+            "P1",
+            "P2",
+            "P3",
+            "P4"
+          ]
+        }
+      }
+    }
+  }
+}

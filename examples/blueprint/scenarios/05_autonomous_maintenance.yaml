@@ -1,0 +1,20 @@
+id: autonomous-maintenance
+title: 30 минут безопасного автономного поддержания потребностей
+mode: AUTONOMOUS
+duration_real_minutes: 30
+permissions:
+  max: P2
+  home_radius: 20
+fixture:
+  safe_house: true
+  supplies:
+    food: 5
+    clean_water: 5
+assertions:
+  - no_death: true
+  - no_command_replay: true
+  - no_action_loop: true
+  - no_false_success: true
+  - logs_bounded: true
+  - manual_takeover_available: true
+  - save_loadable_after: true

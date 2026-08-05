@@ -1,0 +1,19 @@
+id: drink-clean-water
+title: Выпить безопасную воду из рюкзака
+mode: ASSISTED
+fixture:
+  thirst: 0.40
+  worn_backpack:
+    - type: Base.WaterBottleFull
+      fluid: water
+      tainted: false
+      fraction: 0.8
+steps:
+  - tool: pz_action_drink
+    args:
+      selection: best_safe
+      target_thirst: 0.10
+assertions:
+  - terminal_status: succeeded
+  - thirst_decreased: true
+  - tainted_consumed: false

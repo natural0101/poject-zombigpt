@@ -1,0 +1,287 @@
+version: 1
+project: pz-agent
+tasks:
+  - id: T001
+    title: Initialize repository and quality toolchain
+    phase: 1
+    depends_on: []
+    outputs: [git_repo, ci, lint, typecheck, test_runner]
+    acceptance:
+      - clean baseline checks
+      - version source of truth
+
+  - id: T002
+    title: Detect Project Zomboid installation and user directory
+    phase: 0
+    depends_on: [T001]
+    outputs: [install_detector, path_tests]
+    acceptance:
+      - multiple Steam libraries
+      - unicode paths
+      - custom homedir
+
+  - id: T003
+    title: Build local API compatibility scanner
+    phase: 0
+    depends_on: [T002]
+    outputs: [api_report, symbol_index]
+    acceptance:
+      - read-only
+      - does not vendor game files
+
+  - id: T004
+    title: Implement doctor CLI
+    phase: 0
+    depends_on: [T002, T003]
+    outputs: [doctor_command]
+    acceptance:
+      - stable check codes
+      - remediation text
+
+  - id: T005
+    title: Define protocol domain models and JSON schemas
+    phase: 1
+    depends_on: [T001]
+    outputs: [schemas, fixtures]
+    acceptance:
+      - valid and invalid fixtures
+      - schema sync test
+
+  - id: T006
+    title: Implement Lua mod skeleton and heartbeat
+    phase: 2
+    depends_on: [T003, T005]
+    outputs: [lua_mod, game_heartbeat]
+    acceptance:
+      - starts off
+      - reports build and mod version
+
+  - id: T007
+    title: Implement sidecar handshake and locks
+    phase: 2
+    depends_on: [T005, T006]
+    outputs: [session_manager]
+    acceptance:
+      - stale recovery
+      - no old command replay
+
+  - id: T008
+    title: Implement command queue and acknowledgements
+    phase: 2
+    depends_on: [T007]
+    outputs: [ipc_queue, ack_stream]
+    acceptance:
+      - sequence
+      - idempotency
+      - TTL
+      - partial line recovery
+
+  - id: T009
+    title: Implement panic stop and manual takeover
+    phase: 2
+    depends_on: [T006, T008]
+    outputs: [panic_stop, takeover_events]
+    acceptance:
+      - works without planner
+      - only owned actions cancelled
+
+  - id: T010
+    title: Implement save backup subsystem
+    phase: 2
+    depends_on: [T002]
+    outputs: [backup_cli, restore_cli]
+    acceptance:
+      - manifest and hashes
+      - restore only while game closed
+
+  - id: T011
+    title: Observe player scalar state
+    phase: 3
+    depends_on: [T006, T008]
+    outputs: [player_observation]
+    acceptance:
+      - full and diff snapshot
+
+  - id: T012
+    title: Observe nested inventory with stable refs
+    phase: 3
+    depends_on: [T011]
+    outputs: [inventory_observation]
+    acceptance:
+      - main and worn containers
+      - stale generation
+
+  - id: T013
+    title: Observe nearby world and threats
+    phase: 3
+    depends_on: [T011]
+    outputs: [world_observation, threat_level]
+    acceptance:
+      - bounded radius
+      - semantic objects
+
+  - id: T014
+    title: Implement action lifecycle framework
+    phase: 4
+    depends_on: [T008, T011]
+    outputs: [action_engine]
+    acceptance:
+      - preconditions
+      - terminal results
+      - timeout
+      - postconditions
+
+  - id: T015
+    title: Implement movement adapter
+    phase: 4
+    depends_on: [T013, T014]
+    outputs: [move_action]
+    acceptance:
+      - radius verification
+      - stuck detection
+      - takeover cancellation
+
+  - id: T016
+    title: Implement inventory transfer adapter
+    phase: 4
+    depends_on: [T012, T014]
+    outputs: [transfer_action, ensure_main]
+    acceptance:
+      - timed transfer
+      - no direct mutation fallback
+      - destination verification
+
+  - id: T017
+    title: Implement safe food selection and eat adapter
+    phase: 4
+    depends_on: [T016]
+    outputs: [food_policy, eat_action]
+    acceptance:
+      - raw/rotten/poison filters
+      - partial fraction
+      - hunger verification
+
+  - id: T018
+    title: Implement safe drink selection and carried drink adapter
+    phase: 4
+    depends_on: [T016]
+    outputs: [drink_policy, drink_action]
+    acceptance:
+      - tainted reject
+      - volume/thirst verification
+
+  - id: T019
+    title: Implement literature selection and read adapter
+    phase: 4
+    depends_on: [T016]
+    outputs: [reading_policy, read_action]
+    acceptance:
+      - illiterate and level checks
+      - progress
+      - interruption
+
+  - id: T020
+    title: Implement deterministic reflex guard
+    phase: 6
+    depends_on: [T009, T013, T014]
+    outputs: [reflex_guard]
+    acceptance:
+      - no LLM
+      - bounded flee
+      - safety events
+
+  - id: T021
+    title: Implement MCP server
+    phase: 5
+    depends_on: [T011, T014]
+    outputs: [mcp_tools, resources, subscriptions]
+    acceptance:
+      - stdio
+      - typed tools
+      - stable errors
+
+  - id: T022
+    title: Implement permission and autonomy policy
+    phase: 6
+    depends_on: [T017, T018, T019, T020]
+    outputs: [policy_engine]
+    acceptance:
+      - modes
+      - risk classes
+      - resource reservation
+      - anti-loop
+
+  - id: T023
+    title: Implement typed planner and critic
+    phase: 7
+    depends_on: [T021, T022]
+    outputs: [planner, critic, provider_none]
+    acceptance:
+      - strict schema
+      - short plans
+      - no raw code
+
+  - id: T024
+    title: Implement memory store
+    phase: 7
+    depends_on: [T012, T013, T023]
+    outputs: [bounded_memory]
+    acceptance:
+      - save scoped
+      - migrations
+      - retention
+
+  - id: T025
+    title: Implement TeamON voice adapter interface
+    phase: 8
+    depends_on: [T021, T023]
+    outputs: [voice_adapter, fake_voice]
+    acceptance:
+      - barge in
+      - stop bypass
+      - concise statuses
+
+  - id: T026
+    title: Implement installer and launcher
+    phase: 9
+    depends_on: [T004, T006, T007, T010]
+    outputs: [installer, launcher, uninstaller]
+    acceptance:
+      - non-admin
+      - rollback
+      - unicode paths
+
+  - id: T027
+    title: Implement diagnostics and support bundle
+    phase: 9
+    depends_on: [T004, T008, T014]
+    outputs: [logs, traces, support_bundle]
+    acceptance:
+      - redaction
+      - bounded logs
+
+  - id: T028
+    title: Build live game smoke harness
+    phase: 9
+    depends_on: [T015, T016, T017, T018, T019]
+    outputs: [smoke_runner, evidence_format]
+    acceptance:
+      - S01 through S15 documented
+
+  - id: T029
+    title: Run endurance and recovery tests
+    phase: 9
+    depends_on: [T020, T022, T028]
+    outputs: [endurance_report]
+    acceptance:
+      - no replay
+      - no loops
+      - no false success
+
+  - id: T030
+    title: Produce release artifact and final report
+    phase: 9
+    depends_on: [T021, T025, T026, T027, T029]
+    outputs: [release_archive, checksums, final_report]
+    acceptance:
+      - definition of done complete
