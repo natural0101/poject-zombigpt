@@ -581,8 +581,10 @@ def _choose_fraction(
     quantised = math.ceil(max(needed, config.min_drink_fraction) / step) * step
     fraction = min(1.0, round(quantised, 4))
     if last_container and not context.thirst_critical:
-        capped = min(fraction, config.max_last_container_fraction)
-        return capped, True, capped < fraction
+        cap = config.max_last_container_fraction
+        # Reported as capped when the portion sits at the ceiling too, not only
+        # when it was cut: in both cases the cap is what stopped it going up.
+        return min(fraction, cap), True, fraction >= cap
     return fraction, True, False
 
 

@@ -135,11 +135,17 @@ def test_tainted_water_can_be_permitted_explicitly() -> None:
 
 def test_alcohol_is_permitted_only_by_configuration() -> None:
     beer = drink_item("beer", display_name="Beer", type="alcohol", water=False, alcohol_units=0.6)
+    # A second bottle keeps the last-container rule out of this assertion.
+    crate = drink_item(
+        "crate", display_name="Beer", full_type="Base.BeerCrate", type="alcohol", water=False
+    )
 
-    assert select_drink(inventory(beer), thirsty_player(0.5)).is_refusal
+    refused = select_drink(inventory(beer, crate), thirsty_player(0.5))
+    assert refused.is_refusal
+    assert reason_for(refused, beer.ref) is RejectionReason.ALCOHOL_NOT_PERMITTED
 
     permitted = select_drink(
-        inventory(beer),
+        inventory(beer, crate),
         thirsty_player(0.5),
         PolicyConfig(allow_alcohol_for_thirst=True),
     )
@@ -203,13 +209,15 @@ def test_the_last_container_is_emptied_when_thirst_is_critical() -> None:
 def test_partial_drinking_caps_the_last_container_instead_of_refusing_it() -> None:
     only = drink_item("only", thirst_change=-1.0)
 
-    selection = select_drink(inventory(only), thirsty_player(0.5), capabilities=PARTIAL)
+    # Thirst 0.6 leaves a 0.45 deficit, which would otherwise take 75% of the
+    # bottle; the last-container rule holds it to half.
+    selection = select_drink(inventory(only), thirsty_player(0.6), capabilities=PARTIAL)
 
     choice = selection.choice
     assert choice is not None
     assert choice.portioned
     assert choice.fraction == PolicyConfig().max_last_container_fraction
-    assert "last" in choice.rationale
+    assert "last drink in reach" in choice.rationale
 
 
 def test_a_second_container_lifts_the_last_container_rule() -> None:
