@@ -48,6 +48,25 @@ drift out of sync with `pz_agent_core.version`.
   limitations, MCP boundary, quick start, troubleshooting, development and
   release.
 
+- Capability model and read-only symbol scanner. A static scan yields
+  `available_unverified` at best; only a live runtime confirmation produces
+  `verified`, and a report from a different build downgrades every verified
+  entry. The scan records symbol names, paths, signature lines and file hashes
+  but never file contents.
+- Action lifecycle engine. Preconditions are checked against an observation
+  newer than anything already seen, and the mod's ack never overrides
+  observation: without evidence from the adapter's verify, the result is
+  `POSTCONDITION_FAILED` regardless of what the mod claimed.
+- Deterministic selection policy for food, drink and literature, returning the
+  score breakdown and the reason each rejected candidate lost.
+- Observation diff, bounded store and the compact planner view, which is the
+  only observation an LLM ever sees.
+- Deterministic reflex guard, threat assessment and priority arbitration with
+  anti-loop rate limiting. No LLM in the path, so it runs whether or not a
+  planner is configured.
+- Cross-language contract tests asserting the Lua and Python halves agree on
+  versions, the action whitelist, reason codes, enums and IPC filenames.
+
 ### Fixed
 
 - `scripts/check.sh` ran luacheck but never executed the Lua tests, so failing

@@ -43,6 +43,17 @@ DEFAULT_MAX_BACKUP_BYTES: Final = 4 * 1024 * 1024 * 1024
 
 DEFAULT_MAX_BACKUP_FILES: Final = 200_000
 
+#: Directories inside one save. Not configurable: a save's shape is the game's,
+#: not the user's, and the only tree with more subdirectories than this is one
+#: the manager was pointed at by mistake. It exists so the *traversal* is
+#: bounded and not only the file count — a cap that is checked after the whole
+#: listing has been materialised protects nothing.
+MAX_BACKUP_DIRS: Final = 50_000
+
+#: A manifest for the maximum-size backup is a few tens of megabytes; anything
+#: past this is not a manifest this module wrote.
+MAX_MANIFEST_BYTES: Final = 64 * 1024 * 1024
+
 #: Copy buffer. Large enough to be fast on spinning disks, small enough that
 #: memory use is independent of save size.
 COPY_CHUNK_BYTES: Final = 1024 * 1024
@@ -354,10 +365,17 @@ class BackupManager:
     def create(self, save_id: str) -> BackupRecord:
         """Copy the save named by *save_id* into a new, hash-manifested backup.
 
+        The staged backup is re-read from disk and re-hashed against its own
+        manifest *before* it is moved into place (docs/blueprint/08_SAFETY.md
+        §8.3, "verify readable"). A record is only returned once that has
+        passed, so a returned record means a verified backup exists rather than
+        that a copy loop finished without raising.
+
         Raises:
             BackupError: if the save id is unusable.
             SaveNotFoundError: if the save directory does not exist.
             BackupTooLargeError: if the save exceeds the size or file-count cap.
+            BackupCorruptError: if the backup does not read back as written.
         """
         segments = _validate_save_id(save_id)
         source = self.saves_dir.joinpath(*segments)
@@ -389,16 +407,28 @@ class BackupManager:
                 json.dumps(record.to_dict(), indent=2, ensure_ascii=False) + "\n",
                 encoding="utf-8",
             )
+            # Read the manifest back off the disk rather than trusting the
+            # in-memory record: this proves the document parses, and re-hashing
+            # the staged data proves the copy landed.
+            self._verify_record(self._load(staging, expect_id=backup_id))
             os.replace(staging, final)
         except BaseException:
             # A half-written backup that survived would be listed and could be
             # restored; the staging directory is removed on every failure path.
             shutil.rmtree(staging, ignore_errors=True)
             raise
+        if not (final / MANIFEST_NAME).is_file():
+            raise BackupCorruptError(f"{final}: backup did not land at its final location")
         return record
 
     def _plan(self, source: Path) -> tuple[tuple[Path, int], ...]:
-        """Enumerate the files to copy, enforcing both caps before any I/O.
+        """Enumerate the files to copy, enforcing every cap before any I/O.
+
+        The tree is walked lazily and each cap is checked as the walk proceeds.
+        Collecting the whole listing first and checking afterwards would mean a
+        directory with ten million entries exhausts memory before the file cap
+        is ever consulted, so the caps are applied per entry and only the
+        (bounded) planned list is held.
 
         Symbolic links are refused rather than followed: a link inside a save
         directory would otherwise pull arbitrary files from the user's disk into
@@ -406,10 +436,16 @@ class BackupManager:
         """
         planned: list[tuple[Path, int]] = []
         total = 0
-        for entry in sorted(source.rglob("*")):
+        directories = 0
+        for entry in source.rglob("*"):
             if entry.is_symlink():
                 raise BackupError(f"{entry}: symbolic links inside a save are not backed up")
             if entry.is_dir():
+                directories += 1
+                if directories > MAX_BACKUP_DIRS:
+                    raise BackupTooLargeError(
+                        f"{source}: more than {MAX_BACKUP_DIRS} directories; refusing to back up"
+                    )
                 continue
             if not entry.is_file():
                 raise BackupError(f"{entry}: not a regular file")
@@ -426,6 +462,9 @@ class BackupManager:
             planned.append((entry, size))
         if not planned:
             raise BackupError(f"{source}: contains no files; refusing to record an empty backup")
+        # rglob order is filesystem order; the manifest is sorted so two backups
+        # of the same save produce the same document.
+        planned.sort()
         return tuple(planned)
 
     def _copy_into(
@@ -482,15 +521,32 @@ class BackupManager:
         records.sort(key=lambda record: (record.created_at, record.backup_id), reverse=True)
         return tuple(records)
 
-    def _iter_records(self) -> Iterator[BackupRecord]:
+    def list_unreadable(self) -> tuple[str, ...]:
+        """Describe every directory under the backup root that is not a backup.
+
+        :meth:`list_backups` has to skip these — one interrupted create must not
+        make the whole listing unusable — but skipping them silently would mean
+        a corrupt backup is invisible in ``doctor`` output *and* immune to
+        :meth:`prune`, so the reasons are recoverable here.
+        """
+        problems: list[str] = []
+        for _ in self._iter_records(problems):
+            continue
+        return tuple(problems)
+
+    def _iter_records(self, problems: list[str] | None = None) -> Iterator[BackupRecord]:
         if not self._backup_root.is_dir():
             return
         for directory in sorted(self._backup_root.iterdir()):
             if not directory.is_dir() or directory.name.startswith("."):
                 continue
             try:
-                yield self._load(directory)
-            except (BackupCorruptError, BackupNotFoundError):
+                # Held to the same rule ``get`` applies, so every id this
+                # yields is one ``get`` can resolve.
+                yield self._load(directory, expect_id=_validate_backup_id(directory.name))
+            except (BackupCorruptError, BackupNotFoundError) as exc:
+                if problems is not None:
+                    problems.append(f"{directory.name}: {exc}")
                 continue
 
     def get(self, backup_id: str) -> BackupRecord:
@@ -503,19 +559,37 @@ class BackupManager:
         directory = self._backup_root / _validate_backup_id(backup_id)
         if not directory.is_dir():
             raise BackupNotFoundError(f"no backup {backup_id!r} under {self._backup_root}")
-        return self._load(directory)
+        return self._load(directory, expect_id=backup_id)
 
-    def _load(self, directory: Path) -> BackupRecord:
+    def _load(self, directory: Path, *, expect_id: str) -> BackupRecord:
+        """Read and validate one manifest.
+
+        *expect_id* is the id the caller reached this directory by. A manifest
+        naming a different backup would make :meth:`list_backups` hand out ids
+        that :meth:`get` cannot resolve, so the mismatch is corruption.
+        """
         manifest = directory / MANIFEST_NAME
         if not manifest.is_file():
             raise BackupNotFoundError(f"{directory}: no {MANIFEST_NAME}")
         try:
-            payload = json.loads(manifest.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            with manifest.open("rb") as handle:
+                raw = handle.read(MAX_MANIFEST_BYTES + 1)
+        except OSError as exc:
+            raise BackupCorruptError(f"{manifest}: unreadable ({exc})") from exc
+        if len(raw) > MAX_MANIFEST_BYTES:
+            raise BackupCorruptError(f"{manifest}: larger than {MAX_MANIFEST_BYTES} bytes")
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise BackupCorruptError(f"{manifest}: unreadable ({exc})") from exc
         if not isinstance(payload, dict):
             raise BackupCorruptError(f"{manifest}: manifest is not a JSON object")
-        return BackupRecord.from_dict(payload, directory=directory)
+        record = BackupRecord.from_dict(payload, directory=directory)
+        if record.backup_id != expect_id:
+            raise BackupCorruptError(
+                f"{manifest}: manifest names backup {record.backup_id!r}, not {expect_id!r}"
+            )
+        return record
 
     # -- verification and restore ----------------------------------------
 
@@ -535,13 +609,33 @@ class BackupManager:
         expected: dict[str, BackupFile] = {}
         for entry in record.files:
             segments = _validate_relative_member(entry.path)
-            expected["/".join(segments)] = entry
+            relative = "/".join(segments)
+            if relative in expected:
+                raise BackupCorruptError(
+                    f"backup {record.backup_id}: manifest lists {relative!r} more than once"
+                )
+            expected[relative] = entry
 
+        declared = sum(entry.size for entry in record.files)
+        if declared != record.total_bytes:
+            raise BackupCorruptError(
+                f"backup {record.backup_id}: manifest totals {declared} bytes across its "
+                f"file entries but declares {record.total_bytes}"
+            )
+
+        # The walk is bounded the same way the create-side walk is: a backup
+        # root someone dropped a tree into must not be able to exhaust memory
+        # here either.
+        limit = max(self._max_files, len(expected))
         present: set[str] = set()
         if data_dir.is_dir():
-            for path in sorted(data_dir.rglob("*")):
+            for path in data_dir.rglob("*"):
                 if path.is_symlink() or not path.is_file():
                     continue
+                if len(present) >= limit:
+                    raise BackupCorruptError(
+                        f"backup {record.backup_id}: contains more than {limit} files"
+                    )
                 present.add(path.relative_to(data_dir).as_posix())
 
         missing = sorted(set(expected) - present)
@@ -600,19 +694,31 @@ class BackupManager:
         try:
             staging.mkdir(parents=True, exist_ok=False)
             for entry in record.files:
-                destination = staging.joinpath(*_validate_relative_member(entry.path))
+                segments = _validate_relative_member(entry.path)
+                destination = staging.joinpath(*segments)
                 destination.parent.mkdir(parents=True, exist_ok=True)
-                _, written = _copy_and_hash(
-                    record.data_dir / entry.path,
+                digest, written = _copy_and_hash(
+                    record.data_dir.joinpath(*segments),
                     destination,
                     limit=self._max_bytes - total,
                 )
+                # The pre-flight verify proves the backup was intact a moment
+                # ago; this proves the bytes that just went into the staged save
+                # are those bytes, so the swap is never a swap of something
+                # unobserved.
+                if written != entry.size or digest != entry.sha256:
+                    raise BackupCorruptError(
+                        f"backup {record.backup_id}: {entry.path!r} changed while it was "
+                        "being restored; the save was not touched"
+                    )
                 total += written
         except BaseException:
             shutil.rmtree(staging, ignore_errors=True)
             raise
 
         self._swap(staging=staging, target=target, replaced=replaced)
+        if not target.is_dir():
+            raise BackupError(f"{target}: restore reported no error but the save is not there")
         return RestoreResult(
             backup_id=record.backup_id,
             save_id=record.save_id,
@@ -625,7 +731,14 @@ class BackupManager:
         """Move *staging* onto *target*, keeping the old save until it lands."""
         had_previous = target.exists()
         if had_previous:
-            os.replace(target, replaced)
+            try:
+                os.replace(target, replaced)
+            except OSError:
+                # Nothing has moved yet, so the previous save is still whole —
+                # but the staged copy must not be left behind to be mistaken
+                # for a save later.
+                shutil.rmtree(staging, ignore_errors=True)
+                raise
         try:
             os.replace(staging, target)
         except OSError:
@@ -642,12 +755,26 @@ class BackupManager:
 
         This is the only code path in the subsystem that deletes a backup, and
         ``keep`` below 1 is rejected so the newest one can never be pruned away.
+
+        Retention only sees readable backups. A directory :meth:`list_backups`
+        had to skip is never counted and never deleted — see
+        :meth:`list_unreadable`, which is how a caller finds out it is there.
+
+        Raises:
+            BackupError: if a deletion fails, naming how many had already been
+                removed rather than reporting a clean prune.
         """
         if keep < 1:
             raise BackupError("prune must keep at least one backup")
         doomed = self.list_backups()[keep:]
         removed: list[str] = []
         for record in doomed:
-            shutil.rmtree(record.directory)
+            try:
+                shutil.rmtree(record.directory)
+            except OSError as exc:
+                raise BackupError(
+                    f"pruned {len(removed)} backup(s), then could not remove "
+                    f"{record.backup_id}: {exc}"
+                ) from exc
             removed.append(record.backup_id)
         return tuple(removed)

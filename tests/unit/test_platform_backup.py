@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from pathlib import Path
 
 import pytest
 
+from pz_agent_core.platform import backup as backup_module
 from pz_agent_core.platform.backup import (
+    DATA_DIR_NAME,
     HOME_PLACEHOLDER,
     MANIFEST_NAME,
+    MAX_MANIFEST_BYTES,
     REDACTED_PLACEHOLDER,
     USER_DIR_PLACEHOLDER,
     BackupCorruptError,
@@ -164,6 +168,53 @@ def test_file_count_cap_is_enforced(tmp_path: Path) -> None:
     with pytest.raises(BackupTooLargeError, match="more than 2 files"):
         manager.create(SAVE_ID)
 
+    assert list((tmp_path / "backups").glob("*")) == []
+
+
+def test_directory_count_cap_is_enforced(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(backup_module, "MAX_BACKUP_DIRS", 2)
+    manager, user_dir = _manager(tmp_path)
+    save_dir = make_save(user_dir, SAVE_ID, SAVE_FILES)
+    for index in range(4):
+        (save_dir / f"deep{index}").mkdir()
+
+    with pytest.raises(BackupTooLargeError, match="more than 2 directories"):
+        manager.create(SAVE_ID)
+
+    assert list((tmp_path / "backups").glob("*")) == []
+
+
+def test_the_walk_stops_at_the_cap_instead_of_listing_the_whole_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The caps must bound the traversal, not merely be checked after it.
+
+    A cap applied to an already-materialised listing cannot protect anything, so
+    the test asserts on how much of the tree was actually visited: ``rglob`` is
+    replaced by a generator that counts, and one file past the cap is enough.
+    """
+    manager, user_dir = _manager(tmp_path, max_files=3)
+    save_dir = make_save(user_dir, SAVE_ID, {f"f{index:04d}.bin": b"x" for index in range(50)})
+    visited = 0
+    real_rglob = Path.rglob
+
+    def counting_rglob(self: Path, pattern: str) -> object:
+        def generate() -> object:
+            nonlocal visited
+            for entry in real_rglob(self, pattern):
+                visited += 1
+                yield entry
+
+        return generate()
+
+    monkeypatch.setattr(Path, "rglob", counting_rglob)
+
+    with pytest.raises(BackupTooLargeError, match="more than 3 files"):
+        manager.create(SAVE_ID)
+
+    assert save_dir.is_dir()
+    assert visited <= 4, f"walked {visited} entries before honouring a cap of 3"
+
 
 def test_symlink_inside_a_save_is_refused(tmp_path: Path) -> None:
     manager, user_dir = _manager(tmp_path)
@@ -173,6 +224,65 @@ def test_symlink_inside_a_save_is_refused(tmp_path: Path) -> None:
     (save_dir / "link.txt").symlink_to(secret)
 
     with pytest.raises(BackupError, match="symbolic links"):
+        manager.create(SAVE_ID)
+
+    # Nothing is left behind that could later be listed or restored.
+    assert list((tmp_path / "backups").glob("*")) == []
+
+
+def test_manifest_lists_files_in_a_stable_order(tmp_path: Path) -> None:
+    manager, user_dir = _manager(tmp_path)
+    make_save(user_dir, SAVE_ID, SAVE_FILES)
+
+    first = manager.create(SAVE_ID)
+    second = manager.create(SAVE_ID)
+
+    paths = [entry.path for entry in first.files]
+    assert paths == sorted(paths)
+    assert paths == [entry.path for entry in second.files]
+
+
+def test_create_verifies_the_backup_before_returning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A record is only returned once the staged backup has been read back.
+
+    The copy is sabotaged after it lands but before the swap, which is exactly
+    the shape of a disk that accepted a write and did not keep it.
+    """
+    manager, user_dir = _manager(tmp_path)
+    make_save(user_dir, SAVE_ID, SAVE_FILES)
+    real_load = BackupManager._load
+
+    def sabotage(self: BackupManager, directory: Path, *, expect_id: str) -> BackupRecord:
+        target = directory / DATA_DIR_NAME / "players.db"
+        if target.is_file():
+            # Same length as the original, so the size check cannot be what
+            # catches this — only the hash can.
+            target.write_bytes(b"X" * target.stat().st_size)
+        return real_load(self, directory, expect_id=expect_id)
+
+    monkeypatch.setattr(BackupManager, "_load", sabotage)
+
+    with pytest.raises(BackupCorruptError, match="failed its SHA-256 check"):
+        manager.create(SAVE_ID)
+
+    assert list((tmp_path / "backups").glob("*")) == []
+
+
+def test_backup_id_allocation_is_bounded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A clock stuck at one instant must fail loudly, not spin."""
+    monkeypatch.setattr(backup_module, "_MAX_ID_ATTEMPTS", 2)
+    clock = FakeClock()
+    clock.freeze()
+    user_dir = make_user_dir(tmp_path / "home")
+    manager = BackupManager(user_dir, tmp_path / "backups", clock=clock)
+    make_save(user_dir, SAVE_ID, SAVE_FILES)
+
+    manager.create(SAVE_ID)
+    manager.create(SAVE_ID)
+
+    with pytest.raises(BackupError, match="could not allocate a free backup id"):
         manager.create(SAVE_ID)
 
 
@@ -213,6 +323,106 @@ def test_list_backups_is_newest_first_and_ignores_junk(tmp_path: Path) -> None:
     listed = manager.list_backups()
 
     assert [record.backup_id for record in listed] == [second.backup_id, first.backup_id]
+
+
+def test_skipped_directories_are_recoverable_not_silent(tmp_path: Path) -> None:
+    """Listing tolerates junk, but the junk must still be reportable.
+
+    A corrupt backup is invisible to ``list_backups`` *and* immune to ``prune``,
+    so if nothing surfaced it the backup root would grow without anyone able to
+    see why.
+    """
+    manager, user_dir = _manager(tmp_path)
+    make_save(user_dir, SAVE_ID, SAVE_FILES)
+    good = manager.create(SAVE_ID)
+    broken = tmp_path / "backups" / "broken"
+    broken.mkdir()
+    (broken / MANIFEST_NAME).write_text("{ not json", encoding="utf-8")
+    (tmp_path / "backups" / "no-manifest").mkdir()
+    # A directory name ``get`` would refuse must not be listed as if it worked.
+    unusable_name = tmp_path / "backups" / "not a backup id"
+    unusable_name.mkdir()
+    shutil.copy(good.directory / MANIFEST_NAME, unusable_name / MANIFEST_NAME)
+
+    unreadable = manager.list_unreadable()
+
+    listed = [record.backup_id for record in manager.list_backups()]
+    assert listed == [good.backup_id]
+    for backup_id in listed:
+        assert manager.get(backup_id).backup_id == backup_id
+    assert len(unreadable) == 3
+    assert any(problem.startswith("broken:") for problem in unreadable)
+    assert any(problem.startswith("no-manifest:") for problem in unreadable)
+    assert any("malformed backup id" in problem for problem in unreadable)
+
+
+def test_a_manifest_naming_another_backup_is_corrupt(tmp_path: Path) -> None:
+    """Otherwise ``list_backups`` hands out ids that ``get`` cannot resolve."""
+    manager, user_dir = _manager(tmp_path)
+    make_save(user_dir, SAVE_ID, SAVE_FILES)
+    record = manager.create(SAVE_ID)
+    manifest = record.directory / MANIFEST_NAME
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["backup_id"] = "20260805T115900Z-someone-else"
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(BackupCorruptError, match="names backup"):
+        manager.get(record.backup_id)
+    assert manager.list_backups() == ()
+
+
+def test_an_oversized_manifest_is_refused(tmp_path: Path) -> None:
+    manager, user_dir = _manager(tmp_path)
+    make_save(user_dir, SAVE_ID, SAVE_FILES)
+    record = manager.create(SAVE_ID)
+    with (record.directory / MANIFEST_NAME).open("wb") as handle:
+        handle.write(b" " * (MAX_MANIFEST_BYTES + 1))
+
+    with pytest.raises(BackupCorruptError, match="larger than"):
+        manager.get(record.backup_id)
+
+
+def test_a_manifest_that_lies_about_its_total_is_corrupt(tmp_path: Path) -> None:
+    manager, user_dir = _manager(tmp_path)
+    make_save(user_dir, SAVE_ID, SAVE_FILES)
+    record = manager.create(SAVE_ID)
+    manifest = record.directory / MANIFEST_NAME
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["total_bytes"] = payload["total_bytes"] + 1
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(BackupCorruptError, match="declares"):
+        manager.verify(record.backup_id)
+
+
+def test_a_duplicated_manifest_entry_is_corrupt(tmp_path: Path) -> None:
+    """Duplicates would collapse into one key and slip past the missing/extra check."""
+    manager, user_dir = _manager(tmp_path)
+    make_save(user_dir, SAVE_ID, SAVE_FILES)
+    record = manager.create(SAVE_ID)
+    manifest = record.directory / MANIFEST_NAME
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["files"].append(dict(payload["files"][0]))
+    payload["total_bytes"] += payload["files"][0]["size"]
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(BackupCorruptError, match="more than once"):
+        manager.verify(record.backup_id)
+
+
+def test_a_data_file_replaced_by_a_symlink_is_corruption(tmp_path: Path) -> None:
+    """Verification must not follow a link that was swapped in for real data."""
+    manager, user_dir = _manager(tmp_path)
+    make_save(user_dir, SAVE_ID, SAVE_FILES)
+    record = manager.create(SAVE_ID)
+    decoy = tmp_path / "decoy.db"
+    decoy.write_bytes(SAVE_FILES["players.db"])
+    swapped = record.data_dir / "players.db"
+    swapped.unlink()
+    swapped.symlink_to(decoy)
+
+    with pytest.raises(BackupCorruptError, match="missing"):
+        manager.verify(record.backup_id)
 
 
 def test_get_rejects_unknown_and_malformed_ids(tmp_path: Path) -> None:
@@ -378,6 +588,84 @@ def test_nested_directories_survive_the_roundtrip(tmp_path: Path) -> None:
     manager.restore(record.backup_id, game_running=False)
 
     assert (save_dir / "chunkdata" / "map_100_100.bin").read_bytes() == b"chunk" * 16
+
+
+def test_a_backup_that_changes_after_verification_never_reaches_the_save(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verifying then copying is two reads; the second one has to be checked too.
+
+    The backup is mutated in the window between the pre-flight verification and
+    the copy, which is the only way an unobserved byte could reach the save.
+    """
+    manager, user_dir = _manager(tmp_path)
+    save_dir = make_save(user_dir, SAVE_ID, SAVE_FILES)
+    record = manager.create(SAVE_ID)
+    (save_dir / "map_t.bin").write_bytes(b"current state")
+    before = read_save(save_dir)
+    real_verify = BackupManager._verify_record
+
+    def verify_then_change(self: BackupManager, verified: BackupRecord) -> None:
+        real_verify(self, verified)
+        target = verified.data_dir / "players.db"
+        target.write_bytes(b"X" * target.stat().st_size)
+
+    monkeypatch.setattr(BackupManager, "_verify_record", verify_then_change)
+
+    with pytest.raises(BackupCorruptError, match="changed while it was being restored"):
+        manager.restore(record.backup_id, game_running=False)
+
+    assert read_save(save_dir) == before
+    assert [path.name for path in save_dir.parent.iterdir() if path.name.startswith(".")] == []
+
+
+def test_a_failed_swap_puts_the_previous_save_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The rollback branch: the old save is moved aside, then the move in fails."""
+    manager, user_dir = _manager(tmp_path)
+    save_dir = make_save(user_dir, SAVE_ID, SAVE_FILES)
+    record = manager.create(SAVE_ID)
+    (save_dir / "map_t.bin").write_bytes(b"current state")
+    before = read_save(save_dir)
+
+    real_replace = os.replace
+    calls: list[object] = []
+
+    def flaky(src: object, dst: object) -> None:
+        calls.append(src)
+        if len(calls) == 2:  # staging -> target
+            raise OSError(16, "Device or resource busy")
+        real_replace(src, dst)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(os, "replace", flaky)
+
+    with pytest.raises(OSError, match="Device or resource busy"):
+        manager.restore(record.backup_id, game_running=False)
+
+    assert read_save(save_dir) == before
+    assert [path.name for path in save_dir.parent.iterdir() if path.name.startswith(".")] == []
+
+
+def test_a_swap_that_cannot_move_the_old_save_aside_changes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manager, user_dir = _manager(tmp_path)
+    save_dir = make_save(user_dir, SAVE_ID, SAVE_FILES)
+    record = manager.create(SAVE_ID)
+    (save_dir / "map_t.bin").write_bytes(b"current state")
+    before = read_save(save_dir)
+
+    def always_fails(src: object, dst: object) -> None:
+        raise OSError(13, "Permission denied")
+
+    monkeypatch.setattr(os, "replace", always_fails)
+
+    with pytest.raises(OSError, match="Permission denied"):
+        manager.restore(record.backup_id, game_running=False)
+
+    assert read_save(save_dir) == before
+    assert [path.name for path in save_dir.parent.iterdir() if path.name.startswith(".")] == []
 
 
 def test_restore_leaves_no_staging_directories_behind(tmp_path: Path) -> None:

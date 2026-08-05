@@ -111,8 +111,12 @@ function Ipc.new(options)
   options = options or {}
   local fileApi = options.fileApi
   local apiError = nil
-  if fileApi == nil then
-    fileApi, apiError = Ipc.defaultFileApi()
+  if type(fileApi) ~= "table" then
+    if fileApi ~= nil then
+      fileApi, apiError = nil, "the injected file API must be a table"
+    else
+      fileApi, apiError = Ipc.defaultFileApi()
+    end
   end
   local self = setmetatable({
     fileApi = fileApi,
@@ -129,7 +133,7 @@ end
 --- True when the engine file API was resolved. Every operation reports the
 --- reason it was not rather than pretending the write happened.
 function Handle:isAvailable()
-  return self.fileApi ~= nil
+  return type(self.fileApi) == "table"
 end
 
 function Handle:nowMs()

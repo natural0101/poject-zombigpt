@@ -1,0 +1,380 @@
+"""The probes behind every capability the agent claims (§3.8, §12.5).
+
+A probe has two halves and they are ordered, not interchangeable:
+
+1. **Static resolution** against a :class:`~pz_agent_core.capabilities.scanner.SymbolIndex`
+   built from the installed game. Its best possible outcome is
+   ``available_unverified``: the symbols are on disk, which is a reason to *try*
+   the action, never a reason to claim it works.
+2. **Runtime confirmation** from a live game — a succeeded ack for the probe's
+   own command, carrying the postcondition evidence the confirmation declares.
+
+The ordering cannot be skipped because :func:`confirm` takes the static
+capability as an argument and refuses to upgrade one that was not resolved from
+symbols, and because ``verified`` itself requires runtime evidence, which only
+:meth:`~pz_agent_core.capabilities.model.Evidence.from_ack` can mint and only
+from a succeeded :class:`~pz_agent_core.protocol.ActionResult`.
+
+Every probe also declares a *ceiling*. ``autonomous_attack``'s ceiling is
+``unsupported`` with :data:`~pz_agent_core.capabilities.model.REASON_NO_VERIFIED_API`,
+so even a live ack cannot raise it: §12.4 lists autonomous combat as unproven,
+and the decision not to drive it is a design decision, not a missing probe run.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
+from typing import Final
+
+from ..protocol import ActionName, ActionResult, CapabilityState
+from ..version import TARGET_BUILD
+from .model import (
+    MAX_REASON_LEN,
+    REASON_EXPERIMENTAL_API,
+    REASON_NO_VERIFIED_API,
+    REASON_PROBE_NOT_CONFIRMED,
+    REASON_SYMBOL_MISSING,
+    Capability,
+    CapabilityError,
+    CapabilityReport,
+    Evidence,
+    utc_now_iso,
+)
+from .scanner import SymbolIndex
+
+# Capability names, as written in §3.8. They are the keys of the generated
+# report and of the MCP tool gate, so they are fixed strings, not derived.
+MOVE_TO_SQUARE: Final = "move_to_square"
+INVENTORY_TRANSFER: Final = "inventory_transfer"
+EAT_PERCENTAGE: Final = "eat_percentage"
+DRINK_CARRIED: Final = "drink_carried"
+READ_LITERATURE: Final = "read_literature"
+DRINK_WORLD_SOURCE: Final = "drink_world_source"
+AUTONOMOUS_ATTACK: Final = "autonomous_attack"
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeConfirmation:
+    """How a live confirmation for a probe would arrive.
+
+    ``evidence_keys`` names the postcondition fields the ack must carry. They are
+    checked rather than assumed: an ack that says ``succeeded`` while carrying an
+    empty or unrelated evidence bag is exactly the fabricated success this
+    project treats as a defect.
+    """
+
+    action: ActionName
+    evidence_keys: tuple[str, ...]
+    description: str
+
+    def __post_init__(self) -> None:
+        if not self.evidence_keys:
+            raise CapabilityError(
+                f"{self.action.value}: a confirmation must name the evidence it requires"
+            )
+
+    def missing_keys(self, ack: ActionResult) -> tuple[str, ...]:
+        return tuple(key for key in self.evidence_keys if key not in ack.evidence)
+
+
+@dataclass(frozen=True, slots=True)
+class ProbeDefinition:
+    """One capability, the symbols it needs, and how it could ever be proven."""
+
+    capability: str
+    required_symbols: tuple[str, ...]
+    confirmation: RuntimeConfirmation
+    ceiling: CapabilityState = CapabilityState.VERIFIED
+    static_state: CapabilityState = CapabilityState.AVAILABLE_UNVERIFIED
+    ceiling_reason: str = ""
+    static_reason: str = ""
+    description: str = ""
+
+    def __post_init__(self) -> None:
+        if self.ceiling is not CapabilityState.VERIFIED and not self.ceiling_reason:
+            raise CapabilityError(
+                f"{self.capability}: a probe that cannot reach 'verified' must say why"
+            )
+        if self.static_state is CapabilityState.VERIFIED:
+            raise CapabilityError(f"{self.capability}: a static scan may never yield 'verified'")
+
+    @property
+    def can_be_verified(self) -> bool:
+        return self.ceiling is CapabilityState.VERIFIED
+
+    def blocked_capability(self, *, build: str) -> Capability:
+        """The capability for a probe whose ceiling forbids ever running it."""
+        return Capability.unsupported(
+            name=self.capability,
+            reason=self.ceiling_reason,
+            build=build,
+        )
+
+
+#: Vanilla Build 42 timed actions the blueprint names (§12.2). Requiring the
+#: class *and* its constructor keeps a bare forward declaration from counting as
+#: a working API.
+PROBES: Final[tuple[ProbeDefinition, ...]] = (
+    ProbeDefinition(
+        capability=MOVE_TO_SQUARE,
+        required_symbols=(
+            "ISWalkToTimedAction",
+            "ISWalkToTimedAction.new",
+            "ISTimedActionQueue.add",
+        ),
+        confirmation=RuntimeConfirmation(
+            action=ActionName.MOVEMENT_MOVE_TO,
+            evidence_keys=("position",),
+            description="the character stands on the requested square after the walk action ends",
+        ),
+        description="walk to a square using ISWalkToTimedAction",
+    ),
+    ProbeDefinition(
+        capability=INVENTORY_TRANSFER,
+        required_symbols=(
+            "ISInventoryTransferAction",
+            "ISInventoryTransferAction.new",
+            "ISTimedActionQueue.add",
+        ),
+        confirmation=RuntimeConfirmation(
+            action=ActionName.INVENTORY_TRANSFER,
+            evidence_keys=("item_ref", "container_ref"),
+            description="the item is observed inside the destination container",
+        ),
+        description="move an item between containers using ISInventoryTransferAction",
+    ),
+    ProbeDefinition(
+        capability=EAT_PERCENTAGE,
+        required_symbols=("ISEatFoodAction", "ISEatFoodAction.new"),
+        confirmation=RuntimeConfirmation(
+            action=ActionName.CONSUME_EAT,
+            evidence_keys=("hunger_before", "hunger_after"),
+            description="hunger fell and the item's remaining fraction dropped as requested",
+        ),
+        description="eat a chosen fraction of one food item using ISEatFoodAction",
+    ),
+    ProbeDefinition(
+        capability=DRINK_CARRIED,
+        required_symbols=("ISDrinkFromBottle", "ISDrinkFromBottle.new"),
+        confirmation=RuntimeConfirmation(
+            action=ActionName.CONSUME_DRINK,
+            evidence_keys=("thirst_before", "thirst_after"),
+            description="thirst fell after drinking from a carried container",
+        ),
+        description="drink from a carried container using ISDrinkFromBottle",
+    ),
+    ProbeDefinition(
+        capability=READ_LITERATURE,
+        required_symbols=("ISReadABook", "ISReadABook.new"),
+        confirmation=RuntimeConfirmation(
+            action=ActionName.LITERATURE_READ,
+            evidence_keys=("item_ref", "reading_started"),
+            description="the reading action is running and owned by the mod",
+        ),
+        description="read a book or magazine using ISReadABook",
+    ),
+    ProbeDefinition(
+        capability=DRINK_WORLD_SOURCE,
+        # §12.4 lists the world water source action as unconfirmed, so the best
+        # a healthy scan may report is 'experimental': the symbol's presence
+        # says nothing about whether driving it is safe for the save.
+        required_symbols=("ISTakeWaterAction", "ISTakeWaterAction.new"),
+        confirmation=RuntimeConfirmation(
+            action=ActionName.CONSUME_DRINK,
+            evidence_keys=("thirst_before", "thirst_after", "source_ref"),
+            description="thirst fell after drinking from a world water source",
+        ),
+        static_state=CapabilityState.EXPERIMENTAL,
+        static_reason=REASON_EXPERIMENTAL_API,
+        description="drink from a sink, well or rain collector",
+    ),
+    ProbeDefinition(
+        capability=AUTONOMOUS_ATTACK,
+        required_symbols=(),
+        confirmation=RuntimeConfirmation(
+            action=ActionName.ACTION_WAIT,
+            evidence_keys=("never",),
+            description="no confirmation is accepted; the capability is refused by design",
+        ),
+        ceiling=CapabilityState.UNSUPPORTED,
+        ceiling_reason=REASON_NO_VERIFIED_API,
+        static_state=CapabilityState.UNSUPPORTED,
+        static_reason=REASON_NO_VERIFIED_API,
+        description="autonomous combat — no API this project is willing to drive (§12.4)",
+    ),
+)
+
+PROBES_BY_NAME: Final[dict[str, ProbeDefinition]] = {p.capability: p for p in PROBES}
+
+
+def probe_for(capability: str) -> ProbeDefinition:
+    """Look up a probe by capability name.
+
+    Raises:
+        CapabilityError: for an unknown name. Returning a permissive default here
+            would let a typo in a tool definition open an ungated write path.
+    """
+    probe = PROBES_BY_NAME.get(capability)
+    if probe is None:
+        raise CapabilityError(f"no probe declared for capability {capability!r}")
+    return probe
+
+
+def resolve_static(
+    probe: ProbeDefinition,
+    index: SymbolIndex,
+    *,
+    build: str,
+    observed_at: str | None = None,
+) -> Capability:
+    """Resolve *probe* against a symbol index.
+
+    The result is never ``verified``: this function has no access to a running
+    game, and it only ever mints ``static_scan`` evidence.
+    """
+    when = observed_at or utc_now_iso()
+    if not probe.can_be_verified:
+        return probe.blocked_capability(build=build)
+
+    missing = index.missing(probe.required_symbols)
+    if missing:
+        reason = f"{REASON_SYMBOL_MISSING}: {', '.join(missing[:4])}"
+        return Capability.unsupported(
+            name=probe.capability,
+            reason=reason[:MAX_REASON_LEN],
+            build=build,
+        )
+
+    evidence: list[Evidence] = []
+    for symbol in probe.required_symbols:
+        record = index.find(symbol)
+        if record is None:  # pragma: no cover - `missing` above already excluded this
+            continue
+        evidence.append(
+            Evidence.from_scan(
+                symbol=record.symbol,
+                file=record.relative_path,
+                file_sha256=record.file_sha256,
+                signature=record.signature,
+                observed_at=when,
+            )
+        )
+
+    if probe.static_state is CapabilityState.EXPERIMENTAL:
+        return Capability.experimental(
+            name=probe.capability,
+            build=build,
+            reason=probe.static_reason or REASON_EXPERIMENTAL_API,
+            evidence=evidence,
+        )
+    return Capability.available_unverified(
+        name=probe.capability,
+        build=build,
+        evidence=evidence,
+        reason=probe.static_reason,
+    )
+
+
+def confirm(
+    probe: ProbeDefinition,
+    static: Capability,
+    ack: ActionResult,
+    *,
+    build: str,
+    observed_at: str | None = None,
+) -> Capability:
+    """Upgrade a statically resolved capability with a live ack.
+
+    *static* must be the capability :func:`resolve_static` produced for the same
+    probe. That argument is what makes the ordering structural: there is no way
+    to reach ``verified`` without first having found the symbols on the machine
+    the game is installed on.
+
+    A non-succeeded ack, an ack for the wrong action, or an ack missing the
+    declared postcondition keys all leave the capability where it was, with the
+    reason recorded. Nothing here can fabricate a success.
+    """
+    when = observed_at or utc_now_iso()
+    if static.name != probe.capability:
+        raise CapabilityError(
+            f"capability {static.name!r} cannot be confirmed by probe {probe.capability!r}"
+        )
+    if not probe.can_be_verified:
+        return probe.blocked_capability(build=build)
+    if static.state is CapabilityState.UNSUPPORTED:
+        # The symbols are not on this install; a succeeded ack for something else
+        # must not resurrect the claim.
+        return static
+    if ack.action != probe.confirmation.action.value:
+        return _not_confirmed(static, f"ack for {ack.action}, expected {probe.confirmation.action}")
+
+    missing = probe.confirmation.missing_keys(ack)
+    if missing:
+        return _not_confirmed(static, f"ack lacks evidence {', '.join(missing)}")
+
+    try:
+        runtime = Evidence.from_ack(
+            probe=probe.capability,
+            symbol=probe.required_symbols[0] if probe.required_symbols else probe.capability,
+            ack=ack,
+            observed_at=when,
+        )
+    except CapabilityError as exc:
+        return _not_confirmed(static, str(exc))
+
+    return Capability.verified(
+        name=probe.capability,
+        build=build,
+        evidence=(*static.evidence, runtime),
+    )
+
+
+def _not_confirmed(static: Capability, detail: str) -> Capability:
+    reason = f"{REASON_PROBE_NOT_CONFIRMED}: {detail}"
+    return Capability(
+        name=static.name,
+        state=static.state,
+        reason=reason[:MAX_REASON_LEN],
+        build=static.build,
+        evidence=static.evidence,
+    )
+
+
+def resolve_all(
+    index: SymbolIndex,
+    *,
+    build: str = TARGET_BUILD,
+    probes: Sequence[ProbeDefinition] = PROBES,
+    observed_at: str | None = None,
+    revision: int = 1,
+) -> CapabilityReport:
+    """Static pass over every declared probe, as one report.
+
+    This is what ``pz-agent doctor`` produces before any game session exists. No
+    capability in it is ``verified``, by construction.
+    """
+    when = observed_at or utc_now_iso()
+    capabilities = [resolve_static(probe, index, build=build, observed_at=when) for probe in probes]
+    return CapabilityReport(
+        build=build,
+        capabilities=tuple(sorted(capabilities, key=lambda c: c.name)),
+        revision=revision,
+        generated_at=when,
+    )
+
+
+def missing_symbols(
+    index: SymbolIndex, probes: Iterable[ProbeDefinition] = PROBES
+) -> dict[str, tuple[str, ...]]:
+    """Capability → the symbols the local install does not declare.
+
+    ``doctor`` prints this so the user sees exactly which API is absent rather
+    than a bare "unsupported".
+    """
+    result: dict[str, tuple[str, ...]] = {}
+    for probe in probes:
+        gaps = index.missing(probe.required_symbols)
+        if gaps:
+            result[probe.capability] = gaps
+    return result

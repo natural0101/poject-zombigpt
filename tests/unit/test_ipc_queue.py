@@ -108,6 +108,12 @@ def test_negative_sequence_numbers_are_refused() -> None:
         SequenceTracker().observe(Stream.ACK, -1)
 
 
+def test_a_gap_history_that_keeps_nothing_is_refused() -> None:
+    """A cap of zero is not a bound, it is evidence thrown away."""
+    with pytest.raises(ValueError, match="gap_history"):
+        SequenceTracker(gap_history=0)
+
+
 # --------------------------------------------------------------------------
 # idempotency cache
 # --------------------------------------------------------------------------
@@ -189,15 +195,45 @@ def test_an_accepted_command_reaches_the_journal(tmp_path: Path) -> None:
     assert outcome.terminal_result is None
     written = _written_commands(queue)
     assert [c.command_id for c in written] == [command.command_id]
-    assert queue.in_flight is command
+    assert queue.in_flight == outcome.command
     queue.close()
 
 
 def test_sequence_numbers_are_allocated_monotonically(tmp_path: Path) -> None:
     queue = _queue(tmp_path, FakeClock())
-    first = queue.build(ActionName.WORLD_INSPECT, idempotency_key="k1", lease_ms=1_000)
-    second = queue.build(ActionName.WORLD_INSPECT, idempotency_key="k2", lease_ms=1_000)
-    assert (first.seq, second.seq) == (0, 1)
+    first = queue.submit(
+        queue.build(ActionName.WORLD_INSPECT, idempotency_key="k1", lease_ms=1_000)
+    )
+    second = queue.submit(
+        queue.build(ActionName.WORLD_INSPECT, idempotency_key="k2", lease_ms=1_000)
+    )
+    assert (first.command.seq, second.command.seq) == (0, 1)
+    assert [c.seq for c in _written_commands(queue)] == [0, 1]
+    queue.close()
+
+
+def test_a_command_that_is_never_written_does_not_burn_a_sequence_number(
+    tmp_path: Path,
+) -> None:
+    """§3.4 makes a hole in a stream mean "a record was lost". A command that a
+    gate refused was never sent, so it must not leave one behind: the mod would
+    otherwise report a lost command every time backpressure did its job."""
+    clock = FakeClock()
+    queue = _queue(tmp_path, clock)
+    queue.submit(queue.build(ActionName.MOVEMENT_MOVE_TO, idempotency_key="m", lease_ms=10_000))
+
+    blocked = queue.build(ActionName.CONSUME_EAT, idempotency_key="eat-1", lease_ms=10_000)
+    assert not queue.submit(blocked).accepted  # backpressure
+    expired = queue.build(ActionName.WORLD_INSPECT, idempotency_key="look", lease_ms=1_000)
+    clock.advance(2_000)
+    assert not queue.submit(expired).accepted  # lease
+    later = queue.build(ActionName.WORLD_INSPECT, idempotency_key="look-2", lease_ms=10_000)
+    assert queue.submit(later).accepted
+
+    seqs = [c.seq for c in _written_commands(queue)]
+    assert seqs == [0, 1]
+    tracker = SequenceTracker()
+    assert all(tracker.observe(Stream.COMMAND, seq).event is SequenceEvent.IN_ORDER for seq in seqs)
     queue.close()
 
 
@@ -255,7 +291,8 @@ def test_a_non_terminal_ack_does_not_make_a_command_replayable(tmp_path: Path) -
     queue.record_ack(make_started(command))
 
     assert queue.cache.replay("eat-1") is None
-    assert queue.in_flight is command
+    assert queue.in_flight is not None
+    assert queue.in_flight.command_id == command.command_id
     queue.close()
 
 
@@ -346,7 +383,8 @@ def test_safety_stop_bypasses_the_queue(tmp_path: Path) -> None:
     assert [c.action for c in written] == [ActionName.MOVEMENT_MOVE_TO, ActionName.SAFETY_STOP]
     # The stop does not evict the in-flight command: the mod's cancellation ack
     # is what closes it, and pretending otherwise would fabricate an outcome.
-    assert queue.in_flight is moving
+    assert queue.in_flight is not None
+    assert queue.in_flight.command_id == moving.command_id
     assert stop.action is ActionName.SAFETY_STOP
     queue.close()
 
@@ -468,4 +506,42 @@ def test_pending_commands_are_bounded(tmp_path: Path) -> None:
             queue.build(ActionName.WORLD_INSPECT, idempotency_key=f"k{index}", lease_ms=1_000)
         )
     assert len(queue.pending) == 2
+    # The bound sheds the oldest, not a random one.
+    assert [c.idempotency_key for c in queue.pending] == ["k2", "k3"]
     queue.close()
+
+
+def test_the_bound_never_sheds_the_in_flight_command(tmp_path: Path) -> None:
+    """Forgetting it would lose the key its terminal ack is filed under, and a
+    redelivered ``consume.eat`` would then be executed a second time."""
+    clock = FakeClock()
+    queue = CommandQueue(
+        make_layout(tmp_path), session_id=IPC_SESSION_ID, clock=clock, pending_limit=2
+    )
+    eating = queue.build(ActionName.CONSUME_EAT, idempotency_key="eat-1", lease_ms=10_000)
+    assert queue.submit(eating).accepted
+    for index in range(4):
+        queue.submit(
+            queue.build(ActionName.WORLD_INSPECT, idempotency_key=f"k{index}", lease_ms=1_000)
+        )
+
+    assert len(queue.pending) == 2
+    assert [c.command_id for c in queue.pending].count(eating.command_id) == 1
+    assert queue.in_flight is not None
+    assert queue.in_flight.command_id == eating.command_id
+
+    # Its ack therefore still reaches the idempotency cache, and the retry the
+    # planner sends after a hiccup replays instead of eating a second sandwich.
+    queue.record_ack(make_success(eating, timestamp_ms=clock.now))
+    retry = queue.build(ActionName.CONSUME_EAT, idempotency_key="eat-1", lease_ms=10_000)
+    outcome = queue.submit(retry)
+    assert outcome.duplicate
+    assert len(_written_commands(queue)) == 5
+    queue.close()
+
+
+def test_a_pending_limit_of_zero_is_refused(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="pending_limit"):
+        CommandQueue(
+            make_layout(tmp_path), session_id=IPC_SESSION_ID, clock=FakeClock(), pending_limit=0
+        )

@@ -13,14 +13,35 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Mapping
+from itertools import count
 from pathlib import Path
 from typing import Any
 
-from .layout import TEMP_SUFFIX, IpcLayout
+from .layout import IpcLayout, temp_name
+
+# `temp_name` is re-exported deliberately: the scratch file it names is part of
+# this module's observable behaviour, because a concurrent reader can encounter
+# that file mid-write and has to recognise it.
+__all__ = [
+    "MAX_DOCUMENT_BYTES",
+    "DocumentError",
+    "IpcLayout",
+    "IpcPathError",
+    "encode_json_line",
+    "guard_managed",
+    "read_json_document",
+    "temp_name",
+    "write_json_atomic",
+]
 
 #: A document larger than this is a bug in the producer, not a big world. The
 #: cap keeps a corrupt or hostile file from being pulled entirely into memory.
 MAX_DOCUMENT_BYTES = 8 * 1024 * 1024
+
+#: Serial for the temporary filename of §3.5. Together with the pid it makes
+#: every scratch file unique, so two writers aiming at the same target cannot
+#: publish each other's half-written bytes through a shared ``.tmp``.
+_temp_serial = count()
 
 
 class IpcPathError(ValueError):
@@ -54,15 +75,25 @@ def write_json_atomic(layout: IpcLayout, path: Path, document: Mapping[str, Any]
     encoded = body.encode("utf-8")
     if len(encoded) > MAX_DOCUMENT_BYTES:
         raise DocumentError(f"document of {len(encoded)} bytes exceeds {MAX_DOCUMENT_BYTES}")
-    tmp = path.with_name(path.name + TEMP_SUFFIX)
-    with tmp.open("wb") as handle:
-        handle.write(encoded)
-        handle.flush()
-        os.fsync(handle.fileno())
-    # os.replace is atomic on both POSIX and Win32 (MoveFileEx with
-    # MOVEFILE_REPLACE_EXISTING); the Lua side, which cannot rely on that, uses
-    # the two-slot scheme in .snapshot instead.
-    os.replace(tmp, path)
+    tmp = path.with_name(temp_name(path.name, os.getpid(), next(_temp_serial)))
+    # The scratch name is derived, never supplied, but it still has to be a path
+    # the layout owns: if the two modules ever drift apart, this fails loudly
+    # rather than dropping files the layout does not know how to clean up.
+    guard_managed(layout, tmp)
+    try:
+        with tmp.open("wb") as handle:
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+        # os.replace is atomic on both POSIX and Win32 (MoveFileEx with
+        # MOVEFILE_REPLACE_EXISTING); the Lua side, which cannot rely on that,
+        # uses the two-slot scheme in .snapshot instead.
+        os.replace(tmp, path)
+    except OSError:
+        # A unique scratch name is only bounded if a failed write takes its file
+        # with it; otherwise every crashed attempt leaves one behind forever.
+        tmp.unlink(missing_ok=True)
+        raise
     return len(encoded)
 
 

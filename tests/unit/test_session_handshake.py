@@ -314,10 +314,25 @@ def test_a_game_restart_without_a_session_is_an_error(tmp_path: Path) -> None:
 
 def test_the_first_observed_save_is_not_a_recovery(tmp_path: Path) -> None:
     manager = _manager(tmp_path, FakeClock())
-    manager.create(mode=SessionMode.ASSISTED)
+    session = manager.create(mode=SessionMode.ASSISTED)
+    item = f"item:{session.session_id}:player-main:8891:0"
+    assert manager.is_ref_current(item)
+
     assert manager.note_save_id("save-1") is None
     assert manager.refs_valid
     assert not manager.requires_rearm
+    # "Not a recovery" has to mean it: a generation bump here would quietly
+    # invalidate every ref already handed out while reporting nothing happened.
+    assert manager.generation == 0
+    assert manager.is_ref_current(item)
+    reloaded = manager.load()
+    assert reloaded is not None
+    assert (reloaded.generation, reloaded.save_id) == (0, "save-1")
+    # And the save id is now known, so a later change is a genuine recovery.
+    changed = manager.note_save_id("save-2")
+    assert changed is not None
+    assert changed.generation == 1
+    assert not manager.is_ref_current(item)
 
 
 def test_the_same_save_id_changes_nothing(tmp_path: Path) -> None:

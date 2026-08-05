@@ -8,8 +8,8 @@ handover point between work sessions: read it first, update it last.
 green · `wip` in progress · `todo` not started · `live` blocked on a step that
 physically requires a running game.
 
-Last updated: phase 0 partial, phases 1-2 complete. 347 Python tests, 256 Lua assertions,
-`scripts/check.sh` green.
+Last updated: phases 0-4 complete plus the reflex guard. 900 Python tests, 926 Lua
+assertions, `scripts/check.sh` green (exit code checked directly).
 
 ## Status
 
@@ -18,23 +18,23 @@ Last updated: phase 0 partial, phases 1-2 complete. 347 Python tests, 256 Lua as
 | T001 | Initialize repository and quality toolchain | 1 | — | **done** |
 | T005 | Define protocol domain models and JSON schemas | 1 | T001 | **done** |
 | T002 | Detect Project Zomboid installation and user directory | 0 | T001 | **done** |
-| T003 | Build local API compatibility scanner | 0 | T002 | todo |
+| T003 | Build local API compatibility scanner | 0 | T002 | **done** |
 | T004 | Implement doctor CLI | 0 | T002, T003 | todo |
 | T006 | Implement Lua mod skeleton and heartbeat | 2 | T003, T005 | **done** |
 | T007 | Implement sidecar handshake and locks | 2 | T005, T006 | **done** |
 | T008 | Implement command queue and acknowledgements | 2 | T007 | **done** |
 | T009 | Implement panic stop and manual takeover | 2 | T006, T008 | **done** |
 | T010 | Implement save backup subsystem | 2 | T002 | **done** |
-| T011 | Observe player scalar state | 3 | T006, T008 | todo |
-| T012 | Observe nested inventory with stable refs | 3 | T011 | todo |
-| T013 | Observe nearby world and threats | 3 | T011 | todo |
-| T014 | Implement action lifecycle framework | 4 | T008, T011 | wip |
+| T011 | Observe player scalar state | 3 | T006, T008 | wip |
+| T012 | Observe nested inventory with stable refs | 3 | T011 | wip |
+| T013 | Observe nearby world and threats | 3 | T011 | wip |
+| T014 | Implement action lifecycle framework | 4 | T008, T011 | **done** |
 | T015 | Implement movement adapter | 4 | T013, T014 | todo |
 | T016 | Implement inventory transfer adapter | 4 | T012, T014 | todo |
-| T017 | Implement safe food selection and eat adapter | 4 | T016 | todo |
-| T018 | Implement safe drink selection and drink adapter | 4 | T016 | todo |
-| T019 | Implement literature selection and read adapter | 4 | T016 | todo |
-| T020 | Implement deterministic reflex guard | 6 | T009, T013, T014 | todo |
+| T017 | Implement safe food selection and eat adapter | 4 | T016 | wip |
+| T018 | Implement safe drink selection and drink adapter | 4 | T016 | wip |
+| T019 | Implement literature selection and read adapter | 4 | T016 | wip |
+| T020 | Implement deterministic reflex guard | 6 | T009, T013, T014 | **done** |
 | T021 | Implement MCP server | 5 | T011, T014 | todo |
 | T022 | Implement permission and autonomy policy | 6 | T017–T020 | todo |
 | T023 | Implement typed planner and critic | 7 | T021, T022 | todo |
@@ -166,6 +166,23 @@ Lua builders return `nil, reason` rather than raising, following the language's
 convention. Every call site must therefore check, and the client modules that
 consume them are new — this is the most likely place for a swallowed failure to
 hide, and is worth attention in review.
+
+## What `wip` means for each open task
+
+The tasks below are half-built in a specific, nameable way. Recording which
+half matters: "observation" reading as done when only the sidecar side exists
+would hide the fact that nothing yet produces an observation at all.
+
+| Task | Built | Missing |
+| --- | --- | --- |
+| T011–T013 | Sidecar side: diff, bounded store, compact planner view, threat assessment | The Lua producer. The mod emits a tier-0 heartbeat and nothing else — no snapshot, no inventory walk, no nearby scan |
+| T017–T019 | Selection policy for food, drink and literature, with score breakdowns and per-candidate rejection reasons | The action adapters that execute a choice. `consume.eat`, `consume.drink` and `literature.read` have no adapter, and depend on T016 |
+| T028 | Sixteen scenario definitions with their evidence requirements | The runner that drives them |
+
+`actions/builtin.py` currently registers two adapters, `WaitAdapter` and
+`CancelAdapter` — the two that need no game-specific API. Movement, transfer,
+eat, drink and read are unwritten, and each needs a verified capability from
+T003's probes before it can be.
 
 ## Known gaps and caveats
 

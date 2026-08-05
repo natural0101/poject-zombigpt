@@ -123,29 +123,45 @@ def rotated_path(path: Path, index: int) -> Path:
     return path.with_name(f"{path.name}.{index}")
 
 
-def read_header(path: Path) -> JournalHeader | None:
-    """Read a journal file's header line, or None if it has no usable one.
+def probe_header(path: Path) -> tuple[JournalHeader | None, str | None]:
+    """Read a journal file's header, and say why when there is not one.
 
-    A missing file and a file whose first line is still being written are the
-    same answer on purpose: neither can be read from safely yet.
+    The second element separates the two very different reasons a header can be
+    missing. ``None`` means "nothing to report": the file does not exist yet, or
+    its first line is still being written — both resolve by themselves on the
+    next poll. A string means the file is there and *cannot* be used: an I/O
+    error, or a first line that is complete but is not a header. That case must
+    reach the caller, because the reader will otherwise return an empty,
+    healthy-looking poll for a stream it is in fact unable to read at all.
     """
     try:
         with path.open("rb") as handle:
             raw = handle.readline(MAX_LINE_BYTES)
-    except OSError:
-        return None
+    except FileNotFoundError:
+        return None, None
+    except OSError as exc:
+        return None, f"journal is unreadable: {exc}"
     if not raw.endswith(b"\n"):
-        return None
+        if len(raw) >= MAX_LINE_BYTES:
+            return None, f"journal header exceeds {MAX_LINE_BYTES} bytes"
+        # An incomplete first line: the producer is mid-write, or the file is
+        # empty because it was only just created.
+        return None, None
     try:
         parsed: Any = json.loads(raw.decode("utf-8", errors="replace"))
     except json.JSONDecodeError:
-        return None
+        return None, "journal does not start with a header record"
     if not isinstance(parsed, dict) or parsed.get("type") != HEADER_TYPE:
-        return None
+        return None, "journal does not start with a header record"
     serial = parsed.get("serial")
     if not isinstance(serial, int) or isinstance(serial, bool) or serial < 0:
-        return None
-    return JournalHeader(serial=serial, end_offset=len(raw))
+        return None, "journal header carries no usable serial"
+    return JournalHeader(serial=serial, end_offset=len(raw)), None
+
+
+def read_header(path: Path) -> JournalHeader | None:
+    """Read a journal file's header line, or None if it has no usable one."""
+    return probe_header(path)[0]
 
 
 def _file_size(path: Path) -> int:
@@ -366,18 +382,40 @@ class JournalReader:
         A restarting sidecar uses this on the *command* stream: §3.12 says a
         restart must not re-execute commands, and the cheapest way to guarantee
         that is never to hand the old ones to an executor at all.
+
+        Raises :class:`JournalError` when the end cannot be established. Leaving
+        the position at zero instead would silently promise a skip that did not
+        happen, and the records that would then be replayed are commands.
         """
-        header = read_header(self.path)
-        self._offset = _file_size(self.path)
+        header, problem = probe_header(self.path)
+        if problem is not None:
+            raise JournalError(f"cannot skip to the end of {self.path.name}: {problem}")
+        try:
+            size = self.path.stat().st_size
+        except FileNotFoundError:
+            size = 0
+        except OSError as exc:
+            raise JournalError(f"cannot skip to the end of {self.path.name}: {exc}") from exc
+        self._offset = size
         self._serial = None if header is None else header.serial
 
     def read(self) -> JournalRead:
         """Consume every complete record that is new since the last call."""
-        header = read_header(self.path)
+        header, problem = probe_header(self.path)
         if header is None:
-            # Either the file does not exist, or the producer has written only
-            # part of its first line. Both mean "nothing readable yet".
-            return JournalRead(offset=self._offset, serial=self._serial)
+            # A missing file or a half-written first line is "nothing readable
+            # yet" and says so silently; anything else is a stream this reader
+            # cannot consume, and reporting that as a clean empty poll would
+            # hide a broken exchange directory for as long as it stays broken.
+            return JournalRead(
+                offset=self._offset,
+                serial=self._serial,
+                diagnostics=(
+                    ()
+                    if problem is None
+                    else (JournalDiagnostic(offset=self._offset, detail=problem),)
+                ),
+            )
 
         segments, lost = self._plan(header)
         records: list[JournalRecord] = []

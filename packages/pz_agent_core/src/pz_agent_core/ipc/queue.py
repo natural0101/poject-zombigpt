@@ -25,7 +25,7 @@ from __future__ import annotations
 import uuid
 from collections import OrderedDict, deque
 from collections.abc import Iterator, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Final
 
@@ -121,6 +121,11 @@ class SequenceTracker:
     def __init__(self, *, start: int = 0, gap_history: int = DEFAULT_GAP_HISTORY) -> None:
         if start < 0:
             raise ValueError(f"start must be non-negative, got {start}")
+        if gap_history < 1:
+            # A zero-length history is not "bounded", it is "keeps no evidence":
+            # gaps would still be classified but nothing could be inspected
+            # afterwards, which reads as a stream that never had a gap.
+            raise ValueError(f"gap_history must be positive, got {gap_history}")
         self._next: dict[Stream, int] = {stream: start for stream in Stream}
         self._last_seen: dict[Stream, int | None] = {stream: None for stream in Stream}
         self._gaps: deque[SequenceCheck] = deque(maxlen=gap_history)
@@ -224,7 +229,13 @@ class LeaseCheckpoint(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class SubmitOutcome:
-    """What happened to one :meth:`CommandQueue.submit` call."""
+    """What happened to one :meth:`CommandQueue.submit` call.
+
+    ``command`` is the command *as written*: when it was accepted it carries the
+    sequence number the journal record actually got, which is not necessarily
+    the provisional one :meth:`CommandQueue.build` handed out. Callers that keep
+    a copy should keep this one.
+    """
 
     command: Command
     accepted: bool
@@ -287,6 +298,8 @@ class CommandQueue:
     _local_seq: int = field(default=0, init=False)
 
     def __post_init__(self) -> None:
+        if self.pending_limit < 1:
+            raise ValueError(f"pending_limit must be positive, got {self.pending_limit}")
         self.layout.ensure()
         self._writer = JournalWriter(
             self.layout,
@@ -344,11 +357,21 @@ class CommandQueue:
         policy: CommandPolicy | None = None,
         command_id: str | None = None,
     ) -> Command:
-        """Compose a command, allocating its sequence number and timestamp."""
+        """Compose a command and timestamp it.
+
+        The sequence number here is *provisional*: it is the one the command
+        will get if it is the next thing written. The definitive number is
+        stamped by :meth:`submit` at the moment the record reaches the journal,
+        because §3.4 makes a hole in a stream mean "a record was lost". A
+        command that is rejected by a gate, or answered from the idempotency
+        cache, is never written — and if it had already consumed a number, the
+        mod would see a gap and conclude it had lost a command that was never
+        sent.
+        """
         payload: JsonDict = dict(args or {})
         return Command(
             session_id=self.session_id,
-            seq=self.sequences.allocate(Stream.COMMAND),
+            seq=self.sequences.peek(Stream.COMMAND),
             command_id=command_id or str(uuid.uuid4()),
             idempotency_key=idempotency_key,
             issued_at_ms=self.clock(),
@@ -398,16 +421,48 @@ class CommandQueue:
             )
             return SubmitOutcome(command=command, accepted=False, rejection=rejection)
 
-        offset = self._writer.append(command.to_dict())
-        self._track(command)
+        written, offset = self._write(command)
         if occupies:
-            self._in_flight = command
-        return SubmitOutcome(command=command, accepted=True, offset=offset)
+            # Claimed before tracking, so the bound below already knows this one
+            # must not be evicted.
+            self._in_flight = written
+        self._track(written)
+        return SubmitOutcome(command=written, accepted=True, offset=offset)
+
+    def _write(self, command: Command) -> tuple[Command, int]:
+        """Stamp the definitive sequence number and append the record.
+
+        Allocating here rather than in :meth:`build` is what keeps the command
+        stream contiguous: only records that actually reach the journal consume
+        a number.
+        """
+        stamped = replace(command, seq=self.sequences.allocate(Stream.COMMAND))
+        return stamped, self._writer.append(stamped.to_dict())
 
     def _track(self, command: Command) -> None:
+        """Remember a shipped command, oldest-first, within the bound.
+
+        The in-flight command is never the one evicted. Dropping it would lose
+        the idempotency key its terminal ack has to be filed under, and a
+        redelivery of a *world-touching* command that this queue no longer
+        recognises is exactly the double execution the cache exists to prevent.
+        Read-only and session-control commands are cheaper to forget, so they
+        are what the bound sheds.
+        """
         self._pending[command.command_id] = command
         while len(self._pending) > self.pending_limit:
-            self._pending.popitem(last=False)
+            victim = self._evictable_command_id()
+            if victim is None:
+                break
+            self._pending.pop(victim, None)
+
+    def _evictable_command_id(self) -> str | None:
+        """The oldest pending command that is safe to forget, if there is one."""
+        protected = {command.command_id for command in (self._in_flight,) if command is not None}
+        for command_id in self._pending:
+            if command_id not in protected:
+                return command_id
+        return None
 
     def send_stop(self, *, idempotency_key: str, lease_ms: int = 5_000) -> Command:
         """Write ``safety.stop`` past every gate. §3.11: stop bypasses the queue.
@@ -419,9 +474,9 @@ class CommandQueue:
         command = self.build(
             ActionName.SAFETY_STOP, idempotency_key=idempotency_key, lease_ms=lease_ms
         )
-        self._writer.append(command.to_dict())
-        self._track(command)
-        return command
+        written, _ = self._write(command)
+        self._track(written)
+        return written
 
     # -- leases ------------------------------------------------------------
 

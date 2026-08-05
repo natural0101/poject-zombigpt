@@ -260,26 +260,36 @@ class HeartbeatMonitor:
 
     def read(self, peer: Peer) -> Heartbeat | None:
         """Read a peer's heartbeat, or None when there is no usable one."""
+        return self._probe(peer)[0]
+
+    def _probe(self, peer: Peer) -> tuple[Heartbeat | None, str]:
+        """Read a heartbeat and, when there is none, say what was wrong.
+
+        "The peer never wrote a heartbeat", "the file is corrupt" and "the file
+        belongs to the other peer" are three different situations for whoever
+        has to diagnose a silent game, so the reason travels with the verdict
+        instead of collapsing into one unexplained absence.
+        """
         try:
             payload = read_json_document(self.path_for(peer))
-        except DocumentError:
-            return None
+        except DocumentError as exc:
+            return None, f"no readable heartbeat: {exc}"
         try:
             heartbeat = Heartbeat.from_dict(payload)
-        except HeartbeatError:
-            return None
+        except HeartbeatError as exc:
+            return None, f"no readable heartbeat: malformed document ({exc})"
         if heartbeat.peer is not peer:
             # A file naming the wrong peer means the directory is being shared
             # by something else; refusing it is safer than trusting the name.
-            return None
-        return heartbeat
+            return None, f"no readable heartbeat: file claims to belong to {heartbeat.peer.value}"
+        return heartbeat, "fresh"
 
     def liveness(self, peer: Peer, now_ms: int | None = None) -> PeerLiveness:
         """Judge one peer. Absent evidence is never treated as alive."""
         moment = self.clock() if now_ms is None else now_ms
-        heartbeat = self.read(peer)
+        heartbeat, detail = self._probe(peer)
         if heartbeat is None:
-            return PeerLiveness(peer, None, alive=False, detail="no readable heartbeat")
+            return PeerLiveness(peer, None, alive=False, detail=detail)
         timeout = self.timeout_for(peer)
         if heartbeat.is_stale(moment, timeout):
             return PeerLiveness(

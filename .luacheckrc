@@ -34,16 +34,11 @@ exclude_files = {
   "**/vanilla/**",
 }
 
--- The Lua tests run under a plain interpreter with no engine present, so the
--- support harness has to install the globals the mod expects. Declaring them
--- writable here is the point of the mock, not an oversight -- without this,
--- every stub the harness installs reads as "setting a read-only global".
+-- The Lua tests run under a plain interpreter with no engine present, so they
+-- have to install the globals the mod expects -- and swap an implementation
+-- mid-test to exercise a failure branch. Declaring the engine symbols writable
+-- here is the point of the mocks, not an oversight; without it every stub a
+-- test installs reads as "setting a read-only global".
 files["tests/lua"] = {
-  globals = { "PZAgent", "getPlayer", "getGameTime", "getTimestampMs", "Events" },
-}
-
-files["tests/lua/support"] = {
-  -- The harness replaces engine globals wholesale, including swapping an
-  -- implementation mid-test to exercise a failure branch.
   globals = read_globals,
 }

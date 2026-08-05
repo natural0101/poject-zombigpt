@@ -195,6 +195,8 @@ class StubAdapter:
     verify_after: int | None = None
     refuse: PreconditionFailed | None = None
     crash: Exception | None = None
+    #: Raised from :meth:`verify`, i.e. *after* the command has been shipped.
+    verify_crash: Exception | None = None
     validate_calls: list[int] = field(default_factory=list)
     verify_calls: int = 0
 
@@ -210,6 +212,8 @@ class StubAdapter:
 
     def verify(self, command: Command, before: Observation, after: Observation) -> Evidence | None:
         self.verify_calls += 1
+        if self.verify_crash is not None:
+            raise self.verify_crash
         if self.verify_after is None or self.verify_calls < self.verify_after:
             return None
         return Evidence(

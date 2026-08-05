@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pz_agent_core.ipc.layout import IpcLayout, SnapshotSlot
+from pz_agent_core.ipc.layout import SESSION_FILE, IpcLayout, SnapshotSlot, temp_name
 
 
 def test_filenames_match_the_protocol_chapter(tmp_path: Path) -> None:
@@ -42,6 +42,18 @@ def test_temporary_rotated_and_log_paths_are_accepted(tmp_path: Path) -> None:
     assert layout.is_managed_path(layout.session.with_name("session.json.tmp"))
     assert layout.is_managed_path(layout.command_ack.with_name("command.ack.0001.jsonl.3"))
     assert layout.is_managed_path(layout.logs_dir / "executor.log")
+
+
+def test_the_scratch_name_of_3_5_is_a_managed_path(tmp_path: Path) -> None:
+    """§3.5 names the scratch file ``filename.tmp.<pid>.<seq>``."""
+    layout = IpcLayout(tmp_path)
+    scratch = temp_name(SESSION_FILE, 4321, 7)
+    assert scratch == "session.json.tmp.4321.7"
+    assert layout.is_managed_path(layout.root / scratch)
+    assert layout.is_managed_path(layout.root / temp_name("observation.snapshot.pointer", 1, 0))
+    # The pid/seq decoration does not turn a foreign name into a managed one.
+    assert not layout.is_managed_path(layout.root / temp_name("evil.json", 4321, 7))
+    assert not layout.is_managed_path(layout.root / "session.json.tmp.notapid.7")
 
 
 def test_arbitrary_and_traversing_paths_are_rejected(tmp_path: Path) -> None:
