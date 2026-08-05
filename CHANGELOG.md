@@ -26,5 +26,32 @@ drift out of sync with `pz_agent_core.version`.
   code, `eval`/`exec`/`shell=True`/`loadstring`, and committed secrets.
 - GitHub Actions workflow covering Python 3.11/3.12, luacheck, Lua unit tests
   and a build artifact.
+- Installation discovery across every Steam library, with an injectable
+  filesystem root and environment so the Windows path is testable on Linux CI.
+  Build detection reports an honest unknown rather than guessing.
+- Save backup and restore with a hashed manifest. Restore refuses while the
+  game is running and verifies every hash before writing; prune never removes
+  the newest backup.
+- File IPC: fixed layout, byte-offset journal reader that ignores a partial
+  trailing line and skips a corrupt one, alternating-slot snapshots with the
+  pointer written last, sequence gap detection, bounded idempotency cache and
+  lease enforcement at both check points.
+- Session handshake requiring a nonce different from the previous session, so a
+  file left by a crashed sidecar cannot read as a fresh connection request.
+- Lua mod for Build 42: pure shared modules (JSON with deterministic key order
+  and no `loadstring`, references, protocol constants, sequences, queue
+  ownership) and the engine-coupled client half, with a test harness that runs
+  under a plain interpreter.
+- Sixteen game-smoke scenario definitions, each naming the evidence that closes
+  it.
+- Documentation: protocol, architecture, safety, testing, compatibility,
+  limitations, MCP boundary, quick start, troubleshooting, development and
+  release.
+
+### Fixed
+
+- `scripts/check.sh` ran luacheck but never executed the Lua tests, so failing
+  assertions would not have been caught locally. It now runs them over the same
+  glob CI uses.
 
 [Unreleased]: https://github.com/natural0101/poject-zombigpt/compare/main...dev

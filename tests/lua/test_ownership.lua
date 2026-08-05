@@ -49,8 +49,16 @@ do
   equal(Ownership.classify(modEntry(1), SESSION), CLASS.MOD, "our own tag from this session is ours")
   equal(Ownership.classify(playerEntry(1), SESSION), CLASS.MANUAL, "an entry marked as the player's is theirs")
   equal(Ownership.classify(untaggedEntry(1), SESSION), CLASS.AMBIGUOUS, "an untagged entry is ambiguous")
-  equal(Ownership.classify(modEntry(1, OTHER_SESSION), SESSION), CLASS.AMBIGUOUS, "a tag from another session is ambiguous")
-  equal(Ownership.classify({ agent_tag = "pz_agent:x:y" }, SESSION), CLASS.AMBIGUOUS, "a tag with no session field is ambiguous")
+  equal(
+    Ownership.classify(modEntry(1, OTHER_SESSION), SESSION),
+    CLASS.AMBIGUOUS,
+    "a tag from another session is ambiguous"
+  )
+  equal(
+    Ownership.classify({ agent_tag = "pz_agent:x:y" }, SESSION),
+    CLASS.AMBIGUOUS,
+    "a tag with no session field is ambiguous"
+  )
   equal(
     Ownership.classify({ agent_tag = "somebody_else:" .. SESSION .. ":1", agent_session = SESSION }, SESSION),
     CLASS.AMBIGUOUS,

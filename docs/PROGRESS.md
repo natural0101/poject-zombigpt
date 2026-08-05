@@ -8,7 +8,8 @@ handover point between work sessions: read it first, update it last.
 green · `wip` in progress · `todo` not started · `live` blocked on a step that
 physically requires a running game.
 
-Last updated: T001, T005 complete.
+Last updated: phase 0 partial, phases 1-2 complete. 347 Python tests, 256 Lua assertions,
+`scripts/check.sh` green.
 
 ## Status
 
@@ -16,18 +17,18 @@ Last updated: T001, T005 complete.
 | --- | --- | --- | --- | --- |
 | T001 | Initialize repository and quality toolchain | 1 | — | **done** |
 | T005 | Define protocol domain models and JSON schemas | 1 | T001 | **done** |
-| T002 | Detect Project Zomboid installation and user directory | 0 | T001 | todo |
+| T002 | Detect Project Zomboid installation and user directory | 0 | T001 | **done** |
 | T003 | Build local API compatibility scanner | 0 | T002 | todo |
 | T004 | Implement doctor CLI | 0 | T002, T003 | todo |
-| T006 | Implement Lua mod skeleton and heartbeat | 2 | T003, T005 | todo |
-| T007 | Implement sidecar handshake and locks | 2 | T005, T006 | todo |
-| T008 | Implement command queue and acknowledgements | 2 | T007 | todo |
-| T009 | Implement panic stop and manual takeover | 2 | T006, T008 | todo |
-| T010 | Implement save backup subsystem | 2 | T002 | todo |
+| T006 | Implement Lua mod skeleton and heartbeat | 2 | T003, T005 | **done** |
+| T007 | Implement sidecar handshake and locks | 2 | T005, T006 | **done** |
+| T008 | Implement command queue and acknowledgements | 2 | T007 | **done** |
+| T009 | Implement panic stop and manual takeover | 2 | T006, T008 | **done** |
+| T010 | Implement save backup subsystem | 2 | T002 | **done** |
 | T011 | Observe player scalar state | 3 | T006, T008 | todo |
 | T012 | Observe nested inventory with stable refs | 3 | T011 | todo |
 | T013 | Observe nearby world and threats | 3 | T011 | todo |
-| T014 | Implement action lifecycle framework | 4 | T008, T011 | todo |
+| T014 | Implement action lifecycle framework | 4 | T008, T011 | wip |
 | T015 | Implement movement adapter | 4 | T013, T014 | todo |
 | T016 | Implement inventory transfer adapter | 4 | T012, T014 | todo |
 | T017 | Implement safe food selection and eat adapter | 4 | T016 | todo |
@@ -41,7 +42,7 @@ Last updated: T001, T005 complete.
 | T025 | Implement TeamON voice adapter interface | 8 | T021, T023 | todo |
 | T026 | Implement installer and launcher | 9 | T004, T006, T007, T010 | todo |
 | T027 | Implement diagnostics and support bundle | 9 | T004, T008, T014 | todo |
-| T028 | Build live game smoke harness | 9 | T015–T019 | todo |
+| T028 | Build live game smoke harness | 9 | T015–T019 | wip |
 | T029 | Run endurance and recovery tests | 9 | T020, T022, T028 | todo |
 | T030 | Produce release artifact and final report | 9 | T021, T025–T027, T029 | todo |
 
@@ -88,11 +89,118 @@ with `status = succeeded` and any reason other than `POSTCONDITION_MET` raises,
 and `ActionResult.succeeded()` refuses to build without evidence. "Queued" can
 therefore not be reported as "done" by construction, not merely by convention.
 
+### T002 — installation and user-directory discovery
+
+Walks every Steam library from `libraryfolders.vdf` rather than assuming the
+default one; a second library on another drive is the common case. The VDF
+parser accepts the modern `path` key and the legacy numeric form, comments and
+CRLF, because that file is written by many Steam versions over the years.
+
+Every entry point takes an injectable filesystem root and environment mapping
+instead of reading `os.environ` at call time. That is what makes a Windows-only
+code path testable on Linux CI, and it is why the tests genuinely cover a
+Cyrillic username and a relocated home directory instead of assuming them away.
+
+Build detection reports what it read and where. When the metadata is absent it
+says so rather than falling back to `42.20` — a wrong build assumption silently
+invalidates every capability probe downstream, which is worse than an honest
+unknown.
+
+### T010 — save backup and restore
+
+Manifest with per-file sha256, sizes, total bytes and the source directory with
+the user's home redacted to a placeholder. Restore verifies every hash before
+writing anything and stages through a temp directory, so an abort cannot leave
+a half-save.
+
+`restore` refuses while the game is running — an exception, not a warning, with
+no override flag. `prune` is the only deletion path and never removes the
+newest backup. A source directory over the configured size cap is refused with
+a clear error rather than filling the disk.
+
+### T007 + T008 — session, IPC journal, queue
+
+`ipc/layout.py` exposes the fixed filenames as properties plus a predicate
+asserting nothing writes outside them; filenames are constants on both sides,
+so a command can never name a file.
+
+`journal.py` appends one record per line and reads by byte offset. A trailing
+line without a newline is ignored and re-read next tick rather than parsed
+half-written; a complete but unparseable line is reported and skipped so one
+bad record cannot stall the stream. Rotation is signalled, not silent.
+
+`snapshot.py` uses alternating a/b slots with the pointer written last, because
+atomic rename is not guaranteed from inside Kahlua. A torn read falls back to
+the other slot, so the worst case is one stale snapshot rather than a
+half-parsed one.
+
+`queue.py` tracks sequences with gap detection, enforces leases at both check
+points, and caches only terminal results, bounded by entry count.
+
+The session nonce rule carries real weight: `session.json` left by a crashed
+sidecar is perfectly well-formed and would otherwise read as a fresh request to
+attach on the next save load. Requiring a nonce different from the previously
+accepted session distinguishes "a sidecar is asking to connect" from "a sidecar
+asked once and nothing cleaned up".
+
+### T006 + T009 — Lua mod
+
+`shared/PZAgent/` holds the pure logic, tested under a plain interpreter with
+no engine present: `Json` (deterministic key order, correct control-character
+escaping, no `loadstring` anywhere — decoding is a hand-written scanner),
+`Refs`, `Protocol` (version constants and the closed action whitelist checked
+before dispatch), `Sequence`, `Ownership`.
+
+`client/PZAgent/` holds the engine-coupled half: `Ipc`, `Heartbeat`, `Session`,
+`Safety`, `Hud`, `Runtime`. `PZAgent_Main.lua` wires them and holds no logic of
+its own.
+
+Cross-verified directly rather than assumed: an item reference into a world
+container — which carries five colons of its own — parses to the same container
+tail, runtime id and generation on the Lua and Python sides, and rebuilds to
+the identical string. A parser splitting left-to-right would not error here; it
+would resolve to a *different container*, which is the whole reason both
+implementations parse from the ends.
+
+Lua builders return `nil, reason` rather than raising, following the language's
+convention. Every call site must therefore check, and the client modules that
+consume them are new — this is the most likely place for a swallowed failure to
+hide, and is worth attention in review.
+
+## Known gaps and caveats
+
+- **T003 is not done, but T006 was built anyway.** The task graph has T006
+  depending on T003 (the compatibility scanner). The mod's *pure* logic —
+  JSON, refs, protocol constants, ownership — needs no scanner, so it was
+  written first. Nothing in the mod yet calls an unprobed game API. Any action
+  adapter must wait for T003.
+- **T028 is partial.** The 16 scenario definitions exist with their evidence
+  requirements; the runner that drives them does not. Marked `wip`, not `done`.
+- **`tests/lua/` proves logic, not compatibility.** It runs under mocked engine
+  globals. It cannot demonstrate that `ISInventoryTransferAction` or
+  `ISEatFoodAction` behave as expected in Build 42.20, and nothing in this repo
+  claims otherwise.
+
 ## Requires a live game session
 
-Nothing yet — no adapter has reached the point of needing one. Each entry added
-here must name the exact scenario id from `tests/game-smoke/` and say what
-evidence closes it.
+No scenario has been run — there is no installed game in this environment. The
+sixteen definitions in `tests/game-smoke/` name what closes each one.
+
+| Scenario | Status | Blocked on |
+| --- | --- | --- |
+| S01 heartbeat | not run | a live session |
+| S02 panic stop | not run | a live session |
+| S03–S08 actions | not run | T015–T019 adapters, then a live session |
+| S09 manual takeover | not run | a live session |
+| S10 stale sidecar | not run | a live session |
+| S11 invalid ref | not run | a live session |
+| S12 path blocked | not run | T015, then a live session |
+| S13 zombie interruption | not run | T020, then a live session |
+| S14 backup / restore | not run | a live session (the code and its tests exist) |
+| S15 restart recovery | not run | a live session |
+| S99 endurance | not run | everything above |
+
+"Not run" is the honest status and stays until an evidence artefact exists.
 
 ## Deviations from the blueprint
 
