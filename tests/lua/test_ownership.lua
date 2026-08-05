@@ -96,8 +96,16 @@ do
   local bothForeign = Ownership.describe({ playerEntry(1), untaggedEntry(2) }, SESSION)
   equal(bothForeign.ownership, OWNERSHIP.AMBIGUOUS, "ambiguous dominates manual, being the less known state")
 
+  -- "I looked and there was nothing" and "I could not look" must not be the
+  -- same answer: the first permits the agent to enqueue work, the second must
+  -- not.
+  equal(empty.readable, true, "an empty queue was readable")
   local unreadable = Ownership.describe(nil, SESSION)
-  equal(unreadable.ownership, OWNERSHIP.NONE, "a queue that could not be read reports no ownership")
+  equal(unreadable.ownership, OWNERSHIP.AMBIGUOUS, "a queue that could not be read is ambiguous, not empty")
+  equal(unreadable.busy, true, "and is treated as busy")
+  equal(unreadable.readable, false, "and says it could not be read")
+  ok(Ownership.blocksAutomation(unreadable), "so it blocks automation")
+  ok(not Ownership.blocksAutomation(empty), "while an observed-empty queue does not")
   ok(Ownership.blocksAutomation("not a description"), "a description that is not a table blocks automation")
 end
 

@@ -43,6 +43,7 @@ from ..protocol import (
     Observation,
     ReasonCode,
 )
+from ..protocol.messages import MAX_LEASE_MS, MIN_LEASE_MS
 from .adapter import (
     ActionAdapter,
     AdapterRegistry,
@@ -208,6 +209,12 @@ class ActionRequest:
             raise ValueError(
                 f"idempotency_key must be 1..{MAX_BASE_IDEMPOTENCY_KEY_LEN} characters "
                 "so the per-attempt suffix fits within the protocol limit"
+            )
+        # Checked here rather than at send time so an out-of-range lease is a
+        # programming error at the call site, not an INTERNAL_ERROR mid-flight.
+        if not MIN_LEASE_MS <= self.lease_ms <= MAX_LEASE_MS:
+            raise ValueError(
+                f"lease_ms must be within {MIN_LEASE_MS}..{MAX_LEASE_MS}, got {self.lease_ms}"
             )
 
     def attempt_key(self, attempt: int) -> str:
@@ -700,6 +707,7 @@ class ActionEngine:
             message=message,
             evidence=evidence,
             diagnostics=self._diagnostics(attempt, started_at_ms, last_ack),
+            attempt=attempt,
         )
 
     def _diagnostics(

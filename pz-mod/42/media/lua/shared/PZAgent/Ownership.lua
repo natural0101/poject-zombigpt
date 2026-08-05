@@ -124,13 +124,37 @@ local function classifyAll(entries, sessionId)
   return classes, counts, total, truncated
 end
 
+--- The description of a queue that could not be read at all.
+---
+--- Deliberately not the same as an empty queue: "I looked and there was
+--- nothing" permits the agent to enqueue work, while "I could not look" must
+--- not. Reporting an unreadable queue as empty is the single most dangerous
+--- mistake this module could make, so it has its own constructor.
+function Ownership.unreadable()
+  return {
+    ownership = protocol().OWNERSHIP.AMBIGUOUS,
+    busy = true,
+    readable = false,
+    total = 0,
+    mod_owned = 0,
+    foreign = 0,
+    truncated = false,
+    classes = {},
+  }
+end
+
 --- Summarise the queue the way the observation schema reports it.
 ---
 --- Ambiguous dominates because it is the least-known state; manual beats mod
 --- because a queue the mod did not fully author is not the mod's. The result is
 --- "mod" only when every entry is provably ours, which is what lets the
 --- executor treat "ownership == mod" as permission to keep going.
+---
+--- `entries` of nil means the queue could not be read; see `unreadable`.
 function Ownership.describe(entries, sessionId)
+  if type(entries) ~= "table" then
+    return Ownership.unreadable()
+  end
   local classes, counts, total, truncated = classifyAll(entries, sessionId)
   local names = protocol().OWNERSHIP
   local ownership
@@ -146,6 +170,7 @@ function Ownership.describe(entries, sessionId)
   return {
     ownership = ownership,
     busy = total > 0,
+    readable = true,
     total = total,
     mod_owned = counts[Ownership.CLASS.MOD],
     foreign = counts[Ownership.CLASS.MANUAL] + counts[Ownership.CLASS.AMBIGUOUS],
