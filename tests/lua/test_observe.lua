@@ -103,8 +103,9 @@ end
 
 Harness.group("outside the game every probe reports its own absence")
 do
-  local fields = Observe.gameFields()
+  local fields, buildReason = Observe.gameFields()
   isNil(fields.build, "with no getCore there is no build to report")
+  Harness.contains(buildReason, "getCore", "and the probe's own reason travels with the gap, not a vague restatement")
   isNil(fields.save_key, "with no getWorld there is no save identity")
   isNil(fields.speed, "and no clock to read a speed from")
 
@@ -205,7 +206,7 @@ end
 
 Harness.group("the inventory walk nests, names its slots and finds the hands")
 do
-  local player, bottle = furnishedPlayer()
+  local player = furnishedPlayer()
   local roots = Observe.inventoryRoots(player)
   equal(#roots, 2, "the main inventory and the worn bag are separate roots")
   equal(roots[1].kind, "player_main", "the first root is the main inventory")
@@ -217,7 +218,18 @@ do
   equal(satchel.container.kind, "carried", "a bag in the inventory is a carried container")
   equal(satchel.container.runtime_id, 99, "identified by the bag item")
   equal(satchel.container.items[1].hand, "primary", "the item in the primary hand is marked wherever it lives")
-  ok(rawequal(bottle, bottle), "the hand is matched by identity, not by name")
+  equal(satchel.container.items[1].equipped, true, "and counts as equipped even though isEquipped says otherwise")
+
+  -- Two bottles the game would describe identically. Only the one the hand
+  -- actually holds may be marked, or a transfer moves the wrong object.
+  local held = Support.item({ id = 5, full_type = "Base.WaterBottleFull", name = "Water Bottle", weight = 0.8 })
+  local twin = Support.item({ id = 5, full_type = "Base.WaterBottleFull", name = "Water Bottle", weight = 0.8 })
+  local twinned = Observe.inventoryRoots(Support.player({
+    inventory = Support.container({ twin, held }),
+    primary = held,
+  }))[1]
+  isNil(twinned.items[1].hand, "an identical-looking item is not the held one")
+  equal(twinned.items[2].hand, "primary", "the hand is matched by object identity, not by what the item is called")
 
   equal(roots[1].items[1].food.hunger_change, -15, "a food item carries its domain payload")
   isNil(roots[1].items[2].food, "and an item that is not food carries none")
@@ -245,6 +257,68 @@ do
   equal(#node.items, Model.MAX_ITEMS_PER_CONTAINER, "the reader stops at the cap")
   equal(node.truncated, true, "and declares that it did")
   equal(node.dropped, 5, "with the number it did not look at")
+end
+
+Harness.group("the inventory walk is bounded before the engine is asked, not after")
+do
+  -- Bags inside bags inside bags: the per-container cap alone would let this
+  -- cost hundreds of thousands of engine calls on the game thread for a
+  -- document that keeps sixty-four containers.
+  local top = {}
+  local nextId = 0
+  for index = 1, 20 do
+    top[index], nextId = Support.bagTree(2, 20, nextId)
+  end
+  local deepRoots = Observe.inventoryRoots(Support.player({ inventory = Support.container(top) }))
+  local containers, items = 0, 0
+  local function count(node)
+    containers = containers + 1
+    for _, entry in ipairs(node.items or {}) do
+      items = items + 1
+      if entry.container ~= nil then
+        count(entry.container)
+      end
+    end
+  end
+  count(deepRoots[1])
+  ok(containers <= Model.MAX_CONTAINERS, "the reader opens no more containers than the document can hold")
+  ok(items <= Model.MAX_ITEMS, "and reads no more items than it can emit")
+  ok(deepRoots.containers_dropped > 0, "the bags it never opened are counted")
+
+  local document = Model.build({
+    session_id = SESSION,
+    seq = 0,
+    timestamp_ms = NOW,
+    game = { build = "42.20" },
+    player = Observe.playerFields(Support.player({})),
+    inventory = deepRoots,
+  })
+  equal(
+    document.player.stats[Model.LIMIT_PREFIX .. "containers_truncated"],
+    true,
+    "and the document says the tree is incomplete rather than presenting a pruned one as whole"
+  )
+  ok(
+    document.player.stats[Model.LIMIT_PREFIX .. "containers_omitted"] >= deepRoots.containers_dropped,
+    "with a count that includes what the reader never handed over"
+  )
+
+  local nameless = Observe.inventoryRoots(Support.player({
+    inventory = Support.container({}),
+    worn = { Support.worn(nil, Support.item({ id = 3, name = "Backpack", contents = {} })) },
+  }))
+  equal(#nameless, 1, "a worn bag whose slot cannot be read has no reference, so it is not emitted")
+  equal(nameless.containers_dropped, 1, "and its absence is counted, not passed off as an empty back")
+
+  local wornMany = {}
+  for index = 1, Observe.MAX_WORN + 3 do
+    wornMany[index] = Support.worn("Slot" .. index, Support.item({ id = 500 + index, name = "Sock" }))
+  end
+  local overflow = Observe.inventoryRoots(Support.player({
+    inventory = Support.container({}),
+    worn = wornMany,
+  }))
+  equal(overflow.containers_dropped, 3, "worn slots past the cap are counted, since any of them could be a bag")
 end
 
 Harness.group("nearby distinguishes what it saw from what it could not tell")
@@ -300,6 +374,32 @@ do
     true,
     "the zombie nobody could read is declared, because an absent chasing flag reads as safe"
   )
+
+  -- getOnlineID answers -1 outside multiplayer. Taking it would give every
+  -- zombie the reference "zombie:<session>:-1:0" -- one handle for the horde.
+  Support.installCell({}, {
+    Support.zombie({ id = 71, online_id = -1, x = 101, y = 200 }),
+    Support.zombie({ id = 72, online_id = -1, x = 102, y = 200 }),
+  })
+  local sentinelZombies = Observe.nearbyZombies(player, position).zombies
+  equal(sentinelZombies[1].runtime_id, 71, "a -1 online id falls through to the id that identifies")
+  Harness.notEqual(sentinelZombies[1].runtime_id, sentinelZombies[2].runtime_id, "so two zombies stay two zombies")
+  Support.installCell(squares, zombies)
+
+  -- The square budget cannot bite at the shipped radius, which is exactly why
+  -- it is worth proving it holds: a later radius is what would reach it.
+  local squareBudget = Observe.MAX_SQUARES
+  Observe.MAX_SQUARES = 4
+  local starved = Observe.nearbyObjects(position)
+  equal(starved.truncated, true, "past the square budget the scan stops and says so")
+  ok(starved.dropped >= (2 * Observe.RADIUS + 1) ^ 2 - 4, "counting every square it never looked at")
+  Observe.MAX_SQUARES = squareBudget
+
+  local perSquare = Observe.MAX_OBJECTS_PER_SQUARE
+  Observe.MAX_OBJECTS_PER_SQUARE = 1
+  local crowded = Observe.nearbyObjects(position)
+  equal(crowded.truncated, false, "a square with one object is not truncated by a budget of one")
+  Observe.MAX_OBJECTS_PER_SQUARE = perSquare
   removeCell()
 end
 
@@ -353,6 +453,15 @@ do
   local nothing, blindReason = Observe.tick(blind, NOW)
   isNil(nothing, "a character the reader cannot place produces no snapshot")
   equal(blind.safety.last_error, blindReason, "and the failure reaches the HUD instead of passing silently")
+
+  removeCore()
+  local buildless = newAgent()
+  buildless.player = furnishedPlayer()
+  local unbuilt, buildReason = Observe.tick(buildless, NOW)
+  isNil(unbuilt, "a game that will not name its own build produces no snapshot")
+  Harness.contains(buildReason, "getCore", "and the reason is the probe's, not a restatement of the missing field")
+  equal(buildless.safety.last_error, buildReason, "which reaches the HUD")
+  removeCore = installCore("42.20")
 
   local unwritable, unwritableFs = newAgent()
   unwritable.player = furnishedPlayer()

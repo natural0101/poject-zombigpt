@@ -13,10 +13,11 @@ from __future__ import annotations
 
 from pz_agent_core.version import PRODUCT_VERSION
 
-from .app import PROGRAM, build_parser, dispatch, main
+from .app import COMMANDS, PROGRAM, build_parser, dispatch, main
 from .context import EXIT_FAILURE, EXIT_OK, EXIT_USAGE, CliContext, Workspace, resolve_workspace
 
 __all__ = [
+    "COMMANDS",
     "EXIT_FAILURE",
     "EXIT_OK",
     "EXIT_USAGE",

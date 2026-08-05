@@ -295,6 +295,43 @@ def test_an_argument_the_adapter_does_not_understand_is_refused() -> None:
     assert caught.value.reason_code is ReasonCode.INVALID_ARGUMENT
 
 
+def test_a_square_ref_that_names_another_square_than_the_target_is_refused() -> None:
+    """``build_args`` mints this argument; a caller's own copy is not ignored."""
+    with pytest.raises(PreconditionFailed) as caught:
+        MoveToAdapter().validate(
+            move_command(square_ref=square_ref(TARGET_X + 1, TARGET_Y)), world_with_target()
+        )
+    assert caught.value.reason_code is ReasonCode.INVALID_ARGUMENT
+    assert caught.value.evidence["target"] == {"x": TARGET_X, "y": TARGET_Y, "z": 0}
+
+
+def test_a_malformed_square_ref_is_an_invalid_ref() -> None:
+    with pytest.raises(PreconditionFailed) as caught:
+        MoveToAdapter().validate(
+            move_command(square_ref=f"square:{DEFAULT_SESSION}:north:{TARGET_Y}:0"),
+            world_with_target(),
+        )
+    assert caught.value.reason_code is ReasonCode.INVALID_REF
+
+
+def test_a_square_ref_from_another_session_is_an_invalid_ref() -> None:
+    foreign = "square:11111111-2222-3333-4444-555555555555:1204:3400:0"
+    with pytest.raises(PreconditionFailed) as caught:
+        MoveToAdapter().validate(move_command(square_ref=foreign), world_with_target())
+    assert caught.value.reason_code is ReasonCode.INVALID_REF
+
+
+def test_the_adapters_own_prepared_command_still_passes_its_own_checks() -> None:
+    """The prepared form is what ``verify`` re-parses, so it has to stay valid."""
+    adapter = MoveToAdapter()
+    world = world_with_target()
+
+    prepared = prepare(adapter, move_command(), world)
+
+    adapter.validate(prepared, world)
+    assert prepared.args["square_ref"] == square_ref(TARGET_X, TARGET_Y)
+
+
 def test_movement_without_a_nearby_view_cannot_be_verified() -> None:
     with pytest.raises(PreconditionFailed) as caught:
         MoveToAdapter().validate(move_command(), a_world(nearby=NearbyView(), objects=[]))
@@ -492,6 +529,43 @@ def test_move_near_is_not_verified_from_another_floor() -> None:
     )
 
     assert adapter.verify(command, near_world(), upstairs) is None
+
+
+def test_move_near_is_not_verified_against_an_object_that_lost_its_position() -> None:
+    """Re-resolution can return the object without coordinates; that proves nothing."""
+    adapter = MoveNearAdapter()
+    command = prepare(adapter, near_command(), near_world())
+    blind = a_world(
+        seq=2,
+        position=Position(x=float(HOME_X + 3), y=float(HOME_Y), z=0),
+        objects=[replace(a_world_object(CRATE, x=HOME_X + 3, distance=0.0), position=None)],
+    )
+
+    assert adapter.verify(command, near_world(), blind) is None
+
+
+def test_move_near_evidence_records_the_distance_the_radius_test_actually_used() -> None:
+    """The object's position, not the square under it — the two differ by up to a square."""
+    adapter = MoveNearAdapter()
+    off_centre = NearbyObject(
+        ref=CRATE,
+        kind="container",
+        distance=0.0,
+        position=Position(x=float(HOME_X) + 3.9, y=float(HOME_Y), z=0),
+    )
+    start = a_world(seq=1, objects=[off_centre, a_square(HOME_X + 3, HOME_Y)])
+    command = prepare(adapter, near_command(radius=0.1), start)
+    arrived = a_world(
+        seq=2,
+        position=Position(x=float(HOME_X) + 3.9, y=float(HOME_Y), z=0),
+        objects=[off_centre],
+    )
+
+    evidence = adapter.verify(command, start, arrived)
+
+    assert evidence is not None
+    assert evidence.observed["distance"] == pytest.approx(0.0)
+    assert evidence.observed["distance"] <= evidence.observed["radius"]
 
 
 def test_move_near_refuses_an_object_that_is_not_in_view() -> None:

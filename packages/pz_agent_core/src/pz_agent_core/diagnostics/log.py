@@ -54,6 +54,13 @@ MAX_FIELDS: Final = 32
 #: Event names are identifiers, not prose.
 MAX_EVENT_LEN: Final = 80
 
+#: Floor under ``max_record_bytes``. The marker record that replaces an oversize
+#: one is itself a record, and a cap it could not fit in would turn the
+#: oversize path — the one that exists so a big record is survivable — into the
+#: exception it was written to prevent. Measured against the marker's smallest
+#: form, with room for the event name it names.
+MIN_RECORD_BYTES: Final = 256
+
 _EVENT_TRUNCATED: Final = "diagnostics.record_truncated"
 _FIELDS_DROPPED_KEY: Final = "fields_dropped"
 
@@ -149,6 +156,11 @@ class LogLimits:
             raise DiagnosticsError(
                 f"max_record_bytes ({self.max_record_bytes}) cannot exceed "
                 f"max_bytes ({self.max_bytes})"
+            )
+        if self.max_record_bytes < MIN_RECORD_BYTES:
+            raise DiagnosticsError(
+                f"max_record_bytes must be at least {MIN_RECORD_BYTES} so the "
+                f"oversize marker fits, got {self.max_record_bytes}"
             )
 
     @property
@@ -346,28 +358,47 @@ class DiagnosticLog:
         return redacted
 
     def _emit(self, record: LogRecord) -> LogRecord:
-        line = json.dumps(
-            record.to_dict(), ensure_ascii=True, separators=(",", ":"), sort_keys=True
-        )
+        line = _encode(record)
         limit = self._structured.limits.max_record_bytes
         if len(line.encode("utf-8")) + 1 > limit:
-            record = LogRecord(
-                timestamp_ms=record.timestamp_ms,
-                level=LogLevel.WARNING,
-                event=_EVENT_TRUNCATED,
-                fields={
-                    "original_event": record.event,
-                    "original_level": record.level.value,
-                    "bytes": len(line.encode("utf-8")),
-                    "limit_bytes": limit,
-                },
-            )
-            line = json.dumps(
-                record.to_dict(), ensure_ascii=True, separators=(",", ":"), sort_keys=True
-            )
+            record, line = _marker(record, len(line.encode("utf-8")), limit)
         self._structured.write(line)
         self._human.write(_bounded_line(record.to_line(), limit))
         return record
+
+
+def _encode(record: LogRecord) -> str:
+    return json.dumps(record.to_dict(), ensure_ascii=True, separators=(",", ":"), sort_keys=True)
+
+
+def _marker(record: LogRecord, size: int, limit: int) -> tuple[LogRecord, str]:
+    """The record that replaces an oversize one, shrunk until it fits.
+
+    The marker names the event it stands for, and that name is the only part of
+    it whose length is not fixed. It is cut, and then dropped, rather than
+    allowed to push the marker past the same cap the original breached: a writer
+    that raised here would turn "this record was too large" into an exception in
+    whichever subsystem happened to log it.
+    """
+    fixed: JsonDict = {
+        "original_level": record.level.value,
+        "bytes": size,
+        "limit_bytes": limit,
+    }
+    for kept in (len(record.event), MAX_EVENT_LEN // 2, 16, 0):
+        fields = fixed if kept == 0 else {"original_event": record.event[:kept], **fixed}
+        marker = LogRecord(
+            timestamp_ms=record.timestamp_ms,
+            level=LogLevel.WARNING,
+            event=_EVENT_TRUNCATED,
+            fields=fields,
+        )
+        line = _encode(marker)
+        if len(line.encode("utf-8")) + 1 <= limit:
+            return marker, line
+    # Unreachable: LogLimits floors max_record_bytes above the shortest marker,
+    # which is what makes the loop above total rather than best-effort.
+    raise DiagnosticsError(f"no marker record fits in {limit} bytes")
 
 
 def _bounded_line(line: str, limit: int) -> str:
@@ -397,12 +428,18 @@ def read_records(
         raw = path.read_bytes()
     except OSError as exc:
         return (), (f"{path.name}: cannot read ({exc.strerror or exc})",)
-    if len(raw) > max_bytes:
-        raw = raw[-max_bytes:]
-    text = raw.decode("utf-8", errors="replace")
-    lines = [line for line in text.splitlines() if line.strip()]
     records: list[JsonDict] = []
     problems: list[str] = []
+    if len(raw) > max_bytes:
+        omitted = len(raw) - max_bytes
+        raw = raw[-max_bytes:]
+        # The window starts mid-file, so its first line is a fragment of a record
+        # rather than a corrupt one. Reporting it as unparseable would accuse the
+        # log of damage the reader did, so it is dropped and the cut is stated.
+        raw = raw.partition(b"\n")[2]
+        problems.append(f"{path.name}: the first {omitted} byte(s) were not read")
+    text = raw.decode("utf-8", errors="replace")
+    lines = [line for line in text.splitlines() if line.strip()]
     for number, line in enumerate(lines[-limit:], start=max(1, len(lines) - limit + 1)):
         try:
             parsed: Any = json.loads(line)

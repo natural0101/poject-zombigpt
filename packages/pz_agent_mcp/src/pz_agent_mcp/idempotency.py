@@ -43,11 +43,18 @@ class CachedCall:
     that action's current state rather than returning the stored envelope, so a
     retry never resurrects a stale ``accepted`` for something that has since
     finished — and never invents a newer status for something that has not.
+
+    ``status`` is the envelope status the first call answered with, kept for the
+    replays that have no action to re-read: a plan submission, or an action the
+    core has since forgotten. Without it a retry would report ``"ok"`` for a call
+    that originally said ``accepted``, which is a different claim about the same
+    work.
     """
 
     tool: str
     payload: JsonDict
     action_id: str | None = None
+    status: str = "ok"
 
 
 class IdempotencyCache:

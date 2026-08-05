@@ -109,6 +109,20 @@ def test_pattern_rejects_a_value_of_the_wrong_shape() -> None:
     assert "format" in caught.value.message
 
 
+@pytest.mark.parametrize("value", ["item:abc\n", "item:abc\r\n", "item:abc\n\n"])
+def test_pattern_rejects_a_trailing_newline_the_anchor_alone_would_admit(value: str) -> None:
+    # '$' also matches *before* a trailing newline, so re.match would accept a
+    # ref, a filter token or a uuid with a line break glued to the end — a
+    # control character in a field the rest of the boundary treats as safe.
+    schema = object_schema({"item_ref": {"type": "string", "pattern": r"^item:[a-z]+$"}})
+
+    with pytest.raises(ToolFailure) as caught:
+        validate_arguments(schema, {"item_ref": value})
+
+    assert caught.value.reason_code is ReasonCode.INVALID_ARGUMENT
+    assert "format" in caught.value.message
+
+
 def test_string_length_ceiling_applies_even_when_the_schema_forgot_one() -> None:
     schema = object_schema({"goal": {"type": "string"}})
 

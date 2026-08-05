@@ -20,7 +20,9 @@ ASCII.
 **The username is usually not known.** A record can name a path this process
 never learnt about. So the literals are only the first layer: a user-profile
 pattern catches ``…/Users/<anyone>`` with a class that does not assume Latin
-letters, and a final rule reduces any surviving absolute path to its basename.
+letters — including the spaces of ``C:\\Users\\John Smith`` and the ``\\\\?\\``
+prefix of a long path — and a final pair of rules reduces any surviving absolute
+or UNC path to its basename.
 """
 
 from __future__ import annotations
@@ -86,9 +88,27 @@ ELIDED: Final = "<ELIDED>"
 #: the slash is part of something that is not a filesystem path.
 _PATH_LEAD: Final = r"(?<![^\s\"'(\[=,])"
 
-#: One path segment: explicitly *not* ``\w``, so a Cyrillic or CJK account name
-#: is matched by the same rule as an ASCII one.
-_SEGMENT: Final = r"[^\s\"'<>|*?\r\n\\/]+"
+#: Windows' extended-length prefix. Long paths (blueprint §14.8) arrive as
+#: ``\\?\C:\Users\...``; without this the leading backslashes fail
+#: :data:`_PATH_LEAD` and the whole path survives the generic rules.
+_LONG_PREFIX: Final = r"(?:\\\\[?.]\\)?"
+
+#: Characters one path segment is made of: explicitly *not* ``\w``, so a
+#: Cyrillic or CJK account name is matched by the same rule as an ASCII one.
+_SEG_CHARS: Final = r"[^\s\"'<>|*?\r\n\\/]"
+
+#: A word a segment may continue over a space into. ``:`` is excluded so the
+#: continuation cannot run into the drive letter of the *next* path in the same
+#: sentence and swallow it unredacted.
+_SEG_WORD: Final = r"[^\s\"'<>|*?\r\n\\/:]+"
+
+#: One path segment. ``C:\Users\John Smith\Zomboid`` is an ordinary Windows
+#: profile (blueprint §14.8 requires spaces to work), and a segment that stopped
+#: at the first space would replace ``C:\Users\John`` and leave the surname in
+#: the output. The spanning form is taken only when a separator or the end of
+#: the value follows, and it spans at most four words, so the rule can neither
+#: eat a whole sentence following a path nor backtrack unboundedly.
+_SEGMENT: Final = rf"(?:{_SEG_CHARS}+(?:[ ]+{_SEG_WORD}){{1,4}}(?=[\\/]|$)|{_SEG_CHARS}+)"
 
 
 class RedactionError(ValueError):
@@ -211,7 +231,7 @@ SECRET_RULES: Final[tuple[RedactionRule, ...]] = (
 GENERIC_PATH_RULES: Final[tuple[RedactionRule, ...]] = (
     RedactionRule(
         label="windows_user_profile",
-        pattern=re.compile(rf"(?i){_PATH_LEAD}[A-Za-z]:[\\/]+Users[\\/]+{_SEGMENT}"),
+        pattern=re.compile(rf"(?i){_PATH_LEAD}{_LONG_PREFIX}[A-Za-z]:[\\/]+Users[\\/]+{_SEGMENT}"),
         replacement=USER_HOME_PLACEHOLDER,
     ),
     RedactionRule(
@@ -221,8 +241,26 @@ GENERIC_PATH_RULES: Final[tuple[RedactionRule, ...]] = (
     ),
     RedactionRule(
         label="absolute_path",
-        pattern=re.compile(rf"{_PATH_LEAD}(?:[A-Za-z]:[\\/]|/)(?:{_SEGMENT}[\\/])*({_SEGMENT})"),
+        pattern=re.compile(
+            rf"{_PATH_LEAD}{_LONG_PREFIX}(?:[A-Za-z]:[\\/]|/)(?:{_SEGMENT}[\\/])*({_SEGMENT})"
+        ),
         replacement=rf"{PATH_PLACEHOLDER}/\1",
+    ),
+    # A UNC path has no drive letter and its leading backslashes fail the lead
+    # guard, so it reaches this point untouched. The server and the share name a
+    # machine and a person as surely as a home directory does; only the basename
+    # is kept, exactly as for a local path.
+    RedactionRule(
+        label="unc_path",
+        pattern=re.compile(
+            rf"{_PATH_LEAD}\\\\{_SEGMENT}[\\/]{_SEGMENT}(?:[\\/]{_SEGMENT})*[\\/]({_SEGMENT})"
+        ),
+        replacement=rf"{PATH_PLACEHOLDER}/\1",
+    ),
+    RedactionRule(
+        label="unc_share",
+        pattern=re.compile(rf"{_PATH_LEAD}\\\\{_SEGMENT}[\\/]{_SEGMENT}"),
+        replacement=PATH_PLACEHOLDER,
     ),
 )
 

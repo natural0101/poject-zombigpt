@@ -152,7 +152,12 @@ def _string(schema: Mapping[str, Any], value: str, *, path: str) -> str:
     if len(value) < floor:
         raise _fail(path, f"must be at least {floor} characters, got {len(value)}")
     pattern = schema.get("pattern")
-    if pattern is not None and not re.match(str(pattern), value):
+    # ``fullmatch`` rather than ``match``: an anchored ``$`` also matches *before*
+    # a trailing newline, so ``re.match`` would admit ``"item:1\n"`` for a ref
+    # pattern and ``"ipc\n"`` for a component filter. A control character that
+    # survives an anchored pattern is a control character in a field the rest of
+    # the boundary treats as a safe token.
+    if pattern is not None and not re.fullmatch(str(pattern), value):
         raise _fail(path, "does not match the required format")
     return value
 

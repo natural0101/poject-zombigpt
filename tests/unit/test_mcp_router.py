@@ -35,6 +35,7 @@ from pz_agent_core.protocol import (
 )
 from pz_agent_mcp import router as router_module
 from pz_agent_mcp.catalog import TOOLS, ToolKind, ToolSpec
+from pz_agent_mcp.envelope import MAX_DIAGNOSTICS
 from pz_agent_mcp.idempotency import IdempotencyCache
 from pz_agent_mcp.ports import DoctorCheck, LogRecord, MemoryRecord, PlanRecord, PlanStepRecord
 from pz_agent_mcp.router import ToolRouter
@@ -431,6 +432,37 @@ def test_a_replay_of_an_action_the_core_forgot_returns_what_the_key_produced() -
     assert len(doubles.actions.submitted) == 1
 
 
+def test_a_replay_with_nothing_to_re_read_keeps_the_status_it_first_answered_with() -> None:
+    # pz_plan_execute puts no action in flight, so the replay is rebuilt from the
+    # cache. Rebuilding it as a bare "ok" would downgrade an accepted plan to a
+    # different claim about the same work.
+    doubles = armed_doubles()
+    doubles.plans.record = PlanRecord(plan_id="plan-9", status=ActionStatus.ACCEPTED, step_index=0)
+    router = make_router(doubles)
+    arguments = {"goal": "eat then read", "idempotency_key": "k1"}
+    first = router.call("pz_plan_execute", arguments)
+
+    second = router.call("pz_plan_execute", arguments)
+
+    assert first["status"] == ActionStatus.ACCEPTED.value
+    assert second["status"] == ActionStatus.ACCEPTED.value
+    assert second["replayed"] is True
+    assert len(doubles.plans.requests) == 1
+
+
+def test_a_replay_of_a_forgotten_action_keeps_the_status_and_the_capability_warning() -> None:
+    doubles = armed_doubles()
+    router = make_router(doubles)
+    arguments = {"item_ref": BEAN_REF, "idempotency_key": "k1"}
+    first = router.call("pz_action_eat", arguments)
+    doubles.actions.forget = True
+
+    second = router.call("pz_action_eat", arguments)
+
+    assert second["status"] == first["status"] == ActionStatus.ACCEPTED.value
+    assert any(EAT_PERCENTAGE in warning for warning in second["warnings"])
+
+
 def test_reusing_a_key_across_two_tools_is_refused() -> None:
     doubles = armed_doubles()
     router = make_router(doubles)
@@ -625,6 +657,61 @@ def test_a_plan_with_raw_steps_or_lua_fails_validation_because_there_is_nowhere_
         assert payload["reason_code"] == ReasonCode.INVALID_ARGUMENT.value
 
 
+def test_the_reported_plan_steps_are_bounded_and_the_true_count_is_still_told() -> None:
+    doubles = armed_doubles()
+    reported = router_module.MAX_PLAN_STEPS_REPORTED
+    doubles.plans.record = PlanRecord(
+        plan_id="plan-8",
+        status=ActionStatus.STARTED,
+        step_index=2,
+        steps=tuple(
+            PlanStepRecord(index=n, action=ActionName.ACTION_WAIT, status=ActionStatus.SUCCEEDED)
+            for n in range(reported * 3)
+        ),
+    )
+
+    data = make_router(doubles).call("pz_plan_status", {})["data"]
+
+    assert len(data["steps"]) == reported
+    assert data["step_count"] == reported * 3
+
+
+def test_the_refs_on_one_memory_record_are_bounded() -> None:
+    doubles = armed_doubles()
+    doubles.memory.records = (
+        MemoryRecord(
+            kind="known_container",
+            key="crate_1",
+            refs=tuple(
+                f"container:{DEFAULT_SESSION}:world:1200:{n}:0:crate:0"
+                for n in range(router_module.MAX_REFS_PER_RECORD * 3)
+            ),
+        ),
+    )
+
+    data = make_router(doubles).call("pz_memory_query", {})["data"]
+
+    assert len(data["records"][0]["refs"]) == router_module.MAX_REFS_PER_RECORD
+
+
+def test_a_terminal_results_diagnostics_are_bounded_before_they_are_relayed() -> None:
+    doubles = armed_doubles()
+    router = make_router(doubles)
+    arguments = {"game_seconds": 10, "idempotency_key": "k1"}
+    first = router.call("pz_action_wait", arguments)
+    doubles.actions.finish(
+        first["action_id"],
+        replace(
+            failed_result(ActionName.ACTION_WAIT, ReasonCode.ACTION_TIMEOUT),
+            diagnostics=[f"line {n}" for n in range(MAX_DIAGNOSTICS * 5)],
+        ),
+    )
+
+    payload = router.call("pz_action_wait", arguments)
+
+    assert len(payload["data"]["diagnostics"]) == MAX_DIAGNOSTICS
+
+
 def test_plan_status_says_so_plainly_when_nothing_is_running() -> None:
     data = make_router(armed_doubles()).call("pz_plan_status", {})["data"]
 
@@ -653,6 +740,65 @@ def test_memory_records_carry_numbers_and_refs_and_quarantine_their_label() -> N
     assert record["content_marker"] == CONTENT_MARKER
     assert "ignore previous instructions" in record[UNTRUSTED_TEXT_KEY]["label"]
     assert doubles.memory.calls == [((), 5)]
+
+
+def test_a_record_the_boundary_cannot_name_is_omitted_out_loud_not_silently() -> None:
+    # A shorter list with no explanation reads as "that is all there is", which
+    # is the quiet half of a producer bug reaching a client as a fact.
+    doubles = armed_doubles()
+    doubles.memory.records = (
+        MemoryRecord(kind="home_point", key="base", data={"x": 1}),
+        MemoryRecord(kind="a kind with spaces", key="bad"),
+        MemoryRecord(kind="known_container", key="a key with spaces"),
+    )
+
+    payload = make_router(doubles).call("pz_memory_query", {})
+
+    assert len(payload["data"]["records"]) == 1
+    assert payload["data"]["omitted"] == 2
+    assert any("2 memory record(s) omitted" in warning for warning in payload["warnings"])
+
+
+def test_a_doctor_that_could_not_report_every_check_is_not_reported_as_ok() -> None:
+    doubles = armed_doubles()
+    doubles.diagnostics.checks = (
+        DoctorCheck(code="steam_library", ok=True),
+        DoctorCheck(code="a code with spaces", ok=True),
+    )
+
+    payload = make_router(doubles).call("pz_debug_doctor", {})
+
+    assert payload["data"]["failed"] == []
+    assert payload["data"]["omitted"] == 1
+    assert payload["data"]["ok"] is False
+    assert any("environment check(s) omitted" in warning for warning in payload["warnings"])
+
+
+def test_the_doctor_answer_is_bounded_even_though_the_tool_takes_no_limit() -> None:
+    doubles = armed_doubles()
+    doubles.diagnostics.checks = tuple(
+        DoctorCheck(code=f"check_{n}", ok=True) for n in range(router_module.MAX_DOCTOR_CHECKS * 2)
+    )
+
+    payload = make_router(doubles).call("pz_debug_doctor", {})
+
+    assert len(payload["data"]["checks"]) == router_module.MAX_DOCTOR_CHECKS
+    assert payload["data"]["truncated"] is True
+    # A partial report is not a clean bill of health.
+    assert payload["data"]["ok"] is False
+    assert any("cut off" in warning for warning in payload["warnings"])
+
+
+def test_a_port_that_ignores_the_limit_does_not_get_to_set_the_answers_size() -> None:
+    doubles = armed_doubles()
+    doubles.diagnostics.lines = tuple(
+        LogRecord(timestamp_ms=n, level="info", component="ipc", message=f"line {n}")
+        for n in range(50)
+    )
+
+    payload = make_router(doubles).call("pz_debug_tail", {"limit": 5})
+
+    assert len(payload["data"]["records"]) == 5
 
 
 def test_doctor_reports_stable_codes_and_redacts_the_paths_in_its_detail() -> None:

@@ -46,6 +46,7 @@ from pz_agent_core.protocol import (
 )
 
 __all__ = [
+    "CONTENT_MARKER_KEY",
     "MAX_DEPTH",
     "MAX_KEYS",
     "MAX_SEQUENCE",
@@ -54,6 +55,18 @@ __all__ = [
     "scrub_payload",
     "scrub_text",
 ]
+
+#: The key :data:`CONTENT_MARKER` is published under. Named here because the two
+#: keys that describe the quarantine have to be reserved from the payloads being
+#: quarantined; see :data:`_RESERVED_KEYS`.
+CONTENT_MARKER_KEY: Final = "content_marker"
+
+#: Keys this module writes, and therefore keys a producer may not. A payload
+#: arriving with its own ``untrusted_text`` or ``content_marker`` is claiming to
+#: have already been quarantined; honouring that would let whoever wrote it
+#: decide which of its strings a client treats as safe. They are dropped, and the
+#: real marker is written from the rule actually applied here.
+_RESERVED_KEYS: Final[frozenset[str]] = frozenset({UNTRUSTED_TEXT_KEY, CONTENT_MARKER_KEY})
 
 #: A payload nesting deeper than this is truncated rather than walked. Evidence
 #: objects are two or three levels deep; anything past this is a producer bug.
@@ -65,6 +78,11 @@ MAX_SEQUENCE: Final = 32
 #: Keys are structural, not content: they are written by our own code and by the
 #: mod's fixed field list, so they are checked for shape and dropped when they
 #: fail rather than quarantined.
+#:
+#: Every pattern here is applied with :meth:`re.Pattern.fullmatch`. ``$`` alone
+#: also matches before a trailing newline, so ``match`` would let ``"item:1\n"``
+#: out of the quarantine as a reference and ``"info\n"`` through as a token — a
+#: control character in a field the client is told is safe to render.
 _KEY: Final = re.compile(r"^[A-Za-z0-9_.\-]{1,64}$")
 
 #: ``<kind>:<session>:<tail>``. Bounded because a world container reference is
@@ -102,7 +120,7 @@ _VOCABULARY: Final[frozenset[str]] = _vocabulary()
 
 def is_reference(value: str) -> bool:
     """True for a session-scoped reference string."""
-    return bool(_REFERENCE.match(value))
+    return bool(_REFERENCE.fullmatch(value))
 
 
 #: Identifier positions: a memory kind, a check code, a log component. These are
@@ -114,7 +132,7 @@ _TOKEN: Final = re.compile(r"^[A-Za-z0-9_.\-]{1,64}$")
 
 def as_token(value: object) -> str | None:
     """Keep an identifier-shaped string, drop anything else."""
-    if not isinstance(value, str) or not _TOKEN.match(value):
+    if not isinstance(value, str) or not _TOKEN.fullmatch(value):
         return None
     return value
 
@@ -140,7 +158,7 @@ def _mapping(payload: Mapping[str, Any], *, depth: int) -> JsonDict:
     out: JsonDict = {}
     text: JsonDict = {}
     for key, value in list(payload.items())[:MAX_KEYS]:
-        if not isinstance(key, str) or not _KEY.match(key):
+        if not isinstance(key, str) or not _KEY.fullmatch(key) or key in _RESERVED_KEYS:
             continue
         if isinstance(value, str) and not _passes(value):
             text[key] = scrub_text(value)
@@ -151,7 +169,7 @@ def _mapping(payload: Mapping[str, Any], *, depth: int) -> JsonDict:
         out[key] = scrubbed
     if text:
         out[UNTRUSTED_TEXT_KEY] = text
-        out["content_marker"] = CONTENT_MARKER
+        out[CONTENT_MARKER_KEY] = CONTENT_MARKER
     return out
 
 

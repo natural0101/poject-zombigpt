@@ -33,10 +33,15 @@ to fall out of date.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+from itertools import islice
 from typing import Any, Final
 
 from pz_agent_core.actions import ActionRequest
-from pz_agent_core.capabilities.model import Capability, CapabilityReport
+from pz_agent_core.capabilities.model import (
+    MAX_EVIDENCE_PER_CAPABILITY,
+    Capability,
+    CapabilityReport,
+)
 from pz_agent_core.observation.compact import (
     CONTENT_MARKER,
     CONTENT_RULE,
@@ -86,6 +91,7 @@ from .scrub import as_token, is_reference, scrub_payload, scrub_text
 from .validation import validate_arguments
 
 __all__ = [
+    "MAX_DOCTOR_CHECKS",
     "MAX_EVIDENCE_ENTRIES",
     "MAX_PLAN_STEPS_REPORTED",
     "MAX_REFS_PER_RECORD",
@@ -123,12 +129,36 @@ _SCOPES: Final[dict[str, frozenset[str]]] = {
 }
 
 MAX_REFS_PER_RECORD: Final = 8
-MAX_EVIDENCE_ENTRIES: Final = 8
+
+#: Taken from the capability model rather than restated: a second number here
+#: would be a second opinion on how much evidence one capability may carry, and
+#: the looser of the two would win silently.
+MAX_EVIDENCE_ENTRIES: Final = MAX_EVIDENCE_PER_CAPABILITY
+
 MAX_PLAN_STEPS_REPORTED: Final = 16
+
+#: ``pz_debug_doctor`` takes no arguments, so it has no caller-supplied limit to
+#: bound its answer with. The check list is short and fixed in the core, but a
+#: port is foreign code and an unbounded read of one is a bug by house rule.
+MAX_DOCTOR_CHECKS: Final = 64
 
 _ZOMBIE_TYPE: Final = "zombie"
 
 Handler = Callable[[ToolSpec, JsonDict], ToolOutcome]
+
+
+def _omitted_warning(dropped: int, noun: str) -> tuple[str, ...]:
+    """Say out loud that the answer is shorter than what the port offered.
+
+    A record whose own identifiers are not identifiers cannot be reported, but
+    dropping it silently leaves a client reading a short list as a complete one.
+    """
+    if dropped <= 0:
+        return ()
+    return (
+        f"{dropped} {noun}(s) omitted: their identifying fields are not "
+        f"identifiers, which is a producer bug rather than a filter",
+    )
 
 
 class ToolRouter:
@@ -224,7 +254,13 @@ class ToolRouter:
         )
         if isinstance(key, str):
             self._cache.remember(
-                key, CachedCall(tool=spec.name, payload=answer.data, action_id=answer.action_id)
+                key,
+                CachedCall(
+                    tool=spec.name,
+                    payload=answer.data,
+                    action_id=answer.action_id,
+                    status=answer.status,
+                ),
             )
         return answer
 
@@ -285,13 +321,17 @@ class ToolRouter:
         )
         if record is None:
             # Either the call put nothing in flight, or the core no longer knows
-            # about the action. Returning what this key produced is the honest
-            # answer; inventing a current status for work nobody can see is not.
+            # about the action. Returning what this key produced — including the
+            # status it answered with — is the honest answer; inventing a current
+            # status for work nobody can see is not, and so is downgrading an
+            # ``accepted`` to a bare ``ok`` because the envelope was rebuilt.
             return ToolSuccess(
                 tool=spec.name,
                 request_id=request_id,
+                status=cached.status,
                 data=cached.payload,
                 message=f"{spec.name} already ran under this idempotency key",
+                warnings=self._warnings(spec, ()),
                 action_id=cached.action_id,
                 replayed=True,
             )
@@ -632,12 +672,16 @@ class ToolRouter:
         kinds = tuple(args.get("kinds") or ())
         records = self._services.memory.query(kinds=kinds, limit=limit)
         payload: list[JsonDict] = []
-        for record in list(records)[:limit]:
+        dropped = 0
+        for record in islice(records, limit):
             kind = as_token(record.kind)
             key = as_token(record.key)
             if kind is None or key is None:
                 # A record whose own identifiers are not identifiers cannot be
-                # reported without inventing names for it.
+                # reported without inventing names for it. It is counted, not
+                # silently skipped: a shorter list with no explanation reads as
+                # "that is all there is".
+                dropped += 1
                 continue
             entry: JsonDict = {
                 "kind": kind,
@@ -650,15 +694,27 @@ class ToolRouter:
                 entry["content_marker"] = CONTENT_MARKER
             payload.append(entry)
         return ToolOutcome(
-            data={"kinds": list(kinds), "limit": limit, "records": payload},
+            data={
+                "kinds": list(kinds),
+                "limit": limit,
+                "records": payload,
+                "omitted": dropped,
+            },
             message=f"{len(payload)} memory record(s)",
+            warnings=_omitted_warning(dropped, "memory record"),
         )
 
     def _debug_doctor(self, spec: ToolSpec, args: JsonDict) -> ToolOutcome:
         checks: list[JsonDict] = []
-        for check in self._services.diagnostics.doctor():
+        dropped = 0
+        # One past the ceiling, so a port that offered more than the tool will
+        # report can be *said* to have done so rather than quietly cut off.
+        raw = list(islice(self._services.diagnostics.doctor(), MAX_DOCTOR_CHECKS + 1))
+        truncated = len(raw) > MAX_DOCTOR_CHECKS
+        for check in raw[:MAX_DOCTOR_CHECKS]:
             code = as_token(check.code)
             if code is None:
+                dropped += 1
                 continue
             checks.append(
                 {
@@ -669,14 +725,26 @@ class ToolRouter:
                 }
             )
         failed = [check["code"] for check in checks if not check["ok"]]
+        warnings = _omitted_warning(dropped, "environment check")
+        if truncated:
+            warnings = (
+                *warnings,
+                f"the environment report was cut off at {MAX_DOCTOR_CHECKS} checks; "
+                "this answer is not the whole doctor",
+            )
         return ToolOutcome(
             data={
                 "checks": checks,
-                "ok": not failed,
+                # A doctor that could not report every check has not found the
+                # environment healthy; it has found part of it healthy.
+                "ok": not failed and not dropped and not truncated,
                 "failed": failed,
+                "omitted": dropped,
+                "truncated": truncated,
                 "protocol_version": PROTOCOL_VERSION,
             },
             message=f"{len(checks)} check(s), {len(failed)} failing",
+            warnings=warnings,
         )
 
     def _debug_tail(self, spec: ToolSpec, args: JsonDict) -> ToolOutcome:
@@ -688,10 +756,12 @@ class ToolRouter:
             action_id=args.get("action_id"),
         )
         lines: list[JsonDict] = []
-        for record in list(records)[:limit]:
+        dropped = 0
+        for record in islice(records, limit):
             level = as_token(record.level)
             component = as_token(record.component)
             if level is None or component is None:
+                dropped += 1
                 continue
             lines.append(
                 {
@@ -704,7 +774,9 @@ class ToolRouter:
                 }
             )
         return ToolOutcome(
-            data={"limit": limit, "records": lines}, message=f"{len(lines)} log record(s)"
+            data={"limit": limit, "records": lines, "omitted": dropped},
+            message=f"{len(lines)} log record(s)",
+            warnings=_omitted_warning(dropped, "log record"),
         )
 
     # -- documents behind the resources ------------------------------------

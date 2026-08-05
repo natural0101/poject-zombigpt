@@ -23,7 +23,6 @@ from typing import Any
 from pz_agent_core.protocol import JsonDict
 from pz_agent_core.version import PRODUCT_VERSION
 
-from .envelope import ToolFailure, new_request_id
 from .idempotency import IdempotencyCache
 from .ports import CoreServices
 from .resources import ResourceReader
@@ -108,15 +107,10 @@ def build_server(
         ]
 
     async def read_resource(uri: Any) -> str:
-        key = str(uri)
-        try:
-            document = reader.read(key)
-        except ToolFailure as failure:
-            # An unknown URI and a refused read both come back as the error
-            # document: the reason code is what the client acts on, and a
-            # transport exception would carry neither it nor the retry flag.
-            document = failure.to_payload(tool=key, request_id=new_request_id())
-        return json.dumps(document, ensure_ascii=False)
+        # An unknown URI, a refused read and a crashing port all come back as the
+        # error document: the reason code is what the client acts on, and a
+        # transport exception would carry neither it nor the retry flag.
+        return json.dumps(reader.read_payload(str(uri)), ensure_ascii=False)
 
     # Registered by call rather than by decorator: the SDK's decorators are
     # untyped, and a decorator that erases the handler's signature would hide a

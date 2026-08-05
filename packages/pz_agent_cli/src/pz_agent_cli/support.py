@@ -54,15 +54,22 @@ DEFAULT_REPLAY_LIMIT: Final = 200
 _LOG_STEM: Final = "pz-agent"
 
 
-def _tail(path: Path, lines: int, max_bytes: int = 4 * 1024 * 1024) -> tuple[str, ...]:
-    """The last *lines* lines of a text file, reading a bounded window."""
+def _tail(path: Path, lines: int, max_bytes: int = 4 * 1024 * 1024) -> tuple[tuple[str, ...], str]:
+    """The last *lines* lines of a text file, and why there were none.
+
+    Returns ``(lines, problem)``. "The file could not be read" and "the file is
+    not there yet" are different facts, and collapsing a locked or unreadable log
+    into an empty tail would print "no log yet" over a log that exists.
+    """
     try:
         raw = path.read_bytes()
-    except OSError:
-        return ()
+    except FileNotFoundError:
+        return (), ""
+    except OSError as exc:
+        return (), f"{exc.strerror or exc}"
     if len(raw) > max_bytes:
         raw = raw[-max_bytes:]
-    return tuple(raw.decode("utf-8", errors="replace").splitlines()[-lines:])
+    return tuple(raw.decode("utf-8", errors="replace").splitlines()[-lines:]), ""
 
 
 def run_logs(
@@ -94,7 +101,13 @@ def _show_logs(workspace: Workspace, printer: Printer, *, lines: int, as_json: b
         printer.json({"records": list(records), "problems": list(problems)})
         return EXIT_OK
     text_log = workspace.logs_dir / f"{_LOG_STEM}.log"
-    tail = _tail(text_log, lines)
+    tail, problem = _tail(text_log, lines)
+    if problem:
+        printer.error(
+            f"the log at {workspace.redact(text_log)} exists but could not be read: "
+            f"{workspace.redactor.text(problem)}"
+        )
+        return EXIT_FAILURE
     if not tail:
         printer.line(f"no log yet at {workspace.redact(text_log)}")
         return EXIT_OK
@@ -157,13 +170,24 @@ def _add_directory(
             seen.add(path)
             try:
                 builder.add_file(f"{prefix}/{path.name}", path, tail_bytes=BUNDLE_TAIL_BYTES)
-            except BundleError:
+            except BundleError as exc:
                 # A bundle that is missing one log is still worth having; one
-                # that fails to build because a file was locked is not.
-                builder.add_text(
-                    f"{prefix}/{path.name}.unreadable.txt",
-                    f"{path.name} could not be read when the bundle was built\n",
-                )
+                # that fails to build because a file was locked is not. The
+                # placeholder quotes the actual reason: a locked file and a file
+                # the bundle had no room left for are different problems, and
+                # calling both "could not be read" hides which one occurred.
+                _add_placeholder(builder, f"{prefix}/{path.name}", str(exc))
+
+
+def _add_placeholder(builder: BundleBuilder, name: str, reason: str) -> None:
+    """Record a member that could not be added, unless there is no room for that either."""
+    try:
+        builder.add_text(f"{name}.omitted.txt", f"{name} was not added to this bundle: {reason}\n")
+    except BundleError:
+        # The bundle is already at a bound, which is precisely what the
+        # placeholder would have said. The manifest still lists what did go in,
+        # and verify prints it, so nothing here claims a member that is absent.
+        return
 
 
 def _add_protocol_trace(builder: BundleBuilder, workspace: Workspace) -> None:

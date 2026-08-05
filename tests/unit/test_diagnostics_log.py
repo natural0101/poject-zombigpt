@@ -8,7 +8,9 @@ from pathlib import Path
 import pytest
 
 from pz_agent_core.diagnostics.log import (
+    MAX_EVENT_LEN,
     MAX_FIELDS,
+    MIN_RECORD_BYTES,
     DiagnosticLog,
     DiagnosticsError,
     LogLevel,
@@ -173,6 +175,32 @@ def test_fields_beyond_the_cap_are_counted_rather_than_silently_dropped(
     assert len(record.fields) == MAX_FIELDS + 1
 
 
+def test_the_marker_fits_even_when_the_event_name_is_as_long_as_it_may_be(
+    tmp_path: Path,
+) -> None:
+    """The oversize path must not itself overflow the cap it is enforcing.
+
+    A marker naming an 80-character event took 294 bytes, so at the smallest
+    legal cap the writer raised out of ``log()`` — the caller crashed for
+    logging a large field, which is the failure the marker exists to avoid.
+    """
+    log = _log(tmp_path, LogLimits(max_bytes=4096, keep=1, max_record_bytes=MIN_RECORD_BYTES))
+
+    record = log.log(LogLevel.INFO, "e" * MAX_EVENT_LEN, blob="x" * 4000)
+
+    assert record is not None
+    assert record.event == "diagnostics.record_truncated"
+    assert str(record.fields["original_event"]).startswith("e")
+    written = log.structured.path.read_bytes()
+    assert len(written) <= MIN_RECORD_BYTES
+    assert json.loads(written)["event"] == "diagnostics.record_truncated"
+
+
+def test_a_record_cap_too_small_for_the_marker_is_refused_at_construction() -> None:
+    with pytest.raises(DiagnosticsError, match="at least"):
+        LogLimits(max_bytes=4096, keep=1, max_record_bytes=MIN_RECORD_BYTES - 1)
+
+
 def test_a_record_below_the_threshold_is_counted_as_suppressed(tmp_path: Path) -> None:
     home = tmp_path / "Users" / CYRILLIC_USER
     log = DiagnosticLog(
@@ -232,6 +260,21 @@ def test_reading_a_missing_file_is_a_problem_not_an_exception(tmp_path: Path) ->
 
     assert records == ()
     assert "cannot read" in problems[0]
+
+
+def test_a_read_window_that_starts_mid_record_states_the_cut_it_made(tmp_path: Path) -> None:
+    """The fragment the window begins on is the reader's doing, not corruption."""
+    log = _log(tmp_path, LogLimits(max_bytes=64 * 1024, keep=1, max_record_bytes=1024))
+    for index in range(20):
+        log.info("event", index=index, filler="y" * 100)
+
+    records, problems = read_records(log.structured.path, max_bytes=900)
+
+    assert records, "the whole window must not be discarded with the fragment"
+    assert all(record["event"] == "event" for record in records)
+    assert len(problems) == 1
+    assert "were not read" in problems[0]
+    assert "not JSON" not in problems[0]
 
 
 def test_read_records_rejects_a_non_positive_limit(tmp_path: Path) -> None:

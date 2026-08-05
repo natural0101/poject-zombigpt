@@ -257,6 +257,31 @@ do
   equal(document.player.stats[Model.LIMIT_PREFIX .. "items_omitted"], 4, "and the four that were not are counted")
   isNil(document.player.stats[Model.LIMIT_PREFIX .. "items_truncated"], "without claiming a cap was hit")
 
+  local sentinel = built({
+    inventory = {
+      {
+        kind = "player_main",
+        items = {
+          { runtime_id = -1, full_type = "Base.A", display_name = "A", category = "Item", weight = 1 },
+          { runtime_id = -1, full_type = "Base.B", display_name = "B", category = "Item", weight = 1 },
+        },
+      },
+    },
+    nearby = {
+      zombies = {
+        { runtime_id = -1, distance = 1, chasing = true, visible = true },
+        { runtime_id = -1, distance = 2, chasing = true, visible = true },
+      },
+    },
+  })
+  equal(#sentinel.inventory.items, 0, "a negative runtime id is not an identity, so no item is emitted from one")
+  equal(#sentinel.nearby.zombies, 0, "nor a zombie -- one reference for the whole horde is worse than none")
+  equal(sentinel.player.stats[Model.LIMIT_PREFIX .. "items_omitted"], 2, "and the drops are counted, not silent")
+  equal(sentinel.player.stats[Model.LIMIT_PREFIX .. "zombies_omitted"], 2, "for both kinds")
+  isNil(Model.runtimeId(-1), "the sentinel is refused at the source")
+  isNil(Model.runtimeId("-1"), "in string form as well, since it is a legal reference segment")
+  equal(Model.runtimeId(0), "0", "while zero is a perfectly good id")
+
   local unbuildable = built({ inventory = { { kind = "vehicle", items = {} }, { kind = "player_main", items = {} } } })
   equal(#unbuildable.inventory.containers, 1, "a container kind PZAgent.Refs cannot reference is not emitted")
   equal(
@@ -324,6 +349,41 @@ do
     true,
     "and a bag inside a bag inside a bag that was never opened is declared"
   )
+
+  local crowdedStats = {}
+  for index = 1, Model.MAX_STATS + 9 do
+    crowdedStats[string.format("stat_%03d", index)] = index / 100
+  end
+  local statty = built({
+    player = {
+      present = true,
+      alive = true,
+      position = { x = 1, y = 2, z = 0 },
+      stats = crowdedStats,
+      moodles = {},
+    },
+  })
+  local statNames = 0
+  for name in pairs(statty.player.stats) do
+    if name:sub(1, #Model.LIMIT_PREFIX) ~= Model.LIMIT_PREFIX then
+      statNames = statNames + 1
+    end
+  end
+  equal(statNames, Model.MAX_STATS, "player.stats is capped like every other map, not left open")
+  equal(statty.player.stats.stat_001, 0.01, "the cap is taken in name order, so the same reading keeps the same stats")
+  isNil(statty.player.stats.stat_057, "and the tail is what falls off")
+  equal(statty.player.stats[Model.LIMIT_PREFIX .. "stats_truncated"], true, "the cut is reported")
+  equal(statty.player.stats[Model.LIMIT_PREFIX .. "stats_omitted"], 9, "with the number of stats left behind")
+
+  local unopened = { { kind = "player_main", items = {} } }
+  unopened.containers_dropped = 3
+  local partial = built({ inventory = unopened })
+  equal(
+    partial.player.stats[Model.LIMIT_PREFIX .. "containers_omitted"],
+    3,
+    "a container the reader never opened is counted, because no node ever reaches the caps here"
+  )
+  equal(partial.player.stats[Model.LIMIT_PREFIX .. "containers_truncated"], true, "and the tree is declared incomplete")
 
   local wounds = {}
   for index = 1, Model.MAX_WOUNDS + 3 do

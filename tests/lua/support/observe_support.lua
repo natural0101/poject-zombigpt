@@ -338,12 +338,32 @@ function Support.zombie(fields)
       return fields.id
     end,
   }
+  if fields.online_id ~= nil then
+    zombie.getOnlineID = function()
+      return fields.online_id
+    end
+  end
   if fields.has_target then
     zombie.getTarget = function()
       return fields.target
     end
   end
   return zombie
+end
+
+--- A bag holding `width` bags, `depth` levels deep. Every item is a container,
+--- which is the shape that makes an unbounded inventory walk explode.
+function Support.bagTree(depth, width, nextId)
+  local contents = {}
+  if depth > 0 then
+    for index = 1, width do
+      local child
+      child, nextId = Support.bagTree(depth - 1, width, nextId)
+      contents[index] = child
+    end
+  end
+  nextId = nextId + 1
+  return Support.item({ id = nextId, name = "Bag", contents = contents }), nextId
 end
 
 --- Install a `getCell` global returning squares from `squares`, keyed "x,y,z",

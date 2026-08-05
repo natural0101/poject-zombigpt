@@ -34,6 +34,7 @@ from ...protocol import (
     Observation,
     Position,
     ReasonCode,
+    RefError,
     RefKind,
     RiskClass,
     SquareRef,
@@ -110,6 +111,34 @@ SEMANTIC_DROP: Final = "drop"
 SEMANTIC_STAIRS: Final = "stairs"
 
 
+def _check_declared_square_ref(command: Command, x: int, y: int, z: int) -> None:
+    """Refuse a ``square_ref`` that names anything other than ``target``.
+
+    ``build_args`` mints this argument, so the prepared command carries it and
+    it has to be *accepted* here — but accepting it is not the same as ignoring
+    it. A caller-supplied reference pointing at another square would otherwise
+    be silently overwritten, and the command the mod ran would not be the
+    command that was asked for.
+    """
+    if command.args.get("square_ref") is None:
+        return
+    given = read_ref(command, "square_ref", kind=RefKind.SQUARE)
+    try:
+        parsed = SquareRef.parse(given)
+    except RefError as exc:
+        raise PreconditionFailed(
+            f"square_ref is not a well-formed square reference: {given!r}",
+            reason_code=ReasonCode.INVALID_REF,
+        ) from exc
+    if (parsed.x, parsed.y, parsed.z) != (x, y, z):
+        raise PreconditionFailed(
+            f"square_ref names ({parsed.x}, {parsed.y}, {parsed.z}) while target "
+            f"names ({x}, {y}, {z})",
+            reason_code=ReasonCode.INVALID_ARGUMENT,
+            evidence={"square_ref": given, "target": {"x": x, "y": y, "z": z}},
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class _MoveToSpec:
     """The normalised form of a ``movement.move_to`` command.
@@ -149,6 +178,7 @@ class _MoveToSpec:
                 reason_code=ReasonCode.POLICY_DENIED,
             )
         x, y, z = read_position(command.args.get("target"), field_name="target")
+        _check_declared_square_ref(command, x, y, z)
         return cls(
             x=x,
             y=y,
@@ -239,14 +269,25 @@ def _arrival_evidence(
     after: Observation,
     target: tuple[int, int, int],
     radius: float,
+    measured_from: tuple[float, float] | None = None,
     extra: JsonDict | None = None,
 ) -> Evidence:
+    """Package an observed arrival.
+
+    ``measured_from`` is the point the radius test actually used. It exists
+    because ``move_near`` measures against the object's own position while it
+    names the *square* underneath it: recording the distance to the square
+    instead would put a number in the evidence that can exceed the radius the
+    check just passed, and evidence that contradicts its own criterion is worse
+    than no evidence at all.
+    """
+    origin = (float(target[0]), float(target[1])) if measured_from is None else measured_from
     observed: JsonDict = {
         "position": after.player.position.to_dict(),
         "position_before": before.player.position.to_dict(),
         "target": {"x": target[0], "y": target[1], "z": target[2]},
         "radius": radius,
-        "distance": plane_distance(after.player.position, target[0], target[1]),
+        "distance": plane_distance(after.player.position, origin[0], origin[1]),
         "floor": after.player.position.z,
     }
     observed.update(extra or {})
@@ -459,6 +500,7 @@ class MoveNearAdapter:
             after=after,
             target=(x, y, z),
             radius=spec.radius,
+            measured_from=(target.position.x, target.position.y),
             extra={"object_ref": spec.object_ref, "reported_distance": target.distance},
         )
 

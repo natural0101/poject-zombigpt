@@ -35,7 +35,6 @@ from ...protocol import (
     ON_PERSON_CONTAINERS,
     ActionName,
     Command,
-    ContainerKind,
     ContainerRef,
     ContainerView,
     InventoryView,
@@ -522,14 +521,19 @@ def container_kind_is_world(container: ContainerView) -> bool:
 
 
 def describe_container(container: ContainerView) -> JsonDict:
-    """The origin metadata a caller needs to put an item back where it was."""
+    """The origin metadata a caller needs to put an item back where it was.
+
+    The square is attached whenever the reference encodes one, rather than only
+    for :attr:`ContainerKind.WORLD`. ``floor`` and ``vehicle`` containers stand
+    in the world too, and they are exactly the origins a caller cannot walk back
+    to without coordinates.
+    """
     payload: JsonDict = {
         "container_ref": container.ref,
         "container_kind": container.kind.value,
         "container_name": container.name,
     }
-    if container.kind is ContainerKind.WORLD:
-        square = world_square(container.ref)
-        if square is not None:
-            payload["square"] = {"x": square[0], "y": square[1], "z": square[2]}
+    square = world_square(container.ref)
+    if square is not None:
+        payload["square"] = {"x": square[0], "y": square[1], "z": square[2]}
     return payload

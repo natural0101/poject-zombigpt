@@ -147,6 +147,38 @@ def test_an_observation_with_no_inventory_is_not_an_eaten_item() -> None:
     assert adapter.verify(command, before, blind) is None
 
 
+def test_an_item_that_was_never_observed_cannot_have_been_eaten() -> None:
+    """Absent before and absent after is not a disappearance."""
+    adapter = EatAdapter()
+    before = eating(BEANS, hunger=0.5)
+    command = prepare(adapter, eat_command(), before)
+
+    never_there = eating(hunger=0.5, seq=2)
+
+    assert adapter.verify(command, eating(hunger=0.5), never_there) is None
+
+
+def test_a_before_observation_without_an_inventory_cannot_prove_a_disappearance() -> None:
+    """Both ends of the pair have to see the tier, not just the later one."""
+    adapter = EatAdapter()
+    command = prepare(adapter, eat_command(), eating(BEANS, hunger=0.5))
+    blind_before = a_world(seq=1, no_inventory=True, stats={"hunger": 0.5})
+
+    assert adapter.verify(command, blind_before, eating(hunger=0.5, seq=2)) is None
+
+
+def test_a_duplicated_item_cannot_be_followed_across_the_meal() -> None:
+    """One runtime id in two containers has no "the item" whose counter fell."""
+    adapter = EatAdapter()
+    before = eating(BEANS, hunger=0.5)
+    command = prepare(adapter, eat_command(), before)
+
+    nibbled = food_item("42", container_ref=BAG_REF, remaining_portions=1)
+    duplicated = eating(nibbled, BEANS, hunger=0.5, seq=2)
+
+    assert adapter.verify(command, before, duplicated) is None
+
+
 # --------------------------------------------------------------------------
 # eat: refusals
 # --------------------------------------------------------------------------
@@ -172,6 +204,15 @@ def test_food_the_game_calls_inedible_is_refused() -> None:
 
     with pytest.raises(PreconditionFailed) as caught:
         EatAdapter().validate(eat_command(), eating(inedible))
+    assert caught.value.reason_code is ReasonCode.PRECONDITION_FAILED
+
+
+def test_food_the_game_marks_destroyed_is_refused() -> None:
+    """Edible and destroyed at once is the state a rotted-away item ends in."""
+    gone = food_item("42", destroyed=True)
+
+    with pytest.raises(PreconditionFailed) as caught:
+        EatAdapter().validate(eat_command(), eating(gone))
     assert caught.value.reason_code is ReasonCode.PRECONDITION_FAILED
 
 
@@ -267,6 +308,14 @@ def test_an_empty_container_is_refused() -> None:
 
     with pytest.raises(PreconditionFailed) as caught:
         DrinkAdapter().validate(drink_command(), eating(empty))
+    assert caught.value.reason_code is ReasonCode.PRECONDITION_FAILED
+
+
+def test_a_destroyed_container_is_refused() -> None:
+    smashed = drink_item("43", destroyed=True)
+
+    with pytest.raises(PreconditionFailed) as caught:
+        DrinkAdapter().validate(drink_command(), eating(smashed))
     assert caught.value.reason_code is ReasonCode.PRECONDITION_FAILED
 
 

@@ -135,3 +135,45 @@ def test_as_token_keeps_identifiers_and_drops_everything_else() -> None:
     assert as_token("two words") is None
     assert as_token(7) is None
     assert as_token(None) is None
+
+
+def test_a_trailing_newline_does_not_smuggle_a_value_past_the_shape_checks() -> None:
+    # '$' matches before a trailing newline, so an anchored `match` would have
+    # called both of these well-formed and let the line break out unquarantined.
+    assert not is_reference(f"{main_container_ref()}\n")
+    assert as_token("steam_library\n") is None
+
+
+def test_a_ref_with_a_line_break_glued_on_is_quarantined_like_any_other_text() -> None:
+    payload = scrub_payload({"container_ref": f"{main_container_ref()}\n"})
+
+    assert "container_ref" not in payload
+    assert "\n" not in payload[UNTRUSTED_TEXT_KEY]["container_ref"]
+    assert payload["content_marker"] == CONTENT_MARKER
+
+
+def test_a_producer_cannot_forge_the_quarantine_envelope() -> None:
+    # A payload claiming to have already been quarantined would otherwise decide
+    # for itself which of its strings a client treats as safe.
+    payload = scrub_payload(
+        {
+            UNTRUSTED_TEXT_KEY: {"name": "already handled, honest"},
+            "content_marker": main_container_ref(),
+            "container_name": "a rusty locker",
+        }
+    )
+
+    assert payload[UNTRUSTED_TEXT_KEY] == {"container_name": "a rusty locker"}
+    assert payload["content_marker"] == CONTENT_MARKER
+
+
+def test_a_forged_marker_does_not_survive_a_payload_with_nothing_to_quarantine() -> None:
+    payload = scrub_payload({"content_marker": main_container_ref(), "distance": 2})
+
+    assert payload == {"distance": 2}
+
+
+def test_a_key_with_a_line_break_is_dropped_with_its_value() -> None:
+    payload = scrub_payload({"kind\n": 1, "kind": 2})
+
+    assert payload == {"kind": 2}

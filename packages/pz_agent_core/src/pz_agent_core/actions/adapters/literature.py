@@ -95,11 +95,17 @@ class _ReadSpec:
 
 
 def _view(observation: Observation, identity: ItemIdentity) -> LiteratureView | None:
-    """The literature sub-object of the tracked item in *observation*."""
+    """The literature sub-object of the tracked item in *observation*.
+
+    Exactly one match, or nothing: two entries with the same runtime id leave no
+    way to say which page counter belongs to the book that was read, and picking
+    one of them would make the postcondition depend on the order the mod
+    happened to enumerate the inventory in.
+    """
     if observation.inventory is None:
         return None
     found = find_by_identity(observation.inventory, identity)
-    if not found:
+    if len(found) != 1:
         return None
     return LiteratureView.from_item(found[0])
 

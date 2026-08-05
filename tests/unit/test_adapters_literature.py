@@ -156,6 +156,42 @@ def test_the_page_target_is_clamped_to_what_is_left_in_the_book() -> None:
     assert args["pages"] == 5
 
 
+def test_a_book_that_finished_without_a_page_turning_is_not_evidence() -> None:
+    """ "Finished" is only proof when this command is what moved the counter."""
+    adapter = ReadAdapter()
+    nearly_done = literature_item("42", pages_read=195)
+    before = reading(nearly_done)
+    prepared = prepare(
+        adapter,
+        a_command(ActionName.LITERATURE_READ, {"item_ref": nearly_done.ref, "pages": 5}),
+        before,
+    )
+
+    unchanged_but_flagged = literature_item("42", pages_read=195, already_read=True)
+
+    assert adapter.verify(prepared, before, reading(unchanged_but_flagged, seq=2)) is None
+
+
+def test_a_page_counter_that_went_backwards_is_not_progress() -> None:
+    """A fresh copy of the same title reads as fewer pages, not as a read."""
+    adapter = ReadAdapter()
+    part_way = literature_item("42", pages_read=50)
+    before = reading(part_way)
+    command = prepare(adapter, read_command(part_way.ref, pages=10), before)
+
+    assert adapter.verify(command, before, reading(read_to(10), seq=2)) is None
+
+
+def test_a_duplicated_book_cannot_prove_its_own_progress() -> None:
+    adapter = ReadAdapter()
+    before = reading(BOOK)
+    command = prepare(adapter, read_command(pages=10), before)
+
+    twice = reading(literature_item("42", container_ref=BAG_REF, pages_read=10), BOOK, seq=2)
+
+    assert adapter.verify(command, before, twice) is None
+
+
 def test_a_book_that_left_the_inventory_proves_nothing() -> None:
     adapter = ReadAdapter()
     before = reading(BOOK)

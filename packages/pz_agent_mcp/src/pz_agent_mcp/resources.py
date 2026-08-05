@@ -17,7 +17,7 @@ from typing import Final
 from pz_agent_core.protocol import JsonDict, ReasonCode
 
 from .catalog import RESOURCES, RESOURCES_BY_URI, ResourceSpec
-from .envelope import ToolFailure
+from .envelope import IdFactory, ToolFailure, failure_from, new_request_id
 from .router import ToolRouter
 
 __all__ = ["ResourceReader"]
@@ -36,8 +36,9 @@ _FROM_TOOL: Final[dict[str, tuple[str, JsonDict]]] = {
 class ResourceReader:
     """Reads the published resources through the router that owns the rules."""
 
-    def __init__(self, router: ToolRouter) -> None:
+    def __init__(self, router: ToolRouter, *, request_ids: IdFactory = new_request_id) -> None:
         self._router = router
+        self._request_ids = request_ids
         self._documents: dict[str, Callable[[], JsonDict]] = {
             "pz://capabilities": router.capability_document,
             "pz://safety/status": router.safety_document,
@@ -71,3 +72,16 @@ class ResourceReader:
             return document()
         tool, arguments = _FROM_TOOL[spec.uri]
         return self._router.invoke(tool, arguments).data
+
+    def read_payload(self, uri: str) -> JsonDict:
+        """The resource's contents, or the boundary's error document. Never raises.
+
+        The mirror of :meth:`~.router.ToolRouter.call` for the resource path. A
+        port is foreign code: if one crashes on a read, the client must still get
+        a ``reason_code`` and a ``retryable`` flag, and a transport exception
+        carries neither.
+        """
+        try:
+            return self.read(uri)
+        except Exception as exc:
+            return failure_from(exc).to_payload(tool=uri, request_id=self._request_ids())

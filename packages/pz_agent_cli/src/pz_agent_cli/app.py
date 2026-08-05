@@ -40,6 +40,21 @@ from .support import DEFAULT_LOG_LINES, DEFAULT_REPLAY_LIMIT, run_logs, run_repl
 
 PROGRAM: Final = "pz-agent"
 
+#: The commands this build wires. The blueprint also names ``start``, ``stop``,
+#: ``arm`` and ``disarm``; they drive a sidecar process that does not exist yet,
+#: so they are absent from the parser rather than present and inert.
+COMMANDS: Final[tuple[str, ...]] = (
+    "doctor",
+    "install-mod",
+    "uninstall-mod",
+    "status",
+    "backup-save",
+    "restore-save",
+    "logs",
+    "replay",
+    "validate-config",
+)
+
 _DESCRIPTION: Final = "Local agent for Project Zomboid Build 42: diagnose, install, operate."
 
 _EPILOG: Final = (
@@ -201,6 +216,15 @@ def run_install_mod(ctx: CliContext, *, source: Path | None, as_json: bool) -> i
     except InstallError as exc:
         printer.error(f"install failed: {workspace.redactor.text(str(exc))}")
         return EXIT_FAILURE
+    except OSError as exc:
+        # Reading the source or hashing the destination can fail on a locked or
+        # unreadable file. That is a user's environment, not a defect, and it
+        # reports as a message with an exit code rather than a traceback.
+        printer.error(
+            f"install failed while reading the filesystem: "
+            f"{workspace.redactor.text(exc.strerror or str(exc))}"
+        )
+        return EXIT_FAILURE
     if as_json:
         printer.json(
             {
@@ -209,6 +233,7 @@ def run_install_mod(ctx: CliContext, *, source: Path | None, as_json: bool) -> i
                 "bytes_written": result.bytes_written,
                 "replaced": list(result.replaced),
                 "removed_stale": list(result.removed_stale),
+                "kept_stale": list(result.kept_stale),
                 "manifest": result.manifest.to_dict(),
             }
         )
@@ -221,6 +246,9 @@ def run_install_mod(ctx: CliContext, *, source: Path | None, as_json: bool) -> i
         printer.field("replaced", f"{len(result.replaced)} previously installed file(s)")
     if result.removed_stale:
         printer.field("removed", f"{len(result.removed_stale)} file(s) from an older version")
+    if result.kept_stale:
+        printer.field("kept", "an older version's file(s) you edited, not deleted:")
+        printer.lines(f"    {path}" for path in result.kept_stale)
     printer.line("")
     printer.line("Enable 'PZ Agent Bridge' in the game's Mods menu, then reload the save —")
     printer.line("enabling a mod does not affect a game that is already loaded.")
@@ -240,6 +268,14 @@ def run_uninstall_mod(ctx: CliContext, *, as_json: bool) -> int:
     except InstallError as exc:
         printer.error(f"uninstall failed: {workspace.redactor.text(str(exc))}")
         return EXIT_FAILURE
+    except OSError as exc:
+        printer.error(
+            f"uninstall stopped while reading the filesystem: "
+            f"{workspace.redactor.text(exc.strerror or str(exc))}. Nothing further was "
+            "removed; the manifest still records what was installed."
+        )
+        return EXIT_FAILURE
+    exchange = "" if workspace.ipc_root is None else workspace.redact(workspace.ipc_root)
     if as_json:
         printer.json(
             {
@@ -248,6 +284,7 @@ def run_uninstall_mod(ctx: CliContext, *, as_json: bool) -> int:
                 "kept_modified": list(result.kept_modified),
                 "missing": list(result.missing),
                 "directory_removed": result.directory_removed,
+                "exchange_directory_left": exchange,
             }
         )
         return EXIT_OK
@@ -261,6 +298,12 @@ def run_uninstall_mod(ctx: CliContext, *, as_json: bool) -> int:
         printer.field("already gone", f"{len(result.missing)} file(s)")
     if not result.directory_removed:
         printer.field("note", "the mod directory still holds files pz-agent did not install")
+    if exchange:
+        # Stated rather than deleted: the exchange directory is written by the
+        # mod and the sidecar, not by install-mod, and this command removes only
+        # what it put there. Removing files it never wrote is how an uninstaller
+        # takes something else with it.
+        printer.field("left in place", f"{exchange} (written by the mod, not by install-mod)")
     printer.line("Saves, backups and configuration were not touched.")
     return EXIT_OK
 

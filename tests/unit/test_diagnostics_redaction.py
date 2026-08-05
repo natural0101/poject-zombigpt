@@ -94,6 +94,50 @@ def test_an_unknown_account_name_is_still_removed_from_a_profile_path() -> None:
     assert redactor.text("/home/someone/notes.md") == f"{USER_HOME_PLACEHOLDER}/notes.md"
 
 
+def test_an_account_name_with_a_space_is_removed_whole() -> None:
+    """Blueprint §14.8: spaces in Windows paths are supported, so they must redact.
+
+    A segment that stopped at the first space replaced ``C:\\Users\\John`` and
+    left ``Smith`` in the record — the surname of the person filing the issue.
+    """
+    redactor = null_redactor()
+
+    assert (
+        redactor.text(r"C:\Users\John Smith\Zomboid\console.txt")
+        == f"{USER_HOME_PLACEHOLDER}\\Zomboid\\console.txt"
+    )
+    assert redactor.text(r"C:\Users\Иван Петров") == USER_HOME_PLACEHOLDER
+    assert redactor.text("/home/john smith/notes.md") == f"{USER_HOME_PLACEHOLDER}/notes.md"
+
+
+def test_a_spanning_segment_does_not_swallow_the_next_path_in_the_sentence() -> None:
+    """The bound on the spanning form: prose between two paths is not a segment."""
+    redactor = null_redactor()
+
+    assert redactor.text("A C:\\Users\\Bob\\x.txt and D:\\Games\\Zomboid\\save") == (
+        f"A {USER_HOME_PLACEHOLDER}\\x.txt and {PATH_PLACEHOLDER}/save"
+    )
+
+
+def test_a_long_path_prefix_does_not_hide_a_profile() -> None:
+    """``\\\\?\\`` is how Windows spells a path over 260 characters (§14.8)."""
+    redactor = null_redactor()
+
+    assert (
+        redactor.text(r"\\?\C:\Users\Bob\Zomboid\x.lua")
+        == f"{USER_HOME_PLACEHOLDER}\\Zomboid\\x.lua"
+    )
+    assert redactor.text(r"\\?\D:\Games\Zomboid\x.lua") == f"{PATH_PLACEHOLDER}/x.lua"
+
+
+def test_a_unc_path_keeps_only_its_basename() -> None:
+    """A server and a share name a machine and a person; neither is diagnostic."""
+    redactor = null_redactor()
+
+    assert redactor.text(r"\\fileserver\home$\Users\Bob\x.txt") == f"{PATH_PLACEHOLDER}/x.txt"
+    assert redactor.text(r"\\fileserver\home$") == PATH_PLACEHOLDER
+
+
 def test_a_short_username_is_not_struck_out_of_an_unrelated_word() -> None:
     redactor = build_redactor(usernames=["ann"])
 

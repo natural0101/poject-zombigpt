@@ -660,9 +660,16 @@ def check_stale_files(ctx: CliContext, workspace: Workspace) -> CheckResult:
         findings.append("session.json is present while the game heartbeat is not")
     if layout.sidecar_lock.is_file() and not monitor.liveness(Peer.SIDECAR).alive:
         findings.append("a sidecar lock file is present with no live sidecar")
+    try:
+        entries = sorted(workspace.ipc_root.iterdir())
+    except OSError as exc:
+        # Doctor is the command that diagnoses a broken environment, so a
+        # directory it cannot list is a finding rather than a traceback.
+        entries = []
+        findings.append(f"the exchange directory could not be listed ({exc.strerror or exc})")
     unmanaged = [
         entry.name
-        for entry in sorted(workspace.ipc_root.iterdir())
+        for entry in entries
         if not layout.is_managed_path(entry) and not entry.name.startswith(_PROBE_PREFIX)
     ]
     if unmanaged:

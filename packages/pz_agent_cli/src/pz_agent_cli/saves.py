@@ -98,7 +98,7 @@ def run_backup_save(
     if list_only:
         return _list_backups(manager, workspace, printer, as_json=as_json)
     if prune is not None:
-        return _prune(manager, printer, keep=prune, as_json=as_json)
+        return _prune(manager, workspace, printer, keep=prune, as_json=as_json)
 
     target, problem = _resolve_save_id(manager, save_id)
     if target is None:
@@ -164,11 +164,15 @@ def _list_backups(
     return EXIT_OK
 
 
-def _prune(manager: BackupManager, printer: Printer, *, keep: int, as_json: bool) -> int:
+def _prune(
+    manager: BackupManager, workspace: Workspace, printer: Printer, *, keep: int, as_json: bool
+) -> int:
     try:
         removed = manager.prune(keep)
     except BackupError as exc:
-        printer.error(f"prune failed: {exc}")
+        # Redacted like every other error path: a prune that fails part way
+        # names the backup directory it could not remove.
+        printer.error(f"prune failed: {workspace.redactor.text(str(exc))}")
         return EXIT_FAILURE
     if as_json:
         printer.json({"pruned": list(removed), "kept": keep})

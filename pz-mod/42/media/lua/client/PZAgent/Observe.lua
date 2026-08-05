@@ -33,7 +33,12 @@ Observe.RADIUS = 6
 Observe.MAX_SQUARES = 256
 Observe.MAX_OBJECTS_PER_SQUARE = 16
 Observe.MAX_ZOMBIE_SCAN = 256
-Observe.MAX_WORN = 16
+
+--- Worn slots inspected. Build 42 gives a fully dressed character rather more
+--- than a dozen body locations, so this sits above what a player can wear
+--- rather than in the middle of it -- a backpack dropped for being the
+--- seventeenth worn item is a bag the agent would simply never see.
+Observe.MAX_WORN = 32
 Observe.MAX_BODY_PARTS = 24
 
 --- Health scales the game reports out of 100.
@@ -106,6 +111,22 @@ local function readString(owner, names)
   return firstOf(owner, names, "string")
 end
 
+--- The first accessor that answers with a non-negative whole number.
+---
+--- Identity is read through this rather than through readNumber because Java
+--- answers -1 for "there is no id here" -- `getOnlineID` does exactly that
+--- outside multiplayer. Taking that -1 would give every zombie in the horde the
+--- same reference, so the probe falls through to the next accessor instead.
+local function readIdentity(owner, names)
+  for index = 1, #names do
+    local value = invoke(owner, names[index])
+    if type(value) == "number" and value == value and value >= 0 and value < math.huge then
+      return math.floor(value)
+    end
+  end
+  return nil
+end
+
 --- The size of a Java collection, or nil when it is not one.
 local function listSize(list)
   local size = invoke(list, "size")
@@ -160,8 +181,13 @@ function Observe.saveKey()
 end
 
 --- Everything the game block needs, as plain values.
+---
+--- Returns the fields plus the reason the build could not be read, if it could
+--- not: ObserveModel refuses an observation with no build, and "the game build
+--- is unknown" is a far worse thing to put on the HUD than the probe's own
+--- account of which accessor was missing.
 function Observe.gameFields()
-  local build = PZAgent.Heartbeat.detectBuild()
+  local build, buildError = PZAgent.Heartbeat.detectBuild()
   local fields = {
     build = build,
     save_key = Observe.saveKey(),
@@ -188,7 +214,7 @@ function Observe.gameFields()
     -- known to expose; zero multiplier is the game's own definition of paused.
     fields.paused = fields.speed <= 0
   end
-  return fields
+  return fields, buildError
 end
 
 -- ---------------------------------------------------------------------------
@@ -366,7 +392,7 @@ end
 --- One item, as the descriptor ObserveModel consumes.
 local function itemFields(item, hands)
   local descriptor = {
-    runtime_id = readNumber(item, { "getID" }),
+    runtime_id = readIdentity(item, { "getID" }),
     full_type = readString(item, { "getFullType" }),
     display_name = readString(item, { "getName", "getDisplayName" }),
     category = readString(item, { "getDisplayCategory", "getCategory" }),
@@ -389,11 +415,28 @@ end
 
 local walkItemContainer
 
+--- The budget one inventory walk shares across every container it opens.
+---
+--- The per-container cap alone does not bound the walk: bags nest, so
+--- MAX_ITEMS_PER_CONTAINER items each holding a bag is that many containers
+--- again at the next depth, and MAX_DEPTH of that is millions of engine calls
+--- on the game thread for a document that keeps sixty-four containers. The
+--- totals are the model's own caps, because a container or an item the model
+--- would refuse anyway is not worth reading out of the engine.
+local function newWalkBudget()
+  return {
+    containers = model().MAX_CONTAINERS,
+    items = model().MAX_ITEMS,
+    containers_dropped = 0,
+  }
+end
+
 --- Read one ItemContainer into a container node, recursing into carried bags.
 ---
 --- `depth` is bounded here as well as in ObserveModel: the model refuses a node
---- that is too deep, but the walk that produced it would already have run.
-walkItemContainer = function(container, node, hands, depth)
+--- that is too deep, but the walk that produced it would already have run. The
+--- same reasoning is why `budget` exists -- see newWalkBudget.
+walkItemContainer = function(container, node, hands, depth, budget)
   local items = invoke(container, "getItems")
   local size = listSize(items)
   node.capacity = readNumber(container, { "getCapacity", "getMaxWeight" })
@@ -405,26 +448,46 @@ walkItemContainer = function(container, node, hands, depth)
   local limit = model().MAX_ITEMS_PER_CONTAINER
   local scanned = math.min(size, limit)
   local count = 0
+  -- Where the shared item budget ran out, if it did. Everything from there to
+  -- the end of the engine's list was never looked at, and saying so is what
+  -- keeps "the bag holds four things" off a bag whose fifth was never read.
+  local stopped = nil
   for index = 0, scanned - 1 do
+    if budget.items <= 0 then
+      stopped = index
+      break
+    end
     local item = listGet(items, index)
     if item ~= nil then
+      budget.items = budget.items - 1
       local descriptor = itemFields(item, hands)
       count = count + 1
       node.items[count] = descriptor
       local nested = invoke(item, "getInventory")
       if nested ~= nil and depth < model().MAX_DEPTH then
-        descriptor.container = walkItemContainer(nested, {
-          kind = model().CONTAINER_KIND.CARRIED,
-          runtime_id = descriptor.runtime_id,
-          name = descriptor.display_name,
-          accessible = true,
-        }, hands, depth + 1)
+        if budget.containers <= 0 then
+          -- The bag is reported as an item; its contents are not reported at
+          -- all, which is a container the sidecar must be told about.
+          budget.containers_dropped = budget.containers_dropped + 1
+        else
+          budget.containers = budget.containers - 1
+          descriptor.container = walkItemContainer(nested, {
+            kind = model().CONTAINER_KIND.CARRIED,
+            runtime_id = descriptor.runtime_id,
+            name = descriptor.display_name,
+            accessible = true,
+          }, hands, depth + 1, budget)
+        end
       end
     end
   end
-  if size > scanned then
+  local unread = size - scanned
+  if stopped ~= nil then
+    unread = size - stopped
+  end
+  if unread > 0 then
     node.truncated = true
-    node.dropped = size - scanned
+    node.dropped = unread
   end
   return node
 end
@@ -436,7 +499,8 @@ end
 --- different proposition for a transfer, and collapsing the two would make the
 --- reference for one resolve to the other.
 function Observe.inventoryRoots(player)
-  local roots = {}
+  local roots = { containers_dropped = 0 }
+  local budget = newWalkBudget()
   local hands = {
     primary = invoke(player, "getPrimaryHandItem"),
     secondary = invoke(player, "getSecondaryHandItem"),
@@ -445,11 +509,12 @@ function Observe.inventoryRoots(player)
   if main == nil then
     return nil, "the character exposes no main inventory"
   end
+  budget.containers = budget.containers - 1
   roots[1] = walkItemContainer(main, {
     kind = model().CONTAINER_KIND.PLAYER_MAIN,
     name = "Inventory",
     accessible = true,
-  }, hands, 1)
+  }, hands, 1, budget)
 
   local worn = invoke(player, "getWornItems")
   local size = listSize(worn)
@@ -460,17 +525,32 @@ function Observe.inventoryRoots(player)
       local item = invoke(entry, "getItem") or entry
       local slot = readString(entry, { "getLocation", "getBodyLocation" })
       local container = invoke(item, "getInventory")
-      if container ~= nil and slot ~= nil then
-        roots[#roots + 1] = walkItemContainer(container, {
-          kind = model().CONTAINER_KIND.WORN,
-          slot = slot,
-          runtime_id = readNumber(item, { "getID" }),
-          name = readString(item, { "getName", "getDisplayName" }),
-          accessible = true,
-        }, hands, 1)
+      if container ~= nil then
+        if slot == nil or budget.containers <= 0 then
+          -- A worn bag whose slot this build does not name has no reference the
+          -- sidecar could resolve, so it cannot be emitted -- but it is a bag
+          -- the player is wearing, and a snapshot that simply omitted it would
+          -- read as a character carrying nothing on their back.
+          budget.containers_dropped = budget.containers_dropped + 1
+        else
+          budget.containers = budget.containers - 1
+          roots[#roots + 1] = walkItemContainer(container, {
+            kind = model().CONTAINER_KIND.WORN,
+            slot = slot,
+            runtime_id = readIdentity(item, { "getID" }),
+            name = readString(item, { "getName", "getDisplayName" }),
+            accessible = true,
+          }, hands, 1, budget)
+        end
       end
     end
+    if size > scanned then
+      -- Worn slots past the cap were never inspected; any of them could have
+      -- been a bag, so the count travels rather than the assumption.
+      budget.containers_dropped = budget.containers_dropped + (size - scanned)
+    end
   end
+  roots.containers_dropped = budget.containers_dropped
   return roots
 end
 
@@ -611,7 +691,7 @@ function Observe.nearbyZombies(player, playerPosition)
         end
         count = count + 1
         result.zombies[count] = {
-          runtime_id = readNumber(zombie, { "getOnlineID", "getID" }),
+          runtime_id = readIdentity(zombie, { "getOnlineID", "getID" }),
           distance = distance,
           visible = visible,
           chasing = chasing,
@@ -649,6 +729,13 @@ function Observe.context(agent, player, sessionId, seq, nowMs)
   if playerFields == nil then
     return nil, playerError
   end
+  -- The build is the one field ObserveModel refuses to do without, so its own
+  -- probe's reason is caught here rather than replaced downstream by the
+  -- builder's much vaguer "the game build is unknown".
+  local gameFields, buildError = Observe.gameFields()
+  if gameFields.build == nil then
+    return nil, buildError or "the game build is unknown"
+  end
   -- An unreadable inventory costs the section, not the snapshot: the sidecar
   -- reads an absent `inventory` as "not walked". The reason still surfaces,
   -- because an agent that silently stops seeing its own bag looks healthy.
@@ -663,7 +750,7 @@ function Observe.context(agent, player, sessionId, seq, nowMs)
     full = true,
     capability_revision = agent.capability_revision,
     active_goal_id = agent.active_goal_id,
-    game = Observe.gameFields(),
+    game = gameFields,
     player = playerFields,
     inventory = roots,
     nearby = Observe.nearbyFields(player, playerFields.position),
@@ -690,11 +777,14 @@ function Observe.tick(agent, nowMs)
   end
   local player = agent.player
   if player == nil then
-    player = PZAgent.Runtime.currentPlayer()
-    agent.player = player
-  end
-  if player == nil then
-    return nil, "no player character"
+    local found, lookupError = PZAgent.Runtime.currentPlayer()
+    player = found
+    agent.player = found
+    if player == nil then
+      -- Not recorded on the safety state: a tick between characters is routine,
+      -- and the reason is still returned so a caller that cares can say why.
+      return nil, lookupError or "no player character"
+    end
   end
   local seq, seqError = agent.sequence:next("observation")
   if seq == nil then

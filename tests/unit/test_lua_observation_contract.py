@@ -171,6 +171,51 @@ def test_every_reference_parses_with_the_python_implementation(
         assert wound.ref.split(":")[1] == SESSION
 
 
+def test_no_two_inventory_entries_or_zombies_share_a_reference(
+    observation: Observation,
+) -> None:
+    """One reference standing for two objects is a silent aliasing bug.
+
+    The diff keys these arrays by ``ref``, the action engine re-resolves a ref
+    before acting, and neither notices a collision — a transfer would simply
+    move whichever object the collision happened to name. The mod refuses a
+    negative runtime id for exactly this reason: Java answers ``-1`` for "no id
+    here", and ``-1`` is a legal reference segment.
+    """
+    inventory = observation.inventory
+    assert inventory is not None
+    nearby = observation.nearby
+    assert nearby is not None
+
+    for label, refs in (
+        ("containers", [c.ref for c in inventory.containers]),
+        ("items", [i.ref for i in inventory.items]),
+        ("zombies", [z.ref for z in nearby.zombies]),
+        ("wounds", [w.ref for w in observation.player.wounds]),
+    ):
+        assert len(set(refs)) == len(refs), f"{label} carries a duplicated reference"
+        assert all(not part.startswith("-") for ref in refs for part in ref.split(":")), (
+            f"{label} carries a sentinel id formatted as an identity"
+        )
+
+
+def test_the_limit_namespace_survives_as_json_scalars(emitted: dict[str, Any]) -> None:
+    """The limit keys are only useful if they arrive as booleans and counts."""
+    reported = {
+        name: value
+        for name, value in emitted["player"]["stats"].items()
+        if name.startswith(LIMIT_PREFIX)
+    }
+    assert reported, "the fixture pushes a collection past its cap, so something must be reported"
+    for name, value in reported.items():
+        assert isinstance(value, (bool, int)), name
+        if name.endswith("_omitted"):
+            assert isinstance(value, int) and not isinstance(value, bool)
+            assert value > 0, f"{name} is written only when it bit"
+        if name.endswith("_truncated") or name.endswith("_unknown"):
+            assert value is True, f"{name} is written only when it is true"
+
+
 def test_the_nested_container_tree_reconstructs(observation: Observation) -> None:
     inventory = observation.inventory
     assert inventory is not None

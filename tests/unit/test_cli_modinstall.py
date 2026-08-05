@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from pz_agent_cli.context import EXIT_FAILURE, EXIT_OK
 from pz_agent_cli.modinstall import (
     MANIFEST_NAME,
+    MAX_DEPTH,
+    MAX_FILE_BYTES,
+    MAX_INSTALL_FILES,
     MOD_ID,
     ForeignFileError,
     InstallError,
@@ -114,6 +119,121 @@ def test_a_file_from_an_older_version_is_removed_on_reinstall(tmp_path: Path) ->
 
     assert result.removed_stale == ("media/lua/shared/PZAgent/Gone.lua",)
     assert not (result.destination / "media/lua/shared/PZAgent/Gone.lua").exists()
+
+
+def test_an_older_version_file_the_user_edited_is_kept_rather_than_deleted(
+    tmp_path: Path,
+) -> None:
+    """Dropping a file from a release is not authority to delete the user's copy.
+
+    Uninstall already keeps a modified file; install removed the same file
+    without looking at its hash, so upgrading silently discarded an edit that
+    uninstalling would have preserved.
+    """
+    world = make_world(tmp_path)
+    assert world.mods_dir is not None and world.mod_source is not None
+    old_source = make_mod_source(tmp_path / "old")
+    gone = old_source / "media" / "lua" / "shared" / "PZAgent" / "Gone.lua"
+    gone.write_text("-- removed in the next version\n", encoding="utf-8")
+    installed = install_mod(old_source, world.mods_dir)
+    edited = installed.destination / "media" / "lua" / "shared" / "PZAgent" / "Gone.lua"
+    edited.write_text("-- my own tweak\n", encoding="utf-8")
+
+    result = install_mod(world.mod_source, world.mods_dir)
+
+    assert result.kept_stale == ("media/lua/shared/PZAgent/Gone.lua",)
+    assert result.removed_stale == ()
+    assert edited.read_text(encoding="utf-8") == "-- my own tweak\n"
+
+
+def test_a_stale_file_already_gone_is_not_reported_as_removed(tmp_path: Path) -> None:
+    world = make_world(tmp_path)
+    assert world.mods_dir is not None and world.mod_source is not None
+    old_source = make_mod_source(tmp_path / "old")
+    (old_source / "media" / "lua" / "shared" / "PZAgent" / "Gone.lua").write_text(
+        "-- removed in the next version\n", encoding="utf-8"
+    )
+    installed = install_mod(old_source, world.mods_dir)
+    (installed.destination / "media" / "lua" / "shared" / "PZAgent" / "Gone.lua").unlink()
+
+    result = install_mod(world.mod_source, world.mods_dir)
+
+    assert result.removed_stale == ()
+    assert result.kept_stale == ()
+
+
+def test_a_copy_that_fails_part_way_records_what_landed_so_a_retry_works(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A partial install with no ledger would be refused as foreign for ever."""
+    world = make_world(tmp_path)
+    assert world.mods_dir is not None and world.mod_source is not None
+    real = shutil.copyfile
+    seen = {"calls": 0}
+
+    def flaky(source: Any, destination: Any, **kwargs: Any) -> Any:
+        seen["calls"] += 1
+        if seen["calls"] == 2:
+            raise OSError(28, "No space left on device")
+        return real(source, destination, **kwargs)
+
+    monkeypatch.setattr(shutil, "copyfile", flaky)
+
+    with pytest.raises(InstallError, match="copy failed after 1 file"):
+        install_mod(world.mod_source, world.mods_dir)
+
+    partial = read_manifest(_installed(world))
+    assert partial is not None
+    assert len(partial.files) == 1
+    monkeypatch.undo()
+
+    retried = install_mod(world.mod_source, world.mods_dir)
+
+    assert retried.files_written == 3
+
+
+# ---------------------------------------------------------------------------
+# bounds
+# ---------------------------------------------------------------------------
+
+
+def test_a_source_with_more_files_than_the_cap_is_refused(tmp_path: Path) -> None:
+    world = make_world(tmp_path)
+    assert world.mods_dir is not None
+    source = make_mod_source(tmp_path / "wide")
+    for index in range(MAX_INSTALL_FILES + 1):
+        (source / "media" / "lua" / "client" / f"F{index}.lua").write_text("-- x\n")
+
+    with pytest.raises(InstallError, match=f"more than {MAX_INSTALL_FILES} files"):
+        install_mod(source, world.mods_dir)
+
+    assert not _installed(world).exists()
+
+
+def test_a_file_larger_than_the_per_file_cap_is_refused(tmp_path: Path) -> None:
+    world = make_world(tmp_path)
+    assert world.mods_dir is not None
+    source = make_mod_source(tmp_path / "heavy")
+    huge = source / "media" / "lua" / "client" / "Huge.lua"
+    with huge.open("wb") as handle:
+        handle.truncate(MAX_FILE_BYTES + 1)
+
+    with pytest.raises(InstallError, match=f"exceeds the {MAX_FILE_BYTES} cap"):
+        install_mod(source, world.mods_dir)
+
+    assert not _installed(world).exists()
+
+
+def test_a_path_deeper_than_the_cap_is_refused(tmp_path: Path) -> None:
+    world = make_world(tmp_path)
+    assert world.mods_dir is not None
+    source = make_mod_source(tmp_path / "deep")
+    deep = source.joinpath(*[f"d{index}" for index in range(MAX_DEPTH)])
+    deep.mkdir(parents=True)
+    (deep / "Deep.lua").write_text("-- x\n", encoding="utf-8")
+
+    with pytest.raises(InstallError, match="deeper than"):
+        install_mod(source, world.mods_dir)
 
 
 def test_a_source_that_is_not_a_mod_is_refused(tmp_path: Path) -> None:
@@ -303,6 +423,9 @@ def test_the_cli_round_trip_reports_both_halves(tmp_path: Path) -> None:
     world.reset_streams()
     assert world.run("uninstall-mod") == EXIT_OK
     assert "Saves, backups and configuration were not touched." in world.stdout
+    # The exchange directory is the mod's, not the installer's: it is named
+    # rather than deleted, so the user is told what is left instead of guessing.
+    assert "written by the mod, not by install-mod" in world.stdout
 
 
 def test_the_cli_refuses_a_foreign_file_and_names_it_redacted(tmp_path: Path) -> None:

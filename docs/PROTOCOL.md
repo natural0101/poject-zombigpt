@@ -137,6 +137,33 @@ Journals (`.jsonl`) use a different discipline:
 Applying a tier-1 diff to the previous snapshot reproduces the next one exactly;
 that round-trip is a test, not an aspiration.
 
+### Saying where the walk stopped
+
+A snapshot is built by walking things the player controls the size of — a
+hoarder's inventory, a horde, a warehouse of shelves — so every walk in the mod
+is capped. A capped walk that says nothing is worse than no walk at all: an
+inventory list that stops at 512 items reads exactly like an inventory that
+holds 512 items, and a planner cannot tell "there are no zombies" from "we
+stopped counting".
+
+Every object in `observation.schema.json` is `additionalProperties: false`
+except item and nearby entries, so there is no dedicated slot for this.
+`player.stats` is the one open scalar map, and the mod reports its own limits
+there under the reserved `observe.` prefix:
+
+| Key | Meaning |
+| --- | --- |
+| `observe.<section>_truncated` | A cap bit while walking that section |
+| `observe.<section>_omitted` | How many entries were left behind |
+| `observe.chasing_unknown`, `observe.visible_unknown` | A zombie flag this build would not answer |
+| `observe.paused_unknown`, `observe.speed_unknown` | A clock reading that fell back rather than being read |
+
+`<section>` is one of `containers`, `items`, `stats`, `objects`, `zombies`,
+`wounds`, `moodles`. The keys are written **only when they are true**, so
+silence on a section that is present means that section is complete. The mod
+refuses any game stat whose name starts with `observe.`, because a stat that
+could overwrite one of these could hide exactly the fact it is reporting.
+
 ## Stable references
 
 The LLM never receives a Lua table or a Java handle. It receives an opaque

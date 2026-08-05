@@ -16,7 +16,7 @@ from pz_agent_core.actions import (
     AdapterRegistry,
     PreconditionFailed,
 )
-from pz_agent_core.actions.adapters import EnsureMainAdapter, TransferAdapter
+from pz_agent_core.actions.adapters import ContainerChain, EnsureMainAdapter, TransferAdapter
 from pz_agent_core.actions.adapters.common import MAX_CONTAINER_DEPTH
 from pz_agent_core.actions.adapters.inventory import MAX_TRANSFER_QUANTITY
 from pz_agent_core.protocol import (
@@ -123,6 +123,17 @@ def test_an_item_observed_in_both_containers_is_never_reported_as_success() -> N
     duplicated = carrying(BEANS, moved(BEANS, MAIN_REF), seq=2)
 
     assert adapter.verify(command, before, duplicated) is None
+
+
+def test_the_duplicate_check_does_not_depend_on_enumeration_order() -> None:
+    """The destination copy listed first must not shortcut the count."""
+    adapter = TransferAdapter()
+    before = carrying(BEANS)
+    command = prepare(adapter, transfer_command(), before)
+
+    destination_first = carrying(moved(BEANS, MAIN_REF), BEANS, seq=2)
+
+    assert adapter.verify(command, before, destination_first) is None
 
 
 def test_an_observation_without_an_inventory_proves_nothing() -> None:
@@ -255,6 +266,42 @@ def test_an_inaccessible_container_is_refused() -> None:
     with pytest.raises(PreconditionFailed) as caught:
         TransferAdapter().validate(transfer_command(), observation)
     assert caught.value.reason_code is ReasonCode.PRECONDITION_FAILED
+
+
+def test_an_inaccessible_ancestor_makes_the_whole_chain_unreachable() -> None:
+    """Accessibility is a property of every link, not just of the bag itself."""
+    nested_bag = make_container(
+        BAG_REF, ContainerKind.CARRIED, name="Duffel Bag", parent_ref=CRATE_REF
+    )
+    observation = carrying(
+        BEANS,
+        containers=[main_container(), nested_bag, crate_container(accessible=False)],
+    )
+
+    with pytest.raises(PreconditionFailed) as caught:
+        TransferAdapter().validate(transfer_command(), observation)
+    assert caught.value.reason_code is ReasonCode.PRECONDITION_FAILED
+    assert caught.value.evidence["chain"] == [BAG_REF, CRATE_REF]
+
+
+def test_an_incomplete_chain_is_neither_reachable_nor_on_the_person() -> None:
+    """Both properties are read directly, and an undescribed link is not a safe one."""
+    partial = ContainerChain(containers=(main_container(),), complete=False)
+
+    assert partial.accessible is False
+    assert partial.on_person is False
+
+
+def test_the_origin_of_a_container_standing_in_the_world_carries_its_square() -> None:
+    """Putting the item back needs coordinates, whatever kind the mod called it."""
+    on_the_floor = make_container(CRATE_REF, ContainerKind.FLOOR, name="Floor")
+    item = an_item("42", container_ref=CRATE_REF)
+    observation = carrying(item, containers=[main_container(), on_the_floor])
+
+    args = TransferAdapter().build_args(transfer_command(item_ref=item.ref), observation)
+
+    assert args["origin"]["container_kind"] == ContainerKind.FLOOR.value
+    assert args["origin"]["square"] == {"x": HOME_X, "y": HOME_Y, "z": 0}
 
 
 def test_an_observation_with_no_inventory_tier_cannot_support_a_transfer() -> None:
@@ -400,6 +447,29 @@ def test_ensure_main_for_an_item_already_there_is_still_observed_not_assumed() -
 
     assert adapter.verify(command, before, carrying(in_main, seq=2)) is not None
     assert adapter.verify(command, before, carrying(seq=2)) is None
+
+
+def test_ensure_main_refuses_a_destination_that_is_not_the_main_inventory() -> None:
+    """The argument the adapter mints is accepted; a contradicting one is not ignored."""
+    command = a_command(
+        ActionName.INVENTORY_ENSURE_MAIN,
+        {"item_ref": BEANS.ref, "destination_container_ref": BAG_REF},
+    )
+
+    with pytest.raises(PreconditionFailed) as caught:
+        EnsureMainAdapter().validate(command, carrying(BEANS))
+    assert caught.value.reason_code is ReasonCode.INVALID_ARGUMENT
+    assert caught.value.evidence["player_main_ref"] == MAIN_REF
+
+
+def test_the_prepared_ensure_main_command_still_passes_its_own_checks() -> None:
+    adapter = EnsureMainAdapter()
+    before = carrying(BEANS)
+
+    prepared = prepare(adapter, ensure_command(), before)
+
+    adapter.validate(prepared, before)
+    assert prepared.args["destination_container_ref"] == MAIN_REF
 
 
 def test_ensure_main_refuses_an_equipped_item() -> None:

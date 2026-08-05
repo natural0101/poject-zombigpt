@@ -140,20 +140,26 @@ _TIMEOUT_MS: Final[JsonDict] = {
 }
 
 
-def _mutating(properties: Mapping[str, JsonDict], *, required: Iterable[str]) -> JsonDict:
+def _mutating(
+    properties: Mapping[str, JsonDict], *, required: Iterable[str], lease: bool = True
+) -> JsonDict:
     """An input schema for a tool that changes the world.
 
-    Every one of them carries an idempotency key and a lease and nothing else
-    free-form. There is deliberately no field for prose on a write path.
+    Every one of them carries an idempotency key, and nothing else free-form:
+    there is deliberately no field for prose on a write path.
+
+    ``lease`` is false for the one mutating tool that does not submit a single
+    command — a plan is bounded by ``limits.max_real_seconds``, not by a command
+    lease. Publishing ``timeout_ms`` there would advertise an argument no handler
+    reads, which is the same lie as advertising a bound nothing enforces.
     """
+    envelope: JsonDict = {"idempotency_key": _IDEMPOTENCY_KEY}
+    if lease:
+        envelope["timeout_ms"] = _TIMEOUT_MS
     return {
         "type": "object",
         "additionalProperties": False,
-        "properties": {
-            **properties,
-            "idempotency_key": _IDEMPOTENCY_KEY,
-            "timeout_ms": _TIMEOUT_MS,
-        },
+        "properties": {**properties, **envelope},
         "required": [*required, "idempotency_key"],
     }
 
@@ -594,6 +600,7 @@ TOOLS: Final[tuple[ToolSpec, ...]] = (
                 },
             },
             required=("goal",),
+            lease=False,
         ),
     ),
     ToolSpec(
@@ -699,12 +706,22 @@ TOOLS_BY_NAME: Final[dict[str, ToolSpec]] = {spec.name: spec for spec in TOOLS}
 
 @dataclass(frozen=True, slots=True)
 class ResourceSpec:
-    """A read-only view over state the core already holds."""
+    """A read-only view over state the core already holds.
+
+    ``subscribable`` says the server will *push* this URI when it changes. It is
+    false on every resource here and stays false until a change source exists:
+    :func:`~.server.build_server` registers no ``subscribe_resource`` handler,
+    and nothing in the core publishes resource-change events yet. Advertising a
+    subscription a client could accept and then never be notified on is the
+    quietest failure this surface could ship — the client would simply believe
+    the world had stopped moving. Until then a client polls and uses the ``seq``
+    each read carries as its ETag.
+    """
 
     uri: str
     name: str
     summary: str
-    subscribable: bool = True
+    subscribable: bool = False
 
     def descriptor(self) -> JsonDict:
         return {
@@ -746,8 +763,9 @@ RESOURCES: Final[tuple[ResourceSpec, ...]] = (
         uri="pz://safety/status",
         name="safety",
         summary=(
-            "Danger level, takeover state and heartbeat health. Subscribe rather "
-            "than poll: a safety change is the last thing to learn on an interval."
+            "Danger level, takeover state and heartbeat health. Poll this one "
+            "often: a safety change is the last thing to learn late, and this "
+            "server does not push resource updates yet."
         ),
     ),
     ResourceSpec(

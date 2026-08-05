@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import uuid
+from typing import Any
+
 import pytest
 
+from pz_agent_core.actions import AdapterRegistry, PreconditionFailed, register_builtins
+from pz_agent_core.actions.adapters import register_game_adapters
 from pz_agent_core.actions.adapters.movement import MAX_ARRIVAL_RADIUS, MAX_MOVE_DISTANCE_SQUARES
 from pz_agent_core.capabilities.probes import (
     DRINK_CARRIED,
@@ -29,7 +34,19 @@ from pz_agent_mcp.catalog import (
 )
 from pz_agent_mcp.envelope import ToolFailure
 from pz_agent_mcp.validation import validate_arguments
+from tests.fixtures import (
+    DEFAULT_SESSION,
+    backpack_container_ref,
+    item_ref,
+    main_container_ref,
+    make_observation,
+)
+from tests.fixtures.ipc_builders import make_command
 from tests.fixtures.mcp_doubles import make_report
+
+ITEM = item_ref("501", "player-main")
+MAIN = main_container_ref()
+BACKPACK = backpack_container_ref()
 
 #: The set named by docs/MCP_TOOLS.md, written out rather than derived, so a
 #: tool appearing or vanishing has to be a deliberate edit in two places.
@@ -191,8 +208,82 @@ def test_every_mutating_tool_carries_an_idempotency_key() -> None:
         assert "idempotency_key" in spec.input_schema["required"], spec.name
 
 
+def test_no_tool_publishes_an_argument_its_handler_never_reads() -> None:
+    # A plan is bounded by limits.max_real_seconds, not by a command lease, so
+    # publishing timeout_ms on it would advertise an argument nothing reads —
+    # the same lie as advertising a bound nothing enforces.
+    assert "timeout_ms" not in TOOLS_BY_NAME["pz_plan_execute"].input_schema["properties"]
+    for spec in TOOLS:
+        if spec.action is None:
+            continue
+        assert "timeout_ms" in spec.input_schema["properties"], spec.name
+
+
+def test_no_resource_is_advertised_as_subscribable_until_something_pushes_one() -> None:
+    # build_server registers no subscribe handler and core publishes no
+    # resource-change events; a client that subscribed would wait forever and
+    # read the silence as "nothing has changed".
+    assert not any(spec.subscribable for spec in RESOURCES)
+    assert all(spec.descriptor()["subscribable"] is False for spec in RESOURCES)
+
+
 def test_the_stop_tool_takes_no_arguments_so_nothing_can_make_it_fail() -> None:
     assert TOOLS_BY_NAME["pz_safety_stop"].input_schema["properties"] == {}
+
+
+#: One filled-in payload per action tool: every optional argument the schema
+#: offers, so the adapter sees the widest set of names this boundary can send.
+FULL_ACTION_PAYLOADS: dict[str, dict[str, Any]] = {
+    "pz_action_move_to": {
+        "target": {"x": 1210, "y": 3405, "z": 0},
+        "radius": 1.5,
+        "max_distance": 10,
+        "allow_doors": True,
+        "allow_stairs": False,
+    },
+    "pz_action_transfer": {
+        "item_ref": ITEM,
+        "destination_container_ref": BACKPACK,
+        "source_container_ref": MAIN,
+    },
+    "pz_action_eat": {"item_ref": ITEM, "fraction": 0.5},
+    "pz_action_drink": {"item_ref": ITEM, "fraction": 0.5},
+    "pz_action_read": {"item_ref": ITEM, "pages": 3},
+    "pz_action_wait": {"game_seconds": 30},
+    "pz_action_cancel": {"command_id": str(uuid.UUID(int=0xC0FFEE))},
+}
+
+
+def test_every_action_tool_is_covered_by_the_adapter_contract_check() -> None:
+    # The check below is only as good as this table; an action tool added to the
+    # catalogue and forgotten here would never meet its adapter.
+    assert set(FULL_ACTION_PAYLOADS) == {spec.name for spec in TOOLS if spec.action is not None}
+
+
+@pytest.mark.parametrize("tool", sorted(FULL_ACTION_PAYLOADS))
+def test_every_schema_field_is_a_name_the_adapter_actually_accepts(tool: str) -> None:
+    # The claim this boundary makes is that there is no translation table: the
+    # schema field *is* the adapter argument. Nothing enforced that, so a
+    # renamed adapter argument would have been discovered by the game refusing
+    # every call. The adapter may refuse for any domain reason here — a missing
+    # item, an unloaded square — but never because it was handed a name it does
+    # not know.
+    spec = TOOLS_BY_NAME[tool]
+    assert spec.action is not None
+    registry = register_game_adapters(register_builtins(AdapterRegistry()))
+    args = {
+        name: value
+        for name, value in validate_arguments(
+            spec.input_schema, {**FULL_ACTION_PAYLOADS[tool], "idempotency_key": "k1"}
+        ).items()
+        if name not in {"idempotency_key", "timeout_ms"}
+    }
+    command = make_command(spec.action, session_id=DEFAULT_SESSION, args=args)
+
+    try:
+        registry.get(spec.action).validate(command, make_observation())
+    except PreconditionFailed as refusal:
+        assert "unsupported argument" not in str(refusal), f"{tool}: {refusal}"
 
 
 def test_a_long_running_tool_must_name_the_action_it_submits() -> None:

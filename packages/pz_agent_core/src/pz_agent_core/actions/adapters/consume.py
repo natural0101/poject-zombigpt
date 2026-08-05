@@ -175,11 +175,17 @@ def _track(
     Both observations must carry an inventory: an item "missing" from an
     observation that simply has no inventory tier is not evidence that it was
     eaten, and treating it as such is the exact shape of a fabricated success.
+
+    Two entries with one runtime id are not followable either. "Which of them
+    was the one bitten into" has no answer, so the item side of the
+    postcondition is dropped and only the stat can carry the proof.
     """
     if before.inventory is None or after.inventory is None:
         return None
     was = find_by_identity(before.inventory, identity)
     now = find_by_identity(after.inventory, identity)
+    if len(was) > 1 or len(now) > 1:
+        return None
     return _Consumed(
         present_before=bool(was),
         present_after=bool(now),

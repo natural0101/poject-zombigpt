@@ -155,6 +155,7 @@ class InstallResult:
     bytes_written: int
     replaced: tuple[str, ...] = ()
     removed_stale: tuple[str, ...] = ()
+    kept_stale: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -300,8 +301,12 @@ def _audit_destination(
     destination: Path,
     planned: Iterable[tuple[str, Path, int]],
     manifest: InstallManifest | None,
-) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """Check every file the install would touch. Returns ``(replaced, stale)``.
+) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+    """Check every file the install would touch.
+
+    Returns ``(replaced, stale, kept_stale)``: what this install will overwrite,
+    what an earlier version left behind that it will delete, and what it will
+    leave alone because the hash says the user edited it.
 
     Raises:
         ForeignFileError: on the first file pz-agent did not write. Nothing has
@@ -323,8 +328,21 @@ def _audit_destination(
         replaced.append(relative)
 
     planned_paths = {relative for relative, _, _ in planned}
-    stale = tuple(sorted(path for path in known if path not in planned_paths))
-    return tuple(replaced), stale
+    stale: list[str] = []
+    kept: list[str] = []
+    for relative in sorted(path for path in known if path not in planned_paths):
+        target = destination / Path(*_check_relative(relative))
+        if not target.is_file():
+            # Already gone. Listing it as removed would report a deletion this
+            # install did not perform.
+            continue
+        digest, size = _sha256(target)
+        recorded = known[relative]
+        # The same rule uninstall follows: a file whose hash no longer matches
+        # was edited by the user, and dropping a version is not authority to
+        # delete their work.
+        (kept if digest != recorded.sha256 or size != recorded.size else stale).append(relative)
+    return tuple(replaced), tuple(stale), tuple(kept)
 
 
 def install_mod(
@@ -336,54 +354,79 @@ def install_mod(
     """Copy the mod into ``<mods_dir>/pz_agent_bridge``.
 
     Raises:
-        InstallError: when the source is unusable or a bound is breached.
+        InstallError: when the source is unusable, a bound is breached, or a
+            copy fails part way. In that last case the ledger is written for the
+            files that did land, so the next run recognises them as its own
+            instead of refusing them as foreign.
         ForeignFileError: when the destination holds a file pz-agent did not
             write. Nothing is copied in that case.
     """
     destination = mods_dir / MOD_ID
     planned = _plan_source(source)
     manifest = read_manifest(destination)
-    replaced, stale = _audit_destination(destination, planned, manifest)
+    replaced, stale, kept_stale = _audit_destination(destination, planned, manifest)
 
     written: list[InstalledFile] = []
     directories: set[str] = set()
-    total = 0
     destination.mkdir(parents=True, exist_ok=True)
     for relative, path, _ in planned:
         parts = _check_relative(relative)
         target = destination.joinpath(*parts)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        for depth in range(1, len(parts)):
-            directories.add("/".join(parts[:depth]))
-        shutil.copyfile(path, target)
-        digest, size = _sha256(target)
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            for depth in range(1, len(parts)):
+                directories.add("/".join(parts[:depth]))
+            shutil.copyfile(path, target)
+            digest, size = _sha256(target)
+        except OSError as exc:
+            # The ledger goes down before the error goes up. Without it the
+            # files already copied have no record, and the audit above would
+            # refuse the retry as somebody else's — an install that failed once
+            # could never be repeated.
+            _write_ledger(destination, written, directories, clock)
+            raise InstallError(
+                f"{relative}: copy failed after {len(written)} file(s) "
+                f"({exc.strerror or exc}); what was written is recorded in "
+                f"{MANIFEST_NAME}, so install-mod can be run again"
+            ) from exc
         written.append(InstalledFile(path=relative, size=size, sha256=digest))
-        total += size
 
     for relative in stale:
         stale_path = destination.joinpath(*_check_relative(relative))
         stale_path.unlink(missing_ok=True)
 
+    ledger = _write_ledger(destination, written, directories, clock)
+    return InstallResult(
+        destination=destination,
+        manifest=ledger,
+        files_written=len(written),
+        bytes_written=sum(entry.size for entry in written),
+        replaced=replaced,
+        removed_stale=stale,
+        kept_stale=kept_stale,
+    )
+
+
+def _write_ledger(
+    destination: Path,
+    written: Iterable[InstalledFile],
+    directories: Iterable[str],
+    clock: Callable[[], datetime],
+) -> InstallManifest:
+    """Record exactly the files that are on disk. The only writer of the ledger."""
     ledger = InstallManifest(
         mod_id=MOD_ID,
         mod_version=MOD_VERSION,
         product_version=PRODUCT_VERSION,
         installed_at=clock().astimezone(UTC).isoformat(),
         files=tuple(written),
-        directories=tuple(sorted(directories, key=lambda item: (item.count("/"), item))),
+        directories=tuple(sorted(set(directories), key=lambda item: (item.count("/"), item))),
     )
     (destination / MANIFEST_NAME).write_text(
         json.dumps(ledger.to_dict(), ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
-    return InstallResult(
-        destination=destination,
-        manifest=ledger,
-        files_written=len(written),
-        bytes_written=total,
-        replaced=replaced,
-        removed_stale=stale,
-    )
+    return ledger
 
 
 def uninstall_mod(mods_dir: Path) -> UninstallResult:

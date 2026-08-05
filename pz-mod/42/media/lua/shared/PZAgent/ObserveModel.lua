@@ -70,6 +70,7 @@ ObserveModel.MAX_OBJECTS = 64
 ObserveModel.MAX_ZOMBIES = 64
 ObserveModel.MAX_MOODLES = 24
 ObserveModel.MAX_WOUNDS = 24
+ObserveModel.MAX_STATS = 48
 ObserveModel.MAX_TAGS = 12
 ObserveModel.MAX_SEMANTICS = 8
 ObserveModel.MAX_DOMAIN_FIELDS = 16
@@ -205,11 +206,24 @@ function ObserveModel.token(value)
 end
 
 --- A runtime id normalised to a reference segment, or nil.
+---
+--- A negative id is refused rather than formatted. Java answers -1 for "there
+--- is no id here" -- `getOnlineID` does exactly that outside multiplayer -- and
+--- "-1" is a legal reference segment, so accepting it would mint one reference
+--- shared by every zombie in the horde. Two objects behind one reference is the
+--- failure the whole scheme exists to prevent, and it fails silently.
 function ObserveModel.runtimeId(value)
   if isInteger(value) then
+    if value < 0 then
+      return nil
+    end
     return format("%.0f", value)
   end
-  return ObserveModel.token(value)
+  local token = ObserveModel.token(value)
+  if token == nil or token:sub(1, 1) == "-" then
+    return nil
+  end
+  return token
 end
 
 -- ---------------------------------------------------------------------------
@@ -308,6 +322,8 @@ local function newLimits()
     containers_omitted = 0,
     items_truncated = false,
     items_omitted = 0,
+    stats_truncated = false,
+    stats_omitted = 0,
     objects_truncated = false,
     objects_omitted = 0,
     zombies_truncated = false,
@@ -328,6 +344,8 @@ local LIMIT_KEYS = {
   "containers_omitted",
   "items_truncated",
   "items_omitted",
+  "stats_truncated",
+  "stats_omitted",
   "objects_truncated",
   "objects_omitted",
   "zombies_truncated",
@@ -379,31 +397,61 @@ local NON_NEGATIVE_STATS = {
 --- A name the caller supplies with a nil value never appears, which is the
 --- whole point -- `PlayerState.hunger` reads an absent hunger as 0.0 ("not
 --- hungry"), so an unread stat must not arrive as a number at all.
-function ObserveModel.stats(raw)
+---
+--- Bounded and ordered like every other map here. `player.stats` is the one
+--- open scalar map in the schema, so it is the one place an unbounded caller
+--- table would reach the exchange directory unchecked; the cap is taken in
+--- sorted name order so the same reading always produces the same document.
+function ObserveModel.stats(raw, limits)
   local out = {}
   if type(raw) ~= "table" then
     return out
   end
+  local note = type(limits) == "table" and limits or nil
   local prefix = ObserveModel.LIMIT_PREFIX
-  for name, value in pairs(raw) do
+  local names = {}
+  local count = 0
+  local dropped = 0
+  for name in pairs(raw) do
     -- A game stat may not land in the observer's own namespace: the limit keys
     -- are how the sidecar learns the walk was cut short, and a stat that could
     -- overwrite one could hide exactly that.
     if ObserveModel.token(name) ~= nil and name:sub(1, #prefix) ~= prefix then
-      local shaped
-      if type(value) == "boolean" then
-        shaped = value
-      elseif UNIT_STATS[name] then
-        shaped = ObserveModel.clamp(value, 0, 1)
-      elseif NON_NEGATIVE_STATS[name] then
-        shaped = ObserveModel.clamp(value, 0, math.huge)
-      else
-        shaped = ObserveModel.number(value)
-      end
-      if shaped ~= nil then
-        out[name] = shaped
-      end
+      count = count + 1
+      names[count] = name
+    else
+      dropped = dropped + 1
     end
+  end
+  sort(names)
+  local kept = 0
+  for index = 1, count do
+    local name = names[index]
+    local value = raw[name]
+    local shaped
+    if type(value) == "boolean" then
+      shaped = value
+    elseif UNIT_STATS[name] then
+      shaped = ObserveModel.clamp(value, 0, 1)
+    elseif NON_NEGATIVE_STATS[name] then
+      shaped = ObserveModel.clamp(value, 0, math.huge)
+    else
+      shaped = ObserveModel.number(value)
+    end
+    if shaped == nil then
+      dropped = dropped + 1
+    elseif kept >= ObserveModel.MAX_STATS then
+      dropped = dropped + 1
+      if note ~= nil then
+        note.stats_truncated = true
+      end
+    else
+      kept = kept + 1
+      out[name] = shaped
+    end
+  end
+  if note ~= nil and dropped > 0 then
+    note.stats_omitted = note.stats_omitted + dropped
   end
   return out
 end
@@ -580,7 +628,7 @@ function ObserveModel.player(sessionId, fields, limits)
     present = fields.present ~= false,
     alive = fields.alive == true,
     position = position,
-    stats = ObserveModel.stats(fields.stats),
+    stats = ObserveModel.stats(fields.stats, limits),
     moodles = ObserveModel.moodles(fields.moodles, limits),
   }
   local wounds = ObserveModel.wounds(sessionId, fields.wounds, limits)
@@ -813,6 +861,11 @@ end
 --- and each item optionally carrying `container` for a bag inside a bag. The
 --- parent reference of a nested container is the container holding the bag,
 --- which is what lets the sidecar rebuild the tree from a flat list.
+---
+--- `roots.containers_dropped` is the reader's own count of containers it never
+--- opened -- a bag past its walk budget, a worn bag whose slot this build does
+--- not name. The caps here cannot see those, because a node that was never
+--- built never arrives, so the count has to travel with the list.
 function ObserveModel.inventory(sessionId, roots, limits)
   local state = {
     containers = {},
@@ -825,6 +878,11 @@ function ObserveModel.inventory(sessionId, roots, limits)
   if type(roots) == "table" then
     for index = 1, #roots do
       walkContainer(state, sessionId, roots[index], nil, 1)
+    end
+    local unopened = ObserveModel.integer(roots.containers_dropped)
+    if unopened ~= nil and unopened > 0 then
+      limits.containers_truncated = true
+      limits.containers_omitted = limits.containers_omitted + unopened
     end
   end
   sort(state.containers, function(left, right)

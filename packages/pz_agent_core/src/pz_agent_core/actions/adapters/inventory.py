@@ -404,6 +404,26 @@ def _ensure_main_item_ref(command: Command) -> str:
     return read_ref(command, "item_ref", kind=RefKind.ITEM)
 
 
+def _check_declared_destination(command: Command, main: ContainerView) -> None:
+    """Refuse a ``destination_container_ref`` that is not the main inventory.
+
+    ``build_args`` fills the argument in, so the prepared command carries it and
+    it has to be accepted — but a caller who supplies a *different* container is
+    asking for ``inventory.transfer``, not for this action. Silently rewriting
+    it would run an action nobody requested and then verify the one that ran.
+    """
+    if command.args.get("destination_container_ref") is None:
+        return
+    declared = read_ref(command, "destination_container_ref", kind=RefKind.CONTAINER)
+    if declared != main.ref:
+        raise PreconditionFailed(
+            f"inventory.ensure_main always targets {main.ref}; "
+            f"moving an item to {declared} is inventory.transfer",
+            reason_code=ReasonCode.INVALID_ARGUMENT,
+            evidence={"destination_container_ref": declared, "player_main_ref": main.ref},
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class EnsureMainAdapter:
     """``inventory.ensure_main``: get one item into the main inventory.
@@ -427,6 +447,7 @@ class EnsureMainAdapter:
         inventory = require_inventory(observation)
         item = resolve_item(inventory, item_ref)
         main = player_main(inventory)
+        _check_declared_destination(command, main)
         if item.container_ref == main.ref:
             return
         source = resolve_container(inventory, item.container_ref, field_name="source_container_ref")
