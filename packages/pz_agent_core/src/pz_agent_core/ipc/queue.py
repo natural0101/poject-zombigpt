@@ -318,14 +318,18 @@ class CommandQueue:
         """Shipped commands that have not reached a terminal ack yet."""
         return tuple(self._pending.values())
 
-    def skip_pending_commands(self) -> None:
-        """Ignore commands already on the stream.
+    def command_reader_at_end(self) -> JournalReader:
+        """A command-stream reader positioned past everything already written.
 
-        §3.12: a restarted sidecar must not re-execute anything. It re-reads
-        acks — those are how it learns what happened — but the command stream
-        is fast-forwarded to its end.
+        §3.12: a restarted sidecar must not re-execute anything. A consumer
+        with no persisted offset of its own starts here rather than at the top
+        of the file, where the previous run's commands are still sitting. Acks
+        are a different matter and are re-read from where they left off: they
+        are how the sidecar learns what actually happened.
         """
-        JournalReader(self.layout, self.layout.command_queue, keep=self.keep).seek_to_end()
+        reader = JournalReader(self.layout, self.layout.command_queue, keep=self.keep)
+        reader.seek_to_end()
+        return reader
 
     # -- building and sending ---------------------------------------------
 

@@ -119,23 +119,28 @@ class IpcLayout:
         """The three append-only streams, in no particular order."""
         return (self.observation_events, self.command_queue, self.command_ack)
 
+    @staticmethod
+    def managed_names() -> tuple[str, ...]:
+        """Every filename this layout owns, excluding rotated journals."""
+        return (
+            SESSION_FILE,
+            CAPABILITIES_FILE,
+            SNAPSHOT_SLOT_A_FILE,
+            SNAPSHOT_SLOT_B_FILE,
+            SNAPSHOT_POINTER_FILE,
+            OBSERVATION_EVENTS_FILE,
+            COMMAND_QUEUE_FILE,
+            COMMAND_ACK_FILE,
+            GAME_HEARTBEAT_FILE,
+            SIDECAR_HEARTBEAT_FILE,
+            PANIC_STOP_FILE,
+            SIDECAR_LOCK_FILE,
+            LOGS_DIR,
+        )
+
     def managed_paths(self) -> tuple[Path, ...]:
         """Every path this layout may itself create, excluding rotated journals."""
-        return (
-            self.session,
-            self.capabilities,
-            self.snapshot_slot(SnapshotSlot.A),
-            self.snapshot_slot(SnapshotSlot.B),
-            self.snapshot_pointer,
-            self.observation_events,
-            self.command_queue,
-            self.command_ack,
-            self.game_heartbeat,
-            self.sidecar_heartbeat,
-            self.panic_stop,
-            self.sidecar_lock,
-            self.logs_dir,
-        )
+        return tuple(self.root / name for name in self.managed_names())
 
     def is_managed_path(self, path: Path) -> bool:
         """True when *path* is one this layout owns and may be written.
@@ -150,13 +155,15 @@ class IpcLayout:
         root = _normalise(self.root)
         if candidate == root:
             return False
-        managed = {_normalise(p) for p in self.managed_paths()}
+        # The root is resolved, the names are not: a symlink standing in for a
+        # managed name resolves somewhere else and stops matching, which is the
+        # whole point of comparing a fully resolved candidate.
+        managed = {root / name for name in self.managed_names()}
         if candidate in managed:
             return True
-        if _normalise(self.logs_dir) in candidate.parents:
+        if (root / LOGS_DIR) in candidate.parents:
             return True
-        parent = candidate.parent
-        if parent != root:
+        if candidate.parent != root:
             return False
         stem = candidate.name
         if stem.endswith(TEMP_SUFFIX):
