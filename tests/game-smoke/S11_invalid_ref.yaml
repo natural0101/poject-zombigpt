@@ -1,0 +1,27 @@
+id: S11
+title: An invalid reference is refused, never resolved to something else
+requires_live_session: true
+priority: blocking
+
+purpose: >
+  A malformed or stale ref must fail loudly. The dangerous failure is not an
+  error — it is a ref that parses into a DIFFERENT valid object.
+
+preconditions: [session armed]
+
+steps:
+  - {id: 1, manual: false, action: issue a command with a ref from a previous session}
+  - {id: 2, manual: false, action: issue a command with a ref whose generation is stale}
+  - {id: 3, manual: false, action: issue a command with a syntactically malformed ref}
+  - {id: 4, manual: false, action: issue a world container ref with its embedded colons rearranged}
+
+evidence:
+  - {field: action_result.reason_code, assertion: INVALID_REF for all four}
+  - {field: game world, assertion: nothing changed}
+  - field: step 4 specifically
+    assertion: refused rather than resolved
+    why: >
+      A world container tail is five colon-separated numbers. A parser that
+      splits naively does not error here — it acts on a different container.
+
+fails_if: [any of the four is acted upon, INVALID_REF is treated as retryable]

@@ -1,0 +1,54 @@
+id: S02
+title: Panic stop clears only mod-owned actions
+requires_live_session: true
+priority: blocking
+
+purpose: >
+  Stop must always work, and must never cancel an action the player queued.
+  Clearing the whole action queue would be simpler and is forbidden.
+
+preconditions:
+  - session armed in ASSISTED
+  - character idle
+
+steps:
+  - id: 1
+    action: player manually queues a long action (e.g. start reading a book from the inventory UI)
+    manual: true
+  - id: 2
+    action: agent enqueues a mod-owned action (inventory.transfer of a small item)
+    manual: false
+  - id: 3
+    action: press the panic hotkey (F12 by default)
+    manual: true
+  - id: 4
+    action: observe the action queue and the safety state
+    manual: false
+
+evidence:
+  - field: action_result.reason_code
+    assertion: PANIC_STOP for the mod-owned command
+  - field: observation.safety.armed
+    assertion: false
+    why: panic stop disarms; it does not merely pause
+  - field: observation.action.ownership
+    assertion: the player's action is still running (ownership manual, busy true)
+    why: >
+      This is the assertion the scenario exists for. An implementation that
+      calls the engine's "clear queue" helper passes every other check here and
+      fails this one.
+
+variants:
+  - id: S02b
+    change: create the panic.stop file directly instead of pressing the hotkey
+    why: >
+      panic.stop must work with no live session, no sequence agreement and no
+      working protocol. It is the last resort and is tested as one.
+  - id: S02c
+    change: trigger stop while the session is DISARMED
+    assertion: succeeds, does not error
+
+fails_if:
+  - the player's action is cancelled
+  - stop fails while disarmed
+  - the agent remains armed afterwards

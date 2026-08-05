@@ -1,0 +1,65 @@
+id: S05
+title: Eat from a nested container, verified by hunger
+requires_live_session: true
+priority: blocking
+
+purpose: >
+  The reference scenario for the whole project. It exercises nested inventory
+  enumeration, deterministic food selection, a verified transfer, a verified
+  consume, and the rule that success means an observed postcondition.
+
+preconditions:
+  - character wearing a backpack
+  - backpack contains at least one safe food item (tinned beans is ideal)
+  - backpack ALSO contains one unsafe item (rotten or raw) to prove it is rejected
+  - hunger is noticeably above zero but not critical
+  - session armed in ASSISTED
+
+steps:
+  - id: 1
+    action: request "eat something safe"
+    manual: false
+  - id: 2
+    action: observe the selection rationale and the rejection list
+    manual: false
+  - id: 3
+    action: observe the transfer to main inventory, if the policy required one
+    manual: false
+  - id: 4
+    action: observe the eat action reaching a terminal result
+    manual: false
+
+evidence:
+  - field: selection.chosen_ref
+    assertion: is the safe item, not the unsafe one
+  - field: selection.rejections
+    assertion: names the unsafe item with its specific reason (rotten / raw)
+    why: >
+      "It picked the right one" is not enough. The policy must be able to say
+      why it rejected the other, because that explanation is what the voice
+      companion speaks and what doctor prints.
+  - field: action_result.evidence.hunger_before
+    assertion: present
+  - field: action_result.evidence.hunger_after
+    assertion: strictly less than hunger_before
+    why: >
+      This single comparison is the difference between this project and a macro
+      recorder. If hunger did not move, the result must be POSTCONDITION_FAILED
+      no matter what the mod acked.
+  - field: action_result.reason_code
+    assertion: POSTCONDITION_MET
+  - field: action_result.status
+    assertion: succeeded
+
+variants:
+  - id: S05b
+    change: backpack contains ONLY unsafe food
+    assertion: NO_SAFE_FOOD, no action attempted, every rejection explained
+  - id: S05c
+    change: eat_percentage capability unavailable
+    assertion: whole units consumed, and the rationale says so rather than silently rounding
+
+fails_if:
+  - the unsafe item is chosen
+  - success is reported without a hunger delta in the evidence
+  - the transfer is reported as succeeded without the item appearing in the destination

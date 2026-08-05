@@ -1,0 +1,27 @@
+id: S07
+title: Read literature with observed progress
+requires_live_session: true
+priority: high
+
+preconditions: [session armed, skill book in inventory, character not Illiterate]
+
+steps:
+  - {id: 1, manual: false, action: request reading toward a stated skill goal}
+  - {id: 2, manual: false, action: observe the selection rationale}
+  - {id: 3, manual: false, action: observe reading start and progress advance}
+
+evidence:
+  - {field: selection.chosen_ref, assertion: matches the stated goal, not merely "a book"}
+  - {field: action_result.evidence.reading_started, assertion: true}
+  - field: action_result.evidence.progress
+    assertion: advances between two observations
+    why: >
+      A read that starts and never progresses is indistinguishable from a read
+      that failed silently. Progress is the postcondition.
+
+variants:
+  - {id: S07b, change: character is Illiterate, assertion: NO_SUITABLE_LITERATURE with the trait named}
+  - {id: S07c, change: skill level below the book's requirement, assertion: refused, requirement named}
+  - {id: S07d, change: book already fully read, assertion: refused, pages-read named}
+
+fails_if: [success on start without observed progress, a book chosen that the character cannot use]

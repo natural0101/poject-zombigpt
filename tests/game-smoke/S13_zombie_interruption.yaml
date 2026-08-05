@@ -1,0 +1,49 @@
+id: S13
+title: Threat interrupts a long action at the threshold
+requires_live_session: true
+priority: high
+
+purpose: >
+  Verify the reflex guard fires on the real signal. Distance alone is the wrong
+  trigger — a chasing zombie at six tiles matters more than an idle one at
+  three — and getting it backwards produces either constant false alarms or a
+  character who keeps reading while something walks up behind them.
+
+preconditions:
+  - safe indoor location with a controllable zombie outside
+  - character reading a book (a long, interruptible action)
+  - session armed
+
+steps:
+  - id: 1
+    action: agent starts literature.read
+    manual: false
+  - id: 2
+    action: allow a zombie to notice the character and approach
+    manual: true
+  - id: 3
+    action: observe the danger level rising and the action being interrupted
+    manual: false
+
+evidence:
+  - field: observation.safety.danger_level
+    assertion: escalates before the interruption, not simultaneously with it
+  - field: action_result.reason_code
+    assertion: THREAT_INTERRUPTED
+  - field: observation.nearby.zombies[].chasing
+    assertion: true for the approaching zombie at the moment of interruption
+  - field: interruption timing
+    assertion: fires while the zombie is still at a distance, not on contact
+    why: >
+      A guard that fires on contact has not interrupted anything; it has
+      narrated a bite.
+
+variants:
+  - id: S13b
+    change: an idle zombie is closer than the chasing one
+    assertion: the chasing zombie drives the danger level
+
+fails_if:
+  - reading continues after the threat crosses the threshold
+  - the interruption reason is generic rather than THREAT_INTERRUPTED
+  - progress made before the interruption is lost

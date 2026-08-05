@@ -1,0 +1,57 @@
+id: S15
+title: Restart recovery replays nothing and re-arms nothing
+requires_live_session: true
+priority: blocking
+
+purpose: >
+  Coming back from a crash into an armed autonomous state is the surprise this
+  whole design refuses. Also proves at-least-once delivery over a file journal
+  does not become at-least-twice execution.
+
+preconditions:
+  - session armed
+  - at least one command already completed with a terminal result
+
+steps:
+  - id: 1
+    action: agent completes an observable action (a transfer is easiest to verify)
+    manual: false
+  - id: 2
+    action: kill the sidecar process abruptly (not a clean shutdown)
+    manual: true
+  - id: 3
+    action: restart the sidecar
+    manual: false
+  - id: 4
+    action: observe the session state and the command journal
+    manual: false
+
+evidence:
+  - field: observation.safety.mode
+    assertion: OBSERVE
+    why: recovery never re-arms, and this is not configurable
+  - field: command journal
+    assertion: the previously completed command is NOT re-sent
+  - field: game world
+    assertion: the transferred item was moved exactly once
+    why: >
+      The journal is append-only and a restarted reader re-reads from its stored
+      offset. If the offset or the idempotency cache is wrong, this is where it
+      shows up as a duplicated action rather than as an error.
+  - field: session nonce
+    assertion: differs from the pre-restart nonce
+
+variants:
+  - id: S15b
+    change: restart the GAME instead of the sidecar
+    assertion: >
+      new session generation; every previously issued ref is INVALID_REF;
+      in-flight commands closed as lost; re-arm required
+  - id: S15c
+    change: load a DIFFERENT save after the restart
+    assertion: save_id change invalidates world refs; autonomous mode does not resume
+
+fails_if:
+  - any command is executed a second time
+  - the agent comes back armed
+  - stale refs resolve to objects in the new session

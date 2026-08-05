@@ -1,0 +1,26 @@
+id: S08
+title: Cancel a long action cleanly
+requires_live_session: true
+priority: high
+
+purpose: Cancellation must be a clean terminal state, not an abandoned action.
+
+preconditions: [session armed, reading in progress with some pages read]
+
+steps:
+  - {id: 1, manual: false, action: agent is reading}
+  - {id: 2, manual: false, action: issue plan.cancel}
+  - {id: 3, manual: false, action: observe the queue and the book}
+
+evidence:
+  - {field: action_result.status, assertion: cancelled}
+  - {field: action_result.reason_code, assertion: CANCELLED_BY_REQUEST}
+  - field: book pages_read
+    assertion: preserved, not reset
+    why: losing reading progress on cancel makes cancel unusable in practice
+  - {field: observation.action.ownership, assertion: no mod-owned entry remains}
+
+variants:
+  - {id: S08b, change: resume reading afterwards, assertion: continues from the preserved page count}
+
+fails_if: [progress lost, the action lingers in the queue, cancel reported as failed]

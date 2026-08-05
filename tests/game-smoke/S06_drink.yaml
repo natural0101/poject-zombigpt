@@ -1,0 +1,28 @@
+id: S06
+title: Drink from a carried container
+requires_live_session: true
+priority: high
+
+preconditions: [session armed, water bottle carried, thirst noticeably above zero]
+
+steps:
+  - {id: 1, manual: false, action: request a drink}
+  - {id: 2, manual: false, action: observe selection and the terminal result}
+
+evidence:
+  - {field: selection.chosen_ref, assertion: a safe container, not a tainted one}
+  - field: action_result.evidence
+    assertion: thirst_after < thirst_before, OR volume_after < volume_before
+    why: >
+      Either is a real postcondition. Accepting neither is how "drank" becomes
+      "raised the bottle".
+  - {field: action_result.reason_code, assertion: POSTCONDITION_MET}
+
+variants:
+  - {id: S06b, change: only tainted water available, assertion: NO_SAFE_DRINK by default policy}
+  - id: S06c
+    change: single container at low volume, thirst NOT critical
+    assertion: refuses to drain it completely, and says why
+  - {id: S06d, change: thirst critical, assertion: the last-container rule is overridden}
+
+fails_if: [tainted water consumed by default, last container drained at non-critical thirst]
