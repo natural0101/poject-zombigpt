@@ -1,0 +1,491 @@
+"""The ``config.toml`` shape documented in ``docs/QUICKSTART.md``, and its validator.
+
+Read with :mod:`tomllib` from the standard library — the core package carries no
+third-party dependency and the CLI inherits that rule.
+
+**An unknown key is an error, not a warning.** A misspelt safety setting must
+fail loudly: ``manual_takover = false`` that validates as "unknown key ignored"
+leaves the user believing they turned something off, and leaves the agent
+running with it on — or the reverse, which is worse. The same applies to an
+unknown table, because a typo in a section header silently discards every
+setting inside it.
+
+Validation runs before start rather than on first use, so a value that only the
+planner reads is still rejected while the user is still looking at the terminal.
+"""
+
+from __future__ import annotations
+
+import tomllib
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Final
+
+from pz_agent_core.protocol import JsonDict, SessionMode
+from pz_agent_core.version import SUPPORTED_BUILDS
+
+#: A configuration file is a page of TOML. Anything larger is not one.
+MAX_CONFIG_BYTES: Final = 256 * 1024
+
+#: Blueprint §7: the autonomous radius is bounded by the product, not by taste.
+#: Configuration may lower it and may never raise it past this.
+MAX_AUTONOMOUS_RADIUS: Final = 100
+
+#: Blueprint §7.4: plans are short by design.
+MAX_PLAN_STEPS: Final = 32
+
+MAX_HOTKEY_LEN: Final = 16
+
+#: Providers this build can actually run. ``none`` is the fully local path;
+#: an external provider needs the planner, which is not in this build, so
+#: naming one here would validate a configuration that cannot start.
+SUPPORTED_PROVIDERS: Final = ("none",)
+
+SUPPORTED_CHANNELS: Final = ("stable", "unstable")
+
+SUPPORTED_VOICE_ADAPTERS: Final = ("teamon", "none")
+
+#: Problem codes. Stable, because they are what a script or a bug report cites.
+CODE_UNKNOWN_TABLE: Final = "UNKNOWN_TABLE"
+CODE_UNKNOWN_KEY: Final = "UNKNOWN_KEY"
+CODE_TYPE_MISMATCH: Final = "TYPE_MISMATCH"
+CODE_OUT_OF_RANGE: Final = "OUT_OF_RANGE"
+CODE_NOT_ALLOWED: Final = "NOT_ALLOWED"
+CODE_PARSE_ERROR: Final = "PARSE_ERROR"
+CODE_NOT_FOUND: Final = "NOT_FOUND"
+CODE_TOO_LARGE: Final = "TOO_LARGE"
+CODE_UNREADABLE: Final = "UNREADABLE"
+
+
+class ConfigError(ValueError):
+    """A configuration document could not be turned into an :class:`AgentConfig`."""
+
+
+@dataclass(frozen=True, slots=True)
+class ConfigProblem:
+    """One finding, addressed by its dotted path so it can be found by eye."""
+
+    path: str
+    code: str
+    detail: str
+    remediation: str
+
+    def __post_init__(self) -> None:
+        if not self.remediation:
+            raise ConfigError(f"{self.path}: a problem must say what to do about it")
+
+    def render(self) -> str:
+        return f"{self.path}: [{self.code}] {self.detail}\n    -> {self.remediation}"
+
+    def to_dict(self) -> JsonDict:
+        return {
+            "path": self.path,
+            "code": self.code,
+            "detail": self.detail,
+            "remediation": self.remediation,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class FieldSpec:
+    """One key: its type, its default and the values it will accept."""
+
+    kind: str
+    default: Any
+    choices: tuple[str, ...] = ()
+    minimum: int | None = None
+    maximum: int | None = None
+    nullable: bool = False
+
+
+_STR: Final = "string"
+_BOOL: Final = "boolean"
+_INT: Final = "integer"
+
+#: The whole documented surface. Anything not named here is a typo by
+#: definition, which is what makes the unknown-key rule enforceable.
+SCHEMA: Final[Mapping[str, Mapping[str, FieldSpec]]] = {
+    "game": {
+        "channel": FieldSpec(_STR, "stable", choices=SUPPORTED_CHANNELS),
+        "expected_build": FieldSpec(_STR, SUPPORTED_BUILDS[0]),
+        # Not in the QUICKSTART sample because a Steam install needs neither:
+        # TROUBLESHOOTING tells the owner of a GOG or manual copy to point at it
+        # explicitly, and this is the key that does it.
+        "install_dir": FieldSpec(_STR, None, nullable=True),
+        "user_dir": FieldSpec(_STR, None, nullable=True),
+    },
+    "session": {
+        "default_mode": FieldSpec(_STR, "observe", choices=("observe", "assisted", "autonomous")),
+        "require_backup": FieldSpec(_BOOL, True),
+    },
+    "safety": {
+        "panic_hotkey": FieldSpec(_STR, "F12"),
+        "manual_takeover": FieldSpec(_BOOL, True),
+        "max_autonomous_radius": FieldSpec(_INT, 30, minimum=1, maximum=MAX_AUTONOMOUS_RADIUS),
+        "allow_multiplayer": FieldSpec(_BOOL, False),
+    },
+    "planner": {
+        "provider": FieldSpec(_STR, "none", choices=SUPPORTED_PROVIDERS),
+        "max_steps": FieldSpec(_INT, 8, minimum=1, maximum=MAX_PLAN_STEPS),
+    },
+    "voice": {
+        "adapter": FieldSpec(_STR, "teamon", choices=SUPPORTED_VOICE_ADAPTERS),
+        "enabled": FieldSpec(_BOOL, False),
+    },
+}
+
+
+@dataclass(frozen=True, slots=True)
+class AgentConfig:
+    """A validated configuration. Constructed only from a document that passed."""
+
+    values: Mapping[str, Mapping[str, Any]]
+
+    def get(self, table: str, key: str) -> Any:
+        return self.values[table][key]
+
+    @property
+    def default_mode(self) -> SessionMode:
+        return SessionMode(str(self.get("session", "default_mode")).upper())
+
+    @property
+    def install_dir(self) -> Path | None:
+        raw = self.get("game", "install_dir")
+        return None if raw is None else Path(str(raw))
+
+    @property
+    def user_dir(self) -> Path | None:
+        raw = self.get("game", "user_dir")
+        return None if raw is None else Path(str(raw))
+
+    def to_dict(self) -> JsonDict:
+        return {table: dict(keys) for table, keys in self.values.items()}
+
+    def to_toml(self) -> str:
+        """Render the validated configuration back as TOML, for the support bundle."""
+        lines: list[str] = []
+        for table, keys in self.values.items():
+            lines.append(f"[{table}]")
+            for key, value in keys.items():
+                if value is None:
+                    continue
+                lines.append(f"{key} = {_toml_scalar(value)}")
+            lines.append("")
+        return "\n".join(lines)
+
+
+def _toml_scalar(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+@dataclass(frozen=True, slots=True)
+class ConfigValidation:
+    """The outcome. ``config`` is present only when there are no errors."""
+
+    path: Path
+    config: AgentConfig | None = None
+    errors: tuple[ConfigProblem, ...] = ()
+    warnings: tuple[ConfigProblem, ...] = field(default_factory=tuple)
+
+    @property
+    def ok(self) -> bool:
+        return not self.errors
+
+    def to_dict(self) -> JsonDict:
+        return {
+            "ok": self.ok,
+            "errors": [problem.to_dict() for problem in self.errors],
+            "warnings": [problem.to_dict() for problem in self.warnings],
+            "config": None if self.config is None else self.config.to_dict(),
+        }
+
+
+def default_config() -> AgentConfig:
+    """The documented defaults, as a validated configuration."""
+    return AgentConfig(
+        values={
+            table: {key: spec.default for key, spec in keys.items()}
+            for table, keys in SCHEMA.items()
+        }
+    )
+
+
+def _read(path: Path) -> tuple[str | None, ConfigProblem | None]:
+    """Read the file, bounded. Returns ``(text, problem)``; exactly one is set."""
+    try:
+        raw = path.read_bytes()
+    except FileNotFoundError:
+        return None, ConfigProblem(
+            path=str(path.name),
+            code=CODE_NOT_FOUND,
+            detail="no configuration file at this path",
+            remediation=(
+                "create it by copying the sample in docs/QUICKSTART.md, or pass "
+                "--config with the path to yours"
+            ),
+        )
+    except OSError as exc:
+        return None, ConfigProblem(
+            path=str(path.name),
+            code=CODE_UNREADABLE,
+            detail=f"cannot read the file ({exc.strerror or exc})",
+            remediation="check the file's permissions, then run validate-config again",
+        )
+    if len(raw) > MAX_CONFIG_BYTES:
+        return None, ConfigProblem(
+            path=str(path.name),
+            code=CODE_TOO_LARGE,
+            detail=f"{len(raw)} bytes exceeds the {MAX_CONFIG_BYTES} byte limit",
+            remediation="point --config at the agent's configuration rather than another file",
+        )
+    try:
+        return raw.decode("utf-8"), None
+    except UnicodeDecodeError as exc:
+        return None, ConfigProblem(
+            path=str(path.name),
+            code=CODE_PARSE_ERROR,
+            detail=f"not valid UTF-8 ({exc.reason})",
+            remediation="save the file as UTF-8; TOML has no other encoding",
+        )
+
+
+def validate_document(document: Mapping[str, Any], *, path: Path) -> ConfigValidation:
+    """Validate an already-parsed TOML document.
+
+    Every table and key is checked against :data:`SCHEMA`; anything absent takes
+    its documented default, and anything unrecognised is an error.
+    """
+    errors: list[ConfigProblem] = []
+    warnings: list[ConfigProblem] = []
+    values: dict[str, dict[str, Any]] = {
+        table: {key: spec.default for key, spec in keys.items()} for table, keys in SCHEMA.items()
+    }
+
+    for table, body in document.items():
+        specs = SCHEMA.get(table)
+        if specs is None:
+            errors.append(_unknown_table(table))
+            continue
+        if not isinstance(body, dict):
+            errors.append(
+                ConfigProblem(
+                    path=table,
+                    code=CODE_TYPE_MISMATCH,
+                    detail=f"expected a table, got {type(body).__name__}",
+                    remediation=f"write it as a section header: [{table}]",
+                )
+            )
+            continue
+        for key, raw in body.items():
+            spec = specs.get(key)
+            if spec is None:
+                errors.append(_unknown_key(table, key, specs))
+                continue
+            checked, problem = _check_value(f"{table}.{key}", raw, spec)
+            if problem is not None:
+                errors.append(problem)
+                continue
+            values[table][key] = checked
+
+    warnings.extend(_advisories(values))
+    config = None if errors else AgentConfig(values={t: dict(k) for t, k in values.items()})
+    return ConfigValidation(
+        path=path,
+        config=config,
+        errors=tuple(errors),
+        warnings=tuple(warnings),
+    )
+
+
+def load_config(path: Path) -> ConfigValidation:
+    """Read and validate the configuration at *path*.
+
+    A missing file is an error here rather than a silent fall back to defaults:
+    the user named a file, and reporting "valid" for one that does not exist is
+    the same class of lie as ignoring an unknown key.
+    """
+    text, problem = _read(path)
+    if text is None:
+        return (
+            ConfigValidation(path=path, errors=(problem,))
+            if problem
+            else ConfigValidation(path=path)
+        )
+    try:
+        document = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as exc:
+        return ConfigValidation(
+            path=path,
+            errors=(
+                ConfigProblem(
+                    path=path.name,
+                    code=CODE_PARSE_ERROR,
+                    detail=f"not valid TOML ({exc})",
+                    remediation="fix the syntax the message points at, then run this again",
+                ),
+            ),
+        )
+    return validate_document(document, path=path)
+
+
+def _unknown_table(table: str) -> ConfigProblem:
+    known = ", ".join(sorted(SCHEMA))
+    return ConfigProblem(
+        path=table,
+        code=CODE_UNKNOWN_TABLE,
+        detail=f"no such section; this build knows {known}",
+        remediation=(
+            f"remove [{table}] or correct its spelling — a mistyped section header "
+            "silently discards every setting inside it"
+        ),
+    )
+
+
+def _unknown_key(table: str, key: str, specs: Mapping[str, FieldSpec]) -> ConfigProblem:
+    suggestion = _closest(key, tuple(specs))
+    hint = f"; did you mean {suggestion!r}?" if suggestion else ""
+    return ConfigProblem(
+        path=f"{table}.{key}",
+        code=CODE_UNKNOWN_KEY,
+        detail=f"no such key in [{table}]{hint}",
+        remediation=(
+            f"remove it or correct the spelling; keys in [{table}] are {', '.join(sorted(specs))}"
+        ),
+    )
+
+
+def _closest(key: str, candidates: Sequence[str]) -> str | None:
+    """The candidate sharing the longest prefix with *key*, when it is close.
+
+    Deliberately not a general edit distance: the failure this serves is a
+    dropped or doubled letter in a long name, and a prefix rule names it without
+    pulling in a similarity metric that could suggest a different setting.
+    """
+    best: tuple[int, str] | None = None
+    for candidate in candidates:
+        shared = 0
+        for left, right in zip(key, candidate, strict=False):
+            if left != right:
+                break
+            shared += 1
+        if shared >= 4 and (best is None or shared > best[0]):
+            best = (shared, candidate)
+    return None if best is None else best[1]
+
+
+def _check_value(dotted: str, raw: Any, spec: FieldSpec) -> tuple[Any, ConfigProblem | None]:
+    """Type-, choice- and range-check one value."""
+    if raw is None and spec.nullable:
+        return None, None
+    if spec.kind == _BOOL:
+        if not isinstance(raw, bool):
+            return None, _type_problem(dotted, raw, "true or false")
+        return raw, None
+    if spec.kind == _INT:
+        if isinstance(raw, bool) or not isinstance(raw, int):
+            return None, _type_problem(dotted, raw, "a whole number")
+        if spec.minimum is not None and raw < spec.minimum:
+            return None, _range_problem(dotted, raw, spec)
+        if spec.maximum is not None and raw > spec.maximum:
+            return None, _range_problem(dotted, raw, spec)
+        return raw, None
+    if not isinstance(raw, str):
+        return None, _type_problem(dotted, raw, "a quoted string")
+    if spec.choices and raw.lower() not in spec.choices:
+        return None, ConfigProblem(
+            path=dotted,
+            code=CODE_NOT_ALLOWED,
+            detail=f"{raw!r} is not one of {', '.join(spec.choices)}",
+            remediation=f"set it to one of: {', '.join(spec.choices)}",
+        )
+    if dotted == "safety.panic_hotkey":
+        problem = _check_hotkey(dotted, raw)
+        if problem is not None:
+            return None, problem
+    return raw.lower() if spec.choices else raw, None
+
+
+def _check_hotkey(dotted: str, raw: str) -> ConfigProblem | None:
+    if raw and len(raw) <= MAX_HOTKEY_LEN and raw.isalnum():
+        return None
+    return ConfigProblem(
+        path=dotted,
+        code=CODE_NOT_ALLOWED,
+        detail=f"{raw!r} is not a single key name",
+        remediation="use a plain key name such as F12 — combinations are not supported",
+    )
+
+
+def _type_problem(dotted: str, raw: Any, expected: str) -> ConfigProblem:
+    return ConfigProblem(
+        path=dotted,
+        code=CODE_TYPE_MISMATCH,
+        detail=f"expected {expected}, got {type(raw).__name__}",
+        remediation=f"write {dotted.rsplit('.', maxsplit=1)[-1]} as {expected}",
+    )
+
+
+def _range_problem(dotted: str, raw: int, spec: FieldSpec) -> ConfigProblem:
+    low = "" if spec.minimum is None else str(spec.minimum)
+    high = "" if spec.maximum is None else str(spec.maximum)
+    return ConfigProblem(
+        path=dotted,
+        code=CODE_OUT_OF_RANGE,
+        detail=f"{raw} is outside {low}..{high}",
+        remediation=(
+            f"choose a value between {low} and {high}; the upper bound is a product "
+            "limit and cannot be raised by configuration"
+        ),
+    )
+
+
+def _advisories(values: Mapping[str, Mapping[str, Any]]) -> list[ConfigProblem]:
+    """Settings that validate but deserve a word. Never errors."""
+    problems: list[ConfigProblem] = []
+    if values["safety"]["allow_multiplayer"]:
+        problems.append(
+            ConfigProblem(
+                path="safety.allow_multiplayer",
+                code=CODE_NOT_ALLOWED,
+                detail="multiplayer is refused at the handshake regardless of this setting",
+                remediation="set it to false so the configuration matches what happens",
+            )
+        )
+    if not values["session"]["require_backup"]:
+        problems.append(
+            ConfigProblem(
+                path="session.require_backup",
+                code=CODE_NOT_ALLOWED,
+                detail="the first autonomous run on a save will proceed without a verified backup",
+                remediation="leave it true, or run pz-agent backup-save yourself before arming",
+            )
+        )
+    if values["voice"]["enabled"]:
+        problems.append(
+            ConfigProblem(
+                path="voice.enabled",
+                code=CODE_NOT_ALLOWED,
+                detail="no voice adapter ships in this build, so nothing will listen",
+                remediation="set it to false until a voice adapter is installed",
+            )
+        )
+    expected = str(values["game"]["expected_build"])
+    if expected not in SUPPORTED_BUILDS:
+        problems.append(
+            ConfigProblem(
+                path="game.expected_build",
+                code=CODE_NOT_ALLOWED,
+                detail=f"{expected} is outside the builds this release was designed against",
+                remediation=(
+                    f"set it to one of {', '.join(SUPPORTED_BUILDS)}, or expect every "
+                    "capability to be reported unverified"
+                ),
+            )
+        )
+    return problems

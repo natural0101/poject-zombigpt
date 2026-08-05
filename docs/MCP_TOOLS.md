@@ -85,6 +85,9 @@ there is no tool to choose *which* item. That decision belongs to
 `policy/food.py`, which is deterministic and testable. A model that picks the
 sandwich is a model that will eventually pick the rotten one.
 
+Also absent: `allow_windows`. The movement adapter refuses it with
+`POLICY_DENIED`, so publishing it would advertise something policy forbids.
+
 ### Plans
 
 | Tool | Risk | Description |
@@ -134,11 +137,38 @@ learn about on the next poll interval.
 
 ---
 
+## Result shape
+
+```json
+{
+  "ok": true,
+  "tool": "pz_action_eat",
+  "request_id": "7f1c…",
+  "status": "accepted",
+  "message": "consume.eat is accepted",
+  "data": {},
+  "warnings": [],
+  "replayed": false,
+  "action_id": "b2a9…"
+}
+```
+
+`status` is an `ActionStatus` value for the long-running tools and `"ok"` for
+the ones that answer immediately. `action_id` is present exactly when the call
+put work in flight. `replayed` is true when an idempotency key was reused and
+the answer is the original call's, not a second action.
+
+`status: "succeeded"` cannot be constructed without the observed postcondition
+under `data.evidence` — the same rule as `ActionResult.succeeded()`, enforced
+again where a client reads it.
+
 ## Error shape
 
 ```json
 {
   "ok": false,
+  "tool": "pz_action_eat",
+  "request_id": "7f1c…",
   "reason_code": "NOT_ARMED",
   "message": "session is in OBSERVE; call pz_session_arm first",
   "retryable": false,
@@ -150,6 +180,11 @@ learn about on the next poll interval.
 renaming one is a protocol major bump. `retryable` reflects
 `RETRYABLE_CODES`, so a client does not have to maintain its own table of which
 failures are worth another attempt.
+
+Every mutating tool takes `idempotency_key` (required) and `timeout_ms`
+(optional, the command lease). It takes no free-text field: `pz_plan_execute`'s
+`goal` is the only string a caller may write in their own words, and it comes
+back quarantined.
 
 ## What a caller cannot do
 
