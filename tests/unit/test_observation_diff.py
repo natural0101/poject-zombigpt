@@ -8,6 +8,8 @@ import pytest
 
 from pz_agent_core.observation.diff import (
     DiffError,
+    ListDelta,
+    MappingDelta,
     ObservationDiff,
     apply_diff,
     diff_observations,
@@ -251,6 +253,89 @@ def test_a_diff_naming_an_absent_entry_is_refused_rather_than_guessed() -> None:
 
     with pytest.raises(DiffError, match="absent from the baseline array"):
         apply_diff(stripped, diff)
+
+
+# --------------------------------------------------------------------------
+# a hand-built diff cannot talk the baseline into an incoherent shape
+# --------------------------------------------------------------------------
+
+
+def _forged(delta: MappingDelta, baseline: Observation) -> ObservationDiff:
+    return ObservationDiff(
+        session_id=baseline.session_id,
+        from_seq=baseline.seq,
+        to_seq=baseline.seq + 1,
+        timestamp_ms=baseline.timestamp_ms + 250,
+        delta=delta,
+    )
+
+
+def test_a_diff_that_recurses_into_a_scalar_is_refused() -> None:
+    baseline = make_observation()
+    diff = _forged(MappingDelta(nested={"seq": MappingDelta(assigned={"x": 1})}), baseline)
+
+    with pytest.raises(DiffError, match="not an object in the baseline"):
+        apply_diff(baseline, diff)
+
+
+def test_a_diff_that_treats_an_object_as_an_array_is_refused() -> None:
+    baseline = make_observation()
+    diff = _forged(MappingDelta(lists={"player": ListDelta()}), baseline)
+
+    with pytest.raises(DiffError, match="not an array in the baseline"):
+        apply_diff(baseline, diff)
+
+
+def test_a_diff_whose_order_names_an_entry_it_never_provides_is_refused() -> None:
+    baseline = make_observation(inventory=_inventory("1"))
+    ghost = item_ref("ghost", "player-main")
+    diff = _forged(
+        MappingDelta(
+            nested={"inventory": MappingDelta(lists={"items": ListDelta(order=(ghost,))})}
+        ),
+        baseline,
+    )
+
+    with pytest.raises(DiffError, match="never provides"):
+        apply_diff(baseline, diff)
+
+
+def test_a_diff_that_leaves_an_entry_unplaced_is_refused_rather_than_dropping_it() -> None:
+    # Silently dropping the item would hand every layer above a snapshot that
+    # looks complete and is not.
+    baseline = make_observation(inventory=_inventory("1", "2"))
+    diff = _forged(
+        MappingDelta(nested={"inventory": MappingDelta(lists={"items": ListDelta(order=())})}),
+        baseline,
+    )
+
+    with pytest.raises(DiffError, match="unplaced"):
+        apply_diff(baseline, diff)
+
+
+def test_a_diff_that_keys_an_unkeyed_array_is_refused() -> None:
+    ref = item_ref("1", "player-main")
+    baseline = make_observation(
+        inventory=InventoryView(items=[make_item(ref, MAIN, tags=["fresh"])])
+    )
+    diff = _forged(
+        MappingDelta(
+            nested={
+                "inventory": MappingDelta(
+                    lists={
+                        "items": ListDelta(
+                            order=(ref,),
+                            changed={ref: MappingDelta(lists={"tags": ListDelta()})},
+                        )
+                    }
+                )
+            }
+        ),
+        baseline,
+    )
+
+    with pytest.raises(DiffError, match="non-object entry"):
+        apply_diff(baseline, diff)
 
 
 def test_a_malformed_serialised_diff_is_rejected() -> None:

@@ -90,6 +90,17 @@ def save_report(
             os.fsync(handle.fileno())
         os.replace(temp, path)
     except OSError as exc:
+        # A half-written temp file left next to the report would be read by
+        # nothing, but it would look like a report to a user inspecting the
+        # directory. Remove it, and never let that removal mask the real error.
+        try:
+            temp.unlink(missing_ok=True)
+        except OSError as cleanup_failure:
+            raise ReportIOError(
+                f"{path}: cannot write report ({exc.strerror or exc}); "
+                f"the partial file {temp.name} could not be removed either "
+                f"({cleanup_failure.strerror or cleanup_failure})"
+            ) from exc
         raise ReportIOError(f"{path}: cannot write report ({exc.strerror or exc})") from exc
     return len(encoded)
 
@@ -148,8 +159,15 @@ def load_or_empty(path: Path, *, expected_build: str) -> LoadedReport:
     A missing file is the normal first-run state and must not be an error; a
     file that exists but is unreadable stays an error, because silently
     substituting an empty report would hide a corrupted ledger.
+
+    Only "the file is not there" counts as first run. Any other reason the path
+    cannot be inspected — a permission denied on the directory, a parent that is
+    not a directory — is reported, because those say nothing about whether a
+    ledger exists and an empty report would understate what is known.
     """
-    if not path.exists():
+    try:
+        path.stat()
+    except FileNotFoundError:
         empty = CapabilityReport(build=expected_build)
         return LoadedReport(
             report=empty,
@@ -157,4 +175,6 @@ def load_or_empty(path: Path, *, expected_build: str) -> LoadedReport:
             downgraded=False,
             notes=(f"no report at {path}; nothing has been probed yet",),
         )
+    except OSError as exc:
+        raise ReportIOError(f"{path}: cannot stat report ({exc.strerror or exc})") from exc
     return load_report(path, expected_build=expected_build)

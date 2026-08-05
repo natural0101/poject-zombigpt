@@ -136,6 +136,16 @@ def test_load_or_empty_treats_a_first_run_as_empty_but_not_as_capable(tmp_path: 
     assert loaded.notes
 
 
+def test_load_or_empty_reports_a_path_it_cannot_even_inspect(tmp_path: Path) -> None:
+    # "I could not look" is not "there is nothing there". Returning an empty
+    # report here would tell the caller the ledger is empty on the strength of an
+    # error it never saw.
+    blocked = tmp_path / "a-file-not-a-directory"
+    blocked.write_text("{}", encoding="utf-8")
+    with pytest.raises(ReportIOError, match="cannot stat"):
+        load_or_empty(blocked / "generated_api_report.json", expected_build="42.20")
+
+
 def test_load_or_empty_still_fails_on_a_corrupt_existing_file(tmp_path: Path) -> None:
     path = tmp_path / "report.json"
     path.write_text("{not json", encoding="utf-8")
@@ -189,6 +199,31 @@ def test_load_refuses_a_report_whose_verified_claim_cites_only_a_static_scan(
         load_report(path, expected_build="42.20")
 
 
+def test_load_refuses_a_report_that_smuggles_in_another_builds_claim(tmp_path: Path) -> None:
+    forged = {
+        "build": "42.20",
+        "capabilities": {
+            "eat_percentage": {
+                "state": "available_unverified",
+                "build": "42.19",
+                "evidence": [
+                    Evidence.from_scan(
+                        symbol="ISEatFoodAction.new",
+                        file="client/ISEatFoodAction.lua",
+                        file_sha256=SHA,
+                        signature="ISEatFoodAction:new(character, item, percentage)",
+                        observed_at=WHEN,
+                    ).to_dict()
+                ],
+            }
+        },
+    }
+    path = tmp_path / "report.json"
+    path.write_text(json.dumps(forged), encoding="utf-8")
+    with pytest.raises(ReportIOError, match=r"proven on build 42\.19"):
+        load_report(path, expected_build="42.20")
+
+
 def test_load_refuses_a_file_over_the_size_cap(tmp_path: Path) -> None:
     path = tmp_path / "report.json"
     path.write_bytes(b" " * (MAX_REPORT_BYTES + 1))
@@ -218,6 +253,48 @@ def test_save_refuses_an_oversized_document_and_writes_nothing(
     with pytest.raises(ReportIOError, match="exceeds"):
         save_report(path, padded)
     assert not path.exists()
+
+
+def test_a_failed_write_leaves_no_partial_file_behind(tmp_path: Path) -> None:
+    # A directory sitting where the report should go makes the final rename fail
+    # after the temporary file has already been written and fsynced.
+    path = tmp_path / "compat" / "generated_api_report.json"
+    (path / "occupied").mkdir(parents=True)
+
+    with pytest.raises(ReportIOError, match="cannot write report"):
+        save_report(path, CapabilityReport(build="42.20"))
+
+    # The half-written temporary must be gone: a stray file next to the report
+    # reads as a report to anyone inspecting the directory.
+    assert sorted(p.name for p in path.parent.iterdir()) == ["generated_api_report.json"]
+    assert path.is_dir()
+
+
+def test_loading_a_cross_build_report_whose_only_support_was_the_run_refuses_it(
+    tmp_path: Path,
+) -> None:
+    # 'available_unverified' backed by nothing but a probe run on another build
+    # has nothing left once that run is discarded. The load must refuse the
+    # capability, not fail — and above all not keep claiming availability.
+    runtime = Evidence.from_ack(
+        probe=EAT_PERCENTAGE,
+        symbol="ISEatFoodAction.new",
+        ack=probe_ack(ActionName.CONSUME_EAT, {"hunger_before": 0.6, "hunger_after": 0.1}),
+        observed_at=WHEN,
+    )
+    stale = CapabilityReport(
+        build="42.19",
+        capabilities=(
+            Capability.available_unverified(name=EAT_PERCENTAGE, build="42.19", evidence=[runtime]),
+        ),
+    )
+    path = tmp_path / "report.json"
+    save_report(path, stale)
+
+    loaded = load_report(path, expected_build="42.20")
+    assert loaded.downgraded
+    assert loaded.report.state(EAT_PERCENTAGE) is CapabilityState.UNSUPPORTED
+    assert not loaded.report.usable(EAT_PERCENTAGE)
 
 
 def test_a_full_report_stays_well_inside_the_size_cap(tmp_path: Path) -> None:

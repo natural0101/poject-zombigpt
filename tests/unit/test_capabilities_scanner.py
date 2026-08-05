@@ -12,6 +12,8 @@ import pytest
 
 from pz_agent_core.capabilities.scanner import (
     LUA_SUBPATH,
+    MAX_PROBLEMS,
+    MAX_TRUNCATION_REASONS,
     ScanError,
     ScanLimits,
     SymbolIndex,
@@ -116,6 +118,21 @@ def test_ignores_locals_line_comments_and_block_comments() -> None:
 def test_a_block_comment_that_opens_and_closes_on_one_line_does_not_swallow_the_file() -> None:
     found = extract("--[[ inline ]]\nfunction ISReal:new(x)\nend\n")
     assert found == {"ISReal:new": SymbolKind.METHOD}
+
+
+def test_a_line_comment_mentioning_block_syntax_does_not_swallow_the_file() -> None:
+    # ``--[[`` inside a line comment is prose, not an opener. Treating it as one
+    # would drop every declaration up to the next ``]]`` — silently, and the
+    # capability behind them would report as missing.
+    found = extract(
+        "-- see the note --[[ in the design doc\n"
+        "function ISReal:new(x)\nend\n"
+        "function ISAlsoReal.helper(y)\nend\n"
+    )
+    assert found == {
+        "ISReal:new": SymbolKind.METHOD,
+        "ISAlsoReal.helper": SymbolKind.FUNCTION,
+    }
 
 
 def test_symbol_extraction_is_bounded_by_max_symbols() -> None:
@@ -310,6 +327,58 @@ def test_a_dangling_symlink_is_reported_and_does_not_stop_the_scan(tmp_path: Pat
     (root / "Broken.lua").symlink_to(root / "does-not-exist.lua")
     result = scan_lua_tree(root)
     assert any("cannot stat" in problem for problem in result.problems)
+    assert result.index().has("ISEatFoodAction.new")
+
+
+def test_the_problem_list_is_bounded_and_says_that_it_was_cut(tmp_path: Path) -> None:
+    root = full_lua_tree(tmp_path)
+    for i in range(MAX_PROBLEMS * 2):
+        (root / f"Broken{i:03d}.lua").symlink_to(root / f"missing{i:03d}.lua")
+    result = scan_lua_tree(root)
+    assert len(result.problems) == MAX_PROBLEMS
+    assert result.problems[-1].startswith(f"more than {MAX_PROBLEMS - 1}")
+    # The scan still finished: a flood of broken entries must not cost the index.
+    assert result.index().has("ISEatFoodAction.new")
+
+
+def test_one_deep_subtree_does_not_add_one_truncation_reason_per_directory(
+    tmp_path: Path,
+) -> None:
+    root = write_lua_tree(tmp_path)
+    for i in range(MAX_TRUNCATION_REASONS * 2):
+        deep = root / f"branch{i:03d}" / "a" / "b"
+        deep.mkdir(parents=True)
+        (deep / "Deep.lua").write_text("function Deep:new(a)\nend\n", encoding="utf-8")
+    result = scan_lua_tree(root, ScanLimits(max_depth=2))
+    assert len(result.truncation_reasons) <= MAX_TRUNCATION_REASONS
+    assert result.truncation_reasons == ("stopped descending below depth 2",)
+    assert not result.index().has("Deep.new")
+
+
+def test_a_file_that_grows_past_the_cap_after_the_stat_is_refused_whole(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Hashing a partial read would record a sha256 that describes no file on
+    # disk, and a signature reconstructed from half a file.
+    root = write_lua_tree(tmp_path)
+    grown = root / "Grown.lua"
+    grown.write_text("function Grown:new(a)\nend\n" + "-- pad\n" * 200, encoding="utf-8")
+    real_stat = Path.stat
+
+    def understating_stat(self: Path, **kwargs: object) -> os.stat_result:
+        result = real_stat(self, **kwargs)  # type: ignore[arg-type]
+        if self.name == "Grown.lua":
+            fields = list(result)
+            fields[stat.ST_SIZE] = 8
+            return os.stat_result(fields)
+        return result
+
+    monkeypatch.setattr(Path, "stat", understating_stat)
+    result = scan_lua_tree(root, ScanLimits(max_file_bytes=600))
+    assert not result.index().has("Grown.new")
+    assert any("grew past the per-file cap" in problem for problem in result.problems)
+    assert result.truncated
+    # The rest of the tree was still indexed.
     assert result.index().has("ISEatFoodAction.new")
 
 

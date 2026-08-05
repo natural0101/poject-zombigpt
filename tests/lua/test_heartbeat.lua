@@ -63,6 +63,19 @@ do
   equal(document.sidecar_stale, false, "sidecar liveness")
 
   ok(PZ.Json.encode(document) ~= nil, "the heartbeat is encodable, which is the point of building it")
+
+  -- The document has exactly one consumer: pz_agent_core.session.heartbeat,
+  -- whose reader refuses anything missing one of these. A heartbeat it cannot
+  -- parse is a heartbeat that does not exist, and the sidecar concludes the game
+  -- is gone while it is in fact running.
+  equal(document.peer, "game", "the document names the peer that wrote it")
+  equal(document.version, "0.1.0", "and the version of that peer's software")
+  for _, field in ipairs({ "peer", "session_id", "nonce", "seq", "timestamp_ms", "version", "protocol_version" }) do
+    ok(document[field] ~= nil, "the sidecar's heartbeat reader requires " .. field)
+  end
+  ok(document.seq == math.floor(document.seq), "seq is an integer, which that reader also insists on")
+  ok(document.timestamp_ms == math.floor(document.timestamp_ms), "and so is the timestamp")
+  equal(document.session_open, true, "the document says whether a session is open")
 end
 
 Harness.group("the heartbeat never overstates what the mod knows")
@@ -76,6 +89,9 @@ do
   equal(unverified.sidecar_stale, true, "and as no sidecar, which is the safe reading of 'unknown'")
   equal(unverified.action.ownership, Protocol.OWNERSHIP.NONE, "with no action reported")
   isNil(unverified.session_id, "and no session id invented")
+  isNil(unverified.nonce, "nor a nonce")
+  equal(unverified.session_open, false, "the absence of a session is stated rather than left to inference")
+  equal(unverified.peer, "game", "while the peer is known regardless of any session")
 
   local wrongBuild = Heartbeat.build({ safety = {}, now_ms = NOW, build = "41.78", build_verified = true })
   equal(wrongBuild.build_supported, false, "a build outside the supported set is reported, not accepted quietly")
@@ -136,6 +152,13 @@ do
   isNil(panel, "so no panel is created")
   contains(reason, "ISPanel", "and the reason names what is missing")
   ok(not Hud.destroy(nil), "destroying a panel that was never created is a no-op")
+  contains(select(2, Hud.destroy(nil)), "no HUD panel", "which says so rather than reading as a removal")
+  local stubborn = { removeFromUIManager = function()
+    error("mock UI failure", 0)
+  end }
+  local removed, removeError = Hud.destroy(stubborn)
+  ok(not removed, "a panel that refuses to be removed is not reported as removed")
+  contains(removeError, "failed", "and the failure carries its reason")
 
   ISPanel = { derive = function() return {} end }
   isNil(Hud.create("not a function"), "a HUD without a state provider is refused")

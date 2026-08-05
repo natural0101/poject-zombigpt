@@ -40,10 +40,16 @@ MAX_CAPABILITIES: Final = 64
 #: long-lived report cannot grow without bound.
 MAX_EVIDENCE_PER_CAPABILITY: Final = 8
 
+#: Notes are diagnostics attached by :meth:`CapabilityReport.for_build` and by
+#: whatever loaded the report. They are read back from a file this process did
+#: not necessarily write, so both their count and their length are capped.
+MAX_NOTES: Final = 32
+
 MAX_NAME_LEN: Final = 64
 MAX_SYMBOL_LEN: Final = 200
 MAX_REASON_LEN: Final = 200
 MAX_DETAIL_LEN: Final = 300
+MAX_NOTE_LEN: Final = 300
 MAX_PATH_LEN: Final = 400
 
 _NAME_RE: Final = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -419,12 +425,30 @@ class Capability:
         """
         static_only = tuple(e for e in self.evidence if e.kind is EvidenceKind.STATIC_SCAN)
         if self.state is not CapabilityState.VERIFIED:
+            if not self.has_runtime_evidence:
+                return Capability(
+                    name=self.name,
+                    state=self.state,
+                    reason=self.reason,
+                    build=build,
+                    evidence=self.evidence,
+                )
+            if static_only or self.state not in _EVIDENCE_REQUIRED_STATES:
+                return Capability(
+                    name=self.name,
+                    state=self.state,
+                    reason=self.reason,
+                    build=build,
+                    evidence=static_only,
+                )
+            # An ``available_unverified`` claim resting only on the discarded run
+            # has nothing left to stand on. Keeping the state would be a claim
+            # without evidence; raising here would abort the whole load.
             return Capability(
                 name=self.name,
-                state=self.state,
-                reason=self.reason,
+                state=CapabilityState.UNSUPPORTED,
+                reason=reason,
                 build=build,
-                evidence=static_only if self.has_runtime_evidence else self.evidence,
             )
         if static_only:
             return Capability(
@@ -484,6 +508,11 @@ _REASON_REQUIRED_STATES: Final = frozenset(
     }
 )
 
+#: States whose constructor refuses an empty evidence tuple.
+_EVIDENCE_REQUIRED_STATES: Final = frozenset(
+    {CapabilityState.VERIFIED, CapabilityState.AVAILABLE_UNVERIFIED}
+)
+
 
 def _by_name(capability: Capability) -> str:
     return capability.name
@@ -522,8 +551,22 @@ class CapabilityReport:
         names = [c.name for c in self.capabilities]
         if len(set(names)) != len(names):
             raise CapabilityError("a report may not list the same capability twice")
+        for capability in self.capabilities:
+            if capability.build and capability.build != self.build:
+                # A claim proven on another build inside a report that says it
+                # describes this one would pass `usable()` on the strength of
+                # evidence about a different game. `for_build` is the only way to
+                # carry claims across a build change, and it downgrades them.
+                raise CapabilityError(
+                    f"{capability.name}: proven on build {capability.build}, "
+                    f"but this report describes {self.build}; rebase it with for_build()"
+                )
         if self.generated_at:
             _check_timestamp(self.generated_at)
+        if len(self.notes) > MAX_NOTES:
+            raise CapabilityError(f"a report may hold at most {MAX_NOTES} notes")
+        for note in self.notes:
+            _check_text(note, field_name="note", max_len=MAX_NOTE_LEN, required=False)
         if names != sorted(names):
             # Storing them sorted keeps equality — and therefore the "did the set
             # change?" test behind the revision counter — independent of the
@@ -590,14 +633,14 @@ class CapabilityReport:
         if build == self.build:
             return self
         downgraded = tuple(c.downgraded(build=build, reason=reason) for c in self.capabilities)
-        note = f"downgraded from build {self.build} to {build}: {reason}"
+        note = f"downgraded from build {self.build} to {build}: {reason}"[:MAX_NOTE_LEN]
         return CapabilityReport(
             build=build,
             capabilities=downgraded,
             revision=self.revision + 1,
             protocol_version=self.protocol_version,
             generated_at=self.generated_at,
-            notes=(*self.notes, note)[-MAX_CAPABILITIES:],
+            notes=(*self.notes, note)[-MAX_NOTES:],
         )
 
     # --- serialisation -----------------------------------------------------

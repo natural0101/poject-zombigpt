@@ -12,6 +12,7 @@ from pz_agent_core.capabilities.model import (
     REASON_SYMBOL_MISSING,
     Capability,
     CapabilityError,
+    Evidence,
     EvidenceKind,
 )
 from pz_agent_core.capabilities.probes import (
@@ -269,6 +270,102 @@ def test_confirmation_refuses_a_capability_from_a_different_probe(tmp_path: Path
             build=BUILD,
             observed_at=WHEN,
         )
+
+
+def test_a_failed_reprobe_takes_a_previously_verified_capability_back_down(
+    tmp_path: Path,
+) -> None:
+    # §3.8: the report holds probe results, not promises. Leaving 'verified' in
+    # place after a run that did not confirm would publish a ready write tool on
+    # the strength of a probe that just failed.
+    probe = probe_for(EAT_PERCENTAGE)
+    static = resolve_static(probe, full_index(tmp_path), build=BUILD, observed_at=WHEN)
+    verified = confirm(
+        probe,
+        static,
+        probe_ack(ActionName.CONSUME_EAT, EAT_EVIDENCE),
+        build=BUILD,
+        observed_at=WHEN,
+    )
+    assert verified.state is CapabilityState.VERIFIED
+
+    failed = probe_ack(ActionName.CONSUME_EAT, EAT_EVIDENCE, status=ActionStatus.FAILED)
+    reprobed = confirm(probe, verified, failed, build=BUILD, observed_at=WHEN)
+    assert reprobed.state is CapabilityState.AVAILABLE_UNVERIFIED
+    assert reprobed.reason.startswith(REASON_PROBE_NOT_CONFIRMED)
+    # The earlier observation is not erased — it happened — it just no longer
+    # carries the claim on its own.
+    assert reprobed.has_runtime_evidence
+
+
+def test_a_capability_turned_off_by_policy_is_not_reopened_by_a_succeeded_ack(
+    tmp_path: Path,
+) -> None:
+    # The API question was never why it is off, so a live confirmation is not a
+    # permission. Anything else would let a probe run overrule the user.
+    probe = probe_for(EAT_PERCENTAGE)
+    disabled = Capability.disabled_by_policy(name=EAT_PERCENTAGE, build=BUILD)
+    confirmed = confirm(
+        probe,
+        disabled,
+        probe_ack(ActionName.CONSUME_EAT, EAT_EVIDENCE),
+        build=BUILD,
+        observed_at=WHEN,
+    )
+    assert confirmed.state is CapabilityState.DISABLED_BY_POLICY
+    assert not confirmed.usable
+    assert not confirmed.has_runtime_evidence
+    assert full_index(tmp_path).has("ISEatFoodAction.new")  # the symbols are there
+
+
+def test_confirmation_is_refused_when_the_static_finding_covers_the_wrong_symbols() -> None:
+    # A capability the caller built by hand, claiming availability while citing a
+    # scan of something else, must not be upgradeable: the chain from "this API
+    # exists on this machine" to "it worked" would have a hole in it.
+    probe = probe_for(EAT_PERCENTAGE)
+    unrelated = Evidence.from_scan(
+        symbol="ISReadABook.new",
+        file="client/TimedActions/ISReadABook.lua",
+        file_sha256="c" * 64,
+        signature="ISReadABook:new(character, item, time)",
+        observed_at=WHEN,
+    )
+    fabricated = Capability.available_unverified(
+        name=EAT_PERCENTAGE, build=BUILD, evidence=[unrelated]
+    )
+    confirmed = confirm(
+        probe,
+        fabricated,
+        probe_ack(ActionName.CONSUME_EAT, EAT_EVIDENCE),
+        build=BUILD,
+        observed_at=WHEN,
+    )
+    assert confirmed.state is CapabilityState.AVAILABLE_UNVERIFIED
+    assert confirmed.reason.startswith(REASON_PROBE_NOT_CONFIRMED)
+    assert "ISEatFoodAction" in confirmed.reason
+    assert not confirmed.has_runtime_evidence
+
+
+def test_the_experimental_water_source_can_still_be_confirmed_by_a_live_ack(
+    tmp_path: Path,
+) -> None:
+    # 'experimental' is a refusal to publish before proof, not a permanent one:
+    # a live ack for the declared action is exactly the proof §12.4 asks for.
+    probe = probe_for(DRINK_WORLD_SOURCE)
+    static = resolve_static(probe, full_index(tmp_path), build=BUILD, observed_at=WHEN)
+    assert static.state is CapabilityState.EXPERIMENTAL
+    confirmed = confirm(
+        probe,
+        static,
+        probe_ack(
+            ActionName.CONSUME_DRINK,
+            {"thirst_before": 0.7, "thirst_after": 0.1, "source_ref": "sink:1"},
+        ),
+        build=BUILD,
+        observed_at=WHEN,
+    )
+    assert confirmed.state is CapabilityState.VERIFIED
+    assert confirmed.has_runtime_evidence
 
 
 def test_a_hand_written_capability_cannot_smuggle_itself_past_confirmation() -> None:

@@ -15,9 +15,12 @@ tables whose shape a small regular expression reads reliably.
 
 from __future__ import annotations
 
+import json
 import re
+import shutil
+import subprocess
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
 
 import pytest
 
@@ -32,6 +35,7 @@ from pz_agent_core.protocol.enums import (
     SessionMode,
 )
 from pz_agent_core.protocol.reason_codes import ReasonCode
+from pz_agent_core.session.heartbeat import Heartbeat, Peer
 from pz_agent_core.version import (
     MOD_VERSION,
     PROTOCOL_VERSION,
@@ -185,6 +189,93 @@ def test_ipc_never_offers_the_sidecar_lock(ipc_lua: str) -> None:
 def test_journal_record_types_match(ipc_lua: str) -> None:
     assert _scalar(ipc_lua, "Ipc.HEADER_TYPE") == HEADER_TYPE
     assert _scalar(ipc_lua, "Ipc.ROTATED_TYPE") == ROTATED_TYPE
+
+
+#: Modules in the order the game loads them: shared before client.
+_HEARTBEAT_MODULES: Final = (
+    "shared/PZAgent/Json.lua",
+    "shared/PZAgent/Protocol.lua",
+    "shared/PZAgent/Ownership.lua",
+    "client/PZAgent/Heartbeat.lua",
+)
+
+_HEARTBEAT_SCRIPT: Final = """
+local session = {{
+  session_id = "3f2b9c1e-0a4d-4c7b-9e21-8b6d5f0a1c33",
+  nonce = "sidecar-nonce",
+  game_nonce = "g1a-2-3",
+  generation = 4,
+}}
+local document = PZAgent.Heartbeat.build({{
+  session = session,
+  safety = {{
+    armed = true,
+    mode = "AUTONOMOUS",
+    danger_level = "medium",
+    manual_takeover = false,
+    sidecar_stale = false,
+  }},
+  action = PZAgent.Ownership.describe({{}}, session.session_id),
+  seq = 17,
+  now_ms = 1700000000000,
+  player_present = true,
+  player_alive = true,
+  build = "{build}",
+  build_verified = true,
+}})
+local text, err = PZAgent.Json.encode(document)
+if text == nil then
+  error(err, 0)
+end
+io.write(text)
+"""
+
+
+def _lua_interpreter() -> str | None:
+    for candidate in ("lua5.4", "lua"):
+        found = shutil.which(candidate)
+        if found is not None:
+            return found
+    return None
+
+
+@pytest.mark.skipif(_lua_interpreter() is None, reason="no Lua interpreter available")
+def test_the_heartbeat_the_mod_writes_is_one_the_sidecar_can_read() -> None:
+    """The mod's only consumer parses this file; a field it needs is an outage.
+
+    ``HeartbeatMonitor`` is what ``SessionManager.staleness`` and ``resume``
+    consult, and it refuses a document ``Heartbeat.from_dict`` cannot build. A
+    missing ``peer`` or ``version`` therefore does not degrade one field — it
+    makes a running game indistinguishable from a crashed one. Asserting the
+    field names textually would not catch that, so the document is really built
+    by the mod's own code and really parsed by the sidecar's.
+    """
+    interpreter = _lua_interpreter()
+    assert interpreter is not None
+    loads = "".join(f'dofile("{MOD_LUA_ROOT / module}")\n' for module in _HEARTBEAT_MODULES)
+    completed = subprocess.run(
+        [interpreter, "-e", loads + _HEARTBEAT_SCRIPT.format(build=TARGET_BUILD)],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    assert completed.returncode == 0, completed.stderr
+    payload: Any = json.loads(completed.stdout)
+
+    heartbeat = Heartbeat.from_dict(payload)
+    assert heartbeat.peer is Peer.GAME
+    assert heartbeat.protocol_version == PROTOCOL_VERSION
+    assert heartbeat.version == MOD_VERSION
+    assert heartbeat.build == TARGET_BUILD
+    assert heartbeat.seq == 17
+    assert heartbeat.armed is True
+    assert heartbeat.player_present is True
+    assert heartbeat.mode is SessionMode.AUTONOMOUS
+    assert heartbeat.danger_level is DangerLevel.MEDIUM
+    # The mod answers with its *own* nonce (§3.3), not the sidecar's.
+    assert heartbeat.nonce == "g1a-2-3"
+    assert payload["sidecar_nonce"] == "sidecar-nonce"
 
 
 def test_every_mod_source_is_free_of_dynamic_loading() -> None:

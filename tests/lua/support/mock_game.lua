@@ -29,6 +29,7 @@ function Mock.newFilesystem()
     writes = 0,
     failWrites = {},
     failReads = {},
+    readGrace = {},
   }, Filesystem)
   self.api = {
     openWriter = function(name, append)
@@ -46,8 +47,12 @@ function Filesystem:failWritesTo(name)
   self.failWrites[name] = true
 end
 
-function Filesystem:failReadsFrom(name)
+--- Make reads of `name` raise. `afterOpens` lets the first N opens succeed,
+--- which is how a test reaches code that reads one file twice and must cope
+--- with the second read failing.
+function Filesystem:failReadsFrom(name, afterOpens)
   self.failReads[name] = true
+  self.readGrace[name] = afterOpens or 0
 end
 
 function Filesystem:openWriter(name, append)
@@ -72,7 +77,12 @@ end
 
 function Filesystem:openReader(name)
   if self.failReads[name] then
-    error("mock read failure for " .. name, 0)
+    local grace = self.readGrace[name] or 0
+    if grace > 0 then
+      self.readGrace[name] = grace - 1
+    else
+      error("mock read failure for " .. name, 0)
+    end
   end
   local content = self.files[name]
   if content == nil then

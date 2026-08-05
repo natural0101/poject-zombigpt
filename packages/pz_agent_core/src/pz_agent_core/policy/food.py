@@ -45,6 +45,7 @@ from .selection import (
     read_float,
     read_int,
     read_str,
+    truncation_note,
 )
 
 __all__ = [
@@ -204,14 +205,28 @@ class FoodSelection:
     reason_code: ReasonCode | None
     rejections: tuple[Rejection, ...]
     ranked: tuple[ScoredCandidate, ...]
+    #: How many candidates were refused in total. ``rejections`` is a bounded
+    #: sample of them, so this is the number that must not be rounded down: a
+    #: refusal that listed 64 of 300 reasons and said nothing about the other
+    #: 236 would read as a complete answer while being a truncated one.
+    rejected_count: int = 0
 
     def __post_init__(self) -> None:
         if (self.choice is None) == (self.reason_code is None):
             raise ValueError("a selection is either a choice or a refusal, never both or neither")
+        if self.rejected_count < len(self.rejections):
+            raise ValueError(
+                f"rejected_count {self.rejected_count} is below the "
+                f"{len(self.rejections)} rejections carried"
+            )
 
     @property
     def is_refusal(self) -> bool:
         return self.choice is None
+
+    @property
+    def rejections_truncated(self) -> bool:
+        return self.rejected_count > len(self.rejections)
 
     @classmethod
     def chosen(
@@ -220,16 +235,24 @@ class FoodSelection:
         *,
         rejections: tuple[Rejection, ...],
         ranked: tuple[ScoredCandidate, ...],
+        rejected_count: int,
     ) -> FoodSelection:
-        return cls(choice=choice, reason_code=None, rejections=rejections, ranked=ranked)
+        return cls(
+            choice=choice,
+            reason_code=None,
+            rejections=rejections,
+            ranked=ranked,
+            rejected_count=rejected_count,
+        )
 
     @classmethod
-    def refused(cls, rejections: tuple[Rejection, ...]) -> FoodSelection:
+    def refused(cls, rejections: tuple[Rejection, ...], rejected_count: int) -> FoodSelection:
         return cls(
             choice=None,
             reason_code=ReasonCode.NO_SAFE_FOOD,
             rejections=rejections,
             ranked=(),
+            rejected_count=rejected_count,
         )
 
     def explain(self) -> str:
@@ -239,13 +262,15 @@ class FoodSelection:
         if not self.rejections:
             return "there is no food in reach"
         reasons = "; ".join(r.describe() for r in self.rejections)
-        return f"nothing safe to eat: {reasons}"
+        note = truncation_note(len(self.rejections), self.rejected_count)
+        return f"nothing safe to eat: {reasons}{note}"
 
     def as_dict(self) -> JsonDict:
         return {
             "choice": None if self.choice is None else self.choice.as_dict(),
             "reason_code": None if self.reason_code is None else self.reason_code.value,
             "rejections": [r.as_dict() for r in self.rejections],
+            "rejected_count": self.rejected_count,
             "ranked": [
                 {"item_ref": c.item_ref, "score": c.score, "factors": c.breakdown.as_dict()}
                 for c in self.ranked
@@ -289,8 +314,9 @@ def select_food(
 
     Returns:
         A :class:`FoodSelection` carrying either a choice or
-        :attr:`ReasonCode.NO_SAFE_FOOD` together with one rejection per
-        candidate examined.
+        :attr:`ReasonCode.NO_SAFE_FOOD`, together with one rejection per
+        candidate examined — trimmed to ``config.max_reported_rejections``,
+        with the untrimmed total in ``rejected_count``.
     """
     context = _Context(
         config=config,
@@ -299,9 +325,9 @@ def select_food(
         deficit=config.hunger_deficit(player.hunger),
         hunger_critical=config.is_hunger_critical(player.hunger),
         type_counts=count_by_full_type(inventory.items),
-        available_tools=_available_tools(inventory),
+        available_tools=_available_tools(inventory, config),
         inventory=inventory,
-        portioning_available=capabilities.is_usable(CAPABILITY_EAT_PERCENTAGE),
+        portioning_available=capabilities.usable(CAPABILITY_EAT_PERCENTAGE),
     )
 
     rejections: list[Rejection] = []
@@ -321,7 +347,7 @@ def select_food(
 
     reported = bounded_rejections(rejections, config)
     if not candidates:
-        return FoodSelection.refused(reported)
+        return FoodSelection.refused(reported, len(rejections))
 
     ranked = rank_candidates(scored for _, _, scored in candidates)
     best_ref = ranked[0].item_ref
@@ -345,7 +371,12 @@ def select_food(
         ),
         breakdown=scored.breakdown,
     )
-    return FoodSelection.chosen(choice, rejections=reported, ranked=ranked)
+    return FoodSelection.chosen(
+        choice,
+        rejections=reported,
+        ranked=ranked,
+        rejected_count=len(rejections),
+    )
 
 
 # --------------------------------------------------------------------------
@@ -479,6 +510,22 @@ def _filter_reach(item: ItemView, _view: FoodView, context: _Context) -> Rejecti
     return reach_rejection(context.inventory, item, context.config)
 
 
+def _filter_portions_left(item: ItemView, view: FoodView, _context: _Context) -> Rejection | None:
+    """Refuse an item the mod says is already finished.
+
+    Without this an empty tin is not merely selectable, it is *preferred*: the
+    portions factor rewards an already-opened item, and zero portions left is
+    the extreme of already-opened.
+    """
+    if view.remaining_portions > 0:
+        return None
+    return _reject(
+        item,
+        RejectionReason.NO_PORTIONS_LEFT,
+        f"none of its {view.total_portions} portions are left",
+    )
+
+
 def _filter_no_relief(item: ItemView, view: FoodView, _context: _Context) -> Rejection | None:
     if view.hunger_relief > 0.0:
         return None
@@ -503,6 +550,7 @@ _FILTERS: Final[tuple[_Filter, ...]] = (
     _filter_user_reserved,
     _filter_strategic_reserve,
     _filter_reach,
+    _filter_portions_left,
     _filter_no_relief,
 )
 
@@ -656,16 +704,21 @@ def _rationale(
     return "; ".join(parts)
 
 
-def _available_tools(inventory: InventoryView) -> frozenset[str]:
+def _available_tools(inventory: InventoryView, config: PolicyConfig) -> frozenset[str]:
     """Tool names the inventory can supply, lower-cased.
 
     A tool is matched by tag or by the short form of its type, so the mod can
-    say ``required_tool: "canopener"`` and be satisfied by
-    ``Base.TinOpener`` tagged ``canopener`` without the policy hard-coding a
-    table of item types.
+    say ``required_tool: "canopener"`` and be satisfied by ``Base.TinOpener``
+    tagged ``canopener`` without the policy hard-coding a table of item types.
+
+    Only tools the policy could actually reach count. A can opener on a shelf
+    the policy refuses to walk to is not an opener the plan may rely on, and
+    counting it would clear the tool filter on a promise selection cannot keep.
     """
     names: set[str] = set()
     for item in inventory.items:
+        if reach_rejection(inventory, item, config) is not None:
+            continue
         names.update(tag.lower() for tag in item.tags)
         names.add(item.full_type.rsplit(".", 1)[-1].lower())
     return frozenset(names)

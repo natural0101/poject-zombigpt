@@ -61,6 +61,7 @@ from .selection import (
     read_bool,
     read_float,
     read_str,
+    truncation_note,
 )
 
 __all__ = [
@@ -74,6 +75,9 @@ __all__ = [
 #: actively prefers; the rest are ranked but never promoted.
 FLUID_WATER: Final = "water"
 FLUID_ALCOHOL: Final = "alcohol"
+
+#: Freshness label the mod uses for spoiled contents; see :mod:`.food`.
+FRESHNESS_ROTTEN: Final = "rotten"
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,6 +102,13 @@ class DrinkView:
     remaining_units: float
     capacity_units: float
     unhappy_change: float
+    #: Spoilage and temperature only ever arrive on a ``food`` sub-object — a
+    #: soup or a carton of milk. They are read here rather than left to the
+    #: food policy because a drinkable food item is selected by *this* module,
+    #: and rotten milk is a poisoning risk whichever policy picked it.
+    rotten: bool
+    rot_progress: float
+    frozen: bool
 
     @classmethod
     def from_item(cls, item: ItemView) -> DrinkView | None:
@@ -129,6 +140,9 @@ class DrinkView:
             remaining_units=max(0.0, read_float(payload, "remaining_units", capacity)),
             capacity_units=capacity,
             unhappy_change=read_float(payload, "unhappy_change"),
+            rotten=read_str(payload, "freshness").lower() == FRESHNESS_ROTTEN,
+            rot_progress=min(1.0, max(0.0, read_float(payload, "rot_progress"))),
+            frozen=read_bool(payload, "frozen"),
         )
 
     @property
@@ -188,14 +202,25 @@ class DrinkSelection:
     rejections: tuple[Rejection, ...]
     ranked: tuple[ScoredCandidate, ...]
     world_source_state: CapabilityState
+    #: Total candidates refused; ``rejections`` is a bounded sample of them.
+    rejected_count: int = 0
 
     def __post_init__(self) -> None:
         if (self.choice is None) == (self.reason_code is None):
             raise ValueError("a selection is either a choice or a refusal, never both or neither")
+        if self.rejected_count < len(self.rejections):
+            raise ValueError(
+                f"rejected_count {self.rejected_count} is below the "
+                f"{len(self.rejections)} rejections carried"
+            )
 
     @property
     def is_refusal(self) -> bool:
         return self.choice is None
+
+    @property
+    def rejections_truncated(self) -> bool:
+        return self.rejected_count > len(self.rejections)
 
     @property
     def world_source_usable(self) -> bool:
@@ -210,6 +235,7 @@ class DrinkSelection:
         rejections: tuple[Rejection, ...],
         ranked: tuple[ScoredCandidate, ...],
         world_source_state: CapabilityState,
+        rejected_count: int,
     ) -> DrinkSelection:
         return cls(
             choice=choice,
@@ -217,6 +243,7 @@ class DrinkSelection:
             rejections=rejections,
             ranked=ranked,
             world_source_state=world_source_state,
+            rejected_count=rejected_count,
         )
 
     @classmethod
@@ -225,6 +252,7 @@ class DrinkSelection:
         rejections: tuple[Rejection, ...],
         *,
         world_source_state: CapabilityState,
+        rejected_count: int,
     ) -> DrinkSelection:
         return cls(
             choice=None,
@@ -232,6 +260,7 @@ class DrinkSelection:
             rejections=rejections,
             ranked=(),
             world_source_state=world_source_state,
+            rejected_count=rejected_count,
         )
 
     def explain(self) -> str:
@@ -239,7 +268,11 @@ class DrinkSelection:
             return self.choice.rationale
         head = "nothing safe to drink"
         if self.rejections:
-            head = f"{head}: " + "; ".join(r.describe() for r in self.rejections)
+            head = (
+                f"{head}: "
+                + "; ".join(r.describe() for r in self.rejections)
+                + truncation_note(len(self.rejections), self.rejected_count)
+            )
         if self.world_source_usable:
             return f"{head}; a world water source may still be an option"
         return (
@@ -252,6 +285,7 @@ class DrinkSelection:
             "choice": None if self.choice is None else self.choice.as_dict(),
             "reason_code": None if self.reason_code is None else self.reason_code.value,
             "rejections": [r.as_dict() for r in self.rejections],
+            "rejected_count": self.rejected_count,
             "ranked": [
                 {"item_ref": c.item_ref, "score": c.score, "factors": c.breakdown.as_dict()}
                 for c in self.ranked
@@ -291,7 +325,7 @@ def select_drink(
         thirst_critical=config.is_thirst_critical(player.thirst),
         type_counts=count_by_full_type(inventory.items),
         inventory=inventory,
-        portioning_available=capabilities.is_usable(CAPABILITY_DRINK_PERCENTAGE),
+        portioning_available=capabilities.usable(CAPABILITY_DRINK_PERCENTAGE),
     )
     world_state = capabilities.state(CAPABILITY_DRINK_WORLD_SOURCE)
 
@@ -319,7 +353,11 @@ def select_drink(
 
     reported = bounded_rejections(rejections, config)
     if not candidates:
-        return DrinkSelection.refused(reported, world_source_state=world_state)
+        return DrinkSelection.refused(
+            reported,
+            world_source_state=world_state,
+            rejected_count=len(rejections),
+        )
 
     ranked = rank_candidates(scored for _, _, scored in candidates)
     best_ref = ranked[0].item_ref
@@ -348,6 +386,7 @@ def select_drink(
         rejections=reported,
         ranked=ranked,
         world_source_state=world_state,
+        rejected_count=len(rejections),
     )
 
 
@@ -396,6 +435,33 @@ def _filter_tainted(item: ItemView, view: DrinkView, context: _Context) -> Rejec
         item,
         RejectionReason.TAINTED,
         "it is tainted water, which is never drunk without explicit permission",
+    )
+
+
+def _filter_rotten(item: ItemView, view: DrinkView, context: _Context) -> Rejection | None:
+    """Spoiled contents are refused on the same terms as spoiled food."""
+    if context.config.allow_rotten:
+        return None
+    if view.rotten:
+        return _reject(item, RejectionReason.ROTTEN, "its contents have gone off")
+    if view.rot_progress > context.config.max_rot_progress:
+        return _reject(
+            item,
+            RejectionReason.ROTTEN,
+            f"it is {view.rot_progress:.0%} spoiled, past the "
+            f"{context.config.max_rot_progress:.0%} the policy tolerates",
+        )
+    return None
+
+
+def _filter_frozen(item: ItemView, view: DrinkView, context: _Context) -> Rejection | None:
+    """A frozen container cannot be drunk, and this policy cannot thaw one."""
+    if context.config.allow_frozen or not view.frozen:
+        return None
+    return _reject(
+        item,
+        RejectionReason.FROZEN,
+        "it is frozen solid and would have to thaw first",
     )
 
 
@@ -458,6 +524,8 @@ _FILTERS: Final[tuple[_Filter, ...]] = (
     _filter_empty,
     _filter_tainted,
     _filter_poisonous,
+    _filter_rotten,
+    _filter_frozen,
     _filter_alcohol,
     _filter_user_reserved,
     _filter_strategic_reserve,

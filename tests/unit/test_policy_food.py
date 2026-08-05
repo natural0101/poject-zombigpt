@@ -116,6 +116,7 @@ def test_a_safe_item_is_chosen_and_carries_its_breakdown() -> None:
         ({"burn_progress": 0.5}, RejectionReason.BURNT),
         ({"frozen": True}, RejectionReason.FROZEN),
         ({"required_tool": "canopener"}, RejectionReason.TOOL_UNAVAILABLE),
+        ({"remaining_portions": 0}, RejectionReason.NO_PORTIONS_LEFT),
         ({"hunger_change": 0.0}, RejectionReason.NO_HUNGER_RELIEF),
     ],
 )
@@ -187,6 +188,41 @@ def test_required_tool_present_in_the_inventory_clears_the_filter() -> None:
     assert not selection.is_refusal
     assert selection.choice is not None
     assert selection.choice.item_ref == tin.ref
+
+
+def test_an_emptied_tin_is_refused_rather_than_preferred() -> None:
+    # The portions factor rewards an already-opened item, so without a filter
+    # the *most* opened item — the empty one — would win outright.
+    empty = food_item("empty", display_name="Empty Tin", remaining_portions=0, total_portions=4)
+    full = food_item("full", display_name="Full Tin", full_type="Base.TinnedSoup")
+
+    selection = select_food(inventory(empty, full), hungry_player(0.5))
+
+    assert selection.choice is not None
+    assert selection.choice.item_ref == full.ref
+    assert reason_for(selection, empty.ref) is RejectionReason.NO_PORTIONS_LEFT
+
+
+def test_a_tool_the_policy_cannot_reach_does_not_clear_the_tool_filter() -> None:
+    tin = food_item("tin", required_tool="canopener")
+    shelved_opener = make_item(
+        policy_item_ref("opener", WORLD_REF),
+        WORLD_REF,
+        full_type="Base.TinOpener",
+        display_name="Tin Opener",
+        category="Item",
+        tags=["canopener"],
+    )
+    view = inventory(tin, shelved_opener, containers=[main_container(), world_container()])
+
+    refused = select_food(view, hungry_player(0.5))
+    assert refused.is_refusal
+    assert reason_for(refused, tin.ref) is RejectionReason.TOOL_UNAVAILABLE
+
+    # The same opener counts once the policy is allowed to walk to the shelf.
+    allowed = select_food(view, hungry_player(0.5), PolicyConfig(allow_world_containers=True))
+    assert allowed.choice is not None
+    assert allowed.choice.item_ref == tin.ref
 
 
 def test_item_in_an_unreported_container_is_refused_rather_than_guessed_at() -> None:
@@ -355,7 +391,7 @@ def test_ties_break_on_the_item_reference_in_both_input_orders() -> None:
     assert forward.choice.item_ref == backward.choice.item_ref == min(first.ref, second.ref)
 
 
-def test_the_rejection_list_is_bounded() -> None:
+def test_the_rejection_list_is_bounded_and_says_what_it_left_out() -> None:
     config = PolicyConfig(max_reported_rejections=3)
     rotten = [
         food_item(f"r{index}", full_type=f"Base.Rot{index}", freshness="rotten")
@@ -366,6 +402,38 @@ def test_the_rejection_list_is_bounded() -> None:
 
     assert selection.is_refusal
     assert len(selection.rejections) == 3
+    # The bound trims the list; it must not trim the count, or the refusal
+    # would read as a complete answer while hiding seven refused items.
+    assert selection.rejected_count == 10
+    assert selection.rejections_truncated
+    assert "7 further rejected candidates" in selection.explain()
+    assert selection.as_dict()["rejected_count"] == 10
+
+
+def test_an_untruncated_refusal_says_nothing_about_a_bound() -> None:
+    selection = select_food(
+        inventory(food_item("r", freshness="rotten")),
+        hungry_player(0.5),
+        PolicyConfig(max_reported_rejections=3),
+    )
+
+    assert not selection.rejections_truncated
+    assert "not listed" not in selection.explain()
+
+
+def test_a_selection_cannot_undercount_the_candidates_it_refused() -> None:
+    rejection = select_food(
+        inventory(food_item("r", freshness="rotten")), hungry_player(0.5)
+    ).rejections[0]
+
+    with pytest.raises(ValueError, match="is below the"):
+        FoodSelection(
+            choice=None,
+            reason_code=ReasonCode.NO_SAFE_FOOD,
+            rejections=(rejection,),
+            ranked=(),
+            rejected_count=0,
+        )
 
 
 def test_a_choice_cannot_claim_a_portion_it_cannot_take() -> None:

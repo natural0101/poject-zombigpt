@@ -14,6 +14,7 @@ from __future__ import annotations
 from .model import (
     MAX_CAPABILITIES,
     MAX_EVIDENCE_PER_CAPABILITY,
+    MAX_NOTES,
     REASON_BUILD_CHANGED,
     REASON_EXPERIMENTAL_API,
     REASON_NO_VERIFIED_API,
@@ -81,6 +82,7 @@ __all__ = [
     "LUA_SUBPATH",
     "MAX_CAPABILITIES",
     "MAX_EVIDENCE_PER_CAPABILITY",
+    "MAX_NOTES",
     "MAX_REPORT_BYTES",
     "MOVE_TO_SQUARE",
     "PROBES",

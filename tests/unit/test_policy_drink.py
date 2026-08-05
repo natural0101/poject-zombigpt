@@ -29,6 +29,7 @@ from tests.fixtures.policy_items import (
     MAIN_REF,
     backpack_container,
     drink_item,
+    food_item,
     inventory,
     main_container,
     policy_item_ref,
@@ -108,6 +109,45 @@ def test_each_hard_filter_rejects_and_reports_its_reason(
     selection = select_drink(inventory(bad, spare), thirsty_player(0.5))
 
     assert reason_for(selection, bad.ref) is expected
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected"),
+    [
+        ({"freshness": "rotten"}, RejectionReason.ROTTEN),
+        ({"rot_progress": 0.95}, RejectionReason.ROTTEN),
+        ({"frozen": True}, RejectionReason.FROZEN),
+    ],
+)
+def test_a_drinkable_food_item_is_held_to_the_food_safety_rules(
+    overrides: dict[str, Any], expected: RejectionReason
+) -> None:
+    # A soup or a carton of milk arrives as a `food` sub-object, and this
+    # policy is the one that selects it — so spoilage has to be filtered here
+    # or nothing filters it at all.
+    soup = food_item(
+        "soup",
+        display_name="Vegetable Soup",
+        full_type="Base.Soup",
+        thirst_change=-0.4,
+        **overrides,
+    )
+
+    selection = select_drink(inventory(soup), thirsty_player(0.9))
+
+    assert selection.is_refusal
+    assert reason_for(selection, soup.ref) is expected
+
+
+def test_a_sound_drinkable_food_item_is_still_allowed() -> None:
+    soup = food_item(
+        "soup", display_name="Vegetable Soup", full_type="Base.Soup", thirst_change=-0.4
+    )
+
+    selection = select_drink(inventory(soup), thirsty_player(0.9))
+
+    assert selection.choice is not None
+    assert selection.choice.item_ref == soup.ref
 
 
 def test_tainted_water_stays_refused_even_when_it_is_the_only_thing_left() -> None:
@@ -314,6 +354,39 @@ def test_ties_break_on_the_item_reference() -> None:
 
     assert forward.choice is not None and backward.choice is not None
     assert forward.choice.item_ref == backward.choice.item_ref == min(first.ref, second.ref)
+
+
+def test_the_rejection_list_is_bounded_and_says_what_it_left_out() -> None:
+    config = PolicyConfig(max_reported_rejections=2)
+    tainted = [
+        drink_item(f"t{index}", full_type=f"Base.Tainted{index}", tainted=True)
+        for index in range(9)
+    ]
+
+    selection = select_drink(inventory(*tainted), thirsty_player(0.5), config)
+
+    assert selection.is_refusal
+    assert len(selection.rejections) == 2
+    assert selection.rejected_count == 9
+    assert selection.rejections_truncated
+    assert "7 further rejected candidates" in selection.explain()
+    assert selection.as_dict()["rejected_count"] == 9
+
+
+def test_a_selection_cannot_undercount_the_candidates_it_refused() -> None:
+    rejection = select_drink(
+        inventory(drink_item("t", tainted=True)), thirsty_player(0.5)
+    ).rejections[0]
+
+    with pytest.raises(ValueError, match="is below the"):
+        DrinkSelection(
+            choice=None,
+            reason_code=ReasonCode.NO_SAFE_DRINK,
+            rejections=(rejection,),
+            ranked=(),
+            world_source_state=CapabilityState.UNSUPPORTED,
+            rejected_count=0,
+        )
 
 
 def test_a_selection_is_either_a_choice_or_a_refusal() -> None:

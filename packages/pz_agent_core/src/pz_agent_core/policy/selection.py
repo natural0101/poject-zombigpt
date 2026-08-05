@@ -18,10 +18,18 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
+from itertools import islice
 from types import MappingProxyType
 from typing import Any, Final, Protocol, runtime_checkable
 
-from ..protocol import CapabilityState, ContainerKind, InventoryView, ItemView, JsonDict
+from ..protocol import (
+    ON_PERSON_CONTAINERS,
+    CapabilityState,
+    ContainerKind,
+    InventoryView,
+    ItemView,
+    JsonDict,
+)
 from .config import PolicyConfig
 
 __all__ = [
@@ -46,6 +54,7 @@ __all__ = [
     "read_int",
     "read_str",
     "read_str_tuple",
+    "truncation_note",
 ]
 
 #: Scores are compared at this many decimal places. Two candidates whose totals
@@ -79,6 +88,7 @@ class RejectionReason(StrEnum):
     REQUIRES_COOKING = "REQUIRES_COOKING"
     TOOL_UNAVAILABLE = "TOOL_UNAVAILABLE"
     NO_HUNGER_RELIEF = "NO_HUNGER_RELIEF"
+    NO_PORTIONS_LEFT = "NO_PORTIONS_LEFT"
     EMPTY_CONTAINER = "EMPTY_CONTAINER"
     NO_THIRST_RELIEF = "NO_THIRST_RELIEF"
     ALCOHOL_NOT_PERMITTED = "ALCOHOL_NOT_PERMITTED"
@@ -234,16 +244,20 @@ class CapabilityLookup(Protocol):
     """Read-only view of the runtime capability probes.
 
     Structural on purpose: the capability subsystem owns the real report, and
-    the policies only ever ask it two questions. Anything that answers those
-    two questions works here, including the snapshot below.
+    the policies only ever ask it two questions. The member names and their
+    positional-only parameters match
+    :class:`pz_agent_core.capabilities.model.CapabilityReport` exactly, so the
+    real report satisfies this protocol with no adapter — a test asserts it,
+    because a mismatch would otherwise only surface when the two halves are
+    first wired together.
     """
 
-    def state(self, probe: str) -> CapabilityState:
+    def state(self, name: str, /) -> CapabilityState:
         """Probe result, or ``UNSUPPORTED`` when the probe never ran."""
         ...
 
-    def is_usable(self, probe: str) -> bool:
-        """True when a feature backed by *probe* may be used."""
+    def usable(self, name: str, /) -> bool:
+        """True when a feature backed by *name* may be used."""
         ...
 
 
@@ -255,28 +269,34 @@ class CapabilitySnapshot:
     guess: the whole point of the capability system is that nothing is assumed
     to exist because a wiki said so.
 
-    Build one with :meth:`from_mapping`; it copies and freezes the input, so a
-    caller that keeps mutating its own dict cannot change a policy decision
-    that has already been made.
+    The mapping is copied and frozen however the snapshot is built, so neither
+    a caller that keeps mutating its own dict nor one that reaches into
+    ``probes`` can change a decision that has already been made. That matters
+    most for the shared :data:`NO_CAPABILITIES` default: it is one process-wide
+    object, and a writable one would let any caller silently grant a capability
+    to every later policy call.
     """
 
     probes: Mapping[str, CapabilityState] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "probes", MappingProxyType(dict(self.probes)))
+
     @classmethod
     def from_mapping(cls, probes: Mapping[str, CapabilityState]) -> CapabilitySnapshot:
         """Copy *probes* so a later mutation by the caller cannot leak in."""
-        return cls(probes=MappingProxyType(dict(probes)))
+        return cls(probes=probes)
 
     @classmethod
     def verified(cls, *names: str) -> CapabilitySnapshot:
         """Snapshot in which exactly *names* are verified. Handy for tests."""
         return cls.from_mapping({name: CapabilityState.VERIFIED for name in names})
 
-    def state(self, probe: str) -> CapabilityState:
-        return self.probes.get(probe, CapabilityState.UNSUPPORTED)
+    def state(self, name: str, /) -> CapabilityState:
+        return self.probes.get(name, CapabilityState.UNSUPPORTED)
 
-    def is_usable(self, probe: str) -> bool:
-        return self.state(probe).usable
+    def usable(self, name: str, /) -> bool:
+        return self.state(name).usable
 
 
 #: What a policy sees when the caller has no capability information at all.
@@ -415,12 +435,7 @@ def reach_rejection(
             reason=RejectionReason.CONTAINER_UNREACHABLE,
             detail=f"{container.name} is not accessible right now",
         )
-    on_person = container.kind in {
-        ContainerKind.PLAYER_MAIN,
-        ContainerKind.CARRIED,
-        ContainerKind.WORN,
-    }
-    if not on_person and not config.allow_world_containers:
+    if container.kind not in ON_PERSON_CONTAINERS and not config.allow_world_containers:
         return Rejection(
             item_ref=item.ref,
             display_name=item.display_name,
@@ -437,5 +452,26 @@ def bounded_rejections(
     rejections: Iterable[Rejection],
     config: PolicyConfig,
 ) -> tuple[Rejection, ...]:
-    """Trim the rejection list to the configured bound, order preserved."""
-    return tuple(rejections)[: config.max_reported_rejections]
+    """Trim the rejection list to the configured bound, order preserved.
+
+    Trimming loses detail, so every caller also carries the untrimmed count on
+    its selection and renders it with :func:`truncation_note`: a refusal that
+    quietly listed 64 of 300 reasons would read as a complete answer while
+    being a truncated one.
+    """
+    return tuple(islice(rejections, config.max_reported_rejections))
+
+
+def truncation_note(reported: int, total: int) -> str:
+    """Phrase naming the rejections a bounded list left out.
+
+    Empty when nothing was dropped, so an explanation mentions the bound only
+    when the bound actually cost the reader something.
+    """
+    if total < reported:
+        raise ValueError(f"cannot report {reported} rejections out of a total of {total}")
+    hidden = total - reported
+    if not hidden:
+        return ""
+    plural = "" if hidden == 1 else "s"
+    return f" (and {hidden} further rejected candidate{plural} not listed)"

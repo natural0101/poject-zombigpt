@@ -168,7 +168,7 @@ Harness.group("a stop works with no session, no queue and no game")
 do
   getSpecificPlayer = nil
   Mock.removeActionQueue()
-  local agent = newAgent({ session = false })
+  local agent, fs = newAgent({ session = false })
   Safety.noteSidecarHeartbeat(agent.safety, NOW)
   agent.safety.armed = true
   local outcome = Runtime.stop(agent, NOW, REASON.PANIC_STOP)
@@ -176,6 +176,36 @@ do
   equal(outcome.disarmed, true, "and is reported")
   equal(#outcome.plan.clear, 0, "with nothing cancelled, because nothing could be proved ours")
   isNil(agent.session:id(), "and there was never a session to prove it against")
+
+  -- The stop happened over a queue nobody could read. The journal must not
+  -- describe that the same way it describes a stop over an empty queue.
+  local record = journalRecords(fs)[1]
+  equal(record.queue_readable, false, "the journal records that the queue was never read")
+  Harness.notEqual(record.capability, "verified", "so the outcome is not reported as verified")
+  contains(record.detail, "could not be read", "and the detail says why")
+end
+
+Harness.group("an unreadable stop channel gives up authority")
+do
+  getSpecificPlayer = function()
+    return Mock.newPlayer()
+  end
+  Mock.installActionQueue({})
+  local agent, fs = newAgent()
+  Safety.noteSidecarHeartbeat(agent.safety, NOW)
+  Safety.arm(agent.safety, "AUTONOMOUS", NOW, { sessionId = SESSION, playerPresent = true })
+  fs:failReadsFrom(PZ.Ipc.pathFor("panic_stop"))
+
+  Runtime.tick(agent, NOW)
+  equal(agent.safety.armed, false, "a stop request that cannot be read is not read as 'no stop'")
+  contains(agent.safety.last_error, "panic.stop", "and the read failure reaches the HUD and the heartbeat")
+
+  -- One disarm, not one per tick: a permanently broken file must not fill the
+  -- journal with stop events forever.
+  local afterFirst = #journalRecords(fs)
+  Runtime.tick(agent, NOW + 1)
+  Runtime.tick(agent, NOW + 2)
+  equal(#journalRecords(fs), afterFirst, "a still-unreadable file does not stop again once disarmed")
 end
 
 Harness.group("manual input cancels automation")

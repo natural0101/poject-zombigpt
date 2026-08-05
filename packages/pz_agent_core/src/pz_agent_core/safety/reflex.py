@@ -240,33 +240,35 @@ class ReflexGuard:
                     command_ids=in_flight,
                 )
             )
+        # A session replacement is checked before plain link staleness because
+        # both speak through STALE_SESSION: the transition is the one whose
+        # wording the user needs to hear, and :func:`_first_per_reason` keeps the
+        # first event of a code (merging the other's authority into it).
+        if previous is not None:
+            if previous.session_id != current.session_id:
+                events.append(
+                    _event(
+                        ReasonCode.STALE_SESSION,
+                        "The session was replaced. Every reference I held is invalid.",
+                        forces_disarm=True,
+                        command_ids=in_flight,
+                    )
+                )
+            elif previous.game.save_id != current.game.save_id:
+                events.append(
+                    _event(
+                        ReasonCode.SAVE_CHANGED,
+                        "The save changed. Every reference I held is invalid; re-arm when ready.",
+                        forces_disarm=True,
+                        command_ids=in_flight,
+                    )
+                )
         if current.safety.sidecar_stale or not signals.sidecar_alive:
             events.append(
                 _event(
                     ReasonCode.STALE_SESSION,
                     "The game has stopped seeing me. I will not start anything new "
                     "until the link recovers.",
-                )
-            )
-        if previous is None:
-            return events
-
-        if previous.session_id != current.session_id:
-            events.append(
-                _event(
-                    ReasonCode.STALE_SESSION,
-                    "The session was replaced. Every reference I held is invalid.",
-                    forces_disarm=True,
-                    command_ids=in_flight,
-                )
-            )
-        elif previous.game.save_id != current.game.save_id:
-            events.append(
-                _event(
-                    ReasonCode.SAVE_CHANGED,
-                    "The save changed. Every reference I held is invalid; re-arm when ready.",
-                    forces_disarm=True,
-                    command_ids=in_flight,
                 )
             )
         return events
@@ -362,6 +364,11 @@ class ReflexGuard:
             if command.command_id not in expired
             and signals.now_ms - command.last_progress_ms > self.config.stall_ms
         ]
+        # "Stuck" is a claim about two positions. Without a previous observation
+        # there is no second position, so the stall is reported as the thing that
+        # was actually observed — no progress — rather than as a diagnosis the
+        # guard cannot back up.
+        comparable = previous is not None
         moved = previous is not None and _position_changed(previous, current)
 
         events: list[SafetyEvent] = []
@@ -373,7 +380,9 @@ class ReflexGuard:
                     command_ids=expired,
                 )
             )
-        stuck = tuple(c.command_id for c in stalled if c.moves_character and not moved)
+        stuck = tuple(
+            c.command_id for c in stalled if c.moves_character and comparable and not moved
+        )
         no_progress = tuple(c.command_id for c in stalled if c.command_id not in stuck)
         if stuck:
             events.append(
@@ -419,20 +428,42 @@ def _event(
 
 
 def _first_per_reason(events: list[SafetyEvent]) -> list[SafetyEvent]:
-    """Keep the most urgent event per reason code.
+    """Keep the most urgent event per reason code, losing none of its authority.
 
     Two rules can reach the same conclusion in one tick — the takeover flag and
-    a manual action appearing, for instance. Reporting it twice would make a
-    caller cancel twice and a voice adapter say it twice.
+    a manual action appearing, or a replaced session and a stale link, both of
+    which speak through ``STALE_SESSION``. Reporting it twice would make a caller
+    cancel twice and a voice adapter say it twice, so only the first (most
+    urgent) message survives.
+
+    What must *not* be dropped along with the duplicate message is what it
+    authorised. A rule that demanded a disarm, or named a command to close, has
+    observed something the surviving event did not; silently discarding that is
+    how a session replacement stops disarming because the sidecar happened to be
+    stale on the same tick. The effects are therefore unioned into the kept
+    event. The union can never widen ``cancels_running_action`` unsafely: every
+    producer gates that flag on :func:`may_cancel_running_action`, so no rule can
+    contribute a True for an action the player owns.
     """
-    seen: set[ReasonCode] = set()
-    kept: list[SafetyEvent] = []
+    kept: dict[ReasonCode, SafetyEvent] = {}
     for event in events:
-        if event.reason_code in seen:
+        first = kept.get(event.reason_code)
+        if first is None:
+            kept[event.reason_code] = event
             continue
-        seen.add(event.reason_code)
-        kept.append(event)
-    return kept
+        kept[event.reason_code] = SafetyEvent(
+            priority=first.priority,
+            reason_code=first.reason_code,
+            message=first.message,
+            forces_disarm=first.forces_disarm or event.forces_disarm,
+            cancels_mod_owned_queue=(
+                first.cancels_mod_owned_queue or event.cancels_mod_owned_queue
+            ),
+            cancels_running_action=(first.cancels_running_action or event.cancels_running_action),
+            command_ids=first.command_ids
+            + tuple(cid for cid in event.command_ids if cid not in first.command_ids),
+        )
+    return list(kept.values())
 
 
 def _position_changed(previous: Observation, current: Observation) -> bool:

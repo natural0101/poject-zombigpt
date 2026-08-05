@@ -173,6 +173,8 @@ def compact_for_planner(
             "max_containers": MAX_CONTAINERS,
             "max_zombies": MAX_ZOMBIES,
             "max_objects": MAX_OBJECTS,
+            "max_moodles": MAX_MOODLES,
+            "max_capabilities": MAX_CAPABILITIES,
             "max_text_chars": MAX_TEXT_CHARS,
         },
     }
@@ -278,11 +280,10 @@ def _compact_player(player: PlayerState) -> JsonDict:
         "fatigue": round(player.fatigue, 3),
         "endurance": round(player.endurance, 3),
     }
-    moodles = {
-        name: value
-        for name, value in list(player.moodles.items())[:MAX_MOODLES]
-        if _token(name) is not None
-    }
+    # Token-check first, then cap: filtering after the slice would let a handful
+    # of junk names push the real moodles out of the view.
+    named = [(name, value) for name, value in player.moodles.items() if _token(name) is not None]
+    moodles = dict(named[:MAX_MOODLES])
     return {
         "present": player.present,
         "alive": player.alive,
@@ -293,6 +294,8 @@ def _compact_player(player: PlayerState) -> JsonDict:
         },
         "stats": stats,
         "moodles": moodles,
+        "moodle_count": len(player.moodles),
+        "moodles_truncated": len(moodles) < len(player.moodles),
         "bleeding": player.is_bleeding,
         "wound_count": len(player.wounds),
         "hands": {
