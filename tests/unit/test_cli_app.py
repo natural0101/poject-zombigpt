@@ -10,8 +10,8 @@ import pytest
 
 from pz_agent_cli.app import COMMANDS, build_parser, main
 from pz_agent_cli.context import EXIT_FAILURE, EXIT_OK, EXIT_USAGE, resolve_workspace
-from pz_agent_cli.support import DEFAULT_LOG_LINES, MAX_LOG_LINES
-from pz_agent_core.diagnostics import DiagnosticLog, LogLevel, TraceWriter
+from pz_agent_cli.support import DEFAULT_LOG_LINES, MAX_LOG_LINES, _add_directory
+from pz_agent_core.diagnostics import BundleBuilder, DiagnosticLog, LogLevel, TraceWriter
 from pz_agent_core.diagnostics.log import LogLimits
 from pz_agent_core.ipc.layout import IpcLayout
 from pz_agent_core.observation.diff import diff_observations
@@ -127,6 +127,26 @@ def test_logs_says_so_when_nothing_has_been_written_yet(tmp_path: Path) -> None:
     assert "no log yet" in world.stdout
 
 
+def test_a_log_that_exists_but_cannot_be_read_is_not_reported_as_absent(
+    tmp_path: Path,
+) -> None:
+    """ "No log yet" over a log that is there is the wrong diagnosis.
+
+    A directory in the log file's place is the portable stand-in for a locked or
+    unreadable file: both surface as an ``OSError`` that is not
+    ``FileNotFoundError``.
+    """
+    world = make_world(tmp_path)
+    workspace = resolve_workspace(world.ctx)
+    (workspace.logs_dir / "pz-agent.log").mkdir(parents=True)
+
+    exit_code = world.run("logs")
+
+    assert exit_code == EXIT_FAILURE
+    assert "no log yet" not in world.stdout
+    assert "could not be read" in world.stderr
+
+
 @pytest.mark.parametrize("lines", ["0", str(MAX_LOG_LINES + 1)])
 def test_logs_refuses_a_line_count_outside_the_bound(tmp_path: Path, lines: str) -> None:
     world = make_world(tmp_path)
@@ -178,6 +198,30 @@ def test_the_bundle_holds_no_save_and_no_game_source(tmp_path: Path) -> None:
         blob = b"".join(archive.read(name) for name in archive.namelist())
     assert b"players.db" not in blob
     assert b"ISBaseTimedAction.new" not in blob
+
+
+def test_a_log_the_bundle_had_no_room_for_is_named_with_the_real_reason(
+    tmp_path: Path,
+) -> None:
+    """A bound breach and a locked file are different problems.
+
+    Both arrive as a ``BundleError``; reporting the bound as "could not be read"
+    would send a user looking for a permissions fault that is not there.
+    """
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / "a.log").write_text("first\n", encoding="utf-8")
+    (logs / "b.log").write_text("x" * 5000 + "\n", encoding="utf-8")
+    builder = BundleBuilder(max_total_bytes=400)
+
+    _add_directory(builder, "logs", logs, ("*.log",))
+    bundle = builder.build(tmp_path / "partial.zip")
+
+    assert [entry.name for entry in bundle.entries] == ["logs/a.log", "logs/b.log.omitted.txt"]
+    with zipfile.ZipFile(bundle.path) as archive:
+        note = archive.read("logs/b.log.omitted.txt").decode("utf-8")
+    assert "400 byte cap" in note
+    assert "could not be read" not in note
 
 
 def test_verify_lists_the_contents_and_reports_them_clean(tmp_path: Path) -> None:
@@ -412,7 +456,10 @@ def test_restore_states_what_it_could_not_prove_about_the_game(tmp_path: Path) -
 
     assert exit_code == EXIT_OK
     assert (save / "map_t.bin").read_bytes() == b"tiles"
-    assert "not proof the game is closed" in world.stderr
+    # Printed after the restore, so it states what was not proved rather than
+    # advising a step the user can no longer take.
+    assert "not proof the game was closed" in world.stderr
+    assert "main menu writes none" in world.stderr
 
 
 def test_restoring_an_unknown_backup_fails_with_its_id(tmp_path: Path) -> None:

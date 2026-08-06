@@ -205,9 +205,13 @@ def run_restore_save(ctx: CliContext, *, backup_id: str, as_json: bool) -> int:
     except BackupError as exc:
         printer.error(f"restore failed: {workspace.redactor.text(str(exc))}")
         return EXIT_FAILURE
+    # Stated in the past tense because it is printed after the restore: telling a
+    # user to close the game "before restoring" once the files are already back
+    # would describe a step that can no longer be taken.
     inference = (
-        "no game heartbeat was found. That is not proof the game is closed — a game "
-        "sitting on the main menu writes none — so close it before restoring."
+        "no game heartbeat was found before this restore. That is not proof the game "
+        "was closed — a game sitting on the main menu writes none — so if Project "
+        "Zomboid was open, close it and load the save once before playing on."
     )
     if as_json:
         printer.json(
