@@ -192,6 +192,37 @@ The CLI exposes `doctor`, `install-mod`, `uninstall-mod`, `status`,
 would drive is not written — a command that parsed and then did nothing would
 be worse than its absence.
 
+## Deviations found by verification
+
+Recorded here rather than quietly closed, because each is a place the
+implementation and the blueprint differ for a reason.
+
+**Reference generation is session-scoped, not save-scoped.** Blueprint §3.7 says
+the generation in a reference increments after a save/load transition, so a
+reference minted before it fails validation. The mod emits `generation = 0`
+throughout and never increments it; in-session save/load invalidation instead
+works by the sidecar noticing `game.save_id` changed, raising `SAVE_CHANGED`,
+and closing the session.
+
+That is coarser and stronger: ending the session invalidates every reference
+*and* closes in-flight commands as `lost`, where a generation bump alone would
+leave a command mid-flight against refs that had just become meaningless. The
+counter was left at zero rather than wired to `Session.generation`, which
+increments per handshake — a different quantity, and threading it in would put
+a number in the field that does not track what the field claims to.
+
+Revisit if a save/load transition is ever made survivable without a new
+session; until then the coarse invalidation is the safer reading.
+
+**`Refs.KIND.OBJECT` has no builder on either side.** Two non-container world
+objects standing on the same square therefore share one `square:` reference.
+Harmless today — `diff.py` degrades to a whole-list diff when references
+repeat — but it means `nearby.objects` will rarely diff compactly in real play.
+
+**Build 42.20 accessor names are unverified.** The mod's probes degrade to an
+absent field rather than guessing, so the behaviour is honest, but which
+accessors actually exist needs a live session.
+
 ## Known gaps and caveats
 
 - **T003 is not done, but T006 was built anyway.** The task graph has T006

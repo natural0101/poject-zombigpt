@@ -35,7 +35,7 @@ from pz_agent_voice.adapters.teamon import TeamONSpeech, TeamONTranscript
 from pz_agent_voice.config import DEFAULT_VOICE_CONFIG, VoiceConfig
 from pz_agent_voice.driver import VoiceCompanion
 from pz_agent_voice.events import TtsEvent, TtsEventKind
-from pz_agent_voice.messages import OutputKind, VoiceOutput
+from pz_agent_voice.messages import OutputKind, VoiceInput, VoiceOutput
 from pz_agent_voice.ports import VoiceServices
 from pz_agent_voice.session import VoiceSession
 from tests.fixtures.ipc_builders import FakeClock
@@ -104,6 +104,45 @@ class RaisingSessionPort:
         raise self.error
 
 
+class BlindSessionPort:
+    """A session port that cannot say what the session is — but can still stop it.
+
+    The port protocol says ``status`` answers even when the game is gone, so a
+    port that raises there is broken rather than disconnected. It is worth
+    having a double for: an exception escaping the session would end the
+    driver's transcript loop, and the stop the user says next would never be
+    read.
+    """
+
+    def __init__(self, inner: SessionPort, error: Exception | None = None) -> None:
+        self._inner = inner
+        self.error = error or RuntimeError("the sidecar lost the session")
+
+    def status(self) -> SessionSnapshot:
+        raise self.error
+
+    def arm(self, mode: SessionMode, *, confirm_backup: bool) -> SessionSnapshot:
+        return self._inner.arm(mode, confirm_backup=confirm_backup)
+
+    def disarm(self) -> SessionSnapshot:
+        return self._inner.disarm()
+
+    def stop(self) -> StopReport:
+        return self._inner.stop()
+
+
+class NeverOpeningAdapter(FakeVoiceAdapter):
+    """An adapter whose recogniser refuses to start.
+
+    A backend that cannot open its stream is the ordinary "the microphone is
+    held by something else" failure, and the companion has bookkeeping to give
+    back on that path just as much as on a clean shutdown.
+    """
+
+    async def events(self) -> AsyncIterator[VoiceInput]:
+        raise RuntimeError("the recogniser never opened")
+
+
 class FakeTeamONClient:
     """A TeamON transport made of lists.
 
@@ -116,6 +155,9 @@ class FakeTeamONClient:
         self._transcripts = list(transcripts)
         self.spoken: list[TeamONSpeech] = []
         self.interrupted: list[str] = []
+        #: Raised by ``synthesize`` instead of speaking, for the backend that is
+        #: broken rather than interrupted.
+        self.synthesis_error: Exception | None = None
         self.hold = False
         self._release = asyncio.Event()
         self._speaking = asyncio.Event()
@@ -129,6 +171,8 @@ class FakeTeamONClient:
 
     async def synthesize(self, request: TeamONSpeech) -> None:
         self.spoken.append(request)
+        if self.synthesis_error is not None:
+            raise self.synthesis_error
         if not self.hold:
             return
         self._release.clear()

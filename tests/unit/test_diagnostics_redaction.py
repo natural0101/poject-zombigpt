@@ -108,6 +108,11 @@ def test_an_account_name_with_a_space_is_removed_whole() -> None:
     )
     assert redactor.text(r"C:\Users\Иван Петров") == USER_HOME_PLACEHOLDER
     assert redactor.text("/home/john smith/notes.md") == f"{USER_HOME_PLACEHOLDER}/notes.md"
+    # End of line counts as the end of a segment: a multi-line value is one
+    # string to this method, and only the writers split it into lines.
+    assert redactor.text("at C:\\Users\\John Smith\nthen elsewhere") == (
+        f"at {USER_HOME_PLACEHOLDER}\nthen elsewhere"
+    )
 
 
 def test_a_spanning_segment_does_not_swallow_the_next_path_in_the_sentence() -> None:

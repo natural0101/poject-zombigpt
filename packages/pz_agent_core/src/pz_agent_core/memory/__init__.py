@@ -10,10 +10,11 @@ Three rules define the package:
 * **Save scope is structural.** A :class:`SaveMemory` is built for one save id
   and a document from another is refused, not merged. World references name
   places, and the same coordinates in a different save are a different world.
-* **Bounds are applied on write.** Every mutator prunes and evicts before it
-  returns, so "within bounds" is true after every call rather than after a
-  cleanup nobody runs. User-authored records — reservations and preferences —
-  are never evicted; the store refuses instead.
+* **Bounds are applied on write, and again on read.** Every mutator prunes and
+  evicts before it returns, so "within bounds" is true after every call rather
+  than after a cleanup nobody runs, and a document loaded from disk is held to
+  the same caps as one built in memory. User-authored records — reservations and
+  preferences — are never evicted in either direction; the store refuses instead.
 * **An unreadable version is refused, never guessed.** A document from a newer
   build, or from one older than the migration chain reaches, raises with a
   sentence saying so.

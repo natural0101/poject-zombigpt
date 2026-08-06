@@ -70,12 +70,27 @@ def test_superseding_keeps_the_original_position_in_the_queue() -> None:
 
 
 def test_a_stale_revision_is_dropped_rather_than_overwriting_fresher_news() -> None:
-    queue, _ = make_queue()
+    queue, events = make_queue()
     queue.push(utterance(topic="plan", text="Готово.", revision=7))
 
     outcome = queue.push(utterance(topic="plan", text="Ищу еду.", revision=3))
 
-    assert outcome is TtsEventKind.COLLAPSED
+    # DROPPED, not COLLAPSED: nothing else is going to say what it said, which
+    # is exactly what a consumer distinguishing the two needs to know.
+    assert outcome is TtsEventKind.DROPPED
+    assert events.history[-1].kind is TtsEventKind.DROPPED
+    assert [message.text for message in queue.pending] == ["Готово."]
+
+
+def test_an_equal_revision_about_the_same_subject_still_supersedes() -> None:
+    # Two messages minted in the same revision are both current; the later one
+    # is the one to say, and treating it as stale would silence fresh news.
+    queue, _ = make_queue()
+    queue.push(utterance(topic="plan", text="Ищу еду.", revision=4))
+
+    outcome = queue.push(utterance(topic="plan", text="Готово.", revision=4))
+
+    assert outcome is TtsEventKind.SUPERSEDED
     assert [message.text for message in queue.pending] == ["Готово."]
 
 
@@ -98,6 +113,10 @@ def test_the_queue_never_holds_more_than_its_bound() -> None:
         queue.push(utterance(OutputKind.STATUS, topic=f"t{index}", text=f"line {index}"))
 
     assert len(queue) == 3
+    # Equal urgency all the way down, so the newcomer never displaces anything:
+    # the three that got in first are the three that are still there, and the
+    # seventeen that arrived at a full queue were refused, not silently kept.
+    assert [message.topic for message in queue.pending] == ["t0", "t1", "t2"]
 
 
 def test_at_the_bound_the_least_urgent_oldest_message_is_evicted() -> None:

@@ -199,8 +199,13 @@ environment or the OS secret store.
 .venv\Scripts\pz-agent uninstall-mod
 ```
 
-Removes the bridge and its IPC directory. Your saves, backups and configuration
-are left alone; delete the backup directory yourself if you want it gone.
+Removes exactly the files `install-mod` wrote, from the manifest it left behind —
+a file you edited afterwards is kept and named, not deleted. The IPC directory
+under `Zomboid\Lua\pz_agent` is written by the mod and the sidecar rather than by
+the installer, so `uninstall-mod` names it and leaves it in place (blueprint
+§14.6: "remove only the manifest's files"); delete it yourself once the game is
+closed. Your saves, backups and configuration are left alone; delete the backup
+directory yourself if you want it gone.
 
 ## When something goes wrong
 

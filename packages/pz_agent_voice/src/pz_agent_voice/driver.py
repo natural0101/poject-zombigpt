@@ -34,11 +34,14 @@ from .messages import VoiceInput, VoiceOutput
 from .session import VoiceSession
 from .state import VoiceTurn
 
-__all__ = ["MAX_TURN_HISTORY", "VoiceCompanion"]
+__all__ = ["MAX_SPEECH_FAILURES", "MAX_TURN_HISTORY", "VoiceCompanion"]
 
 #: Turns kept for diagnostics. A session runs for hours; the last few dozen are
 #: what a support bundle needs, and everything older is a leak.
 MAX_TURN_HISTORY: Final = 32
+
+#: Synthesiser failures kept for diagnostics, bounded for the same reason.
+MAX_SPEECH_FAILURES: Final = 16
 
 #: Stream events that mean there may now be something to say.
 _PENDING_KINDS: Final[frozenset[TtsEventKind]] = frozenset(
@@ -63,6 +66,7 @@ class VoiceCompanion:
         #: Set whenever something may have been added to the queue.
         self._work = asyncio.Event()
         self._turns: deque[VoiceTurn] = deque(maxlen=MAX_TURN_HISTORY)
+        self._speech_failures: deque[str] = deque(maxlen=MAX_SPEECH_FAILURES)
         self._unsubscribe = session.events.subscribe(self._on_stream_event)
 
     def wake(self) -> None:
@@ -91,22 +95,51 @@ class VoiceCompanion:
     def last_turn(self) -> VoiceTurn | None:
         return self._turns[-1] if self._turns else None
 
+    @property
+    def speech_failures(self) -> tuple[str, ...]:
+        """Synthesiser failures, in the order they happened, bounded.
+
+        A backend that raises is a backend the user did not hear. The utterance
+        is reported cancelled rather than finished and the reason is kept here,
+        because "the companion went quiet" with nothing recorded is the failure
+        mode a support bundle cannot explain.
+        """
+        return tuple(self._speech_failures)
+
     async def run(self) -> None:
         """Serve the conversation until the adapter's stream ends."""
         pump = asyncio.create_task(self._speech_pump())
+        cancelled = False
         try:
             stream = await self._adapter.events()
             async for raw in stream:
                 await self.deliver(raw)
+        except asyncio.CancelledError:
+            cancelled = True
+            raise
         finally:
-            # The pump is woken rather than cancelled: an utterance already in
-            # flight has been heard by the user, and abandoning it mid-word on
-            # shutdown would report speech that never finished as never started.
+            # On a stream that ended, the pump is woken rather than cancelled:
+            # an utterance already in flight has been heard by the user, and
+            # abandoning it mid-word on shutdown would report speech that never
+            # finished as never started.
             self._closing = True
             self._gate.set()
             self._work.set()
-            await pump
-            self._unsubscribe()
+            if cancelled:
+                # On a cancellation it is the other way round. The caller asked
+                # to stop now, and a backend parked inside speak() may never
+                # return — waiting for it would hang the shutdown on exactly the
+                # component that just failed to behave.
+                pump.cancel()
+            try:
+                await pump
+            except asyncio.CancelledError:
+                if not cancelled:
+                    raise
+            finally:
+                # Unconditional: a subscription that outlives its companion is a
+                # slot the next one cannot have, and the stream's cap is small.
+                self._unsubscribe()
 
     async def deliver(self, raw: VoiceInput) -> VoiceTurn:
         """Handle one transcript, barging in on any speech first.
@@ -158,6 +191,18 @@ class VoiceCompanion:
             await self._adapter.speak(message)
         except SpeechCancelled:
             self._interrupted = True
+        except asyncio.CancelledError:
+            self._speaking = None
+            self._publish(TtsEventKind.CANCELLED, message)
+            raise
+        except Exception as exc:
+            # A backend that failed did not deliver the sentence, so the event
+            # is a cancellation, not a finish. The pump survives it: a
+            # synthesiser that breaks once must not leave the companion mute
+            # for the rest of the session, and it must certainly not take the
+            # acknowledgement of the next stop down with it.
+            self._interrupted = True
+            self._speech_failures.append(f"{type(exc).__name__}: {exc}")
         finally:
             self._speaking = None
         self._publish(

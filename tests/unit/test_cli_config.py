@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -26,33 +27,28 @@ from pz_agent_cli.config import (
 )
 from pz_agent_cli.context import EXIT_FAILURE, EXIT_OK
 from pz_agent_core.protocol import SessionMode
+from tests.conftest import REPO_ROOT
 from tests.fixtures.cli_worlds import make_world
 
-#: The sample in docs/QUICKSTART.md, verbatim. If the documented file stops
-#: validating, one of the two is wrong and this test is where that shows up.
-QUICKSTART_SAMPLE = """
-[game]
-channel = "stable"
-expected_build = "42.20"
 
-[session]
-default_mode = "observe"
-require_backup = true
+def _quickstart_sample() -> str:
+    """The TOML block from docs/QUICKSTART.md, read rather than copied.
 
-[safety]
-panic_hotkey = "F12"
-manual_takeover = true
-max_autonomous_radius = 30
-allow_multiplayer = false
+    A hand-copied sample asserts that *a* configuration validates; it goes on
+    passing after the documented one has drifted away from the schema, which is
+    the failure this test exists to catch.
+    """
+    text = (REPO_ROOT / "docs" / "QUICKSTART.md").read_text(encoding="utf-8")
+    blocks: list[str] = re.findall(r"```toml\n(.*?)```", text, flags=re.DOTALL)
+    assert blocks, "docs/QUICKSTART.md no longer carries a toml sample"
+    sample = blocks[0]
+    assert "[safety]" in sample, "the first toml block is no longer the configuration sample"
+    return sample
 
-[planner]
-provider = "none"
-max_steps = 8
 
-[voice]
-adapter = "teamon"
-enabled = false
-"""
+#: The sample in docs/QUICKSTART.md. If the documented file stops validating,
+#: one of the two is wrong and this test is where that shows up.
+QUICKSTART_SAMPLE = _quickstart_sample()
 
 
 def _write(tmp_path: Path, body: str) -> Path:

@@ -232,7 +232,17 @@ def _run_bundle(
         return EXIT_OK
 
     user_dir = workspace.user_dir
-    forbidden = [str(user_dir), str(user_dir.parent), user_dir.parent.name] if user_dir else []
+    # Labelled, not listed: the verifier prints its findings, so a finding that
+    # quoted the account name would put it on the terminal and into --json.
+    forbidden = (
+        {
+            "zomboid_directory": str(user_dir),
+            "home_directory": str(user_dir.parent),
+            "account_name": user_dir.parent.name,
+        }
+        if user_dir is not None
+        else {}
+    )
     verification = verify_bundle(destination, redactor=workspace.redactor, forbidden=forbidden)
     if as_json:
         payload = bundle.to_dict()

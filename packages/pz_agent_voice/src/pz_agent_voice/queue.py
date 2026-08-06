@@ -9,12 +9,15 @@ time the mouth is free, only the current truth about each subject is left.
 
 Three collapses, kept distinct because they mean different things:
 
-* identical — the same thing was already going to be said, so nothing changes;
+* identical — the same thing was already going to be said, so nothing changes
+  (``COLLAPSED``);
 * superseded — something newer about the same subject replaces the pending one
-  in place, keeping its position so a status update cannot jump the line;
+  in place, keeping its position so a status update cannot jump the line
+  (``SUPERSEDED``);
 * stale — a message with a lower revision than the pending one about the same
-  subject is dropped, because a slower path finishing later does not make its
-  information newer.
+  subject is discarded, because a slower path finishing later does not make its
+  information newer (``DROPPED``: unlike a collapse, what it had to say is not
+  going to be said by anything else).
 
 The bound is on distinct subjects, and it is enforced by urgency: at the cap the
 least urgent, oldest pending message is evicted, and a newcomer that is itself
@@ -131,7 +134,11 @@ class UtteranceQueue:
         if message.repeats(existing):
             return self._publish(TtsEventKind.COLLAPSED, message)
         if message.revision < existing.revision:
-            return self._publish(TtsEventKind.COLLAPSED, message)
+            # DROPPED, not COLLAPSED: this message said something different and
+            # is not going to be said at all. Reporting it as a collapse would
+            # tell a consumer the content was already covered, which is the one
+            # thing that is not true about a stale message.
+            return self._publish(TtsEventKind.DROPPED, message)
         self._pending[index] = (arrival, message)
         return self._publish(TtsEventKind.SUPERSEDED, message)
 

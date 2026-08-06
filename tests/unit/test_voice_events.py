@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from pz_agent_voice.events import (
+    MAX_FAILURES,
     MAX_SUBSCRIBERS,
     TooManySubscribers,
     TtsEvent,
@@ -68,6 +69,25 @@ def test_a_listener_that_raises_is_dropped_and_the_rest_still_receive() -> None:
     assert len(seen) == 2
     assert stream.subscribers == 1
     assert stream.failures == ("ValueError: consumer bug",)
+
+
+def test_the_failure_log_is_bounded_and_keeps_the_most_recent() -> None:
+    # One broken listener is dropped, so the only way to reach the cap is a
+    # succession of them — a HUD reconnecting into a bad state, say. The log is
+    # a diagnostic, not an archive, and it must not grow with the session.
+    stream = TtsEventStream()
+
+    for index in range(MAX_FAILURES * 3):
+
+        def broken(_event: TtsEvent, index: int = index) -> None:
+            raise ValueError(f"consumer bug {index}")
+
+        stream.subscribe(broken)
+        stream.publish(an_event())
+
+    assert len(stream.failures) == MAX_FAILURES
+    assert stream.failures[-1] == f"ValueError: consumer bug {MAX_FAILURES * 3 - 1}"
+    assert stream.subscribers == 0
 
 
 def test_history_is_a_bounded_ring() -> None:

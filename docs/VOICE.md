@@ -56,15 +56,40 @@ never spoken back: every sentence the companion can say lives in
 The blueprint forbids narrating every tick, every internal transfer and every
 observation. `UtteranceQueue` makes that structural rather than aspirational:
 messages carry a `topic`, and a second message about a topic that already has one
-pending *replaces* it instead of queueing behind it. Identical messages collapse,
-stale ones (a lower `revision`) are dropped, and the queue is bounded by distinct
-subject — at the cap the least urgent, oldest pending message is evicted, and a
+pending *replaces* it instead of queueing behind it. Identical messages collapse
+(`collapsed`), stale ones — a lower `revision` — are discarded (`dropped`, since
+nothing else is going to say what they said), and the queue is bounded by distinct
+subject: at the cap the least urgent, oldest pending message is evicted, and a
 newcomer less urgent than everything pending is refused. A `STOP` utterance
 cannot be evicted.
 
 `VoiceSession.report_plan` may be called at whatever rate the sidecar observes
 plans; it returns `None` and enqueues nothing unless the status actually changed,
 and only a terminal status is spoken.
+
+## When a part of the system stops answering
+
+None of these end the conversation, because the transcript that arrives next may
+be "стоп":
+
+- **The planner raises.** The goal is reported refused, nothing is submitted, and
+  the exception type and message go into `VoiceTurn.detail`.
+- **`SessionPort.stop()` raises.** "Остановился." is withheld and
+  "Не смог остановить. Останови вручную." is said instead.
+- **`SessionPort.status()` raises.** The port is documented to answer even when
+  the game is gone, so this is a broken port rather than a disconnected game. It
+  is caught anyway: not knowing the state is not the same as knowing it is fine,
+  so nothing is submitted and "Нет связи с игрой." is said.
+- **The synthesiser raises.** The utterance is reported `cancelled` — it was not
+  heard — the reason is kept in `VoiceCompanion.speech_failures` (bounded), and
+  the speech pump carries on. A backend that broke once must not leave the
+  companion mute for the rest of the session.
+- **A listener on the TTS stream raises.** It is unsubscribed and its failure
+  recorded; the other listeners still receive.
+
+`VoiceCompanion.run` gives its subscription back on every exit — a stream that
+never opened, a failure, or a clean shutdown — and on cancellation it abandons
+speech in flight rather than waiting for a backend that may never return.
 
 ## Event stream
 
@@ -99,9 +124,25 @@ sleeping: stop from idle, listening, mid-utterance, mid-plan, mid-clarification
 and after wake expiry; stop from an interim low-confidence transcript; the stop
 acknowledgement withheld when the port fails; barge-in on any speech including
 interim; the dedup queue's collapse, supersede, stale and eviction rules; every
-bound (queue, subscribers, event history, turn history, transcript length,
-clarification budget); a hostile transcript reaching the planner as the token
-`eat` and nothing else; clarification asked rather than a goal guessed.
+bound (queue, subscribers, event history, listener failures, turn history, speech
+failures, transcript length, clarification budget); a hostile transcript reaching
+the planner as the token `eat` and nothing else; clarification asked rather than a
+goal guessed, including that a misheard *answer* to one buys a repeat rather than
+a plan; a planner, a session port and a synthesiser that raise, none of which
+leave the loop unable to take the next stop.
+
+## Deliberate deviations from the blueprint
+
+- **No numbers in the confirmation.** § 5.2 asks for "результат и остаток" after
+  an action, and the master prompt's example is «Готово. Голод снизился». What is
+  said is «Готово.» — `phrases` is a closed table with no free slot in it, and
+  `PlanRecord` carries no quantity to fill one from. Adding the remainder means a
+  second closed table keyed by goal plus a value on the record; it is a phrasing
+  change, not a plumbing one, and it is not done here.
+- **`voice.enabled` is still refused by the CLI.** `pz_agent_cli.config` reports
+  "no voice adapter ships in this build" when the flag is set. That message
+  predates this package and is now false; the `[voice]` section is not parsed
+  into `VoiceConfig` yet. Both live in another package.
 
 Not verified, and cannot be here:
 

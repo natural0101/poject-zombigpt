@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
@@ -152,7 +153,7 @@ def test_verify_lists_the_contents_and_reports_clean(tmp_path: Path) -> None:
     verification = verify_bundle(
         bundle.path,
         redactor=build_redactor(user_dir=home / "Zomboid", home_dir=home),
-        forbidden=[str(home), CYRILLIC_USER],
+        forbidden={"home_directory": str(home), "account_name": CYRILLIC_USER},
     )
 
     assert verification.clean
@@ -177,14 +178,19 @@ def test_verify_flags_a_member_that_reached_the_archive_unredacted(tmp_path: Pat
     verification = verify_bundle(
         archive_path,
         redactor=build_redactor(user_dir=home / "Zomboid", home_dir=home),
-        forbidden=[CYRILLIC_USER],
+        forbidden={"account_name": CYRILLIC_USER},
     )
 
     assert not verification.clean
     entry = verification.entries[0]
     assert "user_dir" in entry.findings
-    assert f"literal:{CYRILLIC_USER}" in entry.findings
-    assert "REVIEW BEFORE SHARING" in "\n".join(verification.render_lines())
+    assert "literal:account_name" in entry.findings
+    # The report says which literal was found, never what it was: it is printed
+    # to the terminal and emitted as JSON.
+    rendered = "\n".join(verification.render_lines())
+    assert CYRILLIC_USER not in rendered
+    assert CYRILLIC_USER not in json.dumps(verification.to_dict(), ensure_ascii=False)
+    assert "REVIEW BEFORE SHARING" in rendered
 
 
 def test_verify_reports_a_member_it_could_not_scan(tmp_path: Path) -> None:

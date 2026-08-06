@@ -40,7 +40,7 @@ from __future__ import annotations
 
 from collections import deque
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from types import MappingProxyType
 from typing import Final, Protocol, runtime_checkable
@@ -49,7 +49,6 @@ from ..protocol import (
     ActionName,
     DangerLevel,
     InventoryView,
-    ItemView,
     Observation,
     PlayerState,
     Priority,
@@ -327,6 +326,11 @@ class ItemSelection(Protocol):
 
 #: Rejections that mean "there is something, but it is spoken for". §7.9 makes
 #: these an ask, not a refusal: the user may well say yes.
+#:
+#: A sound signal but not a complete one: the list a selection carries is bounded
+#: by :attr:`PolicyConfig.max_reported_rejections`, so a reserve rejection can be
+#: trimmed out of it. :meth:`AutonomyGate._reserves_are_the_blocker` therefore
+#: also asks the question directly.
 _RESERVED_REASONS: Final[frozenset[RejectionReason]] = frozenset(
     {
         RejectionReason.USER_RESERVED,
@@ -428,6 +432,21 @@ def derive_needs(
     anti-loop input: raw floats drift by a thousandth every tick, so an
     unquantised signature would read as "the situation is moving" forever and
     the brake in :class:`NeedArbiter` would never engage on anything.
+
+    Two rows of §17.1 are not derived here, and the omissions are deliberate
+    rather than overlooked:
+
+    * **Low endurance.** The table lists it, but nothing in the protocol's
+      action set rests a character, so a need for it could only ever escalate —
+      and endurance crosses 0.15 every time the player sprints, which would turn
+      §7.8's brake into the only thing standing between the user and a question
+      per minute. It belongs to the loop that can answer it, not to this one.
+    * **The exit thresholds.** §17.1 pairs every trigger with an exit value, and
+      §17 says up front that the numbers want hysteresis in production. What is
+      implemented is the trigger edge; a need therefore keeps firing until the
+      stat actually falls back under its trigger. The quantised signature and
+      the arbiter's cooldown bound the cost of that, but they are not hysteresis
+      and should not be read as it.
     """
     player = observation.player
     needs: list[Need] = []
@@ -576,6 +595,15 @@ class AutonomyGate:
             raise ValueError(f"plans are keyed by need; these disagree: {mismatched}")
         self._config = config
         self._policy = policy
+        # The same policy with the user's reserve rules switched off. It is only
+        # ever used to answer the counterfactual "if you lifted your reserves,
+        # would there be something to use?" — never to choose an item.
+        self._unreserved_policy = replace(
+            policy,
+            user_reserve_tags=frozenset(),
+            strategic_reserve_tags=frozenset(),
+            treat_favorite_as_reserved=False,
+        )
         self._permissions = permissions
         self._plans = MappingProxyType(dict(plans))
         self._arbiter = arbiter if arbiter is not None else NeedArbiter(anti_loop)
@@ -919,15 +947,18 @@ class AutonomyGate:
                 plan=plan,
                 arbitration=arbitration,
             )
-        permitted, withheld = _split_reserved(inventory, memory)
+        permitted = _split_reserved(inventory, memory)
         selection = _select(consumable, permitted, observation.player, self._policy, capabilities)
         choice = selection.choice
         if choice is not None:
             return choice.item_ref
-        reserved_blocked = withheld or any(
-            rejection.reason in _RESERVED_REASONS for rejection in selection.rejections
-        )
-        if reserved_blocked:
+        if self._reserves_are_the_blocker(
+            consumable,
+            inventory=inventory,
+            observation=observation,
+            capabilities=capabilities,
+            selection=selection,
+        ):
             return AutonomyDecision(
                 outcome=AutonomyOutcome.ASK_USER,
                 detail=(
@@ -948,34 +979,55 @@ class AutonomyGate:
             arbitration=arbitration,
         )
 
+    def _reserves_are_the_blocker(
+        self,
+        consumable: Consumable,
+        *,
+        inventory: InventoryView,
+        observation: Observation,
+        capabilities: CapabilityLookup,
+        selection: ItemSelection,
+    ) -> bool:
+        """Would lifting the user's reserves actually give the agent something?
+
+        Asked by re-running the selection over the whole inventory with the
+        reserve rules switched off, rather than by taking the *presence* of a
+        reserved item as proof. A reserved axe is not an answer to hunger: it
+        would leave the agent telling the user "everything that would serve it
+        is reserved. Say the word and I will use one" when saying the word would
+        produce nothing to eat — a sentence that reads as a fact and is not one.
+
+        The reported rejections are consulted first because they catch the two
+        reserve shapes the counterfactual cannot switch off (an item flagged
+        ``reserved`` in its own data, and the drink policy's last-container
+        rule); the counterfactual then catches what a bounded rejection list
+        left out.
+        """
+        if any(rejection.reason in _RESERVED_REASONS for rejection in selection.rejections):
+            return True
+        lifted = _select(
+            consumable, inventory, observation.player, self._unreserved_policy, capabilities
+        )
+        return lifted.choice is not None
+
 
 # --------------------------------------------------------------------------
 # helpers
 # --------------------------------------------------------------------------
 
 
-def _split_reserved(
-    inventory: InventoryView, memory: AutonomyMemory
-) -> tuple[InventoryView, tuple[ItemView, ...]]:
-    """Separate what the user set aside from what the agent may use.
+def _split_reserved(inventory: InventoryView, memory: AutonomyMemory) -> InventoryView:
+    """The inventory with every item type the user reserved removed.
 
-    The reserved items are *returned* rather than dropped: whether a refusal is
-    "there is none" or "there is some but it is yours" is the difference between
-    a report and a question.
+    Removal happens *before* the selection policy runs, so a reserved item
+    cannot be chosen even by a policy that would have scored it best. The
+    original view is returned unchanged when nothing is reserved, so the common
+    case allocates nothing.
     """
-    permitted: list[ItemView] = []
-    withheld: list[ItemView] = []
-    for item in inventory.items:
-        if memory.reserves_item(item.full_type):
-            withheld.append(item)
-        else:
-            permitted.append(item)
-    if not withheld:
-        return inventory, ()
-    return (
-        InventoryView(containers=list(inventory.containers), items=permitted),
-        tuple(withheld),
-    )
+    permitted = [item for item in inventory.items if not memory.reserves_item(item.full_type)]
+    if len(permitted) == len(inventory.items):
+        return inventory
+    return InventoryView(containers=list(inventory.containers), items=permitted)
 
 
 def _select(

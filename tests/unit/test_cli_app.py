@@ -10,6 +10,7 @@ import pytest
 
 from pz_agent_cli.app import COMMANDS, build_parser, main
 from pz_agent_cli.context import EXIT_FAILURE, EXIT_OK, EXIT_USAGE, resolve_workspace
+from pz_agent_cli.saves import MAX_LISTED_SAVES, find_saves
 from pz_agent_cli.support import DEFAULT_LOG_LINES, MAX_LOG_LINES, _add_directory
 from pz_agent_core.diagnostics import BundleBuilder, DiagnosticLog, LogLevel, TraceWriter
 from pz_agent_core.diagnostics.log import LogLimits
@@ -43,17 +44,25 @@ def test_every_declared_command_is_accepted_by_the_parser() -> None:
 _REQUIRED_ARGUMENT = {"restore-save": ("some-backup-id",), "replay": ("trace.jsonl",)}
 
 
-@pytest.mark.parametrize("command", ["start", "stop", "arm", "disarm"])
-def test_a_command_with_no_subsystem_is_rejected_rather_than_stubbed(
-    tmp_path: Path, command: str
-) -> None:
+def test_a_command_with_no_subsystem_is_rejected_rather_than_stubbed(tmp_path: Path) -> None:
     """Better an "invalid choice" than a subcommand that prints "not implemented"."""
     world = make_world(tmp_path)
 
     with pytest.raises(SystemExit) as caught:
-        world.run(command)
+        world.run("setup")
 
     assert caught.value.code == EXIT_USAGE
+
+
+@pytest.mark.parametrize("command", ["stop", "arm", "disarm"])
+def test_a_sidecar_command_reports_that_nothing_is_running(tmp_path: Path, command: str) -> None:
+    """The subsystem exists; what is absent is a process, and that is said plainly."""
+    world = make_world(tmp_path)
+
+    exit_code = world.run(command)
+
+    assert exit_code == EXIT_FAILURE
+    assert "no sidecar" in world.stderr
 
 
 def test_no_command_prints_the_help_and_reports_a_usage_error(tmp_path: Path) -> None:
@@ -390,6 +399,21 @@ def test_status_without_a_zomboid_directory_is_a_failure(tmp_path: Path) -> None
 # ---------------------------------------------------------------------------
 # backup-save / restore-save
 # ---------------------------------------------------------------------------
+
+
+def test_the_list_of_saves_offered_to_the_user_is_bounded(tmp_path: Path) -> None:
+    """A profile with hundreds of characters must not print hundreds of lines."""
+    world = make_world(tmp_path)
+    assert world.user_dir is not None
+    for index in range(MAX_LISTED_SAVES + 5):
+        make_save(world.user_dir, f"Survivor/save-{index:03d}", SAVE_FILES)
+
+    found = find_saves(world.user_dir / "Saves")
+
+    assert len(found) == MAX_LISTED_SAVES
+    assert world.run("backup-save") == EXIT_FAILURE
+    named = [line for line in world.stderr.splitlines() if line.strip().startswith("Survivor/")]
+    assert len(named) == MAX_LISTED_SAVES
 
 
 def test_a_single_save_is_backed_up_without_being_named(tmp_path: Path) -> None:

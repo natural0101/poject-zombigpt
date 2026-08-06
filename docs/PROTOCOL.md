@@ -127,15 +127,27 @@ Journals (`.jsonl`) use a different discipline:
 
 ## Observation tiers
 
-| Tier | Content | When |
-| --- | --- | --- |
-| 0 | Heartbeat: session, seq, versions, player present, armed, mode, active action, danger | Every tick |
-| 1 | Compact diff: changed scalars and changed ref lists | Every observation interval |
-| 2 | Full snapshot | On connect, after a gap, after recovery |
-| 3 | Requested detail: one container's contents, a wound, a square, a candidate path | On demand |
+| Tier | Content | Who produces it | When |
+| --- | --- | --- | --- |
+| 0 | Heartbeat: session, seq, versions, player present, armed, mode, active action, danger | The mod | Every tick |
+| 2 | Full snapshot | The mod | Every observation interval, on connect, after a gap, after recovery |
+| 1 | Compact diff: changed scalars and changed ref lists | **The sidecar**, from two consecutive snapshots | On demand, for the planner and the trace |
+| 3 | Requested detail: one container's contents, a wound, a square, a candidate path | The mod | On demand |
 
-Applying a tier-1 diff to the previous snapshot reproduces the next one exactly;
-that round-trip is a test, not an aspiration.
+**Tier 1 is not a wire format.** The mod writes full snapshots; the sidecar
+derives the diff by comparing two of them (`observation/diff.py`). There is no
+diff schema in `schemas/`, and a diff is never parsed off the exchange
+directory.
+
+That is a deliberate trade. A diff on the wire would be smaller, but it would
+make the mod hold the previous snapshot and stay in step with a reader it
+cannot see — and a reader that missed one line would then be silently wrong
+rather than noisily behind. Full snapshots are idempotent: a reader that misses
+one loses a tick, not its grip on the world.
+
+Applying a tier-1 diff to the previous snapshot still has to reproduce the next
+one exactly, and that round-trip is a test rather than an aspiration — it is
+what lets the trace be replayed and the planner be given a compact update.
 
 ### Saying where the walk stopped
 

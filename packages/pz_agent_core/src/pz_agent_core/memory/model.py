@@ -65,6 +65,11 @@ MAX_CATEGORY_LEN: Final = 32
 MAX_PREFERENCE_KEY_LEN: Final = 48
 MAX_PREFERENCE_VALUE_LEN: Final = 64
 
+#: What the tail of a rememberable container starts with. Mirrors
+#: :attr:`~pz_agent_core.protocol.ContainerRef.is_world`; anything else travels
+#: with the player and its tail is only meaningful for one session.
+WORLD_TAIL_PREFIX: Final = "world:"
+
 #: Reason attached to a reservation recovered from a store written before
 #: reservations carried one. Stating that the reason was not recorded is honest;
 #: inventing one would put words in the user's mouth.
@@ -231,6 +236,15 @@ class KnownContainer:
     def __post_init__(self) -> None:
         if not self.tail or len(self.tail) > MAX_TAIL_LEN:
             raise MemoryValueError(f"container tail must be 1..{MAX_TAIL_LEN} characters")
+        if not self.tail.startswith(WORLD_TAIL_PREFIX):
+            # Enforced on the record and not only in :func:`container_tail`, so a
+            # document from an older build or an edited file cannot reintroduce
+            # a tail that embeds a runtime id. Rebuilding a session reference
+            # from one is the §3.7 mis-resolve, and it would look valid.
+            raise MemoryValueError(
+                f"{self.tail!r} is not a world container tail; only a container with a fixed "
+                "place in the world can be remembered across sessions"
+            )
         if len(self.label) > MAX_LABEL_LEN:
             raise MemoryValueError(f"container label must be at most {MAX_LABEL_LEN} characters")
         _check_timestamp(self.last_seen_ms, field_name="last_seen_ms")
