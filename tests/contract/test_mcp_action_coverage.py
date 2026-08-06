@@ -227,6 +227,49 @@ def test_the_read_only_actions_the_surface_publishes_are_the_protocols_own() -> 
     assert unarmed <= READ_ONLY_ACTIONS | ALWAYS_ALLOWED_ACTIONS
 
 
+# -- the tier a caller is told to hold -------------------------------------
+
+#: Tools whose published ``risk`` is not their adapter's base tier, and why.
+#:
+#: One entry, and it is a real disagreement rather than a rule with an
+#: exception. ``MoveToAdapter.risk`` is ``P2``; the descriptor says ``P3``. The
+#: catalogue's own module docstring argues against exactly that: the escalation
+#: to ``P3`` happens in ``risk_for`` when the destination changes floor or leaves
+#: the safe radius, is invisible from the tool name, and publishing it tells a
+#: caller holding a ``P2`` grant that a step across the room is out of reach —
+#: which the engine would then have allowed. It is recorded here rather than
+#: changed, because a published tier is something clients already read.
+RISK_DISAGREEMENTS: Final[dict[str, str]] = {
+    "pz_action_move_to": (
+        "publishes P3 while movement.move_to's adapter declares P2 and escalates "
+        "per call; the two statements of one tier disagree"
+    )
+}
+
+
+@pytest.mark.parametrize("spec", action_tools(), ids=lambda spec: spec.name)
+def test_a_tools_published_tier_is_the_one_its_adapter_declares(spec: ToolSpec) -> None:
+    """``risk`` is the floor a caller needs before the engine has seen the arguments.
+
+    Two numbers for one permission tier is how a caller ends up holding a grant
+    the surface says is insufficient and the engine says is enough, or the other
+    way round — and only one of those two directions is safe to be wrong in.
+    """
+    assert spec.action is not None
+    if spec.name in RISK_DISAGREEMENTS:
+        pytest.skip(RISK_DISAGREEMENTS[spec.name])
+
+    assert spec.risk is a_registry().get(spec.action).risk
+
+
+def test_the_known_risk_disagreements_are_the_only_ones() -> None:
+    """A second one would be a new bug hiding behind the first one's exemption."""
+    for tool, reason in RISK_DISAGREEMENTS.items():
+        assert reason.strip(), f"{tool} is exempt without a reason"
+
+    assert set(RISK_DISAGREEMENTS) == {"pz_action_move_to"}
+
+
 # -- (4) the arguments an adapter will actually accept ---------------------
 
 
