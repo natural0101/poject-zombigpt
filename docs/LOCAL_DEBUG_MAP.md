@@ -18,6 +18,10 @@ not "is the design wrong" — it is "which symbol is spelled differently here".
 grep -rn "Build 42:" pz-mod/
 ```
 
+That finds six comments. The full inventory of what is unconfirmed —
+52 symbols — is `docs/GAME_API_VERIFICATION.md`; check there before concluding
+a symbol is fine because the grep did not name it.
+
 That is the list of every place this code is guessing.
 
 ## Where the evidence lives

@@ -6,8 +6,33 @@ Start here:
 .venv\Scripts\pz-agent doctor
 ```
 
-Every check has a stable code and remediation text. The sections below explain
-the failures whose cause is not obvious from the message.
+Every check has a stable code and remediation text. This document listed none
+of them for a while, which made "look it up in TROUBLESHOOTING.md" impossible
+advice for anyone holding a code.
+
+## The doctor codes
+
+Ten checks, in the order `doctor` runs them. Each depends on the ones above it,
+so **fix the first failure before reading the rest** — a `PZD004` that says
+"no Zomboid directory to test" is not a permissions problem, it is `PZD003`
+still unfixed.
+
+| Code | Check | What it means when it fails |
+| --- | --- | --- |
+| `PZD001` | `game_installation` | The Project Zomboid install could not be found. Discovery searches the Steam library folders and the usual paths; the message says how many it searched. Set `game.install_dir` in `config.toml` if it lives somewhere unusual. |
+| `PZD002` | `build_detected` | The build number could not be read. This is a **warning**, not a failure: only the `versionNumber=` header in `console.txt` is confirmed, and the install-side candidates are guesses. An honest unknown is reported rather than the target build being substituted. |
+| `PZD003` | `user_directory` | The `Zomboid` user directory could not be found — the one holding `Saves/`, `mods/` and `console.txt`, not the install. On Windows it follows `USERPROFILE` and OneDrive redirection. Set `game.user_dir` to override. |
+| `PZD004` | `directory_permissions` | The Zomboid directory exists but could not be written to. Fixing `PZD003` first is usually the answer; permissions cannot be tested on a directory that was never located. |
+| `PZD005` | `mod_installed` | The bridge mod is not in the mods folder. Run `pz-agent install-mod`. Present on disk is not the same as loaded — see `PZD006`. |
+| `PZD006` | `game_heartbeat` | No `heartbeat.game.json`, or one whose timestamp is not advancing. This is the check that distinguishes "the mod is installed" from "the mod is running": a mod that threw during load looks identical to an idle exchange directory everywhere except here. Enable **PZ Agent Bridge** in the in-game mod list and load a save. |
+| `PZD007` | `ipc_writable` | The exchange directory could not be written to, so the sidecar could not send a command even if everything else were healthy. |
+| `PZD008` | `timed_actions` | The timed-action classes the adapters construct could not be found by a scan of the install's own Lua. This is what turns capabilities from unprobed into a state backed by evidence; a failure here explains a later `CAPABILITY_UNAVAILABLE`. |
+| `PZD009` | `conflicting_files` | Something is left over in the exchange directory that this build did not write — usually a previous version's journals. |
+| `PZD010` | `active_session` | Reports whether a session is open and which mode it is in. `unknown` with no exchange directory is normal before the first run. |
+
+A check can report `pass`, `warn`, `fail` or `unknown`, and **`unknown` is not a
+pass**. It means the check could not be performed — almost always because
+something above it failed — and `doctor` says which.
 
 ---
 
