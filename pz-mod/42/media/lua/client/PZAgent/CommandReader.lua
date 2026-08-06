@@ -231,6 +231,15 @@ local function rejection(record, reasonCode, detail)
     command_id = record.command_id,
     action = record.action,
     seq = record.seq,
+    -- Carried so the ack can be addressed to the session that issued the
+    -- command even when that session is not the one the mod has open -- which
+    -- is exactly the case for a STALE_SESSION refusal. The sidecar refuses an
+    -- ack whose session_id is not a UUID, so a malformed one is dropped here
+    -- rather than sent as an unreadable answer.
+    session_id = type(record.session_id) == "string"
+      and record.session_id:match(UUID_PATTERN) ~= nil
+      and record.session_id
+      or nil,
     reason_code = reasonCode,
     detail = detail,
   }
@@ -452,9 +461,14 @@ end
 
 --- Read the next batch of records.
 ---
---- Returns a list of entries (see CommandReader.KIND) plus an optional
---- diagnostic string, or nil plus a reason when the queue could not be read at
---- all. An empty list is the ordinary case: no new records.
+--- Returns a list of entries (see CommandReader.KIND), an optional diagnostic
+--- string, and how many lines the batch consumed -- or nil plus a reason when
+--- the queue could not be read at all. An empty list is the ordinary case: no
+--- new records.
+---
+--- The line count is what the caller spends its budget on, and it is not the
+--- number of entries: a transport record produces no entry and a held-back
+--- fragment produces neither, yet both cost a decode.
 function Handle:poll(sessionId, nowMs, limit)
   local budget = limit or self.maxRecordsPerPoll
   if budget > self.maxRecordsPerPoll then
@@ -480,13 +494,16 @@ function Handle:poll(sessionId, nowMs, limit)
     return nil, readError
   end
   local entries = {}
+  local consumed = 0
   for index = 1, #lines do
     local line = lines[index]
     local record = PZAgent.Json.decode(line)
+    consumed = consumed + 1
     if record == nil then
       if index == #lines and holdPartial(self, #line) then
         -- Incomplete rather than corrupt, as far as anything here can tell.
         -- The cursor stays put and the next poll sees the finished line.
+        consumed = consumed - 1
         break
       end
       consume(self, line)
@@ -506,7 +523,7 @@ function Handle:poll(sessionId, nowMs, limit)
       end
     end
   end
-  return entries, diagnostic
+  return entries, diagnostic, consumed
 end
 
 return CommandReader

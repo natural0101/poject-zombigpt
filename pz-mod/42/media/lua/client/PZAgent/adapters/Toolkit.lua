@@ -243,6 +243,22 @@ function Toolkit.construct(className, ...)
   return instance
 end
 
+--- Construct the first of `names` this build actually has.
+---
+--- The same idea as probing a closed list of accessor spellings: a couple of
+--- these classes are spelled differently across builds and across the mods that
+--- reimplement them, and trying a short closed list is what keeps a rename
+--- costing nothing. When none of them exists the refusal names every candidate,
+--- so the report says what was looked for rather than only the first guess.
+function Toolkit.constructFirst(names, ...)
+  for index = 1, #names do
+    if Toolkit.symbolPresent(names[index] .. ".new") then
+      return Toolkit.construct(names[index], ...)
+    end
+  end
+  return Toolkit.unavailable(table.concat(names, " / "))
+end
+
 -- ---------------------------------------------------------------------------
 -- the action queue
 -- ---------------------------------------------------------------------------
@@ -1095,32 +1111,127 @@ local function defaultPrepare()
   return true
 end
 
+--- Where an adapter's own steps hang, so `start` and `poll` can be the two
+--- functions PZAgent.ActionRuntime actually calls.
+---
+--- This split was not a design choice, it was a defect. The adapters here were
+--- written against a five-step lifecycle -- validate, prepare, begin, progress,
+--- verify -- each taking `(self, args, ctx)`. The runtime calls exactly two
+--- functions, `start(ctx, args)` and `poll(ctx, args)`, and looks up an adapter
+--- by `adapter.action`. So every adapter built by this function named itself
+--- under `name`, exposed no `action`, and registered nowhere:
+--- `tests/lua/test_adapter_registry.lua` found thirteen of the sixteen game
+--- actions unreachable. The mod loaded cleanly, reported healthy, and answered
+--- CAPABILITY_UNAVAILABLE to everything a player would ask it to do.
+---
+--- The five steps are worth keeping -- `verify` is where the postcondition
+--- lives, and an adapter that folded it into `start` would have nowhere to put
+--- the proof -- so the fix is this adaptor rather than a rewrite of ten files.
+local LIFECYCLE_STEPS = { "validate", "prepare", "begin", "progress", "verify" }
+
+--- Run the postcondition and publish what it observed.
+---
+--- The evidence goes on `ctx.state.evidence` because that is where
+--- ActionRuntime reads it when an adapter answers "done", and a "done" with no
+--- evidence there becomes POSTCONDITION_FAILED rather than a success. Verify
+--- returning nil therefore has exactly one meaning: the change could not be
+--- observed, so it will not be claimed.
+local function runVerify(adapter, args, ctx)
+  local state = Toolkit.state(ctx)
+  local evidence, code, detail = adapter:verify(state.before, Toolkit.observe(ctx.player), args, ctx)
+  if evidence == nil then
+    return nil,
+      code or reasons().POSTCONDITION_FAILED,
+      detail or string.format("%s could not observe its postcondition", adapter.action)
+  end
+  state.evidence = evidence
+  return "done"
+end
+
 --- Build an adapter table from a spec, filling in the shared lifecycle steps.
 ---
 --- `validate` and `verify` are mandatory and have no default: an adapter with
 --- no postcondition of its own cannot be allowed to inherit one that always
 --- passes, which is exactly how a command would report success it never saw.
+---
+--- `args` is mandatory for the same class of reason. PZAgent.CommandDispatcher
+--- builds the argument table it hands an adapter *from the declaration*, so an
+--- adapter that declares nothing is handed nothing -- it would not be refused,
+--- it would run with every argument silently dropped.
 function Toolkit.declare(spec)
   assert(type(spec.name) == "string" and #spec.name > 0, "an adapter must name its action")
   assert(type(spec.validate) == "function", spec.name .. " must implement validate")
-  assert(type(spec.start) == "function", spec.name .. " must implement start")
+  assert(type(spec.begin) == "function", spec.name .. " must implement begin")
   assert(type(spec.verify) == "function", spec.name .. " must implement verify")
+  assert(type(spec.args) == "table", spec.name .. " must declare its arguments")
   local adapter = {
+    -- What PZAgent.CommandDispatcher reads. `name` stays beside it because the
+    -- adapters and their tests were written against it, and one spelling on the
+    -- wire is worth more than one spelling in the source.
+    action = spec.name,
     name = spec.name,
     capability = spec.capability,
+    args = spec.args,
+    required_symbols = spec.requires or {},
+
     requires = spec.requires or {},
     timeout_ms = spec.timeout_ms or 30000,
     poll_interval_ms = spec.poll_interval_ms or 250,
     validate = spec.validate,
     prepare = spec.prepare or defaultPrepare,
-    start = spec.start,
+    begin = spec.begin,
     progress = spec.progress or function(_, _, ctx)
       return Toolkit.queueProgress(ctx)
     end,
     verify = spec.verify,
+    interrupt = spec.interrupt,
   }
+
+  --- validate -> prepare -> snapshot -> begin, as one call the runtime can make.
+  ---
+  --- The "before" snapshot is taken after prepare and before begin, which is the
+  --- only window where it means anything: prepare may fetch an item into the
+  --- character's hands, and a snapshot taken before that would show the fetch as
+  --- part of the action's effect.
+  adapter.start = function(ctx, args)
+    local accepted, code, detail = adapter:validate(args, ctx)
+    if accepted == nil then
+      return nil, code, detail
+    end
+    local prepared, prepareCode, prepareDetail = adapter:prepare(args, ctx)
+    if prepared == nil then
+      return nil, prepareCode, prepareDetail
+    end
+    Toolkit.state(ctx).before = Toolkit.observe(ctx.player)
+    local started, startCode, startDetail = adapter:begin(args, ctx)
+    if started == nil then
+      return nil, startCode, startDetail
+    end
+    -- A read-only adapter -- inspect, search -- finishes inside begin. It still
+    -- goes through verify: "the walk returned a table" is not a postcondition.
+    if started == "done" then
+      return runVerify(adapter, args, ctx)
+    end
+    return true
+  end
+
+  adapter.poll = function(ctx, args)
+    local status, code, detail = adapter:progress(args, ctx)
+    if status == nil then
+      return nil, code, detail
+    end
+    if status == "done" then
+      return runVerify(adapter, args, ctx)
+    end
+    return true
+  end
+
   return adapter
 end
+
+--- Every lifecycle step an adapter built by :func:`Toolkit.declare` carries.
+--- Exported so a test can assert the set rather than restate it.
+Toolkit.LIFECYCLE_STEPS = LIFECYCLE_STEPS
 
 --- Publish an adapter to the dispatcher's registry.
 function Toolkit.register(adapter)
