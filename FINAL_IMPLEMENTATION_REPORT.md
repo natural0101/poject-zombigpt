@@ -114,6 +114,23 @@ lua tests           ok        1269 assertions across 12 suites
 The one skip is a test that needs the `mcp` SDK, which is an optional
 dependency and is deliberately not installed here.
 
+### The CI matrix was verified rather than assumed
+
+CI has never run — this repository has no push history to GitHub Actions yet —
+so its configuration was an untested claim. Both matrix entries were therefore
+reproduced locally in clean environments built the way the workflow builds
+them (`uv pip install -e ".[dev]"`, not the source paths the local gate uses):
+
+| Environment | Result |
+| --- | --- |
+| Python 3.11 editable install | every CI step passes; 2338 tests |
+| Python 3.12 editable install | every CI step passes; 2338 tests; mypy strict over 202 files |
+
+That matters because the local gate runs against `pythonpath` entries pointing
+at `packages/*/src`, so a packaging mistake — a module missing from the wheel's
+package list, an import that only resolves from the checkout — would not show
+up there. It does not exist: the editable install resolves everything.
+
 ### What the suite actually covers
 
 The tests worth naming are the ones asserting a refusal rather than a feature:
@@ -220,8 +237,29 @@ dist/pz_agent-0.1.0.tar.gz
 
 Verified by installing the wheel into a clean environment: `pz-agent --version`,
 `--help`, `doctor` and `smoke` all behave correctly, including the two
-honest-failure paths above. The Windows launcher, installer and uninstaller are
-in `installer/`; the unsigned-binary warning is expected and documented.
+honest-failure paths above.
+
+### The installer was run, not just tested
+
+`installer/pz_agent_installer.py` has unit tests, but the round trip had never
+been executed. It was, against a synthetic Zomboid directory:
+
+- **install** placed 17 files — 14 Lua modules, `mod.info`, the launcher and
+  `config.toml` — plus a manifest of exactly what it wrote;
+- a user file (`MY_NOTES.txt`) was then planted *inside the mod directory* and a
+  save alongside it;
+- **uninstall** removed 16 files, kept `config.toml` and said so by name, and
+  left both the planted file and the save untouched.
+
+That is the claim in `docs/QUICKSTART.md` demonstrated rather than asserted: an
+uninstaller that removed the mod directory wholesale would have deleted the
+user's file, and only the manifest makes the difference. Two empty directories
+are left behind (`mods/` and `mods/pz_agent_bridge/`), which is the correct
+conservative choice — removing a directory the installer did not create is how
+an uninstaller deletes something it should not.
+
+The Windows launcher, installer and uninstaller are in `installer/`; the
+unsigned-binary warning is expected and documented.
 
 ---
 
