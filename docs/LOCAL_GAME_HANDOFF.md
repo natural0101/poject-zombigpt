@@ -62,9 +62,31 @@ then run past the critic, capability validation, policy validation and reference
 validation. The safety property is that the plan type is checked, not that the
 model is trusted.
 
-**Autonomous mode.** Hunger, thirst, fatigue, endurance, wounds, an inventory
+**Autonomous mode — read this one carefully.** All the parts exist and are
+separately tested: hunger, thirst, fatigue, endurance, wounds, an inventory
 reserve, return-to-anchor, a bounded radius, re-observation after every action,
 and at most one executing step at a time.
+
+They are not all connected yet. `build_loop` — the function `pz-agent start`
+assembles its sidecar with — passes no planner, and `SidecarLoop._propose`
+returns immediately when there is none. So as of this commit, `arm --mode
+autonomous` produces a loop that observes and guards and **proposes nothing**.
+
+Check before running S19 or S20, which are the two endurance scenarios and the
+only ones this affects:
+
+```
+python -c "import inspect, pz_agent_cli.app as a; print('planner=' in inspect.getsource(a.build_loop))"
+```
+
+`False` means the wiring has not landed and those two scenarios cannot pass —
+not because the game refused anything, but because the agent will sit still.
+Everything else in this document is unaffected: ASSISTED mode takes its commands
+from MCP and does not go through the planner at all.
+
+This is recorded here rather than left to be discovered because it is the fifth
+instance of one pattern on this branch — two subsystems, each complete and each
+tested, with nothing connecting them. `docs/PROGRESS.md` has the full table.
 
 **Voice.** A Russian intent parser, stop on the interim transcript rather than
 the final one, a TeamON adapter, and a fake transport for tests.
