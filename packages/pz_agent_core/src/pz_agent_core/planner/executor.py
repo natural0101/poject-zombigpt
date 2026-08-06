@@ -97,14 +97,16 @@ MAX_ENGINE_CALLS: Final = 32
 class StepState(StrEnum):
     """Where one step ended up.
 
-    A subset of §7.4's list: ``ready`` and ``verifying`` are states *inside*
+    The terminal half of §7.4's list, and only that. ``pending`` and
+    ``executing`` describe a step while the loop is still in it, and a
+    :class:`StepReport` is only ever written once the step is over;
+    :attr:`PlanReport.pending_step_ids` is what says which steps never started.
+    ``ready`` and ``verifying`` live *inside*
     :meth:`~pz_agent_core.actions.ActionEngine.execute`, which owns the
-    enqueue-observe-verify cycle and hands back one terminal answer. Reporting
-    them here would be this module claiming to know something it never sees.
+    enqueue-observe-verify cycle and hands back one terminal answer — reporting
+    them here would be this module claiming to see something it never does.
     """
 
-    PENDING = "pending"
-    EXECUTING = "executing"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     SKIPPED = "skipped"

@@ -46,8 +46,8 @@ from .modinstall import (
 from .output import Printer
 from .runtime import DEFAULT_LIMITS, LoopLimits, SidecarLoop
 from .saves import run_backup_save, run_restore_save
-from .status import run_status
-from .supervisor import SidecarSupervisor, SupervisorState
+from .status import game_liveness, run_status
+from .supervisor import GameRunningProbe, SidecarSupervisor, SupervisorState, probe_game_running
 from .support import DEFAULT_LOG_LINES, DEFAULT_REPLAY_LIMIT, run_logs, run_replay
 
 PROGRAM: Final = "pz-agent"
@@ -436,6 +436,7 @@ def run_start(ctx: CliContext, *, foreground: bool, ticks: int | None, as_json: 
     if foreground:
         return _start_foreground(ctx, workspace, ticks=ticks, as_json=as_json, printer=printer)
     outcome = supervisor.start(_sidecar_argv(workspace))
+    game = probe_game(ctx, workspace)
     if as_json:
         printer.json(
             {
@@ -443,7 +444,8 @@ def run_start(ctx: CliContext, *, foreground: bool, ticks: int | None, as_json: 
                 "detail": workspace.redactor.text(outcome.detail),
                 "mode": SessionMode.OBSERVE.value,
                 "record": None if outcome.record is None else outcome.record.to_dict(),
-                "mcp": _mcp_snippet(workspace),
+                "game": game.to_dict(),
+                "mcp": _mcp_snippet(workspace, redacted=True),
             }
         )
         return EXIT_OK if outcome.started else EXIT_FAILURE
@@ -452,11 +454,21 @@ def run_start(ctx: CliContext, *, foreground: bool, ticks: int | None, as_json: 
         return EXIT_FAILURE
     printer.line(outcome.detail)
     printer.field("mode", "OBSERVE — it will not act until you run 'pz-agent arm'")
+    printer.field("game", game.detail)
     printer.field("logs", workspace.redact(supervisor.spawn_log))
     printer.line("")
     printer.line("MCP stdio server, for a client that speaks it:")
-    printer.lines(f"  {line}" for line in _mcp_snippet(workspace))
+    printer.lines(f"  {line}" for line in _mcp_snippet(workspace, redacted=False))
     return EXIT_OK
+
+
+def probe_game(ctx: CliContext, workspace: Workspace) -> GameRunningProbe:
+    """Whether Project Zomboid is open, from the heartbeat first and the process table second.
+
+    The same three-valued answer ``restore-save`` needs, reported here because
+    ``start`` is where a user finds out the sidecar has nothing to attach to yet.
+    """
+    return probe_game_running(heartbeat=game_liveness(ctx, workspace))
 
 
 def _start_foreground(
@@ -498,13 +510,20 @@ def _start_foreground(
     return EXIT_OK
 
 
-def _mcp_snippet(workspace: Workspace) -> tuple[str, ...]:
-    """The stdio server configuration §14.3 asks ``start`` to print."""
+def _mcp_snippet(workspace: Workspace, *, redacted: bool) -> tuple[str, ...]:
+    """The stdio server configuration §14.3 asks ``start`` to print.
+
+    Printed with real paths so it can be pasted into a client's configuration,
+    and redacted in the ``--json`` form, which is the one that ends up in a bug
+    report — an interpreter path carries the account name.
+    """
+    interpreter = workspace.redactor.text(sys.executable) if redacted else sys.executable
+    state_dir = workspace.redact(workspace.state_dir) if redacted else str(workspace.state_dir)
     return (
         '"pz-agent": {',
-        f'  "command": "{sys.executable}",',
+        f'  "command": "{interpreter}",',
         '  "args": ["-m", "pz_agent_mcp"],',
-        f'  "env": {{"PZ_AGENT_STATE_DIR": "{workspace.redact(workspace.state_dir)}"}}',
+        f'  "env": {{"PZ_AGENT_STATE_DIR": "{state_dir}"}}',
         "}",
     )
 

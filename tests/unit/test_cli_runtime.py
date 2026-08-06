@@ -45,8 +45,8 @@ from pz_agent_core.protocol import (
 )
 from pz_agent_core.safety.reflex import ReflexGuard, ReflexSignals, SafetyEvent
 from pz_agent_core.session.handshake import SessionDescriptor
-from pz_agent_core.session.heartbeat import Peer
-from tests.fixtures import make_player
+from pz_agent_core.session.heartbeat import HeartbeatMonitor, Peer
+from tests.fixtures import DEFAULT_SESSION, make_player
 from tests.fixtures.cli_worlds import CliWorld, make_world
 from tests.fixtures.ipc_builders import FakeClock
 from tests.fixtures.sidecar_worlds import (
@@ -740,6 +740,41 @@ def test_start_detaches_a_child_and_records_its_pid(
     assert document["record"]["pid"] == 5150
     assert document["mode"] == SessionMode.OBSERVE.value
     assert any("pz_agent_mcp" in line for line in document["mcp"])
+    # No mod has ever written a heartbeat on this fake machine, and the process
+    # table of the test runner is not the user's, so the honest answer is the
+    # conservative one either way.
+    assert document["game"]["verdict"] in {"may_be_running", "not_running", "running"}
+    assert document["game"]["unsafe_to_restore"] is (document["game"]["verdict"] != "not_running")
+
+
+def test_start_reports_the_game_as_running_when_the_mod_is_beating(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world = _configured(tmp_path)
+    workspace = resolve_workspace(world.ctx)
+    assert workspace.ipc_root is not None
+    layout = IpcLayout(workspace.ipc_root)
+    layout.ensure()
+    HeartbeatMonitor(layout, clock=world.clock).publish(
+        Peer.GAME,
+        session_id=DEFAULT_SESSION,
+        nonce="beat",
+        version="0.1.0",
+        build="42.20",
+    )
+    world.clock.freeze()
+
+    def supervisor(ctx: object, workspace_: object) -> SidecarSupervisor:
+        return SidecarSupervisor(
+            workspace.state_dir, clock=world.clock, spawn=lambda argv, cwd, log: 7
+        )
+
+    monkeypatch.setattr(app, "build_supervisor", supervisor)
+
+    assert world.run("start", "--json") == EXIT_OK
+
+    document = json.loads(world.stdout)
+    assert document["game"]["verdict"] == "running"
 
 
 def test_arm_publishes_a_request_for_the_running_sidecar(tmp_path: Path) -> None:
