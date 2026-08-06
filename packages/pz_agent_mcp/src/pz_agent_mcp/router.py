@@ -200,11 +200,27 @@ class ToolRouter:
             "pz_observe_snapshot": self._observe_snapshot,
             "pz_observe_inventory": self._observe_inventory,
             "pz_observe_nearby": self._observe_nearby,
+            # Every tool that names an action is routed to the same handler, and
+            # that is the point: the schema field is the adapter argument, so
+            # there is nothing per-action to translate. A handler that knew
+            # which arguments `medical.bandage` takes would be a second copy of
+            # the adapter's own parser, and the copy is what drifts.
+            "pz_action_inspect_world": self._submit,
+            "pz_action_inspect_container": self._submit,
+            "pz_action_search_inventory": self._submit,
             "pz_action_move_to": self._submit,
+            "pz_action_move_near": self._submit,
+            "pz_action_open_container": self._submit,
             "pz_action_transfer": self._submit,
+            "pz_action_ensure_main": self._submit,
             "pz_action_eat": self._submit,
             "pz_action_drink": self._submit,
             "pz_action_read": self._submit,
+            "pz_action_equip": self._submit,
+            "pz_action_unequip": self._submit,
+            "pz_action_bandage": self._submit,
+            "pz_action_rest": self._submit,
+            "pz_action_sleep": self._submit,
             "pz_action_wait": self._submit,
             "pz_action_cancel": self._submit,
             "pz_plan_execute": self._plan_execute,

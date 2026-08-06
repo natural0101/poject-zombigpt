@@ -15,9 +15,14 @@ from pz_agent_core.actions import PreconditionFailed
 from pz_agent_core.capabilities.probes import (
     DRINK_CARRIED,
     EAT_PERCENTAGE,
+    EQUIPMENT_EQUIP,
+    EQUIPMENT_UNEQUIP,
     INVENTORY_TRANSFER,
+    MEDICAL_BANDAGE,
     MOVE_TO_SQUARE,
     READ_LITERATURE,
+    SURVIVAL_REST,
+    SURVIVAL_SLEEP,
 )
 from pz_agent_core.observation.compact import (
     CONTENT_MARKER,
@@ -66,6 +71,11 @@ ALL_CAPABILITIES = (
     EAT_PERCENTAGE,
     DRINK_CARRIED,
     READ_LITERATURE,
+    EQUIPMENT_EQUIP,
+    EQUIPMENT_UNEQUIP,
+    MEDICAL_BANDAGE,
+    SURVIVAL_REST,
+    SURVIVAL_SLEEP,
 )
 
 #: A username that cannot occur by accident inside another word.
@@ -76,6 +86,9 @@ OTHER_SESSION = str(uuid.UUID(int=0x5E5511))
 
 BEAN_REF = item_ref("501", "player-main")
 BOOK_REF = item_ref("502", "worn:Back:99001")
+MAIN_REF = main_container_ref()
+CRATE_REF = f"container:{DEFAULT_SESSION}:world:1200:3400:0:crate:0"
+SQUARE_REF = f"square:{DEFAULT_SESSION}:1200:3400:0"
 
 #: Windows drive paths, UNC paths and POSIX system paths — §3.13 forbids all of
 #: them from crossing this boundary in any field.
@@ -946,7 +959,12 @@ def every_payload(router: ToolRouter) -> Iterator[tuple[str, Any]]:
         ("pz_observe_snapshot", {"detail": "full"}),
         ("pz_observe_inventory", {}),
         ("pz_observe_nearby", {"radius": 30}),
+        ("pz_action_inspect_world", {"idempotency_key": "iw1"}),
+        ("pz_action_inspect_container", {"container_ref": MAIN_REF, "idempotency_key": "ic1"}),
+        ("pz_action_search_inventory", {"edible": True, "idempotency_key": "is1"}),
         ("pz_action_move_to", {"target": {"x": 1, "y": 2, "z": 0}, "idempotency_key": "m1"}),
+        ("pz_action_move_near", {"object_ref": CRATE_REF, "idempotency_key": "mn1"}),
+        ("pz_action_open_container", {"container_ref": CRATE_REF, "idempotency_key": "oc1"}),
         (
             "pz_action_transfer",
             {
@@ -955,9 +973,18 @@ def every_payload(router: ToolRouter) -> Iterator[tuple[str, Any]]:
                 "idempotency_key": "t1",
             },
         ),
+        ("pz_action_ensure_main", {"item_ref": BOOK_REF, "idempotency_key": "em1"}),
         ("pz_action_eat", {"item_ref": BEAN_REF, "idempotency_key": "e1"}),
         ("pz_action_drink", {"item_ref": BEAN_REF, "idempotency_key": "d1"}),
         ("pz_action_read", {"item_ref": BOOK_REF, "idempotency_key": "r1"}),
+        ("pz_action_equip", {"item_ref": BEAN_REF, "idempotency_key": "eq1"}),
+        ("pz_action_unequip", {"hand": "primary", "idempotency_key": "uq1"}),
+        (
+            "pz_action_bandage",
+            {"body_part": "ForeArm_L", "item_ref": BEAN_REF, "idempotency_key": "bd1"},
+        ),
+        ("pz_action_rest", {"target_endurance": 0.95, "idempotency_key": "rs1"}),
+        ("pz_action_sleep", {"bed_ref": SQUARE_REF, "idempotency_key": "sl1"}),
         ("pz_action_wait", {"game_seconds": 10, "idempotency_key": "w1"}),
         ("pz_action_cancel", {"idempotency_key": "c1"}),
         ("pz_plan_execute", {"goal": "eat then read", "idempotency_key": "p1"}),
