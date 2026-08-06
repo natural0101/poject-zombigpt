@@ -80,6 +80,29 @@ it: removing the wiring fails eight of its assertions.
 ASSISTED mode never went through the planner at all — its commands come from
 MCP — so nothing above affects it.
 
+**Three things still hold autonomy back, all by design, all visible in
+`pz-agent status`.** Each answers `ASK_USER` rather than acting, which is the
+safe direction, and each will make S19 and S20 look like an agent that does
+nothing until it is resolved:
+
+1. **No attributable backup.** `AutonomyGate` refuses to act unless a backup
+   exists whose save id equals the one the mod reported for the open save — "a
+   backup exists somewhere" is not a safety net. Local backups are named by save
+   directory while the mod's save id is a hash it computes itself, and bridging
+   the two is in progress. Until it lands, take the backup and expect autonomy
+   to ask.
+2. **A capability must be *verified*, not merely available, before autonomy uses
+   it.** A static scan can never reach `verified`; only a live, user-directed run
+   does. So a fresh install's first autonomous meal is refused until you have
+   eaten once under ASSISTED. Run the relevant scenario first — that is the
+   permission ladder working, not a bug.
+3. **No memory store is wired**, so the agent holds no reserved items and no
+   home point. Consequence: reservations rest on the selection policies' tag
+   rules, and any plan needing a home point is refused. Again the safe
+   direction.
+
+None of the three affects ASSISTED mode.
+
 **Voice.** A Russian intent parser, stop on the interim transcript rather than
 the final one, a TeamON adapter, and a fake transport for tests.
 

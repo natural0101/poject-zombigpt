@@ -32,6 +32,7 @@ written, tested and green; what nothing tested was whether the subsystems were
 | 3 | `move_near` demanded a reference kind the mod never mints | The action could not be called from a real observation |
 | 4 | `build_loop` passed no capability check, so it kept `deny_capability` | The assembled sidecar refused *every* action |
 | 5 | `build_loop` passes no planner | Autonomous mode proposes nothing |
+| 6 | Nothing maps a backup to the save id the mod reports | Autonomy asks instead of acting, so S19/S20 cannot pass |
 
 Every one was found by a test that crosses a seam rather than covering a unit,
 and each of those tests now exists: `tests/lua/test_adapter_registry.lua`,
