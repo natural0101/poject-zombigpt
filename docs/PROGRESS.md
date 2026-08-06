@@ -9,7 +9,8 @@ green · `wip` in progress · `todo` not started · `live` blocked on a step tha
 physically requires a running game.
 
 Last updated: 28 of 30 tasks closed; T029 and T030 are blocked on a live game,
-not deferred. 3432 Python tests, 2840 Lua assertions, `scripts/check.sh` green.
+not deferred. 3435 Python tests on 3.11 and on 3.12, 2840 Lua assertions,
+`scripts/check.sh` green.
 See FINAL_IMPLEMENTATION_REPORT.md.
 
 Work beyond the original graph is complete on `feature/playable-agent-1.0`:

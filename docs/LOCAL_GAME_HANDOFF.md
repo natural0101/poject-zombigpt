@@ -143,8 +143,12 @@ an installer and uninstaller, and the RC ZIP.
 
 Everything below ran and passed in the remote environment:
 
-- the Python test suite (unit, contract and integration) under both supported
-  Python versions, in clean editable installs;
+- the Python test suite (unit, contract and integration) under **both**
+  supported Python versions, in clean editable installs: 3435 passed and 2
+  skipped, identically, on 3.11.15 and on 3.12.3. This line had been standing
+  since long before voice, memory, the live-test runner and the packaging landed
+  — it was re-run rather than inherited, because a claim about a build is only
+  about the build it was made against;
 - `mypy` in strict mode over the whole project;
 - `ruff format --check` and `ruff check`;
 - the mod's own Lua suite under a plain interpreter, with fake engine globals;
