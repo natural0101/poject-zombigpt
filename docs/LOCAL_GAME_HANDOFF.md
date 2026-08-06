@@ -173,6 +173,14 @@ Everything below ran and passed in the remote environment:
   every installed file is byte-for-byte identical to the source tree, and all 29
   Lua files in the archive parse. The archive had been built and checksummed
   several times without anyone installing from it, which is a different claim;
+- **the live-test runner's own commands**, as far as they go without a game.
+  `live-test status` on a fresh state directory lists all twenty scenarios as
+  `NOT_RUN`. `live-test prepare` refuses without `--save <mode>/<name>` — there
+  is no default, because guessing which world to experiment on is how a main
+  save gets used — and it writes nothing when it refuses. `live-test finalize`
+  refuses and names every missing artefact, one line each. All three behave
+  correctly on a machine that has never run them, which is the state yours will
+  be in;
 - the Lua↔Python reference agreement, directly, for a world container reference
   carrying five colons — the case a naive left-to-right split resolves to a
   *different object* without erroring.
