@@ -46,6 +46,7 @@ from .modinstall import (
 from .output import Printer
 from .runtime import DEFAULT_LIMITS, LoopLimits, SidecarLoop
 from .saves import run_backup_save, run_restore_save
+from .smoke import default_scenario_dir, run_smoke
 from .status import game_liveness, run_status
 from .supervisor import GameRunningProbe, SidecarSupervisor, SupervisorState, probe_game_running
 from .support import DEFAULT_LOG_LINES, DEFAULT_REPLAY_LIMIT, run_logs, run_replay
@@ -201,7 +202,44 @@ def build_parser() -> argparse.ArgumentParser:
     validate = subparsers.add_parser("validate-config", help="validate config.toml before start")
     validate.add_argument("--json", action="store_true")
 
+    _add_smoke_parser(subparsers)
+
     return parser
+
+
+def _add_smoke_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """The ``smoke`` subcommand, split out to keep ``build_parser`` readable."""
+    smoke = subparsers.add_parser(
+        "smoke",
+        help="validate the game-smoke scenarios and report what a live run would ask of you",
+    )
+    smoke.add_argument(
+        "--scenario-dir",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="scenario directory (default: tests/game-smoke in a source checkout)",
+    )
+    smoke.add_argument(
+        "--evidence-dir",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="write one evidence file per scenario here, including the unrun ones",
+    )
+    smoke.add_argument(
+        "--scenario",
+        action="append",
+        default=None,
+        metavar="ID",
+        help="run only this scenario; repeatable. Everything else is still reported as not run",
+    )
+    # A live run drives a session this process does not own, so --dry-run is
+    # the only mode that does anything here. It is not the default: asking for
+    # a live run and being told plainly why it cannot happen is better than
+    # silently downgrading to a validation pass the caller did not request.
+    smoke.add_argument("--dry-run", action="store_true", help="validate without touching a game")
+    smoke.add_argument("--json", action="store_true")
 
 
 def run_validate_config(ctx: CliContext, *, as_json: bool) -> int:
@@ -639,6 +677,16 @@ def dispatch(ctx: CliContext, args: argparse.Namespace) -> int:
         return run_replay(ctx, trace=args.trace, as_json=args.json, limit=args.limit)
     if command == "validate-config":
         return run_validate_config(ctx, as_json=args.json)
+    if command == "smoke":
+        return run_smoke(
+            scenario_dir=args.scenario_dir or default_scenario_dir(),
+            evidence_dir=args.evidence_dir,
+            only=args.scenario,
+            dry_run=args.dry_run,
+            timestamp_ms=ctx.clock_ms(),
+            emit=Printer(ctx.stdout, ctx.stderr).line,
+            as_json=args.json,
+        )
     # Unreachable through the parser: every choice it accepts is handled above,
     # and an unknown one is rejected before dispatch.
     raise AssertionError(f"unrouted command: {command!r}")
