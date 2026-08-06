@@ -167,6 +167,12 @@ Everything below ran and passed in the remote environment:
   remove-the-directory implementation gets wrong. The save was untouched, and
   the exchange directory the mod itself writes was reported as left in place
   rather than silently deleted;
+- **the release candidate as an install source**, which is what you will
+  actually use: the ZIP was extracted, `install-mod --source <extracted>/mod`
+  wrote the same 30 files and the same 506 613 bytes as installing from a clone,
+  every installed file is byte-for-byte identical to the source tree, and all 29
+  Lua files in the archive parse. The archive had been built and checksummed
+  several times without anyone installing from it, which is a different claim;
 - the Lua↔Python reference agreement, directly, for a world container reference
   carrying five colons — the case a naive left-to-right split resolves to a
   *different object* without erroring.
