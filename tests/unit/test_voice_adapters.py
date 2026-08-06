@@ -187,6 +187,23 @@ async def test_an_interrupted_utterance_is_reported_cancelled_when_the_client_is
     assert client.interrupted == ["teamon-1"]
 
 
+async def test_a_client_that_raises_leaves_no_utterance_in_flight() -> None:
+    # The failure belongs to the caller, which reports the sentence as not
+    # delivered. What must not survive it is the adapter believing something is
+    # still being spoken: the next cancel_speech would then interrupt an
+    # utterance id the client has never heard of.
+    client = FakeTeamONClient()
+    client.synthesis_error = RuntimeError("the synthesiser is gone")
+    adapter = TeamONVoiceAdapter(client, clock=FakeClock())
+
+    with pytest.raises(RuntimeError, match="synthesiser is gone"):
+        await adapter.speak(utterance(text="Готово."))
+
+    assert adapter.current_utterance_id is None
+    await adapter.cancel_speech()
+    assert client.interrupted == []
+
+
 async def test_cancelling_with_nothing_in_flight_does_not_call_the_client() -> None:
     client = FakeTeamONClient()
     adapter = TeamONVoiceAdapter(client, clock=FakeClock())

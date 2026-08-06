@@ -432,6 +432,21 @@ def derive_needs(
     anti-loop input: raw floats drift by a thousandth every tick, so an
     unquantised signature would read as "the situation is moving" forever and
     the brake in :class:`NeedArbiter` would never engage on anything.
+
+    Two rows of §17.1 are not derived here, and the omissions are deliberate
+    rather than overlooked:
+
+    * **Low endurance.** The table lists it, but nothing in the protocol's
+      action set rests a character, so a need for it could only ever escalate —
+      and endurance crosses 0.15 every time the player sprints, which would turn
+      §7.8's brake into the only thing standing between the user and a question
+      per minute. It belongs to the loop that can answer it, not to this one.
+    * **The exit thresholds.** §17.1 pairs every trigger with an exit value, and
+      §17 says up front that the numbers want hysteresis in production. What is
+      implemented is the trigger edge; a need therefore keeps firing until the
+      stat actually falls back under its trigger. The quantised signature and
+      the arbiter's cooldown bound the cost of that, but they are not hysteresis
+      and should not be read as it.
     """
     player = observation.player
     needs: list[Need] = []

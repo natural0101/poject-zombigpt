@@ -38,6 +38,10 @@ class FakeVoiceAdapter:
     def __init__(self, *, clock: Clock, hold_speech: bool = False) -> None:
         self._clock = clock
         self.hold_speech = hold_speech
+        #: Raised by :meth:`speak` instead of delivering, so the caller's
+        #: handling of a synthesiser that is simply broken — as opposed to one
+        #: that was interrupted — can be exercised.
+        self.speech_error: Exception | None = None
         #: Utterances handed to :meth:`speak`, in order, whatever became of them.
         self.started: list[VoiceOutput] = []
         #: Utterances that were delivered whole.
@@ -138,6 +142,8 @@ class FakeVoiceAdapter:
 
     async def speak(self, message: VoiceOutput) -> None:
         self.started.append(message)
+        if self.speech_error is not None:
+            raise self.speech_error
         if not self.hold_speech:
             self.spoken.append(message)
             return

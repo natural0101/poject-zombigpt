@@ -2,13 +2,16 @@
 
 argparse from the standard library, matching the core package's dependency rule.
 
-**Only commands whose subsystem exists are in the parser.** The blueprint also
-names ``start``, ``stop``, ``arm`` and ``disarm``; those drive a running
-sidecar, and there is no sidecar process in this build. A subcommand that parsed
-and then printed "not implemented" would be a worse answer than an unrecognised
-command, because it would look like a runtime failure rather than an honest
-absence — argparse's "invalid choice" names exactly what is true. See
-``docs/PROGRESS.md`` for what closes them.
+**Only commands whose subsystem exists are in the parser.** Every choice here is
+backed by code that does the thing: a subcommand that parsed and then printed
+"not implemented" would be a worse answer than an unrecognised command, because
+it would look like a runtime failure rather than an honest absence.
+
+``start``, ``stop``, ``arm`` and ``disarm`` drive the loop in
+:mod:`pz_agent_cli.runtime` through the process lifecycle in
+:mod:`pz_agent_cli.supervisor`. ``start`` attaches in ``OBSERVE`` and stays
+there: arming is a separate command, on purpose, and no flag on ``start``
+changes that.
 
 :func:`main` returns an exit code and never calls :func:`sys.exit` itself, so a
 test drives the real command in-process and reads what a user would have seen.
@@ -17,14 +20,21 @@ test drives the real command in-process and reads what a user would have seen.
 from __future__ import annotations
 
 import argparse
+import os
+import sys
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Final
 
+from pz_agent_core.actions.adapter import AdapterRegistry
+from pz_agent_core.actions.adapters import register_game_adapters
+from pz_agent_core.actions.builtin import register_builtins
+from pz_agent_core.ipc.layout import IpcLayout
+from pz_agent_core.protocol import SessionMode
 from pz_agent_core.version import PRODUCT_VERSION
 
 from .config import ConfigValidation, load_config
-from .context import EXIT_FAILURE, EXIT_OK, EXIT_USAGE, CliContext, resolve_workspace
+from .context import EXIT_FAILURE, EXIT_OK, EXIT_USAGE, CliContext, Workspace, resolve_workspace
 from .doctor import run_checks
 from .modinstall import (
     ForeignFileError,
@@ -34,26 +44,33 @@ from .modinstall import (
     uninstall_mod,
 )
 from .output import Printer
+from .runtime import DEFAULT_LIMITS, LoopLimits, SidecarLoop
 from .saves import run_backup_save, run_restore_save
 from .status import run_status
+from .supervisor import SidecarSupervisor, SupervisorState
 from .support import DEFAULT_LOG_LINES, DEFAULT_REPLAY_LIMIT, run_logs, run_replay
 
 PROGRAM: Final = "pz-agent"
 
-#: The commands this build wires. The blueprint also names ``start``, ``stop``,
-#: ``arm`` and ``disarm``; they drive a sidecar process that does not exist yet,
-#: so they are absent from the parser rather than present and inert.
+#: The commands this build wires. Every one of them has a subsystem behind it.
 COMMANDS: Final[tuple[str, ...]] = (
     "doctor",
     "install-mod",
     "uninstall-mod",
     "status",
+    "start",
+    "stop",
+    "arm",
+    "disarm",
     "backup-save",
     "restore-save",
     "logs",
     "replay",
     "validate-config",
 )
+
+#: Modes ``pz-agent arm`` accepts on the command line, lowercased for typing.
+ARM_MODES: Final[tuple[str, ...]] = ("assisted", "autonomous")
 
 _DESCRIPTION: Final = "Local agent for Project Zomboid Build 42: diagnose, install, operate."
 
@@ -122,6 +139,36 @@ def build_parser() -> argparse.ArgumentParser:
 
     status = subparsers.add_parser("status", help="what the exchange directory reports now")
     status.add_argument("--json", action="store_true")
+
+    start = subparsers.add_parser("start", help="run the sidecar; it attaches in OBSERVE")
+    start.add_argument(
+        "--foreground",
+        action="store_true",
+        help="run the loop in this terminal instead of detaching it",
+    )
+    start.add_argument(
+        "--ticks",
+        type=int,
+        default=None,
+        metavar="N",
+        help="stop a foreground loop after N ticks; the default is the whole budget",
+    )
+    start.add_argument("--json", action="store_true")
+
+    stop = subparsers.add_parser("stop", help="ask a running sidecar to shut down")
+    stop.add_argument("--json", action="store_true")
+
+    arm = subparsers.add_parser("arm", help="grant a running sidecar authority to act")
+    arm.add_argument(
+        "--mode",
+        choices=ARM_MODES,
+        default=ARM_MODES[0],
+        help="how much authority to grant (default: assisted)",
+    )
+    arm.add_argument("--json", action="store_true")
+
+    disarm = subparsers.add_parser("disarm", help="return a running sidecar to OBSERVE")
+    disarm.add_argument("--json", action="store_true")
 
     backup = subparsers.add_parser("backup-save", help="hash-manifested copy of a save")
     backup.add_argument("save_id", nargs="?", default=None, help="<mode>/<save name>")
@@ -320,6 +367,217 @@ def run_doctor(ctx: CliContext, *, as_json: bool) -> int:
     return EXIT_OK if report.ok else EXIT_FAILURE
 
 
+def build_supervisor(ctx: CliContext, workspace: Workspace) -> SidecarSupervisor:
+    """The process-lifecycle handle for this workspace's state directory."""
+    return SidecarSupervisor(workspace.state_dir, clock=ctx.clock_ms)
+
+
+def build_loop(ctx: CliContext, workspace: Workspace, *, limits: LoopLimits) -> SidecarLoop:
+    """Assemble the loop from the parts that already exist.
+
+    The registry is built here rather than shared, because registration is
+    single-assignment: a module-level singleton reused by two sessions would
+    raise on the second one.
+    """
+    ipc_root = workspace.ipc_root
+    if ipc_root is None:
+        raise InstallError("no Zomboid directory was found, so there is no exchange directory")
+    registry = register_game_adapters(register_builtins(AdapterRegistry()))
+    return SidecarLoop(
+        layout=IpcLayout(ipc_root),
+        state_dir=workspace.state_dir,
+        registry=registry,
+        clock=ctx.clock_ms,
+        limits=limits,
+        pid_file=build_supervisor(ctx, workspace).pid_file,
+    )
+
+
+def _sidecar_argv(workspace: Workspace) -> list[str]:
+    """The command line a detached sidecar is started with.
+
+    Composed from resolved paths rather than from the user's original argv, so
+    the child does not have to repeat this machine's discovery — and so nothing
+    a user typed is passed through to a process spawn unexamined.
+    """
+    argv = [sys.executable, "-m", "pz_agent_cli"]
+    argv += ["--state-dir", str(workspace.state_dir)]
+    argv += ["--config", str(workspace.config_path)]
+    user_dir = workspace.user_dir
+    if user_dir is not None:
+        argv += ["--zomboid-dir", str(user_dir)]
+    argv += ["start", "--foreground"]
+    return argv
+
+
+def run_start(ctx: CliContext, *, foreground: bool, ticks: int | None, as_json: bool) -> int:
+    """Handler for ``pz-agent start`` (blueprint §14.3).
+
+    Validates the configuration first, because a sidecar that starts and then
+    refuses every command on a bad setting has spent the user's attention to
+    tell them something the validator could have said immediately.
+    """
+    workspace = resolve_workspace(ctx)
+    printer = Printer(ctx.stdout, ctx.stderr)
+    validation = load_config(workspace.config_path)
+    if not validation.ok:
+        _render_validation(
+            validation, workspace_path=workspace.redact(workspace.config_path), printer=printer
+        )
+        printer.error("the sidecar was not started")
+        return EXIT_FAILURE
+    if workspace.ipc_root is None:
+        printer.error(
+            "no Zomboid directory was found, so there is no exchange directory to attach "
+            "to. Run pz-agent doctor and read PZD003."
+        )
+        return EXIT_FAILURE
+    supervisor = build_supervisor(ctx, workspace)
+    if foreground:
+        return _start_foreground(ctx, workspace, ticks=ticks, as_json=as_json, printer=printer)
+    outcome = supervisor.start(_sidecar_argv(workspace))
+    if as_json:
+        printer.json(
+            {
+                "started": outcome.started,
+                "detail": workspace.redactor.text(outcome.detail),
+                "mode": SessionMode.OBSERVE.value,
+                "record": None if outcome.record is None else outcome.record.to_dict(),
+                "mcp": _mcp_snippet(workspace),
+            }
+        )
+        return EXIT_OK if outcome.started else EXIT_FAILURE
+    if not outcome.started:
+        printer.error(outcome.detail)
+        return EXIT_FAILURE
+    printer.line(outcome.detail)
+    printer.field("mode", "OBSERVE — it will not act until you run 'pz-agent arm'")
+    printer.field("logs", workspace.redact(supervisor.spawn_log))
+    printer.line("")
+    printer.line("MCP stdio server, for a client that speaks it:")
+    printer.lines(f"  {line}" for line in _mcp_snippet(workspace))
+    return EXIT_OK
+
+
+def _start_foreground(
+    ctx: CliContext,
+    workspace: Workspace,
+    *,
+    ticks: int | None,
+    as_json: bool,
+    printer: Printer,
+) -> int:
+    limits = DEFAULT_LIMITS if ticks is None else LoopLimits(tick_budget=ticks)
+    loop = build_loop(ctx, workspace, limits=limits)
+    attach = loop.attach()
+    if not attach.attached:
+        printer.error(workspace.redactor.text(attach.detail))
+        return EXIT_FAILURE
+    supervisor = build_supervisor(ctx, workspace)
+    supervisor.pid_file.claim(os.getpid())
+    try:
+        summary = loop.run()
+    finally:
+        shutdown = loop.shutdown(reason="the foreground loop ended")
+    if as_json:
+        printer.json(
+            {
+                "attached": attach.detail,
+                "ticks": summary.ticks,
+                "cause": summary.cause.value,
+                "detail": summary.detail,
+                "lock_released": shutdown.lock_released,
+                "mode": loop.mode.value,
+            }
+        )
+        return EXIT_OK
+    printer.line(workspace.redactor.text(attach.detail))
+    printer.field("ticks", str(summary.ticks))
+    printer.field("stopped", summary.detail)
+    printer.field("lock", "released" if shutdown.lock_released else "was not held")
+    return EXIT_OK
+
+
+def _mcp_snippet(workspace: Workspace) -> tuple[str, ...]:
+    """The stdio server configuration §14.3 asks ``start`` to print."""
+    return (
+        '"pz-agent": {',
+        f'  "command": "{sys.executable}",',
+        '  "args": ["-m", "pz_agent_mcp"],',
+        f'  "env": {{"PZ_AGENT_STATE_DIR": "{workspace.redact(workspace.state_dir)}"}}',
+        "}",
+    )
+
+
+def run_stop(ctx: CliContext, *, as_json: bool) -> int:
+    """Handler for ``pz-agent stop``."""
+    workspace = resolve_workspace(ctx)
+    printer = Printer(ctx.stdout, ctx.stderr)
+    outcome = build_supervisor(ctx, workspace).request_stop()
+    detail = workspace.redactor.text(outcome.detail)
+    if as_json:
+        printer.json(
+            {
+                "requested": outcome.requested,
+                "signalled": outcome.signalled,
+                "detail": detail,
+                "record": None if outcome.record is None else outcome.record.to_dict(),
+            }
+        )
+        return EXIT_OK if outcome.requested else EXIT_FAILURE
+    if not outcome.requested:
+        printer.error(detail)
+        return EXIT_FAILURE
+    printer.line(detail)
+    return EXIT_OK
+
+
+def run_arm(ctx: CliContext, *, mode: str, as_json: bool) -> int:
+    """Handler for ``pz-agent arm``.
+
+    Publishes a request; it does not arm anything itself. The loop applies it,
+    and refuses it if the game is silent, if the panic sentinel is present, or if
+    the guard demanded a disarm on the same tick — none of which this process can
+    see, and none of which it should be second-guessing from outside.
+    """
+    return _control(ctx, arm_mode=SessionMode(mode.upper()), as_json=as_json)
+
+
+def run_disarm(ctx: CliContext, *, as_json: bool) -> int:
+    """Handler for ``pz-agent disarm``."""
+    return _control(ctx, arm_mode=None, as_json=as_json)
+
+
+def _control(ctx: CliContext, *, arm_mode: SessionMode | None, as_json: bool) -> int:
+    workspace = resolve_workspace(ctx)
+    printer = Printer(ctx.stdout, ctx.stderr)
+    supervisor = build_supervisor(ctx, workspace)
+    status = supervisor.status()
+    if status.state is not SupervisorState.RUNNING:
+        message = (
+            f"no sidecar is running to receive this: {workspace.redactor.text(status.detail)}. "
+            "Start one with 'pz-agent start'."
+        )
+        if as_json:
+            printer.json({"delivered": False, "detail": message, "state": status.state.value})
+        else:
+            printer.error(message)
+        return EXIT_FAILURE
+    request = supervisor.disarm() if arm_mode is None else supervisor.arm(arm_mode)
+    verb = "disarm" if arm_mode is None else f"arm in {arm_mode.value}"
+    detail = (
+        f"asked the sidecar (pid {status.record.pid}) to {verb}; "
+        "run 'pz-agent status' to see whether it did"
+        if status.record is not None
+        else f"asked the running sidecar to {verb}"
+    )
+    if as_json:
+        printer.json({"delivered": True, "detail": detail, "request": request.to_dict()})
+    else:
+        printer.line(detail)
+    return EXIT_OK
+
+
 def dispatch(ctx: CliContext, args: argparse.Namespace) -> int:
     """Route a parsed invocation to its handler."""
     command = args.command
@@ -331,6 +589,14 @@ def dispatch(ctx: CliContext, args: argparse.Namespace) -> int:
         return run_uninstall_mod(ctx, as_json=args.json)
     if command == "status":
         return run_status(ctx, as_json=args.json)
+    if command == "start":
+        return run_start(ctx, foreground=args.foreground, ticks=args.ticks, as_json=args.json)
+    if command == "stop":
+        return run_stop(ctx, as_json=args.json)
+    if command == "arm":
+        return run_arm(ctx, mode=args.mode, as_json=args.json)
+    if command == "disarm":
+        return run_disarm(ctx, as_json=args.json)
     if command == "backup-save":
         return run_backup_save(
             ctx,

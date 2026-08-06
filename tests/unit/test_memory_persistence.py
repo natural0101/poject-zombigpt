@@ -19,6 +19,7 @@ from pz_agent_core.memory import (
     MemoryScopeError,
     MemoryStore,
     MemoryStoreError,
+    MemoryValueError,
     SaveMemory,
     Square,
     TaskOutcome,
@@ -171,6 +172,41 @@ def test_a_json_array_is_not_a_memory(store: MemoryStore) -> None:
 
     with pytest.raises(MemoryStoreError, match="expected a JSON object"):
         store.load(DEFAULT_SAVE)
+
+
+def test_a_file_that_is_not_utf8_is_reported_rather_than_forgotten(store: MemoryStore) -> None:
+    store.root.mkdir(parents=True, exist_ok=True)
+    store.path_for(DEFAULT_SAVE).write_bytes(b'{"schema_version": 2, "save_scope": "\xff\xfe"}')
+
+    with pytest.raises(MemoryStoreError, match="cannot read memory"):
+        store.load(DEFAULT_SAVE)
+
+
+def test_a_malformed_home_block_is_refused(store: MemoryStore) -> None:
+    document = _populated().to_document(schema_version=MEMORY_SCHEMA_VERSION)
+    document["home"] = {"square": {"x": 1, "y": 2, "z": 0}, "set_at_ms": -1}
+    store.root.mkdir(parents=True, exist_ok=True)
+    store.path_for(DEFAULT_SAVE).write_text(json.dumps(document), encoding="utf-8")
+
+    with pytest.raises(MemoryValueError, match=r"home\.set_at_ms"):
+        store.load(DEFAULT_SAVE)
+
+
+def test_a_home_block_that_is_not_an_object_is_refused() -> None:
+    document = _populated().to_document(schema_version=MEMORY_SCHEMA_VERSION)
+    document["home"] = "1200,3400"
+
+    with pytest.raises(MemoryValueError, match="home must be an object"):
+        SaveMemory.from_document(document, save_id=DEFAULT_SAVE)
+
+
+def test_a_stored_string_over_its_bound_is_refused_not_truncated() -> None:
+    """Truncating on read would silently change a fact some earlier write accepted."""
+    document = _populated().to_document(schema_version=MEMORY_SCHEMA_VERSION)
+    document["containers"][0]["label"] = "L" * 200
+
+    with pytest.raises(MemoryValueError, match=r"container\.label must be at most"):
+        SaveMemory.from_document(document, save_id=DEFAULT_SAVE)
 
 
 def test_an_oversized_file_is_refused_before_it_is_parsed(store: MemoryStore) -> None:

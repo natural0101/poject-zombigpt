@@ -7,15 +7,22 @@ turns; the injected clock never moves unless a test moves it.
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from pz_agent_core.protocol import ActionStatus
 from pz_agent_mcp.ports import PlanRecord
 from pz_agent_voice import phrases
-from pz_agent_voice.driver import MAX_TURN_HISTORY
+from pz_agent_voice.driver import MAX_SPEECH_FAILURES, MAX_TURN_HISTORY, VoiceCompanion
 from pz_agent_voice.events import TtsEventKind
 from pz_agent_voice.messages import OutputKind, VoiceGoal, VoiceIntent
-from tests.fixtures.voice_doubles import make_harness, settle, utterance
+from tests.fixtures.voice_doubles import (
+    NeverOpeningAdapter,
+    make_harness,
+    settle,
+    utterance,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -242,6 +249,81 @@ async def test_the_companion_shuts_down_when_the_stream_ends() -> None:
     assert harness.task is not None
     assert harness.task.done()
     assert harness.companion.speaking is None
+
+
+# --------------------------------------------------------------------------
+# a synthesiser that breaks
+# --------------------------------------------------------------------------
+
+
+async def test_a_synthesiser_that_raises_does_not_silence_the_companion() -> None:
+    harness = make_harness()
+    harness.adapter.speech_error = RuntimeError("the TTS backend died")
+    harness.adapter.push("агент, поешь")
+    await harness.start()
+    await settle()
+
+    # The failed sentence is reported cancelled — it was not heard — and the
+    # pump is still running, so the stop that comes next is still spoken.
+    assert harness.kinds(topic="plan") == [
+        TtsEventKind.QUEUED,
+        TtsEventKind.STARTED,
+        TtsEventKind.CANCELLED,
+    ]
+    assert harness.companion.speech_failures == ("RuntimeError: the TTS backend died",)
+
+    harness.adapter.speech_error = None
+    harness.adapter.push("стоп")
+    await settle()
+
+    assert harness.doubles.session.stops == 1
+    assert harness.adapter.spoken[-1].text == phrases.STOP_ACK
+    await harness.finish()
+
+
+async def test_the_speech_failure_log_is_bounded() -> None:
+    harness = make_harness()
+    harness.adapter.speech_error = RuntimeError("the TTS backend died")
+    await harness.start()
+    for index in range(MAX_SPEECH_FAILURES * 3):
+        harness.session.queue.push(
+            utterance(OutputKind.STATUS, topic=f"t{index}", text=f"line {index}")
+        )
+        await settle(2)
+
+    assert len(harness.companion.speech_failures) == MAX_SPEECH_FAILURES
+    await harness.finish()
+
+
+async def test_a_cancelled_pump_reports_the_sentence_it_was_saying_as_cancelled() -> None:
+    harness = make_harness(hold_speech=True)
+    harness.adapter.push("агент, поешь")
+    await harness.start()
+    await harness.adapter.wait_until_speaking()
+    assert harness.task is not None
+
+    harness.task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await harness.task
+
+    # STARTED with no terminal event would leave the history claiming the
+    # companion is still talking.
+    assert harness.kinds(topic="plan")[-1] is TtsEventKind.CANCELLED
+
+
+async def test_the_companion_gives_its_subscription_back_even_when_the_stream_fails() -> None:
+    harness = make_harness()
+    companion = VoiceCompanion(
+        NeverOpeningAdapter(clock=harness.clock), harness.session, clock=harness.clock
+    )
+    before = harness.session.events.subscribers
+
+    with pytest.raises(RuntimeError, match="never opened"):
+        await companion.run()
+
+    # A leaked subscription is a slot the next companion cannot have, and the
+    # stream's cap is small enough for that to be a real limit.
+    assert harness.session.events.subscribers == before - 1
 
 
 async def test_deliver_can_be_driven_without_the_stream() -> None:

@@ -37,7 +37,14 @@ from .config import DEFAULT_VOICE_CONFIG, VoiceConfig
 from .events import TtsEventStream
 from .intent import classify, is_stop
 from .messages import OutputKind, VoiceGoal, VoiceInput, VoiceIntent, VoiceOutput
-from .ports import IdFactory, PlanRecord, PlanRequest, StopReport, VoiceServices
+from .ports import (
+    IdFactory,
+    PlanRecord,
+    PlanRequest,
+    SessionSnapshot,
+    StopReport,
+    VoiceServices,
+)
 from .queue import UtteranceQueue
 from .state import VoiceState, VoiceTurn
 
@@ -81,6 +88,7 @@ class VoiceSession:
         self._last_plan: tuple[str, ActionStatus] | None = None
         self._takeover_reported = False
         self._revision = 0
+        self._status_failure = ""
 
     # -- observable state --------------------------------------------------
 
@@ -273,8 +281,35 @@ class VoiceSession:
         self._woken_at_ms = raw.at_ms
         return True
 
+    def _snapshot(self) -> SessionSnapshot | None:
+        """The session's own view of itself, or None when it cannot be read.
+
+        :meth:`~pz_agent_mcp.ports.SessionPort.status` is documented to answer
+        even when the game is gone, so a port that raises here is a broken port
+        rather than a disconnected game. It is caught all the same: an exception
+        escaping :meth:`handle` would end the driver's transcript loop, and the
+        transcript the user says next is the one that has to reach the stop.
+        """
+        try:
+            return self._services.session.status()
+        except Exception as exc:
+            self._status_failure = f"{type(exc).__name__}: {exc}"
+            return None
+
     def _start_goal(self, raw: VoiceInput, goal: VoiceGoal) -> VoiceTurn:
-        snapshot = self._services.session.status()
+        snapshot = self._snapshot()
+        if snapshot is None:
+            # Not knowing the state is not the same as knowing it is fine: the
+            # honest answer is the one that says nothing was started.
+            return VoiceTurn(
+                intent=VoiceIntent.GOAL,
+                state=self._state,
+                goal=goal,
+                utterances=(
+                    self._say(OutputKind.ERROR, TOPIC_PLAN, phrases.NOT_CONNECTED, at_ms=raw.at_ms),
+                ),
+                detail=f"session port raised {self._status_failure}",
+            )
         if not snapshot.connected:
             return VoiceTurn(
                 intent=VoiceIntent.GOAL,
@@ -318,6 +353,11 @@ class VoiceSession:
 
         self._plan_active = not record.status.is_terminal
         self._last_plan = (record.plan_id, record.status)
+        # The agent is acting again, so the next time the player takes over,
+        # that is news. Without this the announcement fires once per process:
+        # § 5.16 ends with the user saying "продолжай", which arrives here as
+        # VoiceGoal.RESUME, and nothing else re-arms it.
+        self._takeover_reported = False
         utterance = self._say(
             OutputKind.CONFIRMATION, TOPIC_PLAN, phrases.GOAL_ACCEPTED[goal], at_ms=raw.at_ms
         )
@@ -365,28 +405,52 @@ class VoiceSession:
         self, raw: VoiceInput, goals: tuple[VoiceGoal, ...], intent: VoiceIntent
     ) -> VoiceTurn:
         """Resolve an outstanding clarification, or give up on it."""
+        if raw.confidence < self._config.min_confidence:
+            # Having asked a question does not lower the bar for the answer. The
+            # confidence gate is checked here as well as in handle() because an
+            # outstanding clarification is precisely the state in which a
+            # half-heard word looks most like a decision.
+            return self._reask(
+                raw,
+                phrases.CLARIFY_REPEAT,
+                detail=f"confidence {raw.confidence} below {self._config.min_confidence}",
+            )
+
         chosen = [goal for goal in goals if goal in self._pending_goals]
         if len(chosen) == 1:
-            self._pending_goals = ()
-            self._clarifications = 0
-            self._state = VoiceState.LISTENING
-            self._woken_at_ms = raw.at_ms
+            self._forget_question(raw.at_ms)
             return self._start_goal(raw, chosen[0])
 
         if intent is VoiceIntent.DENY:
-            self._pending_goals = ()
-            self._clarifications = 0
-            self._state = VoiceState.LISTENING
-            self._woken_at_ms = raw.at_ms
+            self._forget_question(raw.at_ms)
             return VoiceTurn(
                 intent=VoiceIntent.DENY, state=self._state, detail="clarification declined"
             )
 
+        pending = self._pending_goals
+        return self._reask(
+            raw,
+            phrases.clarify_between(pending[0], pending[1]),
+            detail=f"clarification {self._clarifications + 1} of {self._config.max_clarifications}",
+        )
+
+    def _forget_question(self, at_ms: int) -> None:
+        """Drop the outstanding clarification and stay awake for what follows."""
+        self._pending_goals = ()
+        self._clarifications = 0
+        self._state = VoiceState.LISTENING
+        self._woken_at_ms = at_ms
+
+    def _reask(self, raw: VoiceInput, text: str, *, detail: str) -> VoiceTurn:
+        """Ask *text* once more, or give the question up if the budget is spent.
+
+        Every route back to the user runs through here, so an answer that cannot
+        be used — unrecognised, misheard, or naming neither option — costs the
+        same bounded number of attempts. Anything that reasked without spending
+        the budget would be an unbounded loop with a microphone in it.
+        """
         if self._clarifications > self._config.max_clarifications:
-            self._pending_goals = ()
-            self._clarifications = 0
-            self._state = VoiceState.LISTENING
-            self._woken_at_ms = raw.at_ms
+            self._forget_question(raw.at_ms)
             return VoiceTurn(
                 intent=VoiceIntent.UNKNOWN,
                 state=self._state,
@@ -399,22 +463,26 @@ class VoiceSession:
             )
 
         self._clarifications += 1
-        pending = self._pending_goals
-        utterance = self._say(
-            OutputKind.QUESTION,
-            TOPIC_CLARIFY,
-            phrases.clarify_between(pending[0], pending[1]),
-            at_ms=raw.at_ms,
-        )
+        utterance = self._say(OutputKind.QUESTION, TOPIC_CLARIFY, text, at_ms=raw.at_ms)
         return VoiceTurn(
             intent=VoiceIntent.AMBIGUOUS,
             state=self._state,
             utterances=(utterance,),
-            detail=f"clarification {self._clarifications} of {self._config.max_clarifications}",
+            detail=detail,
         )
 
     def _say_status(self, raw: VoiceInput) -> VoiceTurn:
-        snapshot = self._services.session.status()
+        snapshot = self._snapshot()
+        if snapshot is None:
+            utterance = self._say(
+                OutputKind.ERROR, TOPIC_SESSION, phrases.NOT_CONNECTED, at_ms=raw.at_ms
+            )
+            return VoiceTurn(
+                intent=VoiceIntent.STATUS,
+                state=self._state,
+                utterances=(utterance,),
+                detail=f"session port raised {self._status_failure}",
+            )
         danger = snapshot.danger_level if snapshot.connected else DangerLevel.NONE
         utterance = self._say(
             OutputKind.STATUS,

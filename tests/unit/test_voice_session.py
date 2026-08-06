@@ -23,6 +23,7 @@ from tests.fixtures.ipc_builders import BASE_TIME_MS
 from tests.fixtures.mcp_doubles import Doubles
 from tests.fixtures.voice_doubles import (
     HOSTILE_TRANSCRIPT,
+    BlindSessionPort,
     RaisingPlanPort,
     RaisingSessionPort,
     make_session,
@@ -335,6 +336,50 @@ def test_the_clarification_budget_is_bounded() -> None:
     assert doubles.plans.requests == []
 
 
+def test_a_misheard_answer_to_a_clarification_is_not_treated_as_an_answer() -> None:
+    # The question was asked from a confident transcript; the answer to it gets
+    # no discount. Acting on a half-heard "попей" would make asking a question
+    # the way around the confidence gate.
+    session, doubles, _ = make_session(config=VoiceConfig(min_confidence=0.6))
+    session.handle(said("агент, поешь и попей"))
+    session.queue.clear()
+
+    turn = session.handle(said("попей", confidence=0.2))
+
+    assert turn.intent is VoiceIntent.AMBIGUOUS
+    assert doubles.plans.requests == []
+    assert texts(session) == [phrases.CLARIFY_REPEAT]
+    assert session.pending_question == (VoiceGoal.EAT, VoiceGoal.DRINK)
+    assert session.state is VoiceState.AWAITING_ANSWER
+
+
+def test_misheard_answers_spend_the_same_bounded_budget() -> None:
+    # Otherwise the loop is unbounded: every low-confidence answer would buy
+    # another question, and the recogniser is the one supplying them.
+    session, doubles, _ = make_session(config=VoiceConfig(min_confidence=0.6, max_clarifications=1))
+    session.handle(said("агент, поешь и попей"))
+
+    first = session.handle(said("попей", confidence=0.2))
+    second = session.handle(said("попей", confidence=0.2))
+
+    assert first.intent is VoiceIntent.AMBIGUOUS
+    assert second.intent is VoiceIntent.UNKNOWN
+    assert second.detail == "clarification budget spent; the question is dropped"
+    assert session.pending_question == ()
+    assert doubles.plans.requests == []
+
+
+def test_a_confident_answer_after_a_misheard_one_still_works() -> None:
+    session, doubles, _ = make_session(config=VoiceConfig(min_confidence=0.6))
+    session.handle(said("агент, поешь и попей"))
+    session.handle(said("попей", confidence=0.2))
+
+    turn = session.handle(said("попей", confidence=0.9))
+
+    assert turn.goal is VoiceGoal.DRINK
+    assert doubles.plans.requests[0].goal == VoiceGoal.DRINK.value
+
+
 def test_a_clarification_that_names_neither_option_does_not_pick_one() -> None:
     session, doubles, _ = make_session()
     session.handle(said("агент, поешь и попей"))
@@ -426,6 +471,39 @@ def test_a_planner_that_raises_is_reported_not_swallowed() -> None:
     assert "RuntimeError" in turn.detail
 
 
+def test_a_session_port_that_cannot_answer_does_not_end_the_conversation() -> None:
+    doubles = Doubles()
+    blind = BlindSessionPort(doubles.session)
+    session, _, _ = make_session(
+        doubles, services=VoiceServices(session=blind, plans=doubles.plans)
+    )
+
+    turn = session.handle(said("агент, поешь"))
+
+    # Nothing was submitted, the failure is named in the turn, and — the point
+    # of catching it — the session is still able to take the next transcript.
+    assert doubles.plans.requests == []
+    assert texts(session) == [phrases.NOT_CONNECTED]
+    assert turn.utterances[0].kind is OutputKind.ERROR
+    assert "RuntimeError" in turn.detail
+    assert session.handle(said("стоп")).intent is VoiceIntent.STOP
+    assert doubles.session.stops == 1
+
+
+def test_a_status_request_a_broken_port_cannot_answer_says_so() -> None:
+    doubles = Doubles()
+    blind = BlindSessionPort(doubles.session)
+    session, _, _ = make_session(
+        doubles, services=VoiceServices(session=blind, plans=doubles.plans)
+    )
+
+    turn = session.handle(said("агент, статус"))
+
+    assert texts(session) == [phrases.NOT_CONNECTED]
+    assert turn.utterances[0].kind is OutputKind.ERROR
+    assert "RuntimeError" in turn.detail
+
+
 def test_status_is_answered_from_the_session_snapshot() -> None:
     session, doubles, _ = make_session()
     doubles.session.snapshot = replace(doubles.session.snapshot, danger_level=DangerLevel.HIGH)
@@ -507,6 +585,33 @@ def test_manual_takeover_is_announced_once_per_takeover() -> None:
     assert first.text == phrases.TAKEOVER
     assert second is None
     assert third is not None
+
+
+def test_a_second_takeover_after_the_agent_resumed_is_announced_again() -> None:
+    # § 5.16 ends with the user saying "продолжай". Once the agent is working
+    # again the next takeover is news, and an announcement that only ever fires
+    # once per process would leave the user wondering why it stopped.
+    session, _, _ = make_session()
+    session.handle(said("агент, поешь"))
+    first = session.report_manual_takeover()
+
+    session.handle(said("продолжай"))
+    second = session.report_manual_takeover()
+
+    assert first is not None
+    assert second is not None
+    assert second.text == phrases.TAKEOVER
+
+
+def test_a_takeover_the_agent_did_not_resume_from_is_still_announced_once() -> None:
+    session, _, _ = make_session()
+    session.handle(said("агент, поешь"))
+
+    first = session.report_manual_takeover()
+    second = session.report_manual_takeover()
+
+    assert first is not None
+    assert second is None
 
 
 def test_a_takeover_stops_the_session_believing_a_plan_is_running() -> None:
