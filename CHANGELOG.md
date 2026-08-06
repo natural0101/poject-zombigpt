@@ -12,6 +12,15 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Changed
 
+- **`docs/RELEASE.md` asks for the evidence the executable gate checks.** Its
+  evidence checklist required "Game smoke evidence — S01–S15" from
+  `tests/game-smoke/` and never mentioned `release/evidence-manifest.json`,
+  which is the only thing `scripts/check_release.py --release` actually looks
+  for. A human working the checklist and a machine working the gate were
+  checking different things. The checklist now names the manifest, and states
+  plainly that two scenario catalogues exist with colliding numbers —
+  `S06_drink.yaml` in one is `S06_MANUAL_TAKEOVER` in the other — so a
+  scenario id is ambiguous unless the catalogue is named with it.
 - **Protocol 1.0 → 1.1.** The action whitelist grew from fifteen names to
   twenty-two, seventeen of them owned by the mod's adapter files. Added:
   `container.inspect`,
@@ -41,6 +50,34 @@ drift out of sync with `pz_agent_core.version`.
   postcondition accepts only thirst — a refill raises the vessel's volume and
   the drink lowers it again, so the vessel witnesses nothing in either
   direction. Published as `pz_action_drink_source`.
+- **Multiplayer is actually refused now.** It was documented as "refused in
+  configuration and again at the session handshake", and neither refusal
+  existed: a grep for "multiplayer" across `packages/` and `pz-mod/` found the
+  warning's own text and two unrelated comments. `safety.allow_multiplayer`
+  lived in `_advisories`, whose contract is "Never errors", carrying the
+  sentence "multiplayer is refused at the handshake regardless of this setting"
+  — so the flag loaded, the agent ran, and the only thing between it and a
+  server was a line of advice describing a gate nobody had written. Now:
+  the config key is a hard error; `observation.game.multiplayer` carries three
+  states; and `ActionEngine._multiplayer_abort` refuses every mutating command
+  unless the mod positively reported single player, with an **absent reading
+  refused exactly as `true` is**. Stopping, disarming, cancelling and the three
+  read-only actions stay exempt, because an agent that cannot be stopped in the
+  one session it should not be running in is worse than no gate. Both halves
+  mutation-checked. `isClient`/`isServer` are unconfirmed against Build 42.20
+  like every other engine symbol, and are now the first row in
+  `docs/GAME_API_VERIFICATION.md` for a reason: if they cannot be read, the
+  agent refuses everything, which is correct and looks exactly like being
+  broken.
+- **`pz-agent smoke` is in `COMMANDS`.** It always had a parser, a dispatch
+  branch and a working subsystem; it was missing from the tuple that declares
+  what this build wires, so the CLI accepted a command its own list denied
+  having. `tests/contract/test_cli_docs_agreement.py` treats `COMMANDS` as the
+  truth about the surface, which made both of its directions wrong: a document
+  naming `pz-agent smoke` failed for naming something "absent from the CLI",
+  and the check that every real command is documented could never see it. The
+  new `test_the_command_list_is_the_parser_and_the_parser_is_the_command_list`
+  derives the set from the parser instead of restating it.
 - **`scripts/generate_playbook.py`**, and a gate step that runs it with
   `--check`. `docs/LIVE_TEST_PLAYBOOK.md` said it was generated from
   `pz_agent_cli.livetest.scenarios` and had no generator and no check, so it
@@ -69,7 +106,7 @@ drift out of sync with `pz_agent_core.version`.
   `docs/LOCAL_DEBUG_MAP.md`, `docs/GAME_API_VERIFICATION.md` and
   `docs/LOCAL_AGENT_PROMPT.md`.
 
-- **The whole MCP action surface.** Thirty tools, eighteen of them actions, so
+- **The whole MCP action surface.** Thirty-one tools, nineteen of them actions, so
   every action with a registered adapter can be asked for. A fourth tool kind,
   `QUERY`, covers the three that only read: they submit an action and return an
   action id like any other, and need no arming. `container.open_nearby` is

@@ -649,7 +649,46 @@ class ActionEngine:
         session = self._session_abort(request, observation)
         if session is not None:
             return session
+        multiplayer = self._multiplayer_abort(request, observation)
+        if multiplayer is not None:
+            return multiplayer
         return self._interrupt_abort(request, observation)
+
+    def _multiplayer_abort(
+        self, request: ActionRequest, observation: Observation
+    ) -> tuple[ReasonCode, str] | None:
+        """The blueprint forbids multiplayer. This is where that becomes true.
+
+        It was not true anywhere before: ``safety.allow_multiplayer`` produced a
+        warning claiming "multiplayer is refused at the handshake regardless of
+        this setting", and no such refusal existed in the sidecar or the mod.
+
+        Gated here rather than only at arming because this is the funnel every
+        command passes through, with the fresh observation already in hand — an
+        arm-time check alone would be blind to a session that went multiplayer
+        after authority was granted.
+
+        Three exclusions, each for its own reason. ``ALWAYS_ALLOWED_ACTIONS``
+        pass because stopping and cancelling must work *especially* here.
+        Read-only actions pass because looking at a world changes nothing in it.
+        Everything else is refused on ``True`` and equally on ``None``: an
+        absent reading is not a negative reading, which is the same rule that
+        stops a missing ``is_bleeding`` from meaning "not bleeding".
+        """
+        if self._exempt(request) or request.action in READ_ONLY_ACTIONS:
+            return None
+        if observation.game.multiplayer is True:
+            return (
+                ReasonCode.POLICY_DENIED,
+                "this is a multiplayer session, which this build does not act in",
+            )
+        if observation.game.multiplayer is None:
+            return (
+                ReasonCode.POLICY_DENIED,
+                "the mod did not report whether this session is multiplayer, and an "
+                "absent reading is not a negative one",
+            )
+        return None
 
     def _in_flight_abort(
         self, request: ActionRequest, observation: Observation

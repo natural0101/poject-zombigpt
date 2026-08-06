@@ -1065,6 +1065,9 @@ class SidecarLoop:
                 mode=self._mode,
                 detail=f"the game is not writing a heartbeat ({liveness.detail}); nothing to arm",
             )
+        refusal = self._multiplayer_refusal()
+        if refusal is not None:
+            return ArmOutcome(armed=False, mode=self._mode, detail=refusal)
         manager = self._session_manager()
         manager.mark_rearmed()
         self._mode = mode
@@ -1076,6 +1079,44 @@ class SidecarLoop:
             detail=f"armed in {mode.value} on session {attached.session.session_id}",
             changed=True,
         )
+
+    def _multiplayer_refusal(self) -> str | None:
+        """Why this session may not be armed, when multiplayer is the reason.
+
+        The blueprint forbids multiplayer outright, and until now nothing
+        enforced it. ``safety.allow_multiplayer`` produced a warning that said
+        "multiplayer is refused at the handshake regardless of this setting"
+        while no such refusal existed anywhere in the mod or the sidecar — a
+        setting that read like a bypass and was one.
+
+        Three states, and only one of them arms. ``False`` is the mod saying it
+        looked and this is single player. ``True`` is a refusal. **``None`` is
+        also a refusal**, because an absent reading is not a negative reading —
+        the same rule that stops a missing ``is_bleeding`` from meaning "not
+        bleeding". There is no flag that turns this off; a gate with an
+        override is not a gate.
+        """
+        current = self._store.latest()
+        if current is None:
+            # Nothing has been reported yet, which is a normal moment to arm in:
+            # attach, arm, then act on the first snapshot. Nothing is lost by
+            # allowing it, because ActionEngine._multiplayer_abort re-decides
+            # this for every command against the observation it is acting on —
+            # which is the check that actually protects the session.
+            return None
+        if current.game.multiplayer is True:
+            return (
+                "this is a multiplayer session, which this build refuses to act in. "
+                "There is no setting that permits it."
+            )
+        if current.game.multiplayer is None:
+            return (
+                "the mod did not report whether this is a multiplayer session, and an "
+                "absent reading is not a negative one. Arming is refused. If the game "
+                "is single player, this means the mod could not read isClient/isServer "
+                "on this build — see docs/GAME_API_VERIFICATION.md."
+            )
+        return None
 
     def disarm(self, *, reason: str = "requested") -> ArmOutcome:
         """Drop back to ``OBSERVE``. Always succeeds; disarming is never gated."""

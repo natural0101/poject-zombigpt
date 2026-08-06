@@ -230,7 +230,41 @@ function Observe.gameFields()
     -- known to expose; zero multiplier is the game's own definition of paused.
     fields.paused = fields.speed <= 0
   end
+  fields.multiplayer = Observe.multiplayer()
   return fields, buildError
+end
+
+--- Is this a multiplayer session? true, false, or nil when it cannot be told.
+---
+--- The three values are all meaningful and the sidecar treats them as such: it
+--- arms only on a positive `false`, and refuses on nil exactly as it refuses on
+--- true. So this function must never answer false to mean "no reading" -- that
+--- would turn an unknown into a permission.
+---
+--- `isClient` is true on a multiplayer client and `isServer` on a host; a
+--- single-player session is neither. Both are vanilla globals rather than
+--- methods on an object, so they are read directly rather than through
+--- readBoolean.
+function Observe.multiplayer()
+  local seen = false
+  for _, name in ipairs({ "isClient", "isServer" }) do
+    local fn = _G[name]
+    if type(fn) == "function" then
+      local ok, value = pcall(fn)
+      if ok and type(value) == "boolean" then
+        seen = true
+        if value then
+          return true
+        end
+      end
+    end
+  end
+  if not seen then
+    -- Neither accessor answered. Say so, rather than reporting single player on
+    -- the strength of two functions that were not there.
+    return nil
+  end
+  return false
 end
 
 -- ---------------------------------------------------------------------------

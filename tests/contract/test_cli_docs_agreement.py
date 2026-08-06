@@ -18,11 +18,12 @@ mentioned nowhere a user reads.
 
 from __future__ import annotations
 
+import argparse
 import re
 from pathlib import Path
 from typing import Final
 
-from pz_agent_cli.app import COMMANDS
+from pz_agent_cli.app import COMMANDS, build_parser
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[2]
 
@@ -52,6 +53,36 @@ def _named_commands() -> dict[str, list[str]]:
                 continue
             found.setdefault(word, []).append(path.name)
     return found
+
+
+def test_the_command_list_is_the_parser_and_the_parser_is_the_command_list() -> None:
+    """``COMMANDS`` is what the two tests below mean by "the CLI". It must be true.
+
+    It was not. ``smoke`` had a parser, a dispatch branch and a working
+    subsystem, and was absent from this tuple — so the CLI accepted a command
+    the list denied having. Both directions below were wrong because of it: a
+    document naming ``pz-agent smoke`` failed the first assertion for naming
+    something "absent from the CLI", and the second could never notice that a
+    real command was documented nowhere.
+
+    Derived from the parser rather than restated, because a second hand-written
+    list would only move the place the two can disagree.
+    """
+    # argparse exposes no public reader for its subcommands, so this reaches for
+    # the private one. The alternative is a second hand-written list, which is
+    # the thing being tested for.
+    parser = build_parser()
+    accepted: set[str] = set()
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            accepted |= set(action.choices)
+
+    assert accepted, "no subcommands were found; this check would otherwise be vacuous"
+    assert accepted == set(COMMANDS), (
+        "the parser and COMMANDS disagree — "
+        f"accepted but unlisted: {sorted(accepted - set(COMMANDS))}, "
+        f"listed but not accepted: {sorted(set(COMMANDS) - accepted)}"
+    )
 
 
 def test_every_command_the_documentation_names_actually_exists() -> None:

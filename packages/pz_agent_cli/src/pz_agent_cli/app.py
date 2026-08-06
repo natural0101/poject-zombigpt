@@ -94,6 +94,7 @@ COMMANDS: Final[tuple[str, ...]] = (
     "logs",
     "replay",
     "validate-config",
+    "smoke",
     "live-test",
 )
 

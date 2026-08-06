@@ -395,6 +395,7 @@ def validate_document(document: Mapping[str, Any], *, path: Path) -> ConfigValid
         errors.extend(_check_table(table, body, values))
 
     errors.extend(_provider_problems(values))
+    errors.extend(_forbidden(values))
     warnings.extend(_advisories(values))
     config = None if errors else AgentConfig(values={t: dict(k) for t, k in values.items()})
     return ConfigValidation(
@@ -692,18 +693,41 @@ def build_provider_config(
     return None
 
 
-def _advisories(values: Mapping[str, Mapping[str, Any]]) -> list[ConfigProblem]:
-    """Settings that validate but deserve a word. Never errors."""
+def _forbidden(values: Mapping[str, Mapping[str, Any]]) -> list[ConfigProblem]:
+    """Settings this build refuses to load at all.
+
+    ``allow_multiplayer`` used to sit in :func:`_advisories`, whose contract is
+    "never errors", carrying the sentence "multiplayer is refused at the
+    handshake regardless of this setting". No such refusal existed — not in the
+    sidecar, not in the mod, nowhere. So the warning was false and the setting
+    was exactly the bypass it claimed not to be: turn it on, get a line of
+    advice, and proceed.
+
+    It is an error now, and :meth:`SidecarRuntime.arm` refuses any session the
+    mod does not positively report as single player. Two gates rather than one,
+    because a configuration check protects the person who reads the file and
+    the arm check protects the person who does not.
+    """
     problems: list[ConfigProblem] = []
     if values["safety"]["allow_multiplayer"]:
         problems.append(
             ConfigProblem(
                 path="safety.allow_multiplayer",
                 code=CODE_NOT_ALLOWED,
-                detail="multiplayer is refused at the handshake regardless of this setting",
-                remediation="set it to false so the configuration matches what happens",
+                detail=(
+                    "this build does not act in multiplayer, and this setting does not "
+                    "make it. It is refused rather than warned about, because a flag that "
+                    "loads is a flag someone will rely on."
+                ),
+                remediation="remove it, or set it to false",
             )
         )
+    return problems
+
+
+def _advisories(values: Mapping[str, Mapping[str, Any]]) -> list[ConfigProblem]:
+    """Settings that validate but deserve a word. Never errors."""
+    problems: list[ConfigProblem] = []
     if not values["session"]["require_backup"]:
         problems.append(
             ConfigProblem(

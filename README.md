@@ -145,7 +145,9 @@ binding on humans too.
 ## Scope and limits
 
 Single-player only. The agent refuses to operate against multiplayer servers —
-automating another operator's server is out of scope and disabled in config.
+automating another operator's server is out of scope: the configuration key is
+refused outright, and the action engine will not issue a mutating command unless
+the mod positively reports single player.
 It does not fight, does not drive, and does not alter game statistics directly
 to paper over a missing API. Where an API cannot be verified, the capability is
 reported as unsupported rather than faked.

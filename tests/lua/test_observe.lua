@@ -157,6 +157,48 @@ do
   removeCore()
 end
 
+Harness.group("multiplayer is read, and silence is never read as single player")
+do
+  -- The sidecar arms only on a positive false and refuses on nil exactly as it
+  -- refuses on true, so a reading of "no accessor" must never come back false.
+  isClient = nil
+  isServer = nil
+  isNil(Observe.multiplayer(), "with neither accessor the answer is unknown, not single player")
+
+  isClient = function() return false end
+  isServer = function() return false end
+  equal(Observe.multiplayer(), false, "both answering false is single player")
+
+  isClient = function() return true end
+  isServer = function() return false end
+  equal(Observe.multiplayer(), true, "a multiplayer client says so")
+
+  isClient = function() return false end
+  isServer = function() return true end
+  equal(Observe.multiplayer(), true, "and so does a host")
+
+  isClient = function() error("boom") end
+  isServer = nil
+  isNil(Observe.multiplayer(), "an accessor that throws leaves the answer unknown rather than false")
+
+  isClient = function() return "yes" end
+  isServer = nil
+  isNil(Observe.multiplayer(), "and a non-boolean answer is no answer at all")
+
+  -- Only one of the two present is still a real reading: a single-player
+  -- session is neither a client nor a server, so one negative is enough.
+  isClient = function() return false end
+  isServer = nil
+  equal(Observe.multiplayer(), false, "one accessor answering false is a reading")
+
+  isClient = nil
+  isServer = nil
+  local unknown = Model.game({ build = "42.20", save_key = "a/b", speed = 1, paused = false })
+  isNil(unknown.multiplayer, "an unread value is omitted from the document, never written as false")
+  local single = Model.game({ build = "42.20", save_key = "a/b", speed = 1, paused = false, multiplayer = false })
+  equal(single.multiplayer, false, "and a read value is carried")
+end
+
 Harness.group("the player block carries the scalars and omits the rest")
 do
   local player = furnishedPlayer()

@@ -63,13 +63,30 @@ fails on the first unusual file.
 
 | Capability | What it gates | Default state |
 | --- | --- | --- |
-| `move_to_square` | `movement.move_to`, `movement.move_near` | probed |
-| `inventory_transfer` | `inventory.transfer`, `inventory.ensure_main` | probed |
-| `eat_percentage` | Partial eating; without it, whole units only | probed |
-| `drink_carried` | `consume.drink` from a carried container | probed |
-| `read_literature` | `literature.read` | probed |
-| `drink_world_source` | `consume.drink_source` — filling a vessel at a sink, well or rain collector and drinking from it | `experimental` |
+| `move_to_square` | `movement.move_to`, `movement.move_near` | `available_unverified` |
+| `inventory_transfer` | `inventory.transfer`, `inventory.ensure_main` | `available_unverified` |
+| `eat_percentage` | Partial eating; without it, whole units only | `available_unverified` |
+| `drink_carried` | `consume.drink` from a carried container | `available_unverified` |
+| `read_literature` | `literature.read` | `available_unverified` |
+| `equipment_equip` | `equipment.equip` | `available_unverified` |
+| `equipment_unequip` | `equipment.unequip` | `available_unverified` |
+| `medical_bandage` | `medical.bandage` | `available_unverified` |
+| `survival_rest` | `survival.rest` | `available_unverified` |
+| `survival_sleep` | `survival.sleep` | **`experimental`** |
+| `drink_world_source` | `consume.drink_source` — filling a vessel at a sink, well or rain collector and drinking from it | **`experimental`** |
 | `autonomous_attack` | — | **`unsupported`** (`NO_VERIFIED_API`) |
+
+Twelve, which is what `pz_agent_core.capabilities.probes.PROBES` holds. This
+table listed seven for a while and omitted the five equipment, medical and
+survival rows entirely — including `survival_sleep`, whose ceiling is the one a
+reader most needs to know about.
+
+**Two are experimental, not one.** `experimental` means upgradeable but not
+usable: the tool is not published and the action is refused until a live ack
+confirms it. `drink_world_source` is capped because §12.4 lists the world water
+action as unconfirmed. `survival_sleep` is capped for a sharper reason — once
+the character is asleep there is no timed action to interrupt and no queue entry
+to cancel, so a panic stop cannot reach them.
 
 `autonomous_attack` is permanently unsupported. It is listed so the report is
 explicit about it rather than silent.

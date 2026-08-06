@@ -1084,6 +1084,15 @@ function ObserveModel.game(fields, limits)
   if worldTime ~= nil then
     game.world_time = worldTime
   end
+  -- Deliberately *not* given a fallback the way `paused` and `speed` are. Those
+  -- fall back to the reading that stops the agent, which is safe because the
+  -- schema requires them. This one is optional precisely so an unread value can
+  -- stay unread: the sidecar refuses to arm on an omission, so writing `false`
+  -- here to fill a hole would hand out the permission the gate exists to
+  -- withhold.
+  if type(fields.multiplayer) == "boolean" then
+    game.multiplayer = fields.multiplayer
+  end
   return game
 end
 

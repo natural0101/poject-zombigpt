@@ -479,13 +479,25 @@ class Position:
 
 @dataclass(frozen=True, slots=True)
 class GameState:
-    """Which game, which save, and whether time is running."""
+    """Which game, which save, whether time is running, and who else is in it."""
 
     build: str
     save_id: str
     paused: bool
     speed: float
     world_time: str | None = None
+    #: True when the mod read this session as multiplayer, False when it read it
+    #: as single player, and **None when it could not tell**. The three values
+    #: are distinct on purpose: this project treats an absent reading as an
+    #: absent reading everywhere else — a missing ``is_bleeding`` never means
+    #: "not bleeding" — and a safety gate is the last place to start guessing.
+    #: :meth:`SidecarRuntime.arm` refuses on None exactly as it refuses on True.
+    multiplayer: bool | None = None
+
+    @property
+    def provably_single_player(self) -> bool:
+        """True only when the mod positively reported single player."""
+        return self.multiplayer is False
 
     def to_dict(self) -> JsonDict:
         out: JsonDict = {
@@ -496,6 +508,8 @@ class GameState:
         }
         if self.world_time is not None:
             out["world_time"] = self.world_time
+        if self.multiplayer is not None:
+            out["multiplayer"] = self.multiplayer
         return out
 
     @classmethod
@@ -509,6 +523,11 @@ class GameState:
             save_id=save_id,
             paused=_as_bool(_require(payload, "paused"), field_name="game.paused"),
             speed=_as_float(_require(payload, "speed"), field_name="game.speed"),
+            multiplayer=(
+                None
+                if payload.get("multiplayer") is None
+                else _as_bool(payload["multiplayer"], field_name="game.multiplayer")
+            ),
             world_time=(
                 None if world_time is None else _as_str(world_time, field_name="game.world_time")
             ),
