@@ -31,7 +31,7 @@ evidence of anything.
 
 Everything that can be implemented without a running game.
 
-**Protocol and IPC.** A closed action whitelist of 21 names (17 of them game
+**Protocol and IPC.** A closed action whitelist of 22 names (17 of them game
 actions), reason codes, session-scoped references with generation tracking, and
 a file-based exchange: append-only JSONL journals for commands, acks and
 observation events, plus alternating snapshot slots with the pointer written
@@ -144,9 +144,11 @@ an installer and uninstaller, and the RC ZIP.
 Everything below ran and passed in the remote environment:
 
 - the Python test suite (unit, contract and integration) under **both**
-  supported Python versions, in clean editable installs: 3435 passed and 2
-  skipped, identically, on 3.11.15 and on 3.12.3 — 3450 as of the
-  `consume.drink_source` work, on the interpreter this gate runs under. This line had been standing
+  supported Python versions, in clean editable installs. That claim is now
+  **older than the tree**: the suite measures 3471 passed and 2 skipped at the
+  current commit, and only Python 3.11.15 has pytest installed in this
+  container, so the 3.12 half is CI configuration rather than a result observed
+  here. Treat the matrix as declared, not demonstrated. This line had been standing
   since long before voice, memory, the live-test runner and the packaging landed
   — it was re-run rather than inherited, because a claim about a build is only
   about the build it was made against;
@@ -170,7 +172,8 @@ Everything below ran and passed in the remote environment:
   rather than silently deleted;
 - **the release candidate as an install source**, which is what you will
   actually use: the ZIP was extracted, `install-mod --source <extracted>/mod`
-  wrote the same 30 files and the same 506 613 bytes as installing from a clone,
+  wrote the same 30 files as installing from a clone (the byte total this line
+  once gave, 506 613, has drifted with the mod and is not restated),
   every installed file is byte-for-byte identical to the source tree, and all 29
   Lua files in the archive parse. The archive had been built and checksummed
   several times without anyone installing from it, which is a different claim;

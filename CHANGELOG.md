@@ -106,7 +106,7 @@ drift out of sync with `pz_agent_core.version`.
   `docs/LOCAL_DEBUG_MAP.md`, `docs/GAME_API_VERIFICATION.md` and
   `docs/LOCAL_AGENT_PROMPT.md`.
 
-- **The whole MCP action surface.** Thirty tools, eighteen of them actions, so
+- **The whole MCP action surface.** Thirty-one tools, nineteen of them actions, so
   every action with a registered adapter can be asked for. A fourth tool kind,
   `QUERY`, covers the three that only read: they submit an action and return an
   action id like any other, and need no arming. `container.open_nearby` is

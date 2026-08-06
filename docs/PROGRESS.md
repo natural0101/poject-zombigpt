@@ -9,19 +9,22 @@ green · `wip` in progress · `todo` not started · `live` blocked on a step tha
 physically requires a running game.
 
 Last updated: 28 of 30 tasks closed; T029 and T030 are blocked on a live game,
-not deferred. 3435 Python tests on 3.11 and on 3.12, 2840 Lua assertions,
-`scripts/check.sh` green.
+not deferred. 3471 Python tests and 2864 Lua assertions across 26 suites,
+mypy strict over 257 files, `scripts/check.sh` green — measured under Python
+3.11.15, which is the only interpreter with the suite installed here. CI
+declares a 3.11/3.12 matrix; that is configuration, not a result observed in
+this container.
 See FINAL_IMPLEMENTATION_REPORT.md.
 
 Work beyond the original graph is complete on `feature/playable-agent-1.0`:
-the protocol grew from fifteen actions to twenty-one, the mod gained a real
+the protocol grew from fifteen actions to twenty-two, the mod gained a real
 command executor and seventeen game adapters, and the sidecar gained the
 adapters, providers, live-test harness and Windows release candidate that go
 with them. See [the playable-agent section](#the-playable-agent-branch) below,
 and [`LOCAL_GAME_HANDOFF.md`](LOCAL_GAME_HANDOFF.md) for what still needs a
 machine with the game on it.
 
-**Eight defects that branch found are worth reading before any further work**,
+**Ten defects that branch found are worth reading before any further work**,
 because they are one family and the family is not closed. Every subsystem was
 written, tested and green; what nothing tested was whether the subsystems were
 *connected*.
@@ -37,6 +40,7 @@ written, tested and green; what nothing tested was whether the subsystems were
 | 7 | The memory store was complete and connected to nothing | `reserves_item` always answered False, so §7.9 rested on tag rules alone, and no home point could exist |
 | 8 | `pz_agent_voice` was imported by nothing and had no entry point | Russian voice control was complete, tested, and impossible to start |
 | 9 | The mod could drink from a sink; the sidecar had no argument for it, and the path it did have ran under the wrong capability | Two faults in one place: a working mod feature unreachable from Python, *and* `drink_world_source` — which §12.4 caps at `experimental` — reachable through `drink_carried`, which a scan verifies |
+| 10 | **Multiplayer was documented as refused twice and refused nowhere** | `safety.allow_multiplayer` sat in `_advisories`, whose contract is "Never errors", carrying the sentence "multiplayer is refused at the handshake regardless of this setting". No such refusal existed in `packages/` or `pz-mod/`. The setting was the bypass it claimed not to be |
 
 Every one was found by a test that crosses a seam rather than covering a unit,
 and each of those tests now exists: `tests/lua/test_adapter_registry.lua`,
@@ -46,8 +50,17 @@ and each of those tests now exists: `tests/lua/test_adapter_registry.lua`,
 `tests/contract/test_sidecar_capability_wiring.py`,
 `tests/contract/test_sidecar_planner_wiring.py`,
 `tests/contract/test_backup_attribution.py`,
-`tests/contract/test_sidecar_memory_wiring.py` and
-`tests/contract/test_voice_wiring.py`.
+`tests/contract/test_sidecar_memory_wiring.py`,
+`tests/contract/test_voice_wiring.py` and
+`tests/contract/test_multiplayer_refusal.py`.
+
+Number ten is the one to read first, because it is not a wiring defect at all —
+it is a documented safety guarantee that was never implemented. It is closed by
+two gates: the configuration key is a hard error, and
+`ActionEngine._multiplayer_abort` refuses every mutating command unless the mod
+positively reported single player, with an absent reading refused exactly as
+`true` is. `tests/contract/test_multiplayer_refusal.py` holds it, and both
+halves were mutation-checked. Nobody has watched it refuse a real server.
 
 Number nine was closed by splitting the action: `consume.drink_source` is its
 own action with its own adapter on both sides, so the capability is checked by
@@ -236,12 +249,14 @@ side exists hides the gap rather than closing it.
 Seventeen game action adapters are registered on both sides:
 `movement.move_to`, `movement.move_near`, `world.inspect`, `container.inspect`,
 `container.open_nearby`, `inventory.search`, `inventory.transfer`,
-`inventory.ensure_main`, `consume.eat`, `consume.drink`, `literature.read`,
+`inventory.ensure_main`, `consume.eat`, `consume.drink`, `consume.drink_source`, `literature.read`,
 `equipment.equip`, `equipment.unequip`, `medical.bandage`, `survival.rest` and
-`survival.sleep`, plus `plan.cancel`. The control plane — `session.arm`,
-`session.disarm`, `safety.stop`, `action.wait` — is served by
-`PZAgent.ActionRuntime` itself, so a stop can never be queued behind the thing
-it is stopping.
+`survival.sleep`. The control plane is **five** — `session.arm`,
+`session.disarm`, `safety.stop`, `action.wait` and `plan.cancel` — and is served
+by `PZAgent.ActionRuntime` itself, so a stop can never be queued behind the
+thing it is stopping. `plan.cancel` was listed above as an eighteenth adapter
+for a while; it is a Python builtin with no Lua adapter, and putting it on the
+adapter side made the count agree with the membership only by accident.
 
 `tests/lua/test_adapter_registry.lua` asserts that every one of them reaches
 the dispatcher through the real install path, and that the registry holds
@@ -249,10 +264,15 @@ exactly the protocol's actions and nothing else. That test exists because the
 count above was true of the source and false of the running mod: the adapters
 were published under a key the dispatcher does not read.
 
-The CLI exposes `doctor`, `install-mod`, `uninstall-mod`, `status`, `start`,
-`stop`, `arm`, `disarm`, `backup-save`, `restore-save`, `logs`, `replay`,
-`validate-config` and the `live-test` group (`prepare`, `run`, `status`,
-`resume`, `collect`, `finalize`). An earlier revision of this file said
+The CLI exposes seventeen commands: `arm`, `backup-save`, `disarm`, `doctor`,
+`install-mod`, `live-test`, `logs`, `remember`, `replay`, `restore-save`,
+`smoke`, `start`, `status`, `stop`, `uninstall-mod`, `validate-config` and
+`voice`. The `live-test` group carries `prepare`, `run`, `status`, `resume`,
+`collect` and `finalize`. This sentence listed fourteen and omitted `remember`,
+`voice` and `smoke` — the same rot the paragraph below apologises for, one
+revision later. It is derived from `pz_agent_cli.app.COMMANDS`, which
+`tests/contract/test_cli_docs_agreement.py` now pins to the parser in both
+directions. An earlier revision of this file said
 `start`/`stop`/`arm`/`disarm` were deliberately absent because the sidecar loop
 was not written. The loop is written and they are in the parser; the note was
 left standing after the code moved past it.

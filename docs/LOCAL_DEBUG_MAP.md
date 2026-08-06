@@ -22,7 +22,7 @@ That is the list of every place this code is guessing.
 
 ## Where the evidence lives
 
-Six places answer nearly every question. Paths are relative to the exchange
+Nine places answer nearly every question. Paths are relative to the exchange
 directory, which `pz-agent status` prints.
 
 | What | Path | Written by |
