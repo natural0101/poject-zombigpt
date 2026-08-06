@@ -128,6 +128,36 @@ def test_rereading_can_be_permitted_by_configuration() -> None:
     assert selection.choice is not None
 
 
+def test_a_book_the_user_named_may_be_read_again() -> None:
+    # Re-reading is worthless in game and refused by default, but "read this
+    # one" is an instruction, not the policy wasting the character's time.
+    finished = literature_item("finished", display_name="The Requested Book", pages_read=200)
+
+    refused = select_literature(inventory(finished), reader(), BOREDOM)
+    assert reason_for(refused, finished.ref) is RejectionReason.ALREADY_READ
+
+    requested = select_literature(
+        inventory(finished), reader(), LiteratureGoal.specific(finished.ref)
+    )
+    assert requested.choice is not None
+    assert requested.choice.item_ref == finished.ref
+
+
+def test_a_specific_request_does_not_unlock_rereading_every_other_book() -> None:
+    wanted = literature_item("wanted", display_name="Wanted")
+    other_finished = literature_item(
+        "other", display_name="Other", full_type="Base.Book2", pages_read=200
+    )
+
+    selection = select_literature(
+        inventory(other_finished, wanted), reader(), LiteratureGoal.specific(wanted.ref)
+    )
+
+    assert selection.choice is not None
+    assert selection.choice.item_ref == wanted.ref
+    assert reason_for(selection, other_finished.ref) is RejectionReason.ALREADY_READ
+
+
 def test_a_book_below_the_characters_level_is_refused_with_the_window() -> None:
     beginner = carpentry_book("beginner")
 
@@ -163,6 +193,26 @@ def test_a_book_for_another_skill_is_refused_by_name() -> None:
 
     assert reason_for(selection, cooking.ref) is RejectionReason.WRONG_SKILL
     assert "Carpentry" in selection.rejections[0].detail
+
+
+def test_the_wrong_skill_is_reported_even_when_the_book_is_also_outgrown() -> None:
+    # Both filters match; the goal mismatch is the one the user asked about.
+    cooking = carpentry_book(
+        "cooking",
+        display_name="Cooking 1",
+        skill="Cooking",
+        full_type="Base.BookCooking1",
+        min_level=0,
+        max_level=2,
+    )
+
+    selection = select_literature(
+        inventory(cooking),
+        reader(**{f"{SKILL_STAT_PREFIX}Cooking": 9}),
+        LiteratureGoal.train("Carpentry"),
+    )
+
+    assert reason_for(selection, cooking.ref) is RejectionReason.WRONG_SKILL
 
 
 def test_a_newspaper_cannot_train_a_skill() -> None:
@@ -334,6 +384,39 @@ def test_ties_break_on_the_item_reference() -> None:
 
     assert forward.choice is not None and backward.choice is not None
     assert forward.choice.item_ref == backward.choice.item_ref == min(first.ref, second.ref)
+
+
+def test_the_rejection_list_is_bounded_and_says_what_it_left_out() -> None:
+    config = PolicyConfig(max_reported_rejections=2)
+    shelf = [
+        literature_item(f"b{index}", full_type=f"Base.Book{index}", pages_read=200)
+        for index in range(8)
+    ]
+
+    selection = select_literature(inventory(*shelf), reader(), BOREDOM, config)
+
+    assert selection.is_refusal
+    assert len(selection.rejections) == 2
+    assert selection.rejected_count == 8
+    assert selection.rejections_truncated
+    assert "6 further rejected candidates" in selection.explain()
+    assert selection.as_dict()["rejected_count"] == 8
+
+
+def test_a_selection_cannot_undercount_the_candidates_it_refused() -> None:
+    rejection = select_literature(
+        inventory(literature_item("done", pages_read=200)), reader(), BOREDOM
+    ).rejections[0]
+
+    with pytest.raises(ValueError, match="is below the"):
+        LiteratureSelection(
+            choice=None,
+            reason_code=ReasonCode.NO_SUITABLE_LITERATURE,
+            goal=BOREDOM,
+            rejections=(rejection,),
+            ranked=(),
+            rejected_count=0,
+        )
 
 
 def test_a_goal_must_carry_what_it_needs() -> None:

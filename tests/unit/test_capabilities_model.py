@@ -9,6 +9,8 @@ import pytest
 from pz_agent_core.capabilities.model import (
     MAX_CAPABILITIES,
     MAX_EVIDENCE_PER_CAPABILITY,
+    MAX_NOTE_LEN,
+    MAX_NOTES,
     REASON_BUILD_CHANGED,
     REASON_NO_VERIFIED_API,
     Capability,
@@ -235,6 +237,31 @@ def test_downgrade_without_static_evidence_becomes_unsupported() -> None:
     assert downgraded.evidence == ()
 
 
+def test_downgrading_an_unverified_claim_that_rests_only_on_a_run_refuses_it() -> None:
+    # A loaded report may hold 'available_unverified' backed by nothing but a
+    # probe run. Dropping that run leaves no evidence at all, and the constructor
+    # forbids that state without evidence — so the downgrade has to refuse the
+    # capability rather than blow up in the middle of loading the ledger.
+    resting_on_a_run = Capability.available_unverified(
+        name="eat_percentage", build="42.19", evidence=[runtime_evidence()]
+    )
+    downgraded = resting_on_a_run.downgraded(build="42.20", reason=REASON_BUILD_CHANGED)
+    assert downgraded.state is CapabilityState.UNSUPPORTED
+    assert downgraded.reason == REASON_BUILD_CHANGED
+    assert downgraded.evidence == ()
+    assert not downgraded.usable
+
+
+def test_downgrading_a_refusal_keeps_its_state_and_reason() -> None:
+    refused = Capability.unsupported(
+        name="autonomous_attack", reason=REASON_NO_VERIFIED_API, build="42.19"
+    )
+    downgraded = refused.downgraded(build="42.20", reason=REASON_BUILD_CHANGED)
+    assert downgraded.state is CapabilityState.UNSUPPORTED
+    assert downgraded.reason == REASON_NO_VERIFIED_API
+    assert downgraded.build == "42.20"
+
+
 def test_capability_round_trips_through_json() -> None:
     capability = Capability.verified(
         name="eat_percentage",
@@ -313,12 +340,43 @@ def test_report_rejects_duplicates_and_a_negative_revision() -> None:
         CapabilityReport(build="")
 
 
+def test_a_report_refuses_a_claim_proven_on_another_build() -> None:
+    # Otherwise usable() would answer "yes, on 42.20" on the strength of a probe
+    # run against 42.19, which is the exact confusion §12.6 exists to prevent.
+    stale = Capability.verified(
+        name="eat_percentage", build="42.19", evidence=[static_evidence(), runtime_evidence()]
+    )
+    with pytest.raises(CapabilityError, match=r"proven on build 42\.19"):
+        CapabilityReport(build="42.20", capabilities=(stale,))
+    with pytest.raises(CapabilityError, match=r"proven on build 42\.19"):
+        CapabilityReport(build="42.20").with_capabilities([stale])
+    # Rebasing is the supported route, and it costs the verified claim.
+    rebased = CapabilityReport(build="42.19", capabilities=(stale,)).for_build("42.20")
+    assert rebased.state("eat_percentage") is CapabilityState.AVAILABLE_UNVERIFIED
+
+
 def test_report_capability_count_is_bounded() -> None:
     too_many = tuple(
         Capability.unsupported(name=f"cap_{i}", reason="X") for i in range(MAX_CAPABILITIES + 1)
     )
     with pytest.raises(CapabilityError, match="at most"):
         CapabilityReport(build="42.20", capabilities=too_many)
+
+
+def test_report_notes_are_bounded_in_count_and_in_length() -> None:
+    with pytest.raises(CapabilityError, match="at most"):
+        CapabilityReport(build="42.20", notes=tuple(f"note {i}" for i in range(MAX_NOTES + 1)))
+    with pytest.raises(CapabilityError, match="note must be at most"):
+        CapabilityReport(build="42.20", notes=("x" * (MAX_NOTE_LEN + 1),))
+
+
+def test_repeated_rebasing_does_not_grow_the_note_list_without_bound() -> None:
+    report = make_report("42.00")
+    for minor in range(1, MAX_NOTES + 5):
+        report = report.for_build(f"42.{minor:02d}")
+    assert len(report.notes) == MAX_NOTES
+    # The bound keeps the newest notes: the last rebase must still be explained.
+    assert report.notes[-1] == "downgraded from build 42.35 to 42.36: BUILD_CHANGED"
 
 
 def test_revision_advances_only_when_the_set_actually_changes() -> None:

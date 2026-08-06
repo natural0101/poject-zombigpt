@@ -27,10 +27,16 @@ local PANIC_KEY = 88
 --- while leaving the game thread room for everything else.
 local HEARTBEAT_TICK_INTERVAL = 10
 
+--- Observation cadence. A full snapshot walks the inventory and the squares
+--- around the player, so it runs far less often than the heartbeat, and on a
+--- multiple of it so a snapshot is always preceded by a state refresh.
+local OBSERVATION_TICK_INTERVAL = 60
+
 PZAgent.unavailableEvents = {}
 
 local agent = nil
 local tickCounter = 0
+local observationCounter = 0
 
 local function now()
   if type(getTimestampMs) == "function" then
@@ -79,7 +85,10 @@ local function shutdown()
     return
   end
   PZAgent.Runtime.stop(agent, now(), PZAgent.Protocol.REASON.SESSION_TERMINATED)
-  PZAgent.Hud.destroy(agent.hud)
+  local removed, removeError = PZAgent.Hud.destroy(agent.hud)
+  if not removed and agent.hud ~= nil then
+    agent.safety.last_error = removeError
+  end
   agent = nil
 end
 
@@ -88,11 +97,15 @@ local function onTick()
     return
   end
   tickCounter = tickCounter + 1
-  if tickCounter < HEARTBEAT_TICK_INTERVAL then
-    return
+  observationCounter = observationCounter + 1
+  if tickCounter >= HEARTBEAT_TICK_INTERVAL then
+    tickCounter = 0
+    PZAgent.Runtime.tick(agent, now())
   end
-  tickCounter = 0
-  PZAgent.Runtime.tick(agent, now())
+  if observationCounter >= OBSERVATION_TICK_INTERVAL then
+    observationCounter = 0
+    PZAgent.Observe.tick(agent, now())
+  end
 end
 
 local function onKeyPressed(key)

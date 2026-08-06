@@ -86,7 +86,7 @@ do
   local agent, fs = newAgent()
   ok(Safety.sidecarStale(agent.safety, NOW), "with no sidecar heartbeat seen, the sidecar is stale")
 
-  fs:put(PZ.Ipc.pathFor("sidecar_heartbeat"), '{"seq":1,"session_id":"s","timestamp_ms":1}')
+  fs:put(PZ.Ipc.pathFor("sidecar_heartbeat"), '{"peer":"sidecar","seq":1,"session_id":"s","timestamp_ms":1}')
   ok(Runtime.readSidecarHeartbeat(agent, NOW), "a new heartbeat document counts as a sign of life")
   ok(not Safety.sidecarStale(agent.safety, NOW), "so the sidecar is no longer stale")
 
@@ -96,11 +96,21 @@ do
     "so a sidecar that stopped updating goes stale on schedule"
   )
 
-  fs:put(PZ.Ipc.pathFor("sidecar_heartbeat"), '{"seq":2,"session_id":"s","timestamp_ms":2}')
+  fs:put(PZ.Ipc.pathFor("sidecar_heartbeat"), '{"peer":"sidecar","seq":2,"session_id":"s","timestamp_ms":2}')
   ok(Runtime.readSidecarHeartbeat(agent, NOW + 2000), "an updated document revives it")
 
   fs:put(PZ.Ipc.pathFor("sidecar_heartbeat"), "{torn")
   ok(not Runtime.readSidecarHeartbeat(agent, NOW + 3000), "a torn document is not a sign of life")
+
+  -- The mod's own heartbeat, copied into the sidecar's file, must not be able
+  -- to supervise the mod.
+  local stale = NOW + Safety.SIDECAR_MAX_AGE_MS * 10
+  fs:put(PZ.Ipc.pathFor("sidecar_heartbeat"), '{"peer":"game","seq":99,"session_id":"s","timestamp_ms":99}')
+  ok(not Runtime.readSidecarHeartbeat(agent, stale), "a document claiming the wrong peer is not a sign of life")
+  ok(Safety.sidecarStale(agent.safety, stale), "so the sidecar is still counted as gone")
+
+  fs:put(PZ.Ipc.pathFor("sidecar_heartbeat"), '{"seq":100,"session_id":"s","timestamp_ms":100}')
+  ok(not Runtime.readSidecarHeartbeat(agent, stale), "and a document claiming no peer at all is not one either")
 end
 
 Harness.group("a panic stop request in the exchange directory is honoured")
@@ -158,7 +168,7 @@ Harness.group("a stop works with no session, no queue and no game")
 do
   getSpecificPlayer = nil
   Mock.removeActionQueue()
-  local agent = newAgent({ session = false })
+  local agent, fs = newAgent({ session = false })
   Safety.noteSidecarHeartbeat(agent.safety, NOW)
   agent.safety.armed = true
   local outcome = Runtime.stop(agent, NOW, REASON.PANIC_STOP)
@@ -166,6 +176,36 @@ do
   equal(outcome.disarmed, true, "and is reported")
   equal(#outcome.plan.clear, 0, "with nothing cancelled, because nothing could be proved ours")
   isNil(agent.session:id(), "and there was never a session to prove it against")
+
+  -- The stop happened over a queue nobody could read. The journal must not
+  -- describe that the same way it describes a stop over an empty queue.
+  local record = journalRecords(fs)[1]
+  equal(record.queue_readable, false, "the journal records that the queue was never read")
+  Harness.notEqual(record.capability, "verified", "so the outcome is not reported as verified")
+  contains(record.detail, "could not be read", "and the detail says why")
+end
+
+Harness.group("an unreadable stop channel gives up authority")
+do
+  getSpecificPlayer = function()
+    return Mock.newPlayer()
+  end
+  Mock.installActionQueue({})
+  local agent, fs = newAgent()
+  Safety.noteSidecarHeartbeat(agent.safety, NOW)
+  Safety.arm(agent.safety, "AUTONOMOUS", NOW, { sessionId = SESSION, playerPresent = true })
+  fs:failReadsFrom(PZ.Ipc.pathFor("panic_stop"))
+
+  Runtime.tick(agent, NOW)
+  equal(agent.safety.armed, false, "a stop request that cannot be read is not read as 'no stop'")
+  contains(agent.safety.last_error, "panic.stop", "and the read failure reaches the HUD and the heartbeat")
+
+  -- One disarm, not one per tick: a permanently broken file must not fill the
+  -- journal with stop events forever.
+  local afterFirst = #journalRecords(fs)
+  Runtime.tick(agent, NOW + 1)
+  Runtime.tick(agent, NOW + 2)
+  equal(#journalRecords(fs), afterFirst, "a still-unreadable file does not stop again once disarmed")
 end
 
 Harness.group("manual input cancels automation")

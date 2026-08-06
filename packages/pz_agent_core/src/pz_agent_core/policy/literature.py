@@ -35,6 +35,7 @@ from .selection import (
     read_float,
     read_int,
     read_str,
+    truncation_note,
 )
 
 __all__ = [
@@ -288,14 +289,25 @@ class LiteratureSelection:
     goal: LiteratureGoal
     rejections: tuple[Rejection, ...]
     ranked: tuple[ScoredCandidate, ...]
+    #: Total candidates refused; ``rejections`` is a bounded sample of them.
+    rejected_count: int = 0
 
     def __post_init__(self) -> None:
         if (self.choice is None) == (self.reason_code is None):
             raise ValueError("a selection is either a choice or a refusal, never both or neither")
+        if self.rejected_count < len(self.rejections):
+            raise ValueError(
+                f"rejected_count {self.rejected_count} is below the "
+                f"{len(self.rejections)} rejections carried"
+            )
 
     @property
     def is_refusal(self) -> bool:
         return self.choice is None
+
+    @property
+    def rejections_truncated(self) -> bool:
+        return self.rejected_count > len(self.rejections)
 
     @classmethod
     def chosen(
@@ -305,6 +317,7 @@ class LiteratureSelection:
         goal: LiteratureGoal,
         rejections: tuple[Rejection, ...],
         ranked: tuple[ScoredCandidate, ...],
+        rejected_count: int,
     ) -> LiteratureSelection:
         return cls(
             choice=choice,
@@ -312,6 +325,7 @@ class LiteratureSelection:
             goal=goal,
             rejections=rejections,
             ranked=ranked,
+            rejected_count=rejected_count,
         )
 
     @classmethod
@@ -319,6 +333,7 @@ class LiteratureSelection:
         cls,
         goal: LiteratureGoal,
         rejections: tuple[Rejection, ...],
+        rejected_count: int,
     ) -> LiteratureSelection:
         return cls(
             choice=None,
@@ -326,6 +341,7 @@ class LiteratureSelection:
             goal=goal,
             rejections=rejections,
             ranked=(),
+            rejected_count=rejected_count,
         )
 
     def explain(self) -> str:
@@ -334,7 +350,8 @@ class LiteratureSelection:
         if not self.rejections:
             return f"there is nothing to read for goal {self.goal.kind.value}"
         reasons = "; ".join(r.describe() for r in self.rejections)
-        return f"nothing suitable to read for goal {self.goal.kind.value}: {reasons}"
+        note = truncation_note(len(self.rejections), self.rejected_count)
+        return f"nothing suitable to read for goal {self.goal.kind.value}: {reasons}{note}"
 
     def as_dict(self) -> JsonDict:
         return {
@@ -346,6 +363,7 @@ class LiteratureSelection:
                 "item_ref": self.goal.item_ref,
             },
             "rejections": [r.as_dict() for r in self.rejections],
+            "rejected_count": self.rejected_count,
             "ranked": [
                 {"item_ref": c.item_ref, "score": c.score, "factors": c.breakdown.as_dict()}
                 for c in self.ranked
@@ -358,7 +376,6 @@ class _Context:
     config: PolicyConfig
     goal: LiteratureGoal
     illiterate: bool
-    goal_skill_level: int
     inventory: InventoryView
     player: PlayerState
 
@@ -379,7 +396,6 @@ def select_literature(
         config=config,
         goal=goal,
         illiterate=is_illiterate(player),
-        goal_skill_level=skill_level(player, goal.skill) if goal.skill else 0,
         inventory=inventory,
         player=player,
     )
@@ -399,7 +415,7 @@ def select_literature(
 
     reported = bounded_rejections(rejections, config)
     if not candidates:
-        return LiteratureSelection.refused(goal, reported)
+        return LiteratureSelection.refused(goal, reported, len(rejections))
 
     ranked = rank_candidates(scored for _, _, scored in candidates)
     best_ref = ranked[0].item_ref
@@ -414,7 +430,13 @@ def select_literature(
         rationale=_rationale(item, view, scored, context),
         breakdown=scored.breakdown,
     )
-    return LiteratureSelection.chosen(choice, goal=goal, rejections=reported, ranked=ranked)
+    return LiteratureSelection.chosen(
+        choice,
+        goal=goal,
+        rejections=reported,
+        ranked=ranked,
+        rejected_count=len(rejections),
+    )
 
 
 # --------------------------------------------------------------------------
@@ -469,10 +491,24 @@ def _filter_reach(item: ItemView, _view: LiteratureView, context: _Context) -> R
     return reach_rejection(context.inventory, item, context.config)
 
 
+def _is_requested(item: ItemView, context: _Context) -> bool:
+    """True when the user asked for this exact item by reference."""
+    return (
+        context.goal.kind is LiteratureGoalKind.READ_SPECIFIC and item.ref == context.goal.item_ref
+    )
+
+
 def _filter_already_read(
     item: ItemView, view: LiteratureView, context: _Context
 ) -> Rejection | None:
-    if context.config.allow_reread or not view.is_finished:
+    """A finished book teaches nothing — unless the user named it.
+
+    Re-reading is worthless in game, so it is refused by default. An explicit
+    "read this one" is not the policy choosing to waste the character's time,
+    it is the user's instruction, and refusing it would silently ignore a
+    direct request.
+    """
+    if context.config.allow_reread or not view.is_finished or _is_requested(item, context):
         return None
     read_detail = (
         f"all {view.pages_total} pages are already read"
@@ -563,8 +599,11 @@ _FILTERS: Final[tuple[_Filter, ...]] = (
     _filter_reach,
     _filter_already_read,
     _filter_kind,
-    _filter_skill_window,
+    # Goal fit before the book's own level window: for a "train Carpentry"
+    # goal, a maxed-out Cooking book is refused because it is not Carpentry,
+    # which is the sentence the user needs, not "you are already level 10".
     _filter_goal_skill,
+    _filter_skill_window,
     _filter_requested_item,
     _filter_recipes,
 )

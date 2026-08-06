@@ -39,9 +39,22 @@ from .model import (
     CapabilityError,
     CapabilityReport,
     Evidence,
+    EvidenceKind,
     utc_now_iso,
 )
-from .scanner import SymbolIndex
+from .scanner import SymbolIndex, normalise_symbol
+
+#: The only states a live ack may raise. ``unsupported`` means the symbols are
+#: not on this install; ``disabled_by_policy`` means a human turned the
+#: capability off, and no amount of evidence overrides that — the API question
+#: was never the reason it is off.
+_UPGRADEABLE_STATES: Final = frozenset(
+    {
+        CapabilityState.AVAILABLE_UNVERIFIED,
+        CapabilityState.EXPERIMENTAL,
+        CapabilityState.VERIFIED,
+    }
+)
 
 # Capability names, as written in §3.8. They are the keys of the generated
 # report and of the MCP tool gate, so they are fixed strings, not derived.
@@ -292,8 +305,10 @@ def confirm(
     the game is installed on.
 
     A non-succeeded ack, an ack for the wrong action, or an ack missing the
-    declared postcondition keys all leave the capability where it was, with the
-    reason recorded. Nothing here can fabricate a success.
+    declared postcondition keys all record the refusal instead, and a capability
+    an earlier run had marked ``verified`` falls back to ``available_unverified``
+    rather than keeping a claim this run did not support. Nothing here can
+    fabricate a success.
     """
     when = observed_at or utc_now_iso()
     if static.name != probe.capability:
@@ -302,10 +317,17 @@ def confirm(
         )
     if not probe.can_be_verified:
         return probe.blocked_capability(build=build)
-    if static.state is CapabilityState.UNSUPPORTED:
-        # The symbols are not on this install; a succeeded ack for something else
-        # must not resurrect the claim.
+    if static.state not in _UPGRADEABLE_STATES:
+        # ``unsupported``: the symbols are not on this install, so a succeeded ack
+        # for something else must not resurrect the claim. ``disabled_by_policy``:
+        # a human turned it off, and a probe result is not a permission.
         return static
+    unproven = _unproven_symbols(probe, static)
+    if unproven:
+        # The caller handed in something that was not produced by resolve_static
+        # against this machine. Without a static finding for every required
+        # symbol there is no chain from "the API exists here" to "it worked".
+        return _not_confirmed(static, f"no static finding for {', '.join(unproven[:4])}")
     if ack.action != probe.confirmation.action.value:
         return _not_confirmed(static, f"ack for {ack.action}, expected {probe.confirmation.action}")
 
@@ -330,11 +352,33 @@ def confirm(
     )
 
 
+def _unproven_symbols(probe: ProbeDefinition, static: Capability) -> tuple[str, ...]:
+    """Required symbols the *static* capability carries no scan evidence for."""
+    scanned = {
+        normalise_symbol(e.symbol) for e in static.evidence if e.kind is EvidenceKind.STATIC_SCAN
+    }
+    return tuple(s for s in probe.required_symbols if normalise_symbol(s) not in scanned)
+
+
 def _not_confirmed(static: Capability, detail: str) -> Capability:
+    """The capability as it stands after a confirmation attempt that failed.
+
+    A capability that was ``verified`` by an earlier run drops back to
+    ``available_unverified``. §3.8 says the report holds probe *results*, not
+    promises: a run that did not confirm cannot leave "verified" on the record,
+    or the MCP would publish a ready write tool on the strength of a probe that
+    just failed. The earlier evidence is kept — it happened — but it no longer
+    carries a verified claim on its own.
+    """
     reason = f"{REASON_PROBE_NOT_CONFIRMED}: {detail}"
+    state = (
+        CapabilityState.AVAILABLE_UNVERIFIED
+        if static.state is CapabilityState.VERIFIED
+        else static.state
+    )
     return Capability(
         name=static.name,
-        state=static.state,
+        state=state,
         reason=reason[:MAX_REASON_LEN],
         build=static.build,
         evidence=static.evidence,

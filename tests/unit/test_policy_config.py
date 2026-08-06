@@ -11,7 +11,11 @@ from typing import Any
 
 import pytest
 
-from pz_agent_core.policy import DEFAULT_POLICY_CONFIG, PolicyConfig
+from pz_agent_core.policy import (
+    DEFAULT_POLICY_CONFIG,
+    MAX_REPORTED_REJECTIONS_CEILING,
+    PolicyConfig,
+)
 
 
 def test_the_documented_defaults_match_the_decision_table() -> None:
@@ -75,8 +79,23 @@ def test_a_zero_normalisation_reference_is_rejected() -> None:
 
 
 def test_the_rejection_report_must_be_able_to_hold_something() -> None:
-    with pytest.raises(ValueError, match="at least 1"):
+    with pytest.raises(ValueError, match="must be between 1 and"):
         PolicyConfig(max_reported_rejections=0)
+
+
+def test_the_rejection_bound_cannot_be_configured_away() -> None:
+    # "Bounded everything" is not a user preference: a config may lower the cap
+    # on a user-facing, logged list but never raise it past the ceiling.
+    PolicyConfig(max_reported_rejections=MAX_REPORTED_REJECTIONS_CEILING)
+    with pytest.raises(ValueError, match="must be between 1 and"):
+        PolicyConfig(max_reported_rejections=MAX_REPORTED_REJECTIONS_CEILING + 1)
+
+
+def test_a_negative_empty_threshold_is_rejected() -> None:
+    # A negative threshold would let a container with nothing in it pass the
+    # empty filter and be selected as something to drink.
+    with pytest.raises(ValueError, match="min_remaining_units must be non-negative"):
+        PolicyConfig(min_remaining_units=-0.1)
 
 
 def test_deficits_and_criticality_follow_the_thresholds() -> None:

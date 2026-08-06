@@ -238,6 +238,44 @@ def test_only_the_need_that_is_actually_served_advances_its_counter() -> None:
     assert decision.suppressed == (bleeding,)
 
 
+def test_a_need_that_never_wins_arbitration_never_escalates_to_the_user() -> None:
+    # The need loses to the running plan on every tick, so nothing is ever tried
+    # on its behalf. Escalating it would ask the user about a situation the
+    # agent never once attempted to fix.
+    arbiter = NeedArbiter()
+    chore = _need("boredom", Priority.OPTIONAL_ACTIVITY, signature="boredom=3")
+
+    for step in range(10):
+        decision = arbiter.arbitrate(_plan(Priority.USER_COMMAND), [chore], NOW + step)
+        assert decision.outcome is Arbitration.CONTINUE
+        assert decision.serve is None
+        assert decision.deferred == (chore,)
+        assert decision.trigger_count == 0
+        assert not decision.alternate_strategy
+
+    assert arbiter.tracked == 0
+
+    # It escalates normally once it actually starts being served.
+    for _ in range(3):
+        arbiter.arbitrate(None, [chore], NOW)
+    assert arbiter.arbitrate(None, [chore], NOW).outcome is Arbitration.CONTINUE
+
+
+def test_an_uninterruptible_step_does_not_let_a_need_escalate_behind_its_back() -> None:
+    arbiter = NeedArbiter()
+    thirst = _need("thirst", Priority.CRITICAL_THIRST, signature="thirst=0.72")
+
+    for step in range(5):
+        decision = arbiter.arbitrate(_plan(interruptible=False), [thirst], NOW + step)
+        assert decision.outcome is Arbitration.CONTINUE
+        assert decision.trigger_count == 0
+
+    # The step finishes; the need is served for the first time, from zero.
+    served = arbiter.arbitrate(_plan(), [thirst], NOW + 5)
+    assert served.outcome is Arbitration.SUSPEND
+    assert served.trigger_count == 1
+
+
 def test_resolving_a_need_clears_its_history() -> None:
     arbiter = NeedArbiter()
     need = _need("thirst", Priority.CRITICAL_THIRST, signature="thirst=0.72")

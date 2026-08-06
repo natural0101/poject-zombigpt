@@ -55,6 +55,13 @@ function Heartbeat.build(context)
   local session = context.session
 
   local document = {
+    -- `peer` and `version` are not decoration: pz_agent_core.session.heartbeat
+    -- refuses a heartbeat document without them, and the sidecar's staleness
+    -- and resume paths both go through that reader. A heartbeat it cannot parse
+    -- is a heartbeat that does not exist, and the game reads as disconnected
+    -- while it is in fact running.
+    peer = Protocol.PEER.GAME,
+    version = Protocol.MOD_VERSION,
     schema_version = Protocol.SCHEMA_VERSION,
     protocol_version = Protocol.PROTOCOL_VERSION,
     mod_version = Protocol.MOD_VERSION,
@@ -77,6 +84,13 @@ function Heartbeat.build(context)
     },
   }
 
+  -- Session identity is only ever reported when there is a session (§3.3: the
+  -- mod answers "with the same session id and its own nonce"). Before the
+  -- handshake there is no id to report, and the document is deliberately left
+  -- without one rather than carrying an invented or remembered value -- the
+  -- sidecar's reader refuses such a document, which is the correct reading of
+  -- "the game is not on your session".
+  document.session_open = session ~= nil
   if session ~= nil then
     document.session_id = session.session_id
     document.nonce = session.game_nonce

@@ -25,6 +25,7 @@ __all__ = [
     "CAPABILITY_EAT_PERCENTAGE",
     "CAPABILITY_READ_LITERATURE",
     "DEFAULT_POLICY_CONFIG",
+    "MAX_REPORTED_REJECTIONS_CEILING",
     "PolicyConfig",
 ]
 
@@ -40,6 +41,11 @@ CAPABILITY_READ_LITERATURE: Final = "read_literature"
 #: unavailable, which is what makes the last-container rule refuse instead of
 #: quietly emptying the bottle.
 CAPABILITY_DRINK_PERCENTAGE: Final = "drink_percentage"
+
+#: Hard ceiling on ``PolicyConfig.max_reported_rejections``. The rejection list
+#: is rendered to a user and written to a log, so the bound may not be raised
+#: past this by configuration: "bounded everything" is not a user preference.
+MAX_REPORTED_REJECTIONS_CEILING: Final = 256
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,6 +175,8 @@ class PolicyConfig:
 
     #: Longest rejection list a selection reports. Bounded because a refusal is
     #: rendered to a user and written to a log, and an inventory can be large.
+    #: A selection that trims its list still reports the true total, so the
+    #: bound costs detail but never hides that candidates were refused.
     max_reported_rejections: int = 64
 
     def __post_init__(self) -> None:
@@ -191,9 +199,14 @@ class PolicyConfig:
         for name, value in self._weights().items():
             if value < 0.0:
                 raise ValueError(f"{name} must be non-negative, got {value}")
-        if self.max_reported_rejections < 1:
+        if self.min_remaining_units < 0.0:
             raise ValueError(
-                f"max_reported_rejections must be at least 1, got {self.max_reported_rejections}"
+                f"min_remaining_units must be non-negative, got {self.min_remaining_units}"
+            )
+        if not 1 <= self.max_reported_rejections <= MAX_REPORTED_REJECTIONS_CEILING:
+            raise ValueError(
+                "max_reported_rejections must be between 1 and "
+                f"{MAX_REPORTED_REJECTIONS_CEILING}, got {self.max_reported_rejections}"
             )
         if self.boredom_moodle_trigger < 0:
             raise ValueError(

@@ -21,6 +21,7 @@ from .config import (
     CAPABILITY_EAT_PERCENTAGE,
     CAPABILITY_READ_LITERATURE,
     DEFAULT_POLICY_CONFIG,
+    MAX_REPORTED_REJECTIONS_CEILING,
     PolicyConfig,
 )
 from .drink import DrinkChoice, DrinkSelection, DrinkView, select_drink
@@ -52,6 +53,7 @@ __all__ = [
     "CAPABILITY_EAT_PERCENTAGE",
     "CAPABILITY_READ_LITERATURE",
     "DEFAULT_POLICY_CONFIG",
+    "MAX_REPORTED_REJECTIONS_CEILING",
     "NO_CAPABILITIES",
     "CapabilityLookup",
     "CapabilitySnapshot",

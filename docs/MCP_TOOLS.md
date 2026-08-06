@@ -26,8 +26,9 @@ always available, in every mode, armed or not.
 **Read tools work in `OBSERVE`.** Observation never requires arming.
 
 **Long-running tools return an action id.** Movement, eating and reading take
-game-seconds. The tool returns immediately with an id; you wait on it or
-subscribe. It does not block the transport and it does not report success early.
+game-seconds. The tool returns immediately with an id; you poll it with the same
+idempotency key, which replays the call and refreshes it to the action's current
+state. It does not block the transport and it does not report success early.
 
 **Idempotency.** Calling a write tool twice with the same idempotency key does
 not perform the action twice — the original terminal result is replayed.
@@ -85,6 +86,9 @@ there is no tool to choose *which* item. That decision belongs to
 `policy/food.py`, which is deterministic and testable. A model that picks the
 sandwich is a model that will eventually pick the rotten one.
 
+Also absent: `allow_windows`. The movement adapter refuses it with
+`POLICY_DENIED`, so publishing it would advertise something policy forbids.
+
 ### Plans
 
 | Tool | Risk | Description |
@@ -127,18 +131,52 @@ and when the queue is backed up. That is the whole point of it.
 | `pz://safety/status` | Danger level, takeover state, heartbeat health |
 | `pz://diagnostics/recent` | Recent diagnostics, redacted |
 
-Resources are read-only views over state core already holds. They are
-subscribable: a client can watch `pz://safety/status` rather than polling it,
-which matters because a safety change is exactly the thing you do not want to
-learn about on the next poll interval.
+Resources are read-only views over state core already holds. Each read carries
+the observation `seq` it was built from, which a client uses as an ETag.
+
+**Subscriptions are not delivered yet.** The design calls for them — a client
+watching `pz://safety/status` rather than polling it, because a safety change is
+exactly the thing you do not want to learn about on the next poll interval — but
+the server registers no `subscribe_resource` handler and nothing in core
+publishes resource-change events. Every resource descriptor therefore reports
+`subscribable: false`. A client that could subscribe and was never notified
+would read the silence as "nothing has changed", which is the worst possible
+failure for the safety view. Until the event source exists, poll.
 
 ---
+
+## Result shape
+
+```json
+{
+  "ok": true,
+  "tool": "pz_action_eat",
+  "request_id": "7f1c…",
+  "status": "accepted",
+  "message": "consume.eat is accepted",
+  "data": {},
+  "warnings": [],
+  "replayed": false,
+  "action_id": "b2a9…"
+}
+```
+
+`status` is an `ActionStatus` value for the long-running tools and `"ok"` for
+the ones that answer immediately. `action_id` is present exactly when the call
+put work in flight. `replayed` is true when an idempotency key was reused and
+the answer is the original call's, not a second action.
+
+`status: "succeeded"` cannot be constructed without the observed postcondition
+under `data.evidence` — the same rule as `ActionResult.succeeded()`, enforced
+again where a client reads it.
 
 ## Error shape
 
 ```json
 {
   "ok": false,
+  "tool": "pz_action_eat",
+  "request_id": "7f1c…",
   "reason_code": "NOT_ARMED",
   "message": "session is in OBSERVE; call pz_session_arm first",
   "retryable": false,
@@ -150,6 +188,19 @@ learn about on the next poll interval.
 renaming one is a protocol major bump. `retryable` reflects
 `RETRYABLE_CODES`, so a client does not have to maintain its own table of which
 failures are worth another attempt.
+
+Every mutating tool takes `idempotency_key` (required). Every one that submits a
+single command also takes `timeout_ms` (optional, that command's lease);
+`pz_plan_execute` does not, because a plan is bounded by
+`limits.max_real_seconds` rather than by a lease, and publishing an argument no
+handler reads would be the same lie as publishing a bound nothing enforces.
+
+No mutating tool takes a free-text field: `pz_plan_execute`'s `goal` is the only
+string a caller may write in their own words, and it comes back quarantined.
+
+A replay carries `replayed: true` and the status of the call it is replaying —
+refreshed from the action if one is still in flight, and otherwise the status the
+first call answered with. It is never downgraded to a bare `"ok"`.
 
 ## What a caller cannot do
 

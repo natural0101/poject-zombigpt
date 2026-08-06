@@ -9,8 +9,21 @@ from __future__ import annotations
 
 import pytest
 
-from pz_agent_core.policy import CAPABILITY_EAT_PERCENTAGE, CapabilitySnapshot, RejectionReason
+from pz_agent_core.capabilities.model import (
+    Capability,
+    CapabilityReport,
+    Evidence,
+    EvidenceKind,
+)
+from pz_agent_core.policy import (
+    CAPABILITY_EAT_PERCENTAGE,
+    CapabilityLookup,
+    CapabilitySnapshot,
+    RejectionReason,
+    select_food,
+)
 from pz_agent_core.policy.selection import (
+    NO_CAPABILITIES,
     Rejection,
     ScoreBreakdown,
     ScoredCandidate,
@@ -21,8 +34,10 @@ from pz_agent_core.policy.selection import (
     read_int,
     read_str,
     read_str_tuple,
+    truncation_note,
 )
 from pz_agent_core.protocol import CapabilityState
+from tests.fixtures.policy_items import food_item, hungry_player, inventory
 
 
 def factor(name: str, raw: float, weight: float = 1.0) -> ScoreFactor:
@@ -98,7 +113,7 @@ def test_an_unprobed_capability_is_never_usable() -> None:
     snapshot = CapabilitySnapshot()
 
     assert snapshot.state(CAPABILITY_EAT_PERCENTAGE) is CapabilityState.UNSUPPORTED
-    assert not snapshot.is_usable(CAPABILITY_EAT_PERCENTAGE)
+    assert not snapshot.usable(CAPABILITY_EAT_PERCENTAGE)
 
 
 @pytest.mark.parametrize(
@@ -116,7 +131,7 @@ def test_only_verified_and_available_probes_count_as_usable(
 ) -> None:
     snapshot = CapabilitySnapshot.from_mapping({CAPABILITY_EAT_PERCENTAGE: state})
 
-    assert snapshot.is_usable(CAPABILITY_EAT_PERCENTAGE) is usable
+    assert snapshot.usable(CAPABILITY_EAT_PERCENTAGE) is usable
 
 
 def test_a_snapshot_does_not_track_later_edits_to_the_source_mapping() -> None:
@@ -125,7 +140,72 @@ def test_a_snapshot_does_not_track_later_edits_to_the_source_mapping() -> None:
 
     source[CAPABILITY_EAT_PERCENTAGE] = CapabilityState.UNSUPPORTED
 
-    assert snapshot.is_usable(CAPABILITY_EAT_PERCENTAGE)
+    assert snapshot.usable(CAPABILITY_EAT_PERCENTAGE)
+
+
+def test_a_snapshot_cannot_be_edited_through_its_probes_mapping() -> None:
+    snapshot = CapabilitySnapshot({CAPABILITY_EAT_PERCENTAGE: CapabilityState.UNSUPPORTED})
+
+    with pytest.raises(TypeError):
+        snapshot.probes[CAPABILITY_EAT_PERCENTAGE] = CapabilityState.VERIFIED  # type: ignore[index]
+
+    assert not snapshot.usable(CAPABILITY_EAT_PERCENTAGE)
+
+
+def test_the_shared_empty_default_cannot_be_granted_a_capability() -> None:
+    # NO_CAPABILITIES is one process-wide object every policy call falls back
+    # on; a writable one would let any caller grant a probe to all later calls.
+    with pytest.raises(TypeError):
+        NO_CAPABILITIES.probes[CAPABILITY_EAT_PERCENTAGE] = (  # type: ignore[index]
+            CapabilityState.VERIFIED
+        )
+
+    assert NO_CAPABILITIES.state(CAPABILITY_EAT_PERCENTAGE) is CapabilityState.UNSUPPORTED
+
+
+def test_the_real_capability_report_satisfies_the_lookup_protocol() -> None:
+    """The capability subsystem's report must drive a policy with no adapter."""
+    report = CapabilityReport(
+        build="42.0.0",
+        capabilities=(
+            Capability(
+                name=CAPABILITY_EAT_PERCENTAGE,
+                state=CapabilityState.AVAILABLE_UNVERIFIED,
+                build="42.0.0",
+                evidence=(
+                    Evidence(
+                        kind=EvidenceKind.STATIC_SCAN,
+                        symbol="ISEatFoodAction",
+                        observed_at="2026-01-01T00:00:00+00:00",
+                        file="media/lua/client/TimedActions/ISEatFoodAction.lua",
+                        file_sha256="0" * 64,
+                    ),
+                ),
+            ),
+        ),
+    )
+    lookup: CapabilityLookup = report
+
+    assert isinstance(report, CapabilityLookup)
+    assert lookup.state(CAPABILITY_EAT_PERCENTAGE) is CapabilityState.AVAILABLE_UNVERIFIED
+    assert lookup.usable(CAPABILITY_EAT_PERCENTAGE)
+
+    selection = select_food(
+        inventory(food_item("big", hunger_change=-1.0)),
+        hungry_player(0.5),
+        capabilities=report,
+    )
+
+    assert selection.choice is not None
+    assert selection.choice.portioned
+
+
+def test_a_truncation_note_is_silent_only_when_nothing_was_dropped() -> None:
+    assert truncation_note(3, 3) == ""
+    assert "1 further rejected candidate " in truncation_note(3, 4)
+    assert "7 further rejected candidates " in truncation_note(3, 10)
+    with pytest.raises(ValueError, match="out of a total of"):
+        truncation_note(5, 4)
 
 
 @pytest.mark.parametrize(

@@ -178,6 +178,52 @@ do
   ok(handle:journalBytes("observation_events") <= 400 + 200, "the tracked size stays near the cap")
 end
 
+Harness.group("the journal cap survives a mod reload")
+do
+  -- A reloaded mod builds a new handle over a file that is already there. A
+  -- handle that started counting from zero would let the file grow by another
+  -- whole cap on every reload, which is unbounded growth over a long session.
+  local first, fs = newHandle({ maxJournalBytes = 2000 })
+  for index = 1, 12 do
+    first:appendRecord("observation_events", { seq = index, note = "padding-padding-padding-padding" })
+  end
+  local sizeAfterFirst = #fs:read(path("observation_events"))
+  ok(sizeAfterFirst <= 2000, "the first handle kept the file inside the cap")
+
+  local resumed = Ipc.new({ fileApi = fs.api, maxJournalBytes = 2000, clock = function()
+    return NOW
+  end })
+  ok(
+    resumed:journalBytes("observation_events") == 0,
+    "a fresh handle has appended nothing yet"
+  )
+  ok(resumed:appendRecord("observation_events", { seq = 13 }) ~= nil, "and its first record appends")
+  ok(
+    resumed:journalBytes("observation_events") >= sizeAfterFirst,
+    "but it adopted the size of the file it found, instead of starting at zero"
+  )
+
+  for index = 14, 40 do
+    resumed:appendRecord("observation_events", { seq = index, note = "padding-padding-padding-padding" })
+  end
+  ok(#fs:read(path("observation_events")) <= 2000, "so the cap still holds after the reload")
+
+  -- A journal whose size cannot be measured at all -- too large to read, or an
+  -- I/O error part way through -- is assumed to be at the cap. Assuming it is
+  -- empty is what would let it grow without bound.
+  local _, blindFs = newHandle()
+  blindFs:put(path("command_ack"), '{"created_at_ms":0,"serial":3,"type":"journal.header"}\n{"seq":1}\n')
+  -- The header read succeeds; the read that measures the file does not.
+  blindFs:failReadsFrom(path("command_ack"), 1)
+  local blind = Ipc.new({ fileApi = blindFs.api, maxJournalBytes = 2000, clock = function()
+    return NOW
+  end })
+  ok(blind:appendRecord("command_ack", { seq = 2 }) ~= nil, "a record still appends")
+  local restarted = Json.decode(blindFs:lines(path("command_ack"))[1])
+  equal(restarted.type, "journal.header", "onto a restarted file")
+  equal(restarted.serial, 4, "whose serial advanced, so the reader is told records were lost")
+end
+
 Harness.group("the panic stop file is a flag, never an instruction")
 do
   local handle, fs = newHandle()

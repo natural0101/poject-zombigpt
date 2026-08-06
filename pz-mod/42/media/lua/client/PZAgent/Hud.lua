@@ -140,12 +140,17 @@ end
 --- Remove the panel. Safe to call when it was never created.
 function Hud.destroy(panel)
   if panel == nil then
-    return false
+    return false, "there was no HUD panel to remove"
   end
-  local removed = pcall(function()
+  local removed, err = pcall(function()
     panel:removeFromUIManager()
   end)
-  return removed
+  if not removed then
+    -- A panel left on screen after a shutdown is a visible lie about the mod's
+    -- state, so the reason travels with the false.
+    return false, "removing the HUD panel failed: " .. tostring(err)
+  end
+  return true
 end
 
 return Hud

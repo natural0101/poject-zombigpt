@@ -278,7 +278,14 @@ function Safety.panicStop(state, queueEntries, sessionId, nowMs, reason)
   state.last_stop_reason = reason or Protocol.REASON.PANIC_STOP
   state.stop_count = state.stop_count + 1
   local history = state.stops
-  history[#history + 1] = { at_ms = nowMs, reason = state.last_stop_reason, cleared = plan.mod_owned }
+  -- What the plan *proposes*, not what was cancelled: applying the plan is a
+  -- separate step that can fail, and this record is written before it runs.
+  history[#history + 1] = {
+    at_ms = nowMs,
+    reason = state.last_stop_reason,
+    mod_owned = plan.mod_owned,
+    queue_readable = plan.readable == true,
+  }
   while #history > Safety.STOP_HISTORY do
     table.remove(history, 1)
   end
@@ -341,7 +348,9 @@ function Safety.describeQueue(player)
   local entries = {}
   local count = 0
   local limit = PZAgent.Ownership.MAX_ENTRIES
-  for index = 1, math.min(#queue.queue, limit) do
+  local present = #queue.queue
+  local scanned = math.min(present, limit)
+  for index = 1, scanned do
     local action = queue.queue[index]
     local entry = { index = index }
     if type(action) == "table" then
@@ -352,6 +361,14 @@ function Safety.describeQueue(player)
     end
     count = count + 1
     entries[count] = entry
+  end
+  if present > scanned then
+    -- Walking an arbitrarily long queue on the game thread is not an option, so
+    -- the read is bounded -- but the entries left behind are declared, never
+    -- dropped in silence. PZAgent.Ownership counts them as foreign, which is
+    -- what stops a wholesale clear from reaching an entry nobody looked at.
+    entries.truncated = true
+    entries.dropped = present - scanned
   end
   -- The API answered and the entries were read, but no probe has confirmed on a
   -- live build that `queue` lists exactly the actions the character will run.
@@ -373,18 +390,34 @@ function Safety.applyStop(player, plan, sessionId)
     capability = Protocol.CAPABILITY.UNSUPPORTED,
     detail = nil,
   }
-  if type(plan) ~= "table" or plan.mod_owned == 0 then
+  if type(plan) ~= "table" then
+    result.detail = "no stop plan was produced"
+    return result
+  end
+  if plan.readable ~= true then
+    -- A plan built from a queue that could not be read counts zero mod-owned
+    -- entries, exactly as an observed-empty queue does. Reporting that as
+    -- "verified: nothing of mine was queued" would be a postcondition claimed
+    -- without an observation, which is the one thing this file may not do.
+    result.detail = "the action queue could not be read, so nothing was cancelled"
+    return result
+  end
+  if plan.mod_owned == 0 then
     result.capability = Protocol.CAPABILITY.VERIFIED
     result.detail = "nothing the mod owns is queued"
     return result
   end
-  if plan.foreign > 0 then
+  if plan.foreign > 0 or plan.truncated == true then
     -- Blueprint 8.12: under any uncertainty, do not clear the player's queue.
     -- The whole-queue clear is the only cancellation the game is known to
     -- expose, and it would take the player's entries with ours.
     result.remaining = plan.mod_owned
     result.capability = Protocol.CAPABILITY.UNSUPPORTED
-    result.detail = "the queue also holds entries the mod does not own; it was left untouched"
+    if plan.truncated == true then
+      result.detail = "the queue is longer than the mod can inspect; it was left untouched"
+    else
+      result.detail = "the queue also holds entries the mod does not own; it was left untouched"
+    end
     return result
   end
   local queue, detail = queueObject(player)

@@ -9,6 +9,7 @@ import pytest
 from pz_agent_core.observation.store import (
     DEFAULT_WINDOW,
     MAX_WINDOW,
+    MIN_WINDOW,
     ObservationStore,
 )
 from tests.fixtures import make_observation
@@ -96,6 +97,29 @@ def test_a_gap_followed_by_a_partial_update_is_refused_not_interpolated() -> Non
     assert result.gap is not None
     assert (result.gap.expected, result.gap.received, result.gap.missing) == (2, 5, 3)
     assert store.latest().seq == 1  # type: ignore[union-attr]
+
+
+def test_the_store_keeps_refusing_partials_until_a_full_snapshot_lands() -> None:
+    store = ObservationStore()
+    store.push(make_observation(seq=1))
+    for seq in (5, 6, 7):
+        result = store.push(make_observation(seq=seq, full=False))
+        assert not result.accepted, seq
+        assert store.needs_full_snapshot
+
+    assert store.latest().seq == 1  # type: ignore[union-attr]
+    assert store.size == 1
+    assert store.rejected_count == 3
+
+
+@pytest.mark.parametrize("capacity", [MIN_WINDOW, MAX_WINDOW])
+def test_the_capacity_bounds_themselves_are_accepted_and_enforced(capacity: int) -> None:
+    store = ObservationStore(capacity=capacity)
+    for seq in range(1, capacity * 2 + 2):
+        store.push(make_observation(seq=seq))
+
+    assert store.size == capacity
+    assert len(store.window(capacity * 10)) == capacity
 
 
 def test_a_full_snapshot_resynchronises_after_a_gap() -> None:

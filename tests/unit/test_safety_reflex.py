@@ -295,6 +295,46 @@ def test_a_save_change_needs_a_previous_observation_to_be_visible() -> None:
     assert GUARD.evaluate(None, _obs(game=make_game(save_id="save-other"))) == []
 
 
+def test_a_replaced_session_still_disarms_when_the_link_is_also_stale() -> None:
+    # Both conditions speak through STALE_SESSION. Collapsing them must not lose
+    # the disarm the replacement demanded, nor the commands it named.
+    current = _obs(
+        seq=2,
+        session_id=str(uuid.UUID(int=0xBEEF)),
+        safety=make_safety(sidecar_stale=True),
+    )
+    signals = _signals(sidecar_alive=False, in_flight=(in_flight("c1"),))
+    event = _one(GUARD.evaluate(_obs(), current, signals), ReasonCode.STALE_SESSION)
+
+    assert event.forces_disarm
+    assert event.command_ids == ("c1",)
+    assert "session was replaced" in event.message
+
+
+def test_a_stale_link_alone_still_does_not_disarm() -> None:
+    # The guard against over-merging: with no session change there is nothing to
+    # union in, so the weaker event keeps its weaker authority.
+    current = _obs(seq=2, safety=make_safety(sidecar_stale=True))
+    event = _one(
+        GUARD.evaluate(_obs(), current, _signals(in_flight=(in_flight("c1"),))),
+        ReasonCode.STALE_SESSION,
+    )
+
+    assert not event.forces_disarm
+    assert event.command_ids == ()
+
+
+def test_a_save_change_and_a_stale_link_are_reported_separately() -> None:
+    current = _obs(
+        seq=2, game=make_game(save_id="save-other"), safety=make_safety(sidecar_stale=True)
+    )
+    events = GUARD.evaluate(_obs(), current)
+
+    assert set(_codes(events)) == {ReasonCode.SAVE_CHANGED, ReasonCode.STALE_SESSION}
+    assert _one(events, ReasonCode.SAVE_CHANGED).forces_disarm
+    assert not _one(events, ReasonCode.STALE_SESSION).forces_disarm
+
+
 # --------------------------------------------------------------------------
 # command faults
 # --------------------------------------------------------------------------
@@ -343,6 +383,18 @@ def test_a_stalled_move_that_is_still_moving_is_only_no_progress() -> None:
     events = GUARD.evaluate(_obs(), moved, _signals(in_flight=(stalled,)))
 
     assert _codes(events) == [ReasonCode.NO_PROGRESS]
+
+
+def test_a_stall_with_no_previous_observation_is_not_diagnosed_as_stuck() -> None:
+    # "Stuck" compares two positions. With only one observation there is no
+    # second position, so the guard reports what it saw, not what it guessed.
+    stalled = in_flight(
+        "c1", action="movement.move_to", last_progress_ms=NOW - 60_000, moves_character=True
+    )
+    events = GUARD.evaluate(None, _obs(), _signals(in_flight=(stalled,)))
+
+    assert _codes(events) == [ReasonCode.NO_PROGRESS]
+    assert events[0].command_ids == ("c1",)
 
 
 def test_a_progressing_action_is_left_alone() -> None:

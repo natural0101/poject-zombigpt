@@ -13,9 +13,10 @@ module is constrained hard:
   a **reconstructed** signature and the sha256 of the file. It never records a
   line of the file. Vanilla Lua may not be redistributed, and a report carrying
   source excerpts would be a redistribution in a trench coat.
-* The scan is bounded by file count, per-file size and total bytes. When a bound
-  bites, the result says so in :attr:`ScanResult.truncation_reasons`; a silently
-  short index would read as "the API is missing" further downstream.
+* The scan is bounded by file count, per-file size, total bytes, symbol count and
+  directory depth, and the two diagnostic lists it returns are bounded too. When
+  a bound bites, the result says so in :attr:`ScanResult.truncation_reasons`; a
+  silently short index would read as "the API is missing" further downstream.
 
 The extractor is deliberately line-based. A real Lua parser would be a
 dependency (forbidden in core) or a large hand-written one, and the declaration
@@ -77,6 +78,12 @@ _LINE_COMMENT_RE: Final = re.compile(r"^--")
 #: Symbols and paths are bounded so a hostile filename cannot bloat the report.
 MAX_SIGNATURE_LEN: Final = 300
 MAX_PARAMS: Final = 16
+
+#: A tree can produce one problem per file and one truncation reason per
+#: directory. Both lists end up in a generated report, so both are capped and the
+#: cap itself is reported rather than applied silently.
+MAX_PROBLEMS: Final = 50
+MAX_TRUNCATION_REASONS: Final = 20
 
 
 class ScanError(Exception):
@@ -301,12 +308,15 @@ def _strip_block_comments(lines: Sequence[str]) -> Iterator[tuple[int, str]]:
                 depth_marker = None
             continue
         opener = _BLOCK_OPEN_RE.search(line)
+        if _LINE_COMMENT_RE.match(line) and (opener is None or opener.start() != 0):
+            # ``-- talks about --[[ something`` is a line comment that merely
+            # mentions the block syntax. Treating it as an opener would swallow
+            # every declaration up to the next ``]]`` in the file.
+            continue
         if opener is not None:
             closer = f"]{opener.group(1)}]"
             if closer not in line[opener.end() :]:
                 depth_marker = closer
-            continue
-        if _LINE_COMMENT_RE.match(line):
             continue
         yield lineno, line
 
@@ -416,6 +426,24 @@ def extract_symbols(
 # ---------------------------------------------------------------------------
 
 
+def _append_bounded(items: list[str], message: str, *, cap: int, label: str) -> None:
+    """Append *message* once, keeping *items* at or below *cap* entries.
+
+    The last slot is reserved for a marker saying the list itself was cut, so a
+    reader of the report can tell "no more problems" from "more problems than
+    fit". Duplicates are dropped: one message per distinct cause, not one per
+    directory that hit it.
+    """
+    if message in items:
+        return
+    if len(items) >= cap - 1:
+        marker = f"more than {cap - 1} {label}; the rest are not listed"
+        if marker not in items:
+            items.append(marker)
+        return
+    items.append(message)
+
+
 def lua_root(install_dir: Path) -> Path:
     """The Lua directory of an install. Existence is the caller's to check."""
     return install_dir.joinpath(*LUA_SUBPATH)
@@ -434,14 +462,24 @@ def _iter_lua_files(root: Path, limits: ScanLimits) -> tuple[list[Path], list[st
         depth = len(_resolve(current).parts) - root_depth
         if depth >= limits.max_depth:
             dirnames[:] = []
-            reasons.append(f"stopped descending below depth {limits.max_depth} at {current.name}")
+            _append_bounded(
+                reasons,
+                f"stopped descending below depth {limits.max_depth}",
+                cap=MAX_TRUNCATION_REASONS,
+                label="truncation reasons",
+            )
             continue
         dirnames.sort()
         for name in sorted(filenames):
             if not name.endswith(".lua"):
                 continue
             if len(found) >= limits.max_files:
-                reasons.append(f"stopped after {limits.max_files} files")
+                _append_bounded(
+                    reasons,
+                    f"stopped after {limits.max_files} files",
+                    cap=MAX_TRUNCATION_REASONS,
+                    label="truncation reasons",
+                )
                 return found, reasons
             found.append(current / name)
     return found, reasons
@@ -466,29 +504,42 @@ def scan_lua_tree(root: Path, limits: ScanLimits | None = None) -> ScanResult:
     bytes_read = 0
     files_scanned = 0
 
+    def _problem(message: str) -> None:
+        _append_bounded(problems, message, cap=MAX_PROBLEMS, label="unreadable files")
+
+    def _reason(message: str) -> None:
+        _append_bounded(reasons, message, cap=MAX_TRUNCATION_REASONS, label="truncation reasons")
+
     for path in files:
         if bytes_read >= bounds.max_total_bytes:
-            reasons.append(f"stopped after reading {bounds.max_total_bytes} bytes")
+            _reason(f"stopped after reading {bounds.max_total_bytes} bytes")
             break
         if len(records) >= bounds.max_symbols:
-            reasons.append(f"stopped after {bounds.max_symbols} symbols")
+            _reason(f"stopped after {bounds.max_symbols} symbols")
             break
         try:
             size = path.stat().st_size
         except OSError as exc:
-            problems.append(f"{path.name}: cannot stat ({exc.strerror or exc})")
+            _problem(f"{path.name}: cannot stat ({exc.strerror or exc})")
             continue
         if size > bounds.max_file_bytes:
-            problems.append(
-                f"{_relative(path, resolved_root)}: {size} bytes, over the per-file cap"
-            )
-            reasons.append(f"skipped a file larger than {bounds.max_file_bytes} bytes")
+            _problem(f"{_relative(path, resolved_root)}: {size} bytes, over the per-file cap")
+            _reason(f"skipped a file larger than {bounds.max_file_bytes} bytes")
             continue
         try:
             with path.open("rb") as handle:
-                raw = handle.read(bounds.max_file_bytes)
+                # One byte past the cap: if that byte exists the file grew between
+                # the stat above and this read, and hashing what we got would
+                # record a sha256 that describes no file on disk.
+                raw = handle.read(bounds.max_file_bytes + 1)
         except OSError as exc:
-            problems.append(f"{path.name}: cannot read ({exc.strerror or exc})")
+            _problem(f"{path.name}: cannot read ({exc.strerror or exc})")
+            continue
+        if len(raw) > bounds.max_file_bytes:
+            _problem(
+                f"{_relative(path, resolved_root)}: grew past the per-file cap while being read"
+            )
+            _reason(f"skipped a file larger than {bounds.max_file_bytes} bytes")
             continue
 
         bytes_read += len(raw)
@@ -508,7 +559,7 @@ def scan_lua_tree(root: Path, limits: ScanLimits | None = None) -> ScanResult:
         )
 
     if len(records) >= bounds.max_symbols:
-        reasons.append(f"symbol index capped at {bounds.max_symbols} entries")
+        _reason(f"symbol index capped at {bounds.max_symbols} entries")
 
     return ScanResult(
         root=str(root),
@@ -517,7 +568,7 @@ def scan_lua_tree(root: Path, limits: ScanLimits | None = None) -> ScanResult:
         files_seen=len(files),
         bytes_read=bytes_read,
         truncated=bool(reasons),
-        truncation_reasons=tuple(dict.fromkeys(reasons)),
+        truncation_reasons=tuple(reasons),
         problems=tuple(problems),
     )
 

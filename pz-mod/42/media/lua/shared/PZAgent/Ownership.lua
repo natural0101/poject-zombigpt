@@ -93,6 +93,27 @@ function Ownership.classify(entry, sessionId)
   return Ownership.CLASS.MOD
 end
 
+--- How many entries the queue reader saw but could not describe.
+---
+--- The reader is bounded too, so a queue longer than it is willing to walk
+--- arrives here already cut short. It says so by setting `truncated` on the
+--- list and `dropped` to how many entries it left behind. Ignoring that would
+--- turn "the first 256 of 300 entries are ours" into "the whole queue is ours",
+--- and the wholesale clear that follows would delete the player's work -- the
+--- one outcome this module exists to prevent.
+local function droppedCount(entries)
+  if entries.truncated ~= true then
+    return 0
+  end
+  local reported = tonumber(entries.dropped)
+  if reported == nil or reported ~= math.floor(reported) or reported < 1 then
+    -- The reader knows it dropped something but not how much. One unknown
+    -- entry is enough to make the queue foreign, which is the whole point.
+    return 1
+  end
+  return reported
+end
+
 local function classifyAll(entries, sessionId)
   local classes = {}
   local counts = {
@@ -103,14 +124,18 @@ local function classifyAll(entries, sessionId)
   local total = 0
   local truncated = false
   if type(entries) == "table" then
-    total = #entries
-    if total > Ownership.MAX_ENTRIES then
-      truncated = true
-    end
-    local scanned = total
+    local present = #entries
+    local scanned = present
     if scanned > Ownership.MAX_ENTRIES then
       scanned = Ownership.MAX_ENTRIES
+      truncated = true
     end
+    -- Entries past the scan bound, plus the ones the reader itself dropped.
+    local unscanned = (present - scanned) + droppedCount(entries)
+    if unscanned > 0 then
+      truncated = true
+    end
+    total = scanned + unscanned
     for index = 1, scanned do
       local class = Ownership.classify(entries[index], sessionId)
       classes[index] = class
@@ -186,14 +211,27 @@ end
 --- cancelling the plan -- the caller needs that, because the only queue-clearing
 --- API the game is known to expose clears the queue wholesale, and using it
 --- while a foreign entry is present would destroy the player's work.
+---
+--- `readable` is false when there was no queue description to plan from. A stop
+--- must still disarm in that case, but "I could not read the queue" is not
+--- "there was nothing of mine in it": the two produce identical counts and mean
+--- opposite things, so the flag is what tells them apart downstream.
 function Ownership.panicPlan(entries, sessionId)
+  local readable = type(entries) == "table"
   local classes, counts, total, truncated = classifyAll(entries, sessionId)
   local clear = {}
   local keep = {}
   local clearCount = 0
   local keepCount = 0
-  for index = 1, total do
-    local entry = type(entries) == "table" and entries[index] or nil
+  -- Only scanned indices carry an entry, and only they can be classified as
+  -- ours; the records past the bound are already counted as ambiguous, so the
+  -- diagnostic lists stay bounded by MAX_ENTRIES however long the queue was.
+  local described = total
+  if described > Ownership.MAX_ENTRIES then
+    described = Ownership.MAX_ENTRIES
+  end
+  for index = 1, described do
+    local entry = readable and entries[index] or nil
     local record = {
       index = index,
       class = classes[index],
@@ -211,10 +249,12 @@ function Ownership.panicPlan(entries, sessionId)
   return {
     clear = clear,
     keep = keep,
-    mod_owned = clearCount,
+    readable = readable,
+    mod_owned = counts[Ownership.CLASS.MOD],
     foreign = foreign,
+    total = total,
     truncated = truncated,
-    whole_queue = foreign == 0 and clearCount > 0,
+    whole_queue = readable and foreign == 0 and clearCount > 0,
   }
 end
 
@@ -222,8 +262,13 @@ end
 ---
 --- Anything the mod did not author -- including ambiguous -- counts, so the
 --- agent waits rather than fighting the player for the action queue.
+---
+--- Only a description this module produced is trusted to mean "the queue was
+--- observed". Anything else -- nil, a raw entry list handed in by mistake, a
+--- description carrying `readable = false` -- is unobserved, and unobserved
+--- blocks.
 function Ownership.blocksAutomation(description)
-  if type(description) ~= "table" then
+  if type(description) ~= "table" or description.readable ~= true then
     return true
   end
   return description.busy == true and description.ownership ~= protocol().OWNERSHIP.MOD

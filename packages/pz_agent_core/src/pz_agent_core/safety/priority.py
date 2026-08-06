@@ -181,6 +181,22 @@ class NeedArbiter:
 
         need = candidates[0]
         deferred = tuple(candidates[1:])
+
+        outcome, serve, detail = self._compare(running, need)
+        if serve is None:
+            # The need lost to the running plan, so nothing was tried on its
+            # behalf. Advancing the counter here would escalate "triggered three
+            # times without its state improving" about a need the agent never
+            # once acted on — a claim the arbiter has no evidence for, and the
+            # cry-wolf failure mode §7.8 exists to prevent.
+            return ArbitrationDecision(
+                outcome=outcome,
+                serve=None,
+                deferred=(need, *deferred),
+                suppressed=suppressed,
+                detail=detail,
+            )
+
         record = self._record_trigger(need, now_ms)
         alternate = record.count >= self._config.alternate_after
 
@@ -199,11 +215,10 @@ class NeedArbiter:
                 trigger_count=record.count,
             )
 
-        outcome, serve, detail = self._compare(running, need)
         return ArbitrationDecision(
             outcome=outcome,
             serve=serve,
-            deferred=deferred if serve is not None else (need, *deferred),
+            deferred=deferred,
             suppressed=suppressed,
             detail=detail,
             alternate_strategy=alternate,
