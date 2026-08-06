@@ -46,6 +46,7 @@ from .config import AgentConfig, ConfigValidation, default_config, load_config
 from .context import EXIT_FAILURE, EXIT_OK, EXIT_USAGE, CliContext, Workspace, resolve_workspace
 from .doctor import check_capabilities, run_checks
 from .livetest import add_live_test_parser, run_live_test
+from .memory import SidecarMemory, add_remember_parser, build_sidecar_memory, run_remember
 from .modinstall import (
     ForeignFileError,
     InstallError,
@@ -81,6 +82,7 @@ COMMANDS: Final[tuple[str, ...]] = (
     "disarm",
     "backup-save",
     "restore-save",
+    "remember",
     "logs",
     "replay",
     "validate-config",
@@ -188,19 +190,8 @@ def build_parser() -> argparse.ArgumentParser:
     disarm = subparsers.add_parser("disarm", help="return a running sidecar to OBSERVE")
     disarm.add_argument("--json", action="store_true")
 
-    backup = subparsers.add_parser("backup-save", help="hash-manifested copy of a save")
-    backup.add_argument("save_id", nargs="?", default=None, help="<mode>/<save name>")
-    backup.add_argument("--list", action="store_true", dest="list_only", help="list backups")
-    backup.add_argument(
-        "--prune", type=int, default=None, metavar="KEEP", help="delete all but the newest KEEP"
-    )
-    backup.add_argument("--json", action="store_true")
-
-    restore = subparsers.add_parser(
-        "restore-save", help="restore a verified backup; refuses while the game is open"
-    )
-    restore.add_argument("backup_id")
-    restore.add_argument("--json", action="store_true")
+    _add_save_parsers(subparsers)
+    add_remember_parser(subparsers)
 
     logs = subparsers.add_parser("logs", help="recent diagnostics, or a support bundle")
     logs.add_argument("--lines", type=int, default=DEFAULT_LOG_LINES)
@@ -223,6 +214,23 @@ def build_parser() -> argparse.ArgumentParser:
     add_live_test_parser(subparsers)
 
     return parser
+
+
+def _add_save_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """The two save commands, split out to keep ``build_parser`` readable."""
+    backup = subparsers.add_parser("backup-save", help="hash-manifested copy of a save")
+    backup.add_argument("save_id", nargs="?", default=None, help="<mode>/<save name>")
+    backup.add_argument("--list", action="store_true", dest="list_only", help="list backups")
+    backup.add_argument(
+        "--prune", type=int, default=None, metavar="KEEP", help="delete all but the newest KEEP"
+    )
+    backup.add_argument("--json", action="store_true")
+
+    restore = subparsers.add_parser(
+        "restore-save", help="restore a verified backup; refuses while the game is open"
+    )
+    restore.add_argument("backup_id")
+    restore.add_argument("--json", action="store_true")
 
 
 def _add_smoke_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -481,6 +489,12 @@ def build_loop(ctx: CliContext, workspace: Workspace, *, limits: LoopLimits) -> 
     grants an authority nothing exercises. It is assembled here and its record
     is written from the loop that was actually built, so ``status`` reports what
     is running rather than what this function meant to build.
+
+    The memory is the same defect one layer deeper again, and quieter than
+    either: a planner whose memory is the empty one answers "nothing is
+    reserved" to every question, so §7.9 rests on nothing and the user has no
+    way to protect an item at all. It is built here, handed to the planner, and
+    its record is read back off the loop for the same reason the planner's is.
     """
     ipc_root = workspace.ipc_root
     if ipc_root is None:
@@ -488,7 +502,10 @@ def build_loop(ctx: CliContext, workspace: Workspace, *, limits: LoopLimits) -> 
     registry = register_game_adapters(register_builtins(AdapterRegistry()))
     capabilities = build_capabilities(workspace)
     capabilities.publish()
-    planner, record = _build_planner(ctx, workspace, registry=registry, capabilities=capabilities)
+    memory = build_sidecar_memory(workspace)
+    planner, record = _build_planner(
+        ctx, workspace, registry=registry, capabilities=capabilities, memory=memory
+    )
     loop = SidecarLoop(
         layout=IpcLayout(ipc_root),
         state_dir=workspace.state_dir,
@@ -505,7 +522,22 @@ def build_loop(ctx: CliContext, workspace: Workspace, *, limits: LoopLimits) -> 
         # would have caught the planner never reaching the constructor.
         replace(record, wired=loop.planner is not None),
     )
+    # The same reading for memory, one level further in: it is not enough that a
+    # planner reached the loop, it has to be the planner holding *this* memory.
+    memory.wired = _planner_memory(loop) is memory
+    memory.publish()
     return loop
+
+
+def _planner_memory(loop: SidecarLoop) -> object | None:
+    """What the assembled loop's planner will actually ask about reservations.
+
+    Read off the loop rather than off the local that was passed in, so a memory
+    that stopped short of the planner is a fact ``status`` reports rather than
+    an assembly that only looks right.
+    """
+    planner = loop.planner
+    return planner.memory if isinstance(planner, AutonomyPlanner) else None
 
 
 def _build_planner(
@@ -514,6 +546,7 @@ def _build_planner(
     *,
     registry: AdapterRegistry,
     capabilities: CapabilityLedger,
+    memory: SidecarMemory,
 ) -> tuple[AutonomyPlanner, PlannerRecord]:
     """The planner for this workspace, and what to tell ``status`` about it.
 
@@ -529,6 +562,10 @@ def _build_planner(
     autonomous sidecar ask about every need, and which of the two a machine gets
     is a fact about its backups, not about this function. The note that comes
     back with it says which one happened, so ``status`` can report it.
+
+    The memory is passed in rather than built here because the caller has to
+    keep hold of it: it publishes its own record, and only the caller can see
+    whether it reached the loop.
     """
     validation = load_config(workspace.config_path)
     config: AgentConfig = validation.config or default_config()
@@ -546,6 +583,7 @@ def _build_planner(
         env=ctx.env,
         clock=ctx.clock_ms,
         backup=backup,
+        memory=memory,
         notes=tuple(workspace.redactor.text(note) for note in notes),
     )
     # A fallback reason is a provider's own message about an endpoint or a
@@ -787,6 +825,8 @@ def dispatch(ctx: CliContext, args: argparse.Namespace) -> int:
         )
     if command == "restore-save":
         return run_restore_save(ctx, backup_id=args.backup_id, as_json=args.json)
+    if command == "remember":
+        return run_remember(ctx, args)
     if command == "logs":
         return run_logs(
             ctx,

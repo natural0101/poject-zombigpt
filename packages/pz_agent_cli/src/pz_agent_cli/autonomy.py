@@ -50,6 +50,15 @@ gate a backup whose manifest names the very id the observation carries — the
 same value produced by the same code the gate compares against, so no hash is
 re-implemented here and nothing is assumed.
 
+**What the user set aside is read, not assumed.** The gate removes every item
+type the user reserved before it chooses one (§7.9), and it asks memory which
+those are. That memory is per save, and the save is only known from an
+observation, so what this module holds is a :class:`SaveScopedMemory`:
+:mod:`pz_agent_cli.memory` loads the store the first time a tick names a save
+and answers as an empty memory until then. Empty means nothing is reserved and
+no home is known — permissive about spending and refusing about travelling,
+which is what :class:`~pz_agent_core.policy.autonomy.NoMemory` documents.
+
 When no backup names the observed save the answer is still None and the gate
 still asks: :func:`no_attributable_backup` remains what an unattributed machine
 gets, and :data:`BACKUP_NOT_ATTRIBUTABLE` still says so through ``pz-agent
@@ -67,7 +76,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Final, TypeAlias
+from typing import Any, Final, Protocol, TypeAlias, runtime_checkable
 
 from pz_agent_core.actions.adapter import AdapterRegistry
 from pz_agent_core.actions.engine import ActionRequest
@@ -134,14 +143,17 @@ __all__ = [
     "BackupWitness",
     "LedgerCapabilities",
     "ObservedSave",
+    "ObservedSnapshot",
     "PlannerError",
     "PlannerRecord",
+    "SaveScopedMemory",
     "autonomy_config",
     "backup_note",
     "build_backup_witness",
     "build_planner",
     "no_attributable_backup",
     "observed_save",
+    "observed_snapshot",
     "publish_planner_record",
     "read_planner_record",
     "resolve_provider",
@@ -209,6 +221,25 @@ def no_attributable_backup(save_id: str) -> BackupEvidence | None:
 
 
 @dataclass(frozen=True, slots=True)
+class ObservedSnapshot:
+    """The whole snapshot the mod last published, or why there is none to read.
+
+    Separate from :class:`ObservedSave` because two commands want two different
+    things out of one read. ``backup-save`` wants the save id; ``remember home``
+    wants the square the character is standing on, and a home point read from
+    anywhere but the mod's own snapshot would be a coordinate the user typed
+    rather than the place they are.
+    """
+
+    observation: Observation | None
+    detail: str
+
+    def __post_init__(self) -> None:
+        if not self.detail.strip():
+            raise ValueError("an observed-snapshot reading must say how it reached its answer")
+
+
+@dataclass(frozen=True, slots=True)
 class ObservedSave:
     """The save id the mod last published, or why there is none to have.
 
@@ -225,6 +256,71 @@ class ObservedSave:
             raise ValueError("an observed-save reading must say how it reached its answer")
 
 
+def observed_snapshot(
+    ipc_root: Path | None,
+    *,
+    now_ms: int,
+    max_age_ms: int = MAX_SNAPSHOT_AGE_MS,
+) -> ObservedSnapshot:
+    """Read the snapshot the mod finished publishing, or say why there is none.
+
+    The pointer is read first because the mod writes it *last* (§3.5): it is the
+    commit point, and the slot it names is the only file that holds a snapshot
+    the mod finished publishing. When that slot cannot be read this reports
+    nothing rather than following
+    :class:`~pz_agent_core.ipc.snapshot.SnapshotReader` to the other slot — that
+    fallback exists to keep a *world model* moving across a torn write, and the
+    older snapshot it recovers describes the world before the one now loaded.
+    Reading a save id or a home point off it would be exactly the guess this
+    module refuses.
+
+    Every failure is the same answer, ``None`` with a reason: no exchange
+    directory, no pointer, an unusable slot, a document that is not an
+    observation, or one older than *max_age_ms*.
+    """
+    if ipc_root is None or not ipc_root.is_dir():
+        return ObservedSnapshot(
+            None, "there is no exchange directory, so no session has published anything"
+        )
+    layout = IpcLayout(ipc_root)
+    slot = _pointed_slot(layout)
+    if slot is None:
+        return ObservedSnapshot(
+            None,
+            "no session has published a snapshot here that this can read",
+        )
+    try:
+        document = read_json_document(layout.snapshot_slot(slot))
+    except DocumentError as exc:
+        return ObservedSnapshot(
+            None,
+            f"the snapshot pointer names slot {slot.value}, which could not be read ({exc}); "
+            "the other slot holds an older snapshot and is not what the mod last published",
+        )
+    try:
+        observation = Observation.from_dict(document)
+    except ProtocolError as exc:
+        return ObservedSnapshot(
+            None, f"slot {slot.value} does not hold a whole observation ({exc})"
+        )
+    age_ms = now_ms - observation.timestamp_ms
+    if age_ms > max_age_ms:
+        return ObservedSnapshot(
+            None,
+            f"the last snapshot the mod published is {age_ms} ms old, past the {max_age_ms} ms "
+            "that still describes the save open now",
+        )
+    if age_ms < -max_age_ms:
+        return ObservedSnapshot(
+            None,
+            f"the last snapshot the mod published is stamped {-age_ms} ms in the future; the two "
+            "clocks disagree, so nothing in it describes this moment",
+        )
+    return ObservedSnapshot(
+        observation, f"the mod published it {age_ms} ms ago in slot {slot.value}"
+    )
+
+
 def observed_save(
     ipc_root: Path | None,
     *,
@@ -233,62 +329,22 @@ def observed_save(
 ) -> ObservedSave:
     """Read ``observation.game.save_id`` out of the mod's own published snapshot.
 
-    The pointer is read first because the mod writes it *last* (§3.5): it is the
-    commit point, and the slot it names is the only file that holds a snapshot
-    the mod finished publishing. When that slot cannot be read this reports no
-    save id rather than following
-    :class:`~pz_agent_core.ipc.snapshot.SnapshotReader` to the other slot — that
-    fallback exists to keep a *world model* moving across a torn write, and the
-    older snapshot it recovers may name the save before the one now loaded.
-    Attributing a backup to it would be exactly the guess this module refuses.
-
-    Every failure is the same answer, ``None`` with a reason: no exchange
-    directory, no pointer, an unusable slot, a document that is not an
-    observation, one older than *max_age_ms*, or one the mod itself could not
-    name a save for (:data:`UNKNOWN_SAVE_ID`).
+    Every way :func:`observed_snapshot` can fail is an absent save id with that
+    reading's own reason, plus one more of this function's own: a snapshot the
+    mod itself could not name a save for (:data:`UNKNOWN_SAVE_ID`).
     """
-    if ipc_root is None or not ipc_root.is_dir():
-        return ObservedSave(None, "there is no exchange directory, so no session reported a save")
-    layout = IpcLayout(ipc_root)
-    slot = _pointed_slot(layout)
-    if slot is None:
-        return ObservedSave(
-            None,
-            "no session has published a snapshot here that this can read the save id from",
-        )
-    try:
-        document = read_json_document(layout.snapshot_slot(slot))
-    except DocumentError as exc:
-        return ObservedSave(
-            None,
-            f"the snapshot pointer names slot {slot.value}, which could not be read ({exc}); "
-            "the other slot holds an older snapshot and is not what the mod last published",
-        )
-    try:
-        observation = Observation.from_dict(document)
-    except ProtocolError as exc:
-        return ObservedSave(None, f"slot {slot.value} does not hold a whole observation ({exc})")
-    age_ms = now_ms - observation.timestamp_ms
-    if age_ms > max_age_ms:
-        return ObservedSave(
-            None,
-            f"the last snapshot the mod published is {age_ms} ms old, past the {max_age_ms} ms "
-            "that still describes the save open now",
-        )
-    if age_ms < -max_age_ms:
-        return ObservedSave(
-            None,
-            f"the last snapshot the mod published is stamped {-age_ms} ms in the future; the two "
-            "clocks disagree, so its save id is not something to record against this moment",
-        )
+    snapshot = observed_snapshot(ipc_root, now_ms=now_ms, max_age_ms=max_age_ms)
+    observation = snapshot.observation
+    if observation is None:
+        return ObservedSave(None, snapshot.detail)
     save_id = observation.game.save_id
     if save_id == UNKNOWN_SAVE_ID:
         return ObservedSave(
             None,
             "the mod could not read the save key and reported it as unknown, which every "
-            "unreadable save reports; it names no save to attribute a backup to",
+            "unreadable save reports; it names no save in particular",
         )
-    return ObservedSave(save_id, f"the mod reported it {age_ms} ms ago in slot {slot.value}")
+    return ObservedSave(save_id, snapshot.detail)
 
 
 def _pointed_slot(layout: IpcLayout) -> SnapshotSlot | None:
@@ -611,6 +667,30 @@ class LedgerCapabilities:
         return self.ledger.usable(name)
 
 
+@runtime_checkable
+class SaveScopedMemory(AutonomyMemory, Protocol):
+    """An :class:`AutonomyMemory` that has to be told which save it answers for.
+
+    :class:`~pz_agent_core.memory.store.SaveMemory` is built *for* one save id,
+    and the save is only known once the mod has published an observation — the
+    loop is assembled before the game attaches. So what the planner can be given
+    at assembly is not a memory but something that can be pointed at the save
+    each tick names, and :meth:`follow` is the whole of the difference.
+
+    A plain :class:`~pz_agent_core.policy.autonomy.NoMemory` is not one of these
+    and is used exactly as it is, which is what keeps the default behaviour of
+    this module unchanged for every caller that has no store to offer.
+    """
+
+    def follow(self, save_id: str, /) -> None:
+        """Answer for *save_id* from here on.
+
+        Never raises. A memory that cannot be read is a state to report, not an
+        exception to throw at a tick that was only asking what is reserved.
+        """
+        ...
+
+
 @dataclass
 class AutonomyPlanner:
     """One tick's answer to "should I start something, and what exactly"."""
@@ -619,6 +699,9 @@ class AutonomyPlanner:
     provider: PlanProvider = field(default_factory=NullProvider)
     capabilities: CapabilityLookup = NO_CAPABILITIES
     backup: BackupWitness = no_attributable_backup
+    #: What the user set aside and where home is. A :class:`SaveScopedMemory` is
+    #: pointed at the save each observation names before it is asked anything;
+    #: anything else is asked exactly as it stands.
     memory: AutonomyMemory = NO_MEMORY
     policy: PolicyConfig = DEFAULT_POLICY_CONFIG
     config: AutonomyConfig = DEFAULT_AUTONOMY_CONFIG
@@ -665,23 +748,41 @@ class AutonomyPlanner:
         because a reference chosen against an older one may name a different
         object by now.
         """
+        memory = self._memory_for(observation)
         decision = self._gate.evaluate(
             observation,
             now_ms=self.clock(),
             backup=self.backup(observation.game.save_id),
             capabilities=self.capabilities,
-            memory=self.memory,
+            memory=memory,
         )
         self._decision = decision
         self._detail = decision.detail
         if not decision.should_act:
             return None
-        return self._compose(decision, observation)
+        return self._compose(decision, observation, memory)
+
+    def _memory_for(self, observation: Observation) -> AutonomyMemory:
+        """What is remembered about the save *this* observation names.
+
+        The save id is read off the observation for the same reason the session
+        id is: the loop is assembled before the mod attaches, so the tick is the
+        earliest moment either of them exists. A save that changes mid-session is
+        a different world, and telling the memory which one is what stops the
+        previous one's reservations answering for it.
+        """
+        memory = self.memory
+        if isinstance(memory, SaveScopedMemory):
+            memory.follow(observation.game.save_id)
+        return memory
 
     # -- from a need to one request ----------------------------------------
 
     def _compose(
-        self, decision: AutonomyDecision, observation: Observation
+        self,
+        decision: AutonomyDecision,
+        observation: Observation,
+        memory: AutonomyMemory,
     ) -> ActionRequest | None:
         """Turn an ACT decision into the first step of a reviewed plan."""
         need = decision.need
@@ -713,7 +814,10 @@ class AutonomyPlanner:
             registry=self.registry,
             capabilities=self.capabilities,
             initiative=Initiative.SELF_DIRECTED,
-            home=self.memory.home_point(),
+            # The same memory the gate was handed on this tick, not a second
+            # reading of it: a reload between the two would review the plan
+            # against a home point the decision was not taken under.
+            home=memory.home_point(),
             home_radius=self.config.home_radius,
             max_steps=self.max_steps,
         ).review(plan, observation)
@@ -841,6 +945,7 @@ def build_planner(
     env: Mapping[str, str],
     clock: Clock = system_clock_ms,
     backup: BackupWitness = no_attributable_backup,
+    memory: AutonomyMemory = NO_MEMORY,
     notes: tuple[str, ...] = (),
 ) -> tuple[AutonomyPlanner, PlannerRecord]:
     """Assemble the planner ``pz-agent start`` runs, and the record describing it.
@@ -848,6 +953,12 @@ def build_planner(
     The record's ``wired`` field is left False here on purpose: only the caller
     that builds the loop can say whether the planner reached it, and that is the
     fact ``status`` has to report.
+
+    *memory* defaults to the empty one for the same reason *backup* defaults to
+    the refusing witness: a caller with no store to offer gets the documented
+    fail-safe rather than a silent one. The empty memory reserves nothing, which
+    is the permissive direction, so the caller that means to honour §7.9 has to
+    pass something — and :mod:`pz_agent_cli.memory` is what ``build_loop`` passes.
     """
     configured = str(config.get("planner", "provider"))
     provider, fallback = resolve_provider(config, env=env)
@@ -856,6 +967,7 @@ def build_planner(
         provider=provider,
         capabilities=LedgerCapabilities(capabilities),
         backup=backup,
+        memory=memory,
         policy=DEFAULT_POLICY_CONFIG,
         config=autonomy_config(config),
         clock=clock,

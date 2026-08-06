@@ -9,7 +9,7 @@ green · `wip` in progress · `todo` not started · `live` blocked on a step tha
 physically requires a running game.
 
 Last updated: 28 of 30 tasks closed; T029 and T030 are blocked on a live game,
-not deferred. 2950 Python tests, 2840 Lua assertions, `scripts/check.sh` green.
+not deferred. 3362 Python tests, 2840 Lua assertions, `scripts/check.sh` green.
 See FINAL_IMPLEMENTATION_REPORT.md.
 
 Work beyond the original graph is complete on `feature/playable-agent-1.0`:
@@ -20,7 +20,7 @@ with them. See [the playable-agent section](#the-playable-agent-branch) below,
 and [`LOCAL_GAME_HANDOFF.md`](LOCAL_GAME_HANDOFF.md) for what still needs a
 machine with the game on it.
 
-**Five defects that branch found are worth reading before any further work**,
+**Seven defects that branch found are worth reading before any further work**,
 because they are one family and the family is not closed. Every subsystem was
 written, tested and green; what nothing tested was whether the subsystems were
 *connected*.
@@ -33,13 +33,21 @@ written, tested and green; what nothing tested was whether the subsystems were
 | 4 | `build_loop` passed no capability check, so it kept `deny_capability` | The assembled sidecar refused *every* action |
 | 5 | `build_loop` passes no planner | Autonomous mode proposes nothing |
 | 6 | Nothing mapped a backup to the save id the mod reports | Autonomy asked instead of acting; closed by recording the id at backup time |
+| 7 | The memory store was complete and connected to nothing | `reserves_item` always answered False, so §7.9 rested on tag rules alone, and no home point could exist |
 
 Every one was found by a test that crosses a seam rather than covering a unit,
 and each of those tests now exists: `tests/lua/test_adapter_registry.lua`,
 `tests/contract/test_adapter_args_agreement.py`,
 `tests/contract/test_capability_evidence_agreement.py`,
-`tests/contract/test_mcp_action_coverage.py` and
-`tests/contract/test_sidecar_capability_wiring.py`.
+`tests/contract/test_mcp_action_coverage.py`,
+`tests/contract/test_sidecar_capability_wiring.py`,
+`tests/contract/test_sidecar_planner_wiring.py`,
+`tests/contract/test_backup_attribution.py` and
+`tests/contract/test_sidecar_memory_wiring.py`.
+
+Each was mutation-checked rather than trusted: the wiring was removed and the
+failures counted. A seam test that would not have failed is not evidence that
+the seam holds.
 
 The pattern is worth naming, because it will recur. A unit test written beside
 the code it covers cannot fail for the reason these failed: both sides were

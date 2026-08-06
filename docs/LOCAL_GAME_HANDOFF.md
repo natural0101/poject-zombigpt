@@ -98,10 +98,21 @@ nothing until it is resolved:
    does. So a fresh install's first autonomous meal is refused until you have
    eaten once under ASSISTED. Run the relevant scenario first — that is the
    permission ladder working, not a bug.
-3. **No memory store is wired**, so the agent holds no reserved items and no
-   home point. Consequence: reservations rest on the selection policies' tag
-   rules, and any plan needing a home point is refused. Again the safe
-   direction.
+3. **Memory starts empty.** The store is wired, but it holds nothing until you
+   put something in it, and an empty memory knows no home — so any plan needing
+   a home point is refused until you set one:
+
+   ```
+   pz-agent remember home                 remembers where the character is standing
+   pz-agent remember reserve Base.Beans   sets an item type aside; autonomy will not eat it
+   pz-agent remember release Base.Beans
+   pz-agent remember list
+   ```
+
+   All of these read the open save from the mod's own snapshot, so they need the
+   game running and the sidecar attached; with nothing attached they change
+   nothing and say so. A reservation takes effect on the running sidecar's next
+   tick — no restart.
 
 None of the three affects ASSISTED mode.
 

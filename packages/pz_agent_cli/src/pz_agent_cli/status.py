@@ -15,6 +15,11 @@ the same way and for the same reason — the record says which provider a runnin
 loop is on and whether it fell back to the deterministic path, and re-resolving
 the provider here could answer differently from the sidecar that is running.
 
+The memory line is a record for the third time, and the state it exists to make
+visible is "wired but nothing loaded yet": an agent that honours no reservation
+because none has been read is indistinguishable from one that honours them and
+has none, right up until it eats something.
+
 The backup line is read rather than recorded, because unlike the other two it is
 a fact about *now*: which backups exist, and whether one of them names the save
 the mod is reporting this second. It is three states and never two — no backup
@@ -49,6 +54,7 @@ from .autonomy import (
 )
 from .context import EXIT_FAILURE, EXIT_OK, CliContext, Workspace, resolve_workspace
 from .doctor import environment_facts
+from .memory import MEMORY_RECORD_NAME, MemoryRecord, read_memory_record
 from .output import Printer
 from .runtime import CAPABILITY_FILE_NAME, CapabilityRecord, read_capability_record
 
@@ -135,6 +141,9 @@ class StatusReport:
     #: Which planner the last sidecar assembled, or None when none has ever
     #: recorded one here. The same three-way distinction applies.
     planner: PlannerRecord | None = None
+    #: What the last sidecar had in force about what the user set aside and
+    #: where home is, or None when none has ever recorded it here.
+    memory: MemoryRecord | None = None
     #: What can be said right now about a backup covering the save being played.
     #: None only when there is no backup root to read, which is the same machine
     #: on which there is no game profile at all.
@@ -161,6 +170,7 @@ class StatusReport:
             "environment": self.environment or {},
             "capabilities": None if self.capabilities is None else self.capabilities.to_dict(),
             "planner": None if self.planner is None else self.planner.to_dict(),
+            "memory": None if self.memory is None else self.memory.to_dict(),
             "backup": None if self.backup is None else self.backup.to_dict(),
         }
 
@@ -190,6 +200,7 @@ def collect_status(ctx: CliContext, workspace: Workspace) -> StatusReport:
     # that a sidecar tried and could not resolve anything.
     capabilities = read_capability_record(workspace.state_dir / CAPABILITY_FILE_NAME)
     planner = read_planner_record(workspace.state_dir / PLANNER_FILE_NAME)
+    memory = read_memory_record(workspace.state_dir / MEMORY_RECORD_NAME)
     # Backups live in the state directory too, so a machine whose exchange
     # directory has never existed still has a backup answer worth printing.
     backup = collect_backup_status(ctx, workspace)
@@ -200,6 +211,7 @@ def collect_status(ctx: CliContext, workspace: Workspace) -> StatusReport:
             environment=environment_facts(workspace),
             capabilities=capabilities,
             planner=planner,
+            memory=memory,
             backup=backup,
         )
     layout = IpcLayout(root)
@@ -218,6 +230,7 @@ def collect_status(ctx: CliContext, workspace: Workspace) -> StatusReport:
         environment=environment_facts(workspace),
         capabilities=capabilities,
         planner=planner,
+        memory=memory,
         backup=backup,
     )
 
@@ -321,6 +334,7 @@ def render_status(report: StatusReport, printer: Printer) -> None:
         printer.field("state", "no exchange directory; nothing has ever connected")
         _render_capabilities(report.capabilities, printer)
         _render_planner(report.planner, printer)
+        _render_memory(report.memory, printer)
         _render_backup(report.backup, printer)
         printer.line()
         printer.line("Run pz-agent doctor — it distinguishes a missing Zomboid directory")
@@ -354,6 +368,7 @@ def render_status(report: StatusReport, printer: Printer) -> None:
         printer.field("panic stop", "a panic-stop sentinel is present")
     _render_capabilities(report.capabilities, printer)
     _render_planner(report.planner, printer)
+    _render_memory(report.memory, printer)
     _render_backup(report.backup, printer)
     printer.field("attached", "yes" if report.attached else "no")
 
@@ -410,6 +425,41 @@ def _render_planner(record: PlannerRecord | None, printer: Printer) -> None:
         printer.field("planner", f"{record.active} — {record.detail}")
     for note in record.notes:
         printer.field("planner note", note)
+
+
+def _render_memory(record: MemoryRecord | None, printer: Printer) -> None:
+    """What the sidecar has in force about reservations and the home point.
+
+    Five states, and the first three are the ones that would otherwise look
+    identical from outside — an agent that ignores a reservation, an agent that
+    has not been told about the save yet, and an agent whose memory file will not
+    read back all behave like an agent with nothing reserved. Only the second of
+    those is harmless, and it is the only one this prints as ordinary.
+    """
+    if record is None:
+        printer.field("memory", "no sidecar has loaded one in this state directory")
+        return
+    if not record.wired:
+        printer.field("memory", "NOT WIRED — nothing you reserved reaches the agent")
+        printer.field("memory detail", record.detail)
+        printer.line("    §7.9 rests on the item's own tags alone while this says NOT WIRED")
+        return
+    if not record.readable:
+        printer.field("memory", f"UNREADABLE — {record.detail}")
+        printer.line("    every item type reads as reserved, so nothing is spent unasked")
+        return
+    if not record.loaded:
+        printer.field("memory", "not loaded — no observation has named a save yet")
+        printer.field("memory detail", record.detail)
+        return
+    if record.empty:
+        printer.field("memory", "loaded and empty — nothing reserved, no home point")
+    else:
+        home = "a home point" if record.home else "no home point"
+        printer.field("memory", f"loaded — {record.reservations} reservation(s) and {home}")
+    printer.field("memory file", record.root)
+    for note in record.notes:
+        printer.field("memory note", note)
 
 
 def _render_backup(state: BackupStatus | None, printer: Printer) -> None:
