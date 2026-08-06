@@ -21,7 +21,7 @@ tells the caller far less than three ten-square walks, one of which failed.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import ClassVar, Final
 
 from ...capabilities import MOVE_TO_SQUARE
@@ -158,10 +158,22 @@ class _MoveToSpec:
 
     @classmethod
     def parse(cls, command: Command) -> _MoveToSpec:
+        """Read either shape of this command: as issued, or as shipped.
+
+        ``verify`` is handed the command the engine actually sent, whose args
+        are :meth:`as_args` output — so a parser that accepted only the issued
+        shape would refuse the adapter's own payload and fail every
+        verification. The issued shape names the destination as a ``target``
+        object; the shipped one names it as three scalars, because the mod's
+        dispatcher accepts nothing else.
+        """
         check_args(
             command,
             allowed=(
                 "target",
+                "x",
+                "y",
+                "z",
                 "radius",
                 "max_distance",
                 "allow_doors",
@@ -169,7 +181,6 @@ class _MoveToSpec:
                 "allow_stairs",
                 "square_ref",
             ),
-            required=("target",),
         )
         if read_flag(command, "allow_windows", default=False):
             raise PreconditionFailed(
@@ -177,7 +188,13 @@ class _MoveToSpec:
                 "ask for it as a separate, explicitly permitted action",
                 reason_code=ReasonCode.POLICY_DENIED,
             )
-        x, y, z = read_position(command.args.get("target"), field_name="target")
+        if "target" in command.args:
+            x, y, z = read_position(command.args.get("target"), field_name="target")
+        else:
+            x, y, z = read_position(
+                {key: command.args.get(key) for key in ("x", "y", "z")},
+                field_name="x/y/z",
+            )
         _check_declared_square_ref(command, x, y, z)
         return cls(
             x=x,
@@ -202,14 +219,29 @@ class _MoveToSpec:
         )
 
     def as_args(self, session_id: str) -> JsonDict:
+        """The payload the mod receives — which is not the command's own shape.
+
+        Three scalars rather than a ``target`` object, because
+        ``PZAgent.CommandDispatcher`` accepts only scalar arguments: a nested
+        table is refused before an adapter is reached, so a ``target`` object
+        could never have arrived. It used to be sent anyway, together with a
+        ``square_ref`` the mod recomputes and four flags the mod does not
+        declare, and every one of those keys is an undeclared argument — which
+        is a refusal, not an ignored field. ``movement.move_to`` was therefore
+        refused outright, every time.
+
+        ``max_distance``, ``allow_doors``, ``allow_windows`` and
+        ``allow_stairs`` stay on this side deliberately. They are decisions, and
+        :meth:`parse` and :func:`_check_square` have already made them against
+        the observation. Sending them would ask the mod to re-derive a policy it
+        has no observation to re-derive it from.
+        """
+        del session_id  # the mod resolves the square from the coordinates
         return {
-            "target": {"x": self.x, "y": self.y, "z": self.z},
-            "square_ref": str(SquareRef(session_id=session_id, x=self.x, y=self.y, z=self.z)),
+            "x": self.x,
+            "y": self.y,
+            "z": self.z,
             "radius": self.radius,
-            "max_distance": self.max_distance,
-            "allow_doors": self.allow_doors,
-            "allow_windows": False,
-            "allow_stairs": self.allow_stairs,
         }
 
     def arrived(self, position: Position) -> bool:
@@ -383,18 +415,40 @@ class _MoveNearSpec:
 
     @classmethod
     def parse(cls, command: Command) -> _MoveNearSpec:
+        # ``ref`` and ``reach`` are the shipped spellings; see _MoveToSpec.parse
+        # for why both shapes have to be readable here.
         check_args(
             command,
-            allowed=("object_ref", "radius", "max_distance", "allow_windows"),
-            required=("object_ref",),
+            allowed=("object_ref", "ref", "radius", "reach", "max_distance", "allow_windows"),
         )
+        if "object_ref" not in command.args and "ref" in command.args:
+            command = replace(command, args={**command.args, "object_ref": command.args["ref"]})
+        if "radius" not in command.args and "reach" in command.args:
+            command = replace(command, args={**command.args, "radius": command.args["reach"]})
+        if "object_ref" not in command.args:
+            raise PreconditionFailed(
+                "missing required argument(s): ['object_ref']",
+                reason_code=ReasonCode.INVALID_ARGUMENT,
+            )
         if read_flag(command, "allow_windows", default=False):
             raise PreconditionFailed(
                 "approaching something through a window is never done automatically",
                 reason_code=ReasonCode.POLICY_DENIED,
             )
         return cls(
-            object_ref=read_ref(command, "object_ref", kind=RefKind.OBJECT),
+            # Not RefKind.OBJECT, though the argument is named object_ref and the
+            # protocol defines that kind. PZAgent.ObserveModel never mints one:
+            # it describes a nearby thing as a container reference when it holds
+            # a container and as a square reference otherwise, "because that
+            # reference is the one an inventory transfer can actually name". So
+            # insisting on an object reference here rejected every reference the
+            # mod is capable of producing, and move_near could not be reached
+            # from a real observation at all.
+            object_ref=read_ref(
+                command,
+                "object_ref",
+                kind=(RefKind.CONTAINER, RefKind.SQUARE, RefKind.ITEM),
+            ),
             radius=read_number(
                 command,
                 "radius",
@@ -412,11 +466,16 @@ class _MoveNearSpec:
         )
 
     def as_args(self) -> JsonDict:
+        """``ref`` and ``reach``, which is what the mod's adapter declares.
+
+        The command-side names (``object_ref``, ``radius``) are the planner's
+        and the MCP surface's; the mod's are these. Translating here is this
+        method's whole job, and sending the command's own names instead meant
+        every argument was undeclared and the command refused.
+        """
         return {
-            "object_ref": self.object_ref,
-            "radius": self.radius,
-            "max_distance": self.max_distance,
-            "allow_windows": False,
+            "ref": self.object_ref,
+            "reach": self.radius,
         }
 
 

@@ -1,0 +1,219 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/natural0101/poject-zombigpt/evidence/schema/result.schema.json",
+  "title": "Live-test scenario result",
+  "description": "One attempt at one live scenario. Written only by pz-agent live-test run; a SHA-256 of these exact bytes is recorded in the scenario's state.json and re-checked by finalize, so an edited result is detected rather than believed.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "commit",
+    "game_build",
+    "product_version",
+    "mod_version",
+    "schema_version",
+    "scenario_id",
+    "title",
+    "attempt",
+    "status",
+    "failure_code",
+    "detail",
+    "started_at_ms",
+    "finished_at_ms",
+    "timestamp",
+    "duration_ms",
+    "time_budget_s",
+    "before",
+    "after",
+    "postconditions",
+    "latency",
+    "logs",
+    "screenshots"
+  ],
+  "properties": {
+    "format": {
+      "const": "pz-agent/livetest-result/1"
+    },
+    "commit": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The checked-out commit. A result whose commit does not match the code under test is not evidence about that code."
+    },
+    "game_build": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The build string read off the running game, or '(not observed)'. Never defaulted to the supported build."
+    },
+    "product_version": { "type": "string", "minLength": 1 },
+    "mod_version": { "type": "string", "minLength": 1 },
+    "schema_version": { "type": "string", "minLength": 1 },
+    "scenario_id": {
+      "type": "string",
+      "pattern": "^S[0-9]{2}_[A-Z0-9_]+$"
+    },
+    "title": { "type": "string", "minLength": 1 },
+    "attempt": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "1-based position in the scenario's attempt ledger. Attempts are appended, never replaced."
+    },
+    "status": {
+      "enum": ["NOT_RUN", "PASS", "FAIL", "BLOCKED"],
+      "description": "NOT_RUN never appears in a written result: a result exists only because an attempt was made."
+    },
+    "failure_code": {
+      "type": "string",
+      "description": "Empty exactly when the status is PASS."
+    },
+    "detail": { "type": "string" },
+    "started_at_ms": { "type": "integer", "minimum": 0 },
+    "finished_at_ms": { "type": "integer", "minimum": 0 },
+    "timestamp": { "type": "string", "minLength": 1 },
+    "duration_ms": { "type": "integer", "minimum": 0 },
+    "time_budget_s": { "type": "integer", "minimum": 1 },
+    "before": {
+      "type": "object",
+      "description": "The snapshot read before the scenario ran. Free-form: its shape is the game's observation, not this schema's business."
+    },
+    "after": { "type": "object" },
+    "postconditions": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": { "$ref": "#/$defs/postcondition" },
+      "description": "Every postcondition the scenario declares, each with its own verdict and the values it was decided from."
+    },
+    "latency": { "$ref": "#/$defs/latency" },
+    "logs": {
+      "type": "array",
+      "maxItems": 64,
+      "items": { "type": "string" }
+    },
+    "screenshots": {
+      "type": "array",
+      "maxItems": 64,
+      "items": { "type": "string" }
+    }
+  },
+  "allOf": [
+    {
+      "description": "A PASS carries no failure code, and every one of its postconditions was observed and passed.",
+      "if": {
+        "properties": { "status": { "const": "PASS" } },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "failure_code": { "const": "" },
+          "postconditions": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "properties": {
+                "passed": { "const": true },
+                "present": { "const": true }
+              },
+              "required": ["passed", "present"]
+            }
+          }
+        }
+      }
+    },
+    {
+      "description": "Anything that is not a PASS must name why.",
+      "if": {
+        "properties": { "status": { "enum": ["FAIL", "BLOCKED"] } },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": { "failure_code": { "type": "string", "minLength": 1 } }
+      }
+    }
+  ],
+  "$defs": {
+    "postcondition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "statement",
+        "check",
+        "field",
+        "expected",
+        "observed",
+        "observed_before",
+        "present",
+        "passed",
+        "detail"
+      ],
+      "properties": {
+        "key": { "type": "string", "minLength": 1 },
+        "statement": { "type": "string", "minLength": 1 },
+        "check": {
+          "enum": [
+            "observed",
+            "is_true",
+            "is_false",
+            "equals",
+            "at_least",
+            "at_most",
+            "increased",
+            "decreased",
+            "changed",
+            "unchanged"
+          ]
+        },
+        "field": { "type": "string", "minLength": 1 },
+        "expected": {},
+        "observed": {},
+        "observed_before": {},
+        "present": {
+          "type": "boolean",
+          "description": "Whether the field was actually read. False can never accompany passed=true."
+        },
+        "passed": { "type": "boolean" },
+        "detail": { "type": "string" }
+      },
+      "allOf": [
+        {
+          "description": "A postcondition cannot pass on a value nobody observed.",
+          "if": {
+            "properties": { "passed": { "const": true } },
+            "required": ["passed"]
+          },
+          "then": {
+            "properties": { "present": { "const": true } }
+          }
+        }
+      ]
+    },
+    "latency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["measured", "samples", "p50_ms", "p95_ms"],
+      "properties": {
+        "measured": {
+          "type": "boolean",
+          "description": "True only for scenarios that repeat an operation. A percentile over one sample is that sample wearing a statistic's name."
+        },
+        "samples": { "type": "integer", "minimum": 0 },
+        "p50_ms": { "type": ["integer", "null"], "minimum": 0 },
+        "p95_ms": { "type": ["integer", "null"], "minimum": 0 }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "measured": { "const": false } },
+            "required": ["measured"]
+          },
+          "then": {
+            "properties": {
+              "p50_ms": { "type": "null" },
+              "p95_ms": { "type": "null" }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

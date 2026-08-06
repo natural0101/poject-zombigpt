@@ -144,13 +144,56 @@ def test_an_observation_without_an_inventory_proves_nothing() -> None:
     assert adapter.verify(command, before, a_world(seq=2, no_inventory=True)) is None
 
 
-def test_the_prepared_command_records_where_the_item_came_from() -> None:
-    """Origin metadata is what makes putting the item back possible (§4.6)."""
-    args = TransferAdapter().build_args(transfer_command(), carrying(BEANS))
+def test_the_evidence_reads_where_the_item_came_from_out_of_the_observation() -> None:
+    """Origin metadata is what makes putting the item back possible (§4.6).
 
-    assert args["source_container_ref"] == BAG_REF
-    assert args["origin"]["container_kind"] == ContainerKind.CARRIED.value
-    assert args["quantity"] == MAX_TRANSFER_QUANTITY
+    It used to travel in the command as a nested ``origin`` object, which the
+    mod's dispatcher refuses outright — so every transfer came back
+    ``INVALID_ARGUMENT``. Recovering it from the before-observation is not only
+    what the wire allows, it is the better source: an origin the sidecar wrote
+    down is an assertion about the world, one read back off the observation is a
+    reading of it.
+    """
+    adapter = TransferAdapter()
+    before = carrying(BEANS)
+    command = prepare(adapter, transfer_command(), before)
+
+    assert set(command.args) == {
+        "item_ref",
+        "source_container_ref",
+        "destination_container_ref",
+        "quantity",
+    }
+    assert command.args["source_container_ref"] == BAG_REF
+    assert command.args["quantity"] == MAX_TRANSFER_QUANTITY
+
+    evidence = adapter.verify(command, before, carrying(moved(BEANS, MAIN_REF), seq=2))
+
+    assert evidence is not None
+    assert evidence.observed["origin"]["container_ref"] == BAG_REF
+    assert evidence.observed["origin"]["container_kind"] == ContainerKind.CARRIED.value
+
+
+def test_an_origin_nobody_observed_is_left_empty_rather_than_invented() -> None:
+    """The honest gap: nothing in the command says where the item was.
+
+    A ``before`` that does not show the item — or shows no inventory at all —
+    leaves the adapter with no reading to report, and a guessed origin would
+    send a caller trying to undo the move to a container of the adapter's own
+    invention.
+    """
+    adapter = TransferAdapter()
+    before = carrying(BEANS)
+    command = prepare(adapter, transfer_command(), before)
+    after = carrying(moved(BEANS, MAIN_REF), seq=2)
+
+    unseen = adapter.verify(command, carrying(seq=1), after)
+    assert unseen is not None
+    assert unseen.observed["origin"] == {}
+
+    no_tier = adapter.verify(command, a_world(seq=1, no_inventory=True), after)
+    assert no_tier is not None
+    assert no_tier.observed["origin"] == {}
 
 
 # --------------------------------------------------------------------------
@@ -293,15 +336,24 @@ def test_an_incomplete_chain_is_neither_reachable_nor_on_the_person() -> None:
 
 
 def test_the_origin_of_a_container_standing_in_the_world_carries_its_square() -> None:
-    """Putting the item back needs coordinates, whatever kind the mod called it."""
+    """Putting the item back needs coordinates, whatever kind the mod called it.
+
+    ``floor`` is not ``world``, and the square is attached on the strength of the
+    reference encoding one rather than of the kind the mod chose to call it —
+    otherwise the one origin a caller cannot walk back to unaided is the one
+    without coordinates.
+    """
+    adapter = TransferAdapter()
     on_the_floor = make_container(CRATE_REF, ContainerKind.FLOOR, name="Floor")
     item = an_item("42", container_ref=CRATE_REF)
-    observation = carrying(item, containers=[main_container(), on_the_floor])
+    before = carrying(item, containers=[main_container(), on_the_floor])
+    command = prepare(adapter, transfer_command(item_ref=item.ref), before)
 
-    args = TransferAdapter().build_args(transfer_command(item_ref=item.ref), observation)
+    evidence = adapter.verify(command, before, carrying(moved(item, MAIN_REF), seq=2))
 
-    assert args["origin"]["container_kind"] == ContainerKind.FLOOR.value
-    assert args["origin"]["square"] == {"x": HOME_X, "y": HOME_Y, "z": 0}
+    assert evidence is not None
+    assert evidence.observed["origin"]["container_kind"] == ContainerKind.FLOOR.value
+    assert evidence.observed["origin"]["square"] == {"x": HOME_X, "y": HOME_Y, "z": 0}
 
 
 def test_an_observation_with_no_inventory_tier_cannot_support_a_transfer() -> None:
@@ -506,6 +558,38 @@ def test_ensure_main_from_a_world_container_is_the_world_tier() -> None:
 
     assert adapter.risk_for(ensure_command(item.ref), observation) is RiskClass.P3
     assert adapter.risk_for(ensure_command(), carrying(BEANS)) is RiskClass.P1
+
+
+# --------------------------------------------------------------------------
+# the shipped shape
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("adapter", "command"),
+    [
+        (TransferAdapter(), transfer_command()),
+        (EnsureMainAdapter(), ensure_command()),
+    ],
+    ids=["transfer", "ensure_main"],
+)
+def test_the_adapter_can_read_back_the_arguments_it_ships(
+    adapter: TransferAdapter | EnsureMainAdapter,
+    command: Command,
+) -> None:
+    """``build_args`` output must survive the adapter's own parser, unchanged.
+
+    Nothing checked this, and both adapters failed it: they shipped an ``origin``
+    object no argument list allowed, so re-reading the prepared command — which
+    is the only command ``verify`` ever sees — refused it. The property is a
+    fixpoint, so a payload the parser silently rewrites fails it just as loudly
+    as one it refuses.
+    """
+    world = carrying(BEANS)
+    prepared = prepare(adapter, command, world)
+
+    assert adapter.build_args(prepared, world) == prepared.args
+    adapter.validate(prepared, world)
 
 
 # --------------------------------------------------------------------------

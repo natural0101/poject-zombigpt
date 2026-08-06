@@ -214,18 +214,42 @@ class TestReferences:
         plan = Plan.from_payload(payload)
         assert plan.steps[0].args.refs()[0].value == foreign_item_ref()
 
-    def test_an_object_reference_has_no_typed_parser_and_is_still_validated(self) -> None:
+    def test_move_near_refuses_a_kind_the_mod_never_mints(self) -> None:
+        """``object:`` parses on both sides and still may not be planned.
+
+        ``PZAgent.ObserveModel`` describes a nearby thing as a ``container``
+        reference when it holds one and a ``square`` reference otherwise. It
+        never mints an ``object`` reference, so one arriving in a plan came from
+        a model inventing a reference rather than copying an observed one —
+        which is the single thing reference validation exists to catch.
+        """
         payload = plan_payload(
             steps=[
                 step_payload(
                     action="movement.move_near",
-                    args={"object_ref": "object:not a session:1"},
+                    args={"object_ref": f"object:{DEFAULT_SESSION}:1:0"},
                     success={"type": "adapter_evidence"},
                 )
             ]
         )
-        with pytest.raises(PlanRejected, match="well-formed object reference"):
+        with pytest.raises(PlanRejected, match="got a object one"):
             Plan.from_payload(payload)
+
+    def test_move_near_accepts_the_kinds_the_mod_does_mint(self) -> None:
+        square = f"square:{DEFAULT_SESSION}:1200:3400:0"
+        for ref in (MAIN_REF, square):
+            payload = plan_payload(
+                risk_class="P3",
+                steps=[
+                    step_payload(
+                        action="movement.move_near",
+                        args={"object_ref": ref},
+                        success={"type": "adapter_evidence"},
+                    )
+                ],
+            )
+            plan = Plan.from_payload(payload)
+            assert [r.value for r in plan.steps[0].args.refs()] == [ref]
 
     def test_refs_report_the_kind_they_were_validated_as(self) -> None:
         args = TransferArgs(

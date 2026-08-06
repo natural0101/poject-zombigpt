@@ -157,13 +157,20 @@ def check_args(command: Command, *, allowed: Iterable[str], required: Iterable[s
         )
 
 
-def read_ref(command: Command, key: str, *, kind: RefKind) -> str:
+def read_ref(command: Command, key: str, *, kind: RefKind | tuple[RefKind, ...]) -> str:
     """Read a reference argument of *kind* that this session minted.
 
     A reference from an earlier session is not stale but *wrong*: its runtime
     ids may now denote different objects, so it is ``INVALID_REF`` rather than
     anything retryable.
+
+    *kind* takes a tuple when more than one kind is genuinely acceptable. That
+    is not a convenience: the mod describes a nearby thing as a ``container``
+    reference when it holds one and as a ``square`` reference otherwise, so an
+    argument naming "something to walk up to" that insisted on a single kind
+    would refuse most of what the mod actually reports.
     """
+    accepted = (kind,) if isinstance(kind, RefKind) else kind
     raw = command.args.get(key)
     if not isinstance(raw, str) or not raw:
         raise PreconditionFailed(
@@ -177,9 +184,10 @@ def read_ref(command: Command, key: str, *, kind: RefKind) -> str:
             f"{key} is not a reference: {raw!r}",
             reason_code=ReasonCode.INVALID_REF,
         ) from exc
-    if actual is not kind:
+    if actual not in accepted:
+        wanted = " or ".join(sorted(k.value for k in accepted))
         raise PreconditionFailed(
-            f"{key} must be a {kind.value} reference, got a {actual.value} reference",
+            f"{key} must be a {wanted} reference, got a {actual.value} reference",
             reason_code=ReasonCode.INVALID_REF,
         )
     if not belongs_to_session(raw, command.session_id):

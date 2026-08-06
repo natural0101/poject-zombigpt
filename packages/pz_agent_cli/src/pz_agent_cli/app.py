@@ -36,6 +36,7 @@ from pz_agent_core.version import PRODUCT_VERSION
 from .config import ConfigValidation, load_config
 from .context import EXIT_FAILURE, EXIT_OK, EXIT_USAGE, CliContext, Workspace, resolve_workspace
 from .doctor import run_checks
+from .livetest import add_live_test_parser, run_live_test
 from .modinstall import (
     ForeignFileError,
     InstallError,
@@ -68,6 +69,7 @@ COMMANDS: Final[tuple[str, ...]] = (
     "logs",
     "replay",
     "validate-config",
+    "live-test",
 )
 
 #: Modes ``pz-agent arm`` accepts on the command line, lowercased for typing.
@@ -203,6 +205,7 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("--json", action="store_true")
 
     _add_smoke_parser(subparsers)
+    add_live_test_parser(subparsers)
 
     return parser
 
@@ -687,6 +690,8 @@ def dispatch(ctx: CliContext, args: argparse.Namespace) -> int:
             emit=Printer(ctx.stdout, ctx.stderr).line,
             as_json=args.json,
         )
+    if command == "live-test":
+        return run_live_test(ctx, args)
     # Unreachable through the parser: every choice it accepts is handled above,
     # and an unknown one is rejected before dispatch.
     raise AssertionError(f"unrouted command: {command!r}")

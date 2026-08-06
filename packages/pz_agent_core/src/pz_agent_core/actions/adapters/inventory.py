@@ -267,6 +267,30 @@ def _transfer_evidence(
     )
 
 
+def _origin_from(before: Observation, identity: ItemIdentity) -> JsonDict:
+    """Where the item stood before the move, read from the observation.
+
+    This used to be handed to `verify` inside the command, put there by
+    `build_args`. Reading it from `before` is not just the fix for an argument
+    the mod refused — it is the better source. An origin the sidecar wrote down
+    is an assertion about the world; an origin recovered from the observation
+    the mod sent is a reading of it, and the difference is exactly the one this
+    project draws everywhere else.
+
+    An empty dict when the item cannot be found in `before`: an origin nobody
+    observed is not a fact to put in evidence.
+    """
+    if before.inventory is None:
+        return {}
+    candidates = find_by_identity(before.inventory, identity)
+    if len(candidates) != 1:
+        return {}
+    source = before.inventory.container(candidates[0].container_ref)
+    if source is None:
+        return {}
+    return describe_container(source)
+
+
 def _verify_landed(
     identity: ItemIdentity,
     destination_ref: str,
@@ -303,7 +327,6 @@ class _TransferSpec:
                 "source_container_ref",
                 "destination_container_ref",
                 "quantity",
-                "origin",
             ),
             required=("item_ref", "destination_container_ref"),
         )
@@ -379,10 +402,14 @@ class TransferAdapter:
             "source_container_ref": source.ref,
             "destination_container_ref": spec.destination_ref,
             "quantity": 1,
-            # Carried so a caller — or a later undo — can put the item back
-            # without having to have kept the pre-move observation (§4.6).
-            "origin": describe_container(source),
         }
+        # `origin` used to travel here too, as a nested object describing the
+        # source container, so a caller could undo the move without having kept
+        # the pre-move observation. It could never arrive: the mod's dispatcher
+        # accepts only scalar arguments and refuses an undeclared key outright,
+        # so the whole transfer came back INVALID_ARGUMENT. `verify` now reads
+        # the origin from the before-observation, which is a better source
+        # anyway — it is observed rather than asserted.
 
     def verify(self, command: Command, before: Observation, after: Observation) -> Evidence | None:
         spec = _TransferSpec.parse(command)
@@ -393,11 +420,10 @@ class TransferAdapter:
         destination = after.inventory.container(spec.destination_ref)
         if destination is None:
             return None
-        origin = command.args.get("origin")
         return _transfer_evidence(
             "item_in_destination_container",
             identity=identity,
-            origin=dict(origin) if isinstance(origin, dict) else {},
+            origin=_origin_from(before, identity),
             destination=destination,
             moved=landed,
             after=after,
@@ -420,14 +446,14 @@ class TransferAdapter:
 def _ensure_main_item_ref(command: Command) -> str:
     """The one argument ``ensure_main`` takes, read the same way three times.
 
-    The prepared command also carries the destination and the origin that
-    ``build_args`` filled in, so they are accepted here: ``verify`` re-reads the
-    command as it was *shipped*, and an argument check that refused the
-    adapter's own output would fail every verification.
+    The prepared command also carries the destination ``build_args`` filled
+    in, so it is accepted here: ``verify`` re-reads the command as it was
+    *shipped*, and an argument check that refused the adapter's own output would
+    fail every verification.
     """
     check_args(
         command,
-        allowed=("item_ref", "destination_container_ref", "origin"),
+        allowed=("item_ref", "destination_container_ref"),
         required=("item_ref",),
     )
     return read_ref(command, "item_ref", kind=RefKind.ITEM)
@@ -490,11 +516,15 @@ class EnsureMainAdapter:
         item_ref = _ensure_main_item_ref(command)
         inventory = require_inventory(observation)
         item = resolve_item(inventory, item_ref)
-        source = resolve_container(inventory, item.container_ref, field_name="source_container_ref")
+        # Called for the refusal, not the value: an item whose container the
+        # observation does not describe is one the mod cannot be asked to move,
+        # and finding that out here costs a rejected command rather than a
+        # transfer that fails at the far end. `verify` recovers the origin from
+        # the before-observation, so nothing needs the container itself.
+        resolve_container(inventory, item.container_ref, field_name="source_container_ref")
         return {
             "item_ref": item.ref,
             "destination_container_ref": player_main(inventory).ref,
-            "origin": describe_container(source),
         }
 
     def verify(self, command: Command, before: Observation, after: Observation) -> Evidence | None:
@@ -507,11 +537,10 @@ class EnsureMainAdapter:
         landed = _verify_landed(identity, main.ref, after)
         if landed is None:
             return None
-        origin = command.args.get("origin")
         return _transfer_evidence(
             "item_in_player_main",
             identity=identity,
-            origin=dict(origin) if isinstance(origin, dict) else {},
+            origin=_origin_from(before, identity),
             destination=main,
             moved=landed,
             after=after,

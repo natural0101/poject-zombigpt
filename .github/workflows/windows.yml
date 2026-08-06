@@ -1,0 +1,94 @@
+name: windows package
+
+# The artefact this project actually ships is a Windows ZIP, and nothing about
+# it is exercised by the Linux CI: PyInstaller produces a binary for the machine
+# it runs on, and the wrappers are cmd.exe. So this workflow runs the suite on
+# Windows, builds the two executables there, assembles the archive, and puts the
+# result past the release gate. It certifies a release *candidate* only —
+# certifying v1.0.0 needs live evidence from a real game session, which no CI
+# runner has.
+
+on:
+  push:
+    branches: [main, dev, "feature/**", "claude/**"]
+  pull_request:
+    branches: [main, dev]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    name: build and certify the release candidate
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the project and the build tools
+        # PyInstaller is pinned to a major version because the spec files use
+        # its 6.x EXE signature; 5.x took an extra positional argument, and the
+        # failure from getting that wrong is a confusing one.
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev,mcp]" "pyinstaller>=6,<7"
+
+      - name: Tests
+        # The report is the observable the gate reads. Without --junitxml the
+        # gate has only this step's colour to go on, and a colour is not an
+        # artefact.
+        run: python -m pytest --junitxml=pytest-windows.xml
+
+      - name: Build pz-agent.exe
+        run: >
+          pyinstaller --noconfirm --clean
+          --distpath packaging/windows/dist --workpath packaging/windows/build
+          packaging/windows/pz-agent.spec
+
+      - name: Build pz-agent-mcp.exe
+        run: >
+          pyinstaller --noconfirm --clean
+          --distpath packaging/windows/dist --workpath packaging/windows/build
+          packaging/windows/pz-agent-mcp.spec
+
+      - name: Both executables answer
+        # A binary that was produced is not a binary that runs. --version and
+        # --describe need no game, no sidecar and no session, so they are the
+        # cheapest proof that the bundle imports its own packages.
+        run: |
+          packaging/windows/dist/pz-agent.exe --version
+          packaging/windows/dist/pz-agent-mcp.exe --describe > pz-agent-mcp-catalogue.json
+
+      - name: Assemble the archive
+        run: python packaging/windows/build_rc.py
+
+      - name: Release gate
+        run: python scripts/check_release.py --rc --junit pytest-windows.xml
+
+      - name: Upload the release candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: pz-agent-windows-rc
+          path: |
+            dist/pz-agent-windows-*.zip
+            dist/pz-agent-windows-*.zip.sha256
+          if-no-files-found: error
+
+      - name: Upload the test report and the published surface
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pz-agent-windows-reports
+          path: |
+            pytest-windows.xml
+            pz-agent-mcp-catalogue.json
+          if-no-files-found: ignore

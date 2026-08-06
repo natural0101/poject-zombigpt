@@ -573,7 +573,9 @@ class MoveNearArgs:
         }
 
     def refs(self) -> tuple[PlanRef, ...]:
-        return (PlanRef(value=self.object_ref, kind=RefKind.OBJECT),)
+        # The kind is read back off the reference rather than declared, because
+        # this argument accepts whichever of them the mod minted for the thing.
+        return (PlanRef(value=self.object_ref, kind=ref_kind(self.object_ref)),)
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any], step_id: str) -> MoveNearArgs:
@@ -588,7 +590,7 @@ class MoveNearArgs:
             step_id,
             object_ref=_ref(
                 _require(payload, "object_ref", field="args.object_ref", step_id=step_id),
-                kind=RefKind.OBJECT,
+                kind=(RefKind.CONTAINER, RefKind.SQUARE, RefKind.ITEM),
                 field="args.object_ref",
                 step_id=step_id,
             ),
@@ -1298,7 +1300,17 @@ _REF_PARSERS: Final[Mapping[RefKind, Callable[[str], object]]] = MappingProxyTyp
 )
 
 
-def _ref(value: Any, *, kind: RefKind, field: str, step_id: str) -> str:
+def _ref(value: Any, *, kind: RefKind | tuple[RefKind, ...], field: str, step_id: str) -> str:
+    """Validate one reference in a plan, against one acceptable kind or several.
+
+    Several is not a loosening. ``PZAgent.ObserveModel`` describes a nearby
+    thing as a ``container`` reference when it holds one and a ``square``
+    reference otherwise — it never mints an ``object`` reference at all — so a
+    step naming something to walk up to has to accept the kinds the mod is
+    capable of producing, or it refuses every plan built from a real
+    observation.
+    """
+    accepted = (kind,) if isinstance(kind, RefKind) else kind
     raw = _string(value, field=field, step_id=step_id)
     try:
         actual = ref_kind(raw)
@@ -1306,19 +1318,20 @@ def _ref(value: Any, *, kind: RefKind, field: str, step_id: str) -> str:
         raise PlanRejected(
             PlanFault.BAD_REF, f"{raw!r} is not a reference", field=field, step_id=step_id
         ) from exc
-    if actual is not kind:
+    if actual not in accepted:
+        wanted = " or ".join(sorted(k.value for k in accepted))
         raise PlanRejected(
             PlanFault.BAD_REF,
-            f"expected a {kind.value} reference, got a {actual.value} one",
+            f"expected a {wanted} reference, got a {actual.value} one",
             field=field,
             step_id=step_id,
         )
-    parser = _REF_PARSERS.get(kind)
+    parser = _REF_PARSERS.get(actual)
     if parser is None:
         if not _UNTYPED_REF.fullmatch(raw):
             raise PlanRejected(
                 PlanFault.BAD_REF,
-                f"{raw!r} is not a well-formed {kind.value} reference",
+                f"{raw!r} is not a well-formed {actual.value} reference",
                 field=field,
                 step_id=step_id,
             )

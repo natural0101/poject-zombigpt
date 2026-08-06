@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "pz-agent": {
+      "type": "stdio",
+      "command": "pz-agent-mcp",
+      "args": [],
+      "env": {}
+    }
+  }
+}

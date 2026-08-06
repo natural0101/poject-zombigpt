@@ -1,0 +1,110 @@
+# MCP client configurations
+
+Three ready configurations for the stdio server, plus the one thing you need to
+know before you paste any of them in.
+
+## What happens when a client launches this today
+
+`pz-agent-mcp` starts, finds no core services attached to its process, writes
+one sentence to stderr saying so, and exits with status 1. That is the honest
+behaviour, not a bug in these files: the MCP boundary reads through the ports
+the **sidecar** owns while it holds the exchange directory's lock, and this
+build has no channel that hands those ports to a second process. An embedder
+passes them in with `main(services=...)`.
+
+So today these configurations do two useful things: they are the exact shape a
+client needs, and they let you confirm the executable is where the client
+thinks it is. What answers right now, with no game, no sidecar and no SDK, is:
+
+```
+pz-agent-mcp --describe
+```
+
+which writes the whole published surface — every tool and resource, with the
+protocol and product versions — as JSON. That is the document to read when
+writing a client, and it is generated from the same catalogue the server
+serves, so it cannot drift from it.
+
+## The files
+
+| File | For | Command it runs |
+|---|---|---|
+| `claude-desktop.json` | Claude Desktop (`claude_desktop_config.json`) | `pz-agent-mcp` |
+| `claude-code.json` | Claude Code (`.mcp.json`) | `pz-agent-mcp` |
+| `generic-stdio.json` | any stdio client | `python -m pz_agent_mcp` |
+
+Merge the `mcpServers` entry into the file your client already has rather than
+replacing it. The server registers itself as **`pz-agent`**; that name is what
+appears in the client, and it is the same string the server sends in its
+initialisation, so keep it.
+
+`pz-agent-mcp` is a console script declared in `pyproject.toml`, so it is on
+PATH in any environment the project is installed into. From the Windows release
+ZIP there is no such environment — give the full path to the executable
+instead:
+
+```json
+{
+  "mcpServers": {
+    "pz-agent": {
+      "command": "C:\\pz-agent\\bin\\pz-agent-mcp.exe",
+      "args": [],
+      "env": {}
+    }
+  }
+}
+```
+
+Backslashes are doubled because it is JSON. A forward-slash path works too and
+avoids the question.
+
+## Why `env` is empty
+
+Because the server reads no environment variable of its own. Its paths come
+from the same discovery the CLI uses — `USERPROFILE`, `OneDrive`, `HOME`,
+`USERNAME` — which a client-launched process inherits from the client. Naming a
+variable here that nothing reads would look like configuration and be
+decoration, and the first person to change it would spend an evening finding
+out that it does nothing.
+
+If the game is in a place discovery cannot find, that is fixed once, in
+`config.toml` (`game.install_dir`, `game.user_dir`), and every part of the
+system reads it from there.
+
+**No key, no token, no path to a secret belongs in these files.** The planner's
+credentials are named as environment variables in `config.toml` and read from
+the environment at the moment of the call; nothing in the MCP boundary needs
+one.
+
+## What the server publishes
+
+Nineteen tools, in six groups. The names are stable and the schemas are served
+with them:
+
+- **session** — `pz_session_status`, `pz_session_arm`, `pz_session_disarm`
+- **observation** — `pz_observe_snapshot`, `pz_observe_inventory`,
+  `pz_observe_nearby`
+- **action** — `pz_action_move_to`, `pz_action_transfer`, `pz_action_eat`,
+  `pz_action_drink`, `pz_action_read`, `pz_action_wait`, `pz_action_cancel`
+- **plan** — `pz_plan_execute`, `pz_plan_status`
+- **safety** — `pz_safety_stop`
+- **memory and diagnostics** — `pz_memory_query`, `pz_debug_doctor`,
+  `pz_debug_tail`
+
+Seven resources are published beside them: `pz://session/current`,
+`pz://observation/latest`, `pz://inventory/current`, `pz://capabilities`,
+`pz://plan/current`, `pz://safety/status` and `pz://diagnostics/recent`. None
+of them is subscribable — the server pushes no resource updates, so a client
+polls and uses the `seq` each read carries.
+
+Two behaviours are worth knowing before writing against this:
+
+- **A tool whose capability is not usable on your install is not listed and not
+  callable.** `pz://capabilities` says which ones are withheld and why, by
+  name. A missing tool is a capability answer, not an error.
+- **`succeeded` means a postcondition was observed.** A tool that submits an
+  action answers with the action id and `accepted` while the work is queued.
+  Polling is how you learn it finished; a result that says it succeeded carries
+  the evidence under `data.evidence`.
+
+`docs/MCP_TOOLS.md` documents each tool's arguments and what it verifies.

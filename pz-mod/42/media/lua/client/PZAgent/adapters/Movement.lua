@@ -425,8 +425,12 @@ local MoveNear = {
     ref = {
       type = ARG.REF,
       required = true,
-      -- No `zombie` and no `object`: walking up to a zombie is never automatic,
-      -- and an object reference has no parser on either side of the wire.
+      -- No `zombie`: walking up to one is never automatic. No `object` either,
+      -- but not for the reason an earlier comment here gave -- both sides do
+      -- parse that kind. The real reason is that nothing ever mints one:
+      -- PZAgent.ObserveModel describes a nearby thing as a container reference
+      -- when it holds a container and as a square reference otherwise, so an
+      -- object reference could only arrive from a caller that invented it.
       kinds = { square = true, container = true, item = true },
     },
     reach = { type = ARG.NUMBER, min = 0.1, max = Movement.MAX_RADIUS },
