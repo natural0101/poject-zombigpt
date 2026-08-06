@@ -11,11 +11,17 @@ declared in the adapter's `requires` list and resolved through
 build that spells a class differently costs one `CAPABILITY_UNAVAILABLE`
 *naming the symbol* rather than an error unwinding the dispatcher mid-command.
 
-Find every guess in the source with:
+Some guesses carry a `-- Build 42:` comment, findable with:
 
 ```
 grep -rn "Build 42:" pz-mod/
 ```
+
+`grep -rn "Build 42:" pz-mod/` returns six lines, in two files. It is a
+*shortcut*, not an inventory: the table below marks 52 symbols `requires_live`,
+so the grep covers roughly an eighth of what is unconfirmed. **This document is
+the list.** Use the grep to jump to a comment; use the table to know what has
+not been checked.
 
 ## Status vocabulary
 

@@ -203,7 +203,9 @@ following was done, and none of it is claimed:
 - **The 30-minute and 2-hour endurance runs.**
 - **Measured p50/p95 latencies.** Any number here would have been invented.
 - **Build 42.20 API signatures.** Every engine symbol is *declared* and probed;
-  none is confirmed. `grep -rn "Build 42:" pz-mod/` lists every guess.
+  none is confirmed. `docs/GAME_API_VERIFICATION.md` lists all 52; the grep
+  `grep -rn "Build 42:" pz-mod/` finds six of them and was described here as the
+  whole list, which would have left about forty unchecked.
   **Start with `ISTakeWaterAction`.** Three places in this repository once
   stated three different argument orders for it; `docs/GAME_API_VERIFICATION.md`
   now records the one the mod actually calls —

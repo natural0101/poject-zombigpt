@@ -50,6 +50,27 @@ drift out of sync with `pz_agent_core.version`.
   postcondition accepts only thirst — a refill raises the vessel's volume and
   the drink lowers it again, so the vessel witnesses nothing in either
   direction. Published as `pz_action_drink_source`.
+- **The doctor's codes are documented.** `pz-agent doctor` stamps every check
+  `PZD001`…`PZD010` and `README.md` bills `docs/TROUBLESHOOTING.md` as "Doctor
+  codes and remedies"; `grep -rn 'PZD0' docs/` returned nothing, so the one
+  instruction the tool gives a stuck user pointed at a page where their code did
+  not appear. There is a table now, ordered as `doctor` runs the checks and
+  saying which failures are consequences of an earlier one — and noting that
+  `unknown` is not a pass. `tests/contract/test_doctor_codes_documented.py`
+  pins it in both directions and checks each code against the check it belongs
+  to, because a row naming the wrong check misdirects while passing a presence
+  test.
+- **`grep -rn "Build 42:" pz-mod/` is no longer described as the list of every
+  guess.** It returns six lines in two files;
+  `docs/GAME_API_VERIFICATION.md` marks 52 symbols `requires_live`. The claim
+  appeared in five documents including `docs/LOCAL_AGENT_PROMPT.md`, where it
+  read "Это исчерпывающий список" — so an agent working from that prompt would
+  have enumerated six places and believed the unconfirmed surface covered. All
+  five now point at the table and say what the grep is.
+  `tests/contract/test_game_api_inventory.py` checks the table is complete
+  against every engine class the mod constructs or probes for; its first
+  version used a substring match and a mutation caught that, so it matches on a
+  word boundary.
 - **The mod names the capability that gates each action.** Five adapters —
   `equipment.equip`, `equipment.unequip`, `medical.bandage`, `survival.rest`
   and `survival.sleep` — declared `capability = nil`, each with a comment

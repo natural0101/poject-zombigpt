@@ -4,12 +4,12 @@ Prepared to the gate in [`docs/RELEASE.md`](docs/RELEASE.md), whose "The final
 report" section lists nine things this document must state. They are §1 to §9
 below, in that order.
 
-**Base commit:** `dev` at `34d7676` (see below — it is refreshed each time this file is)
+**Base commit:** `dev` at `ce7d99c` (see below — it is refreshed each time this file is)
 **Versions:** product 0.1.0 · protocol 1.1 · schema 1.0 · mod 0.1.0 · supported build 42.20
 
 A report cannot name the commit that contains it — the hash does not exist until
 the commit is made. The hash above is this report's parent. Check
-`git log 34d7676..HEAD` before trusting any number here against a newer tree.
+`git log ce7d99c..HEAD` before trusting any number here against a newer tree.
 
 **Note the version.** The release candidate is named `v1.0.0-rc1`, and every
 version constant in the tree says `0.1.0`. No `1.0.0` exists in `version.py`,
@@ -19,7 +19,7 @@ filename is a target, not a state.
 Every figure below was produced by running something at this commit. The
 previous revision of this document was written against `main` at `6a57f74`, 36
 commits back, and had drifted badly: it claimed 2338 Python tests (there are
-3475), 1269 Lua assertions (2864), 202 mypy files (258), 7 schemas (6), 30
+3481), 1269 Lua assertions (2864), 202 mypy files (260), 7 schemas (6), 30
 luacheck files (62), nine registered adapters (19) and an installer that placed
 17 files (30). None of that was dishonest when written. All of it was wrong by
 the time anyone read it, which is why this revision states its base commit at
@@ -69,12 +69,14 @@ Measured at this commit:
 | Capability probes | 12 |
 | Live-test scenarios | 20 |
 
-### Nine wiring defects, found and closed
+### Twelve defects, found and closed
 
 Every subsystem in this build was written, tested and green. What nothing tested
-was whether the subsystems were *connected*. Nine defects of that one shape were
-found, each by a test that crosses a seam rather than covering a unit, and each
-mutation-checked by removing the wiring and counting the failures:
+was whether the subsystems were *connected*, or whether the documents describing
+them were true. Twelve defects of those two shapes were found, each by a test
+that crosses a seam rather than covering a unit, and each mutation-checked:
+
+**Nine were wiring** — a subsystem complete and connected to nothing:
 
 1. Adapters published under `name`; the dispatcher reads `action` — thirteen of
    sixteen game actions unreachable.
@@ -90,15 +92,35 @@ mutation-checked by removing the wiring and counting the failures:
 9. The mod could drink from a world source; the sidecar had no argument for it,
    and the path it did have ran under the wrong capability.
 
-**A tenth was found while writing this report, and it is the most serious.**
-`docs/LIMITATIONS.md` stated that multiplayer was "refused in configuration and
-again at the session handshake" and that "the refusal has no workaround
-setting". Neither refusal existed anywhere in `packages/` or `pz-mod/`. The
-`safety.allow_multiplayer` key lived in `config._advisories`, whose contract is
-*"Never errors"*, carrying the sentence "multiplayer is refused at the handshake
-regardless of this setting" — so the flag loaded, the agent ran, and the only
-thing between it and someone else's server was a line of advice describing a
-gate nobody had written. See §5.
+**Three were documents asserting things the code did not do**, which is the
+harder shape, because a reader has no reason to doubt them:
+
+10. **Multiplayer was refused nowhere.** `docs/LIMITATIONS.md` said it was
+    "refused in configuration and again at the session handshake" and that "the
+    refusal has no workaround setting". No such refusal existed in `packages/`
+    or `pz-mod/`. `safety.allow_multiplayer` lived in `config._advisories`,
+    whose contract is *"Never errors"*, carrying the sentence "multiplayer is
+    refused at the handshake regardless of this setting" — so the flag loaded,
+    the agent ran, and the only thing between it and someone else's server was
+    a line of advice describing a gate nobody had written. See §5.
+11. **Five Lua adapters declared no capability**, each with a comment saying no
+    probe existed for it. Probes exist for all five. No command was ungated —
+    both sides enforce independently — but the mod's published capability
+    document named six capabilities where the system knows twelve, so five were
+    absent from the report a person reads when an action is refused.
+    `survival_sleep` is the costly one: its `experimental` ceiling exists
+    because a sleeping character cannot be reached by a panic stop.
+12. **`grep -rn "Build 42:" pz-mod/` was described as listing every guess**, in
+    five documents including `docs/LOCAL_AGENT_PROMPT.md`, the file the local
+    agent starts from, where it read "Это исчерпывающий список". It returns six
+    lines in two files against 52 `requires_live` rows — about an eighth. An
+    agent following that would have checked six symbols and concluded the
+    unconfirmed surface was covered.
+
+Numbers 10 to 12 are the reason this report states its base commit and
+re-measures rather than carrying figures forward. A stale number is a small
+lie; a document describing a safety gate that does not exist is a different
+thing.
 
 ---
 
@@ -145,12 +167,12 @@ Two symbols deserve naming individually, because their failure modes are quiet:
 ```
 ruff format        ok    316 files already formatted
 ruff lint          ok    All checks passed!
-mypy               ok    no issues found in 258 source files
+mypy               ok    no issues found in 260 source files
 forbidden patterns ok    no stub bodies, no TODO markers, no eval/exec/loadstring, no secrets
 version sync       ok    product=0.1.0 protocol=1.1 schema=1.0 mod=0.1.0
 schema validity    ok    6 schema(s) valid
 playbook in sync   ok    docs/LIVE_TEST_PLAYBOOK.md matches its 20 scenarios
-pytest             ok    3475 passed, 2 skipped
+pytest             ok    3481 passed, 2 skipped
 luacheck           ok    0 warnings / 0 errors in 62 files
 lua tests          ok    2864 assertions across 26 suites, 0 failed
 ```
@@ -302,8 +324,8 @@ Full walkthrough: [`docs/QUICKSTART.md`](docs/QUICKSTART.md).
 
 ## 7. The commit hash
 
-`34d7676` on `dev`. See the header for why this is the parent rather than the
-containing commit; `git log 34d7676..HEAD --oneline` shows anything this
+`ce7d99c` on `dev`. See the header for why this is the parent rather than the
+containing commit; `git log ce7d99c..HEAD --oneline` shows anything this
 document does not cover.
 
 ---
@@ -312,8 +334,8 @@ document does not cover.
 
 ```
 dist/pz-agent-windows-v1.0.0-rc1.zip
-  sha256   98de6d645dda447422592676131111308a35b112e67b42755616974c6adda30a
-  size     231 457 bytes
+  sha256   40692914b76bd9040fb13ba5f4ad4602df3fae0888e456665cdfc2c131750e3b
+  size     234 026 bytes
   entries  62 (61 files plus BUILD-MANIFEST.json)
 ```
 
@@ -327,7 +349,7 @@ own gate.** `BUILD-MANIFEST.json` records `complete: false`, `build_rc.py` exits
 [ok  ] archive.bat:      all 11 wrappers are at the root
 [ok  ] archive.digests:  61 file(s) match the digests recorded for them
 [ok  ] archive.claims:   the archive claims no live-test evidence
-[ok  ] tests:            3475 of 3477 passed, 2 skipped
+[ok  ] tests:            3481 of 3483 passed, 2 skipped
 ```
 
 Both executables need PyInstaller on Windows. `.github/workflows/windows.yml`
@@ -418,7 +440,7 @@ Project Zomboid Build 42.20 on Windows, and on nothing else.
 It does not say the architecture is ready and only needs testing. It does not
 say a user can take it from here.
 
-It says: twenty-eight tasks are implemented and covered by 3475 Python tests and
+It says: twenty-eight tasks are implemented and covered by 3481 Python tests and
 2864 Lua assertions; ten wiring defects were found by seam tests and closed, one
 of them a safety gate that had been documented for weeks and never written; two
 tasks are blocked on a game that does not exist in this environment; and §9 is
