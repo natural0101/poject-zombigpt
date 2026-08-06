@@ -78,18 +78,32 @@ one.
 
 ## What the server publishes
 
-Nineteen tools, in six groups. The names are stable and the schemas are served
+Thirty tools, in seven groups. The names are stable and the schemas are served
 with them:
 
 - **session** — `pz_session_status`, `pz_session_arm`, `pz_session_disarm`
 - **observation** — `pz_observe_snapshot`, `pz_observe_inventory`,
   `pz_observe_nearby`
-- **action** — `pz_action_move_to`, `pz_action_transfer`, `pz_action_eat`,
-  `pz_action_drink`, `pz_action_read`, `pz_action_wait`, `pz_action_cancel`
+- **query** — `pz_action_inspect_world`, `pz_action_inspect_container`,
+  `pz_action_search_inventory`. These submit an action and return an action id
+  like any other, and they need no arming, because the actions behind them only
+  read. `pz_action_open_container` is deliberately *not* here: its name reads
+  like a query, but opening a container is a timed action the character
+  performs.
+- **action** — `pz_action_move_to`, `pz_action_move_near`,
+  `pz_action_open_container`, `pz_action_transfer`, `pz_action_ensure_main`,
+  `pz_action_eat`, `pz_action_drink`, `pz_action_read`, `pz_action_equip`,
+  `pz_action_unequip`, `pz_action_bandage`, `pz_action_rest`,
+  `pz_action_sleep`, `pz_action_wait`, `pz_action_cancel`
 - **plan** — `pz_plan_execute`, `pz_plan_status`
 - **safety** — `pz_safety_stop`
 - **memory and diagnostics** — `pz_memory_query`, `pz_debug_doctor`,
   `pz_debug_tail`
+
+`pz_action_sleep` will usually be absent from `list_tools`. Its capability
+resolves to `experimental` on a clean scan, and the reason is not caution for
+its own sake: once the character is asleep there is no timed action to interrupt
+and no queue entry to cancel, so a panic stop cannot reach them.
 
 Seven resources are published beside them: `pz://session/current`,
 `pz://observation/latest`, `pz://inventory/current`, `pz://capabilities`,

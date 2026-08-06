@@ -196,3 +196,21 @@ def test_router_answers_a_tool_the_configuration_advertises() -> None:
     payload = router.call("pz_session_status", {})
     assert payload["ok"] is True
     assert payload["tool"] == "pz_session_status"
+
+
+def test_the_configuration_readme_lists_the_whole_surface() -> None:
+    """Per-document, not unioned across them — which is how this went stale.
+
+    ``test_the_documented_tools_are_the_whole_surface`` asks whether a tool is
+    named *anywhere*, so ``docs/MCP_TOOLS.md`` naming all of them satisfied it
+    while ``configs/mcp/README.md`` still said "Nineteen tools" and listed the
+    seven actions of an older build. A client reads that file to learn what it
+    can call; a list that quietly stops covering half the surface is worse than
+    no list, because it reads as complete.
+    """
+    text = (CONFIG_DIR / "README.md").read_text(encoding="utf-8")
+    named = set(_TOOL_TOKEN.findall(text))
+    missing = sorted(set(TOOLS_BY_NAME) - named)
+    assert missing == [], "the configuration README does not name these published tools"
+    invented = sorted(named - set(TOOLS_BY_NAME))
+    assert invented == [], "the configuration README names tools this build does not publish"
