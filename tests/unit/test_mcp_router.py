@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import uuid
 from collections.abc import Iterator
@@ -756,7 +757,47 @@ def test_a_terminal_results_diagnostics_are_bounded_before_they_are_relayed() ->
 
     payload = router.call("pz_action_wait", arguments)
 
-    assert len(payload["data"]["diagnostics"]) == MAX_DIAGNOSTICS
+    assert len(payload["data"][UNTRUSTED_TEXT_KEY]["diagnostics"]) == MAX_DIAGNOSTICS
+
+
+def test_a_terminal_refusal_quotes_the_item_name_only_inside_the_quarantine() -> None:
+    """An adapter's refusal wording carries game text, so it leaves marked.
+
+    ``consume.eat`` answers ``f"{item.display_name} has no portions left"`` and
+    the display name is whatever a mod called the item. The terminal ack reaches
+    a client through the replay path — re-calling with the same idempotency key
+    is how a client polls — so this is the ordinary route, not a corner. Putting
+    that sentence in a bare ``data.detail`` hands a client a string it has no
+    way to tell from the protocol's own words.
+    """
+    doubles = armed_doubles()
+    doubles.observations.observation = rich_observation()
+    router = make_router(doubles)
+    router.call("pz_session_arm", {"mode": "ASSISTED", "idempotency_key": "arm"})
+    arguments = {"item_ref": BEAN_REF, "fraction": 1.0, "idempotency_key": "eat-1"}
+    first = router.call("pz_action_eat", arguments)
+    doubles.actions.finish(
+        first["action_id"],
+        replace(
+            failed_result(ActionName.CONSUME_EAT, ReasonCode.PRECONDITION_FAILED),
+            message=f"{HOSTILE_NAME} has no portions left",
+        ),
+    )
+
+    data = router.call("pz_action_eat", arguments)["data"]
+
+    # The name is present exactly once, and only under the quarantine key.
+    assert "detail" not in data
+    assert "diagnostics" not in data
+    assert data["content_marker"] == CONTENT_MARKER
+    # Redaction still applies inside the quarantine: bounded, and no line break
+    # with which to end the sentence a client wrapped it in.
+    assert "SYSTEM:" in data[UNTRUSTED_TEXT_KEY]["detail"]
+    assert "\n" not in data[UNTRUSTED_TEXT_KEY]["detail"]
+    unmarked = {key: value for key, value in data.items() if key != UNTRUSTED_TEXT_KEY}
+    assert "SYSTEM:" not in json.dumps(unmarked)
+    # `reason_code` is closed protocol vocabulary and stays where a client branches on it.
+    assert data["reason_code"] == ReasonCode.PRECONDITION_FAILED.value
 
 
 def test_plan_status_says_so_plainly_when_nothing_is_running() -> None:

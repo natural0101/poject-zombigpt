@@ -469,9 +469,23 @@ class JournalReader:
             if candidate_header is not None:
                 rotated[candidate_header.serial] = (candidate, candidate_header)
 
+        # Only the generations that could still be on disk are worth walking.
+        # `rotated` holds at most `keep` of them, so every serial older than
+        # that was pruned no matter what the header says — and the header says
+        # whatever is written in the first line of a file this process does not
+        # write. `probe_header` checks that value is a non-negative int and
+        # stops there, so a corrupt or hand-edited header naming a far-future
+        # generation used to turn ~100 bytes of input into one `lost` entry per
+        # missing serial: at serial 20,000,000 that is 4.7 GiB and minutes of
+        # CPU. Reporting the oldest reachable window and one aggregate entry
+        # for the rest loses nothing real, because a gap wider than `keep`
+        # already means the records are gone rather than late.
+        oldest_reachable = max(self._serial, header.serial - self.keep)
         segments: list[_Segment] = []
         lost: list[int] = []
-        for serial in range(self._serial, header.serial):
+        if oldest_reachable > self._serial:
+            lost.append(self._serial)
+        for serial in range(oldest_reachable, header.serial):
             entry = rotated.get(serial)
             if entry is None:
                 lost.append(serial)

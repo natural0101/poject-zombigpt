@@ -588,13 +588,27 @@ class ToolRouter:
         )
 
     def _result_payload(self, result: ActionResult) -> JsonDict:
-        """The terminal ack, with its own text redacted and its evidence scrubbed."""
+        """The terminal ack, with its own text quarantined and its evidence scrubbed.
+
+        ``detail`` and ``diagnostics`` are the adapter's refusal wording, and the
+        adapters interpolate game-authored text into it — ``consume.eat`` answers
+        ``f"{item.display_name} has no portions left"``, and the display name is
+        whatever a mod called the item. Redaction alone is not the rule this
+        boundary states: free text leaves it *marked*, so a client can tell the
+        game's words from the protocol's. Carried under the quarantine key with
+        the marker beside it, exactly as ``_plan_execute`` carries the echoed
+        goal — ``reason_code`` is what a client should branch on, and that stays
+        outside because it is a member of a closed protocol vocabulary.
+        """
         payload: JsonDict = {
             "reason_code": result.reason_code.value,
             "retryable": is_retryable(result.reason_code),
             "attempt": result.attempt,
-            "detail": scrub_text(result.message),
-            "diagnostics": [scrub_text(line) for line in result.diagnostics[:MAX_DIAGNOSTICS]],
+            UNTRUSTED_TEXT_KEY: {
+                "detail": scrub_text(result.message),
+                "diagnostics": [scrub_text(line) for line in result.diagnostics[:MAX_DIAGNOSTICS]],
+            },
+            "content_marker": CONTENT_MARKER,
         }
         evidence = self._evidence_payload(result)
         if evidence:
