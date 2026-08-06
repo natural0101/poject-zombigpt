@@ -276,3 +276,20 @@ def test_findings_names_the_rules_that_still_match() -> None:
 
     assert redactor.findings("clean text") == ()
     assert "user_dir" in redactor.findings(str(profile / "Zomboid"))
+
+
+def test_a_findings_label_never_quotes_the_literal_it_was_built_from() -> None:
+    # `findings` exists for the support-bundle verifier, which prints its
+    # findings to a terminal and emits them as JSON. A label carrying the value
+    # the rule was created to keep out of a report puts it straight back into
+    # the report — the same leak `verify_bundle`'s `forbidden` map is labelled
+    # rather than listed to avoid.
+    redactor = build_redactor(extra_literals={CYRILLIC_USER: USERNAME_PLACEHOLDER})
+
+    labels = [rule.label for rule in redactor.rules]
+
+    assert all(CYRILLIC_USER not in label for label in labels), labels
+    assert all(CYRILLIC_USER not in f for f in redactor.findings(f"hi {CYRILLIC_USER}"))
+    # The rule still fires, and still replaces the literal.
+    assert redactor.findings(f"hi {CYRILLIC_USER}") != ()
+    assert redactor.text(f"hi {CYRILLIC_USER}") == f"hi {USERNAME_PLACEHOLDER}"

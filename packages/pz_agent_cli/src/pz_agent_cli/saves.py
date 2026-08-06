@@ -6,12 +6,16 @@ the argument handling and the output.
 
 The one judgement call lives here. ``BackupManager.restore`` takes
 ``game_running`` as a required keyword and refuses when it is true, so something
-has to decide. The only evidence available without inspecting processes is the
-game's own heartbeat: a fresh one proves the game is open, and the restore is
-refused. Its *absence* proves nothing — a game sitting on the main menu writes
-no heartbeat either — so the command says so in as many words instead of
-reporting "the game is closed", and leaves the last word to the user, exactly as
-``docs/TROUBLESHOOTING.md`` describes.
+has to decide, and a wrong answer overwrites a live save.
+
+The decision is :func:`~pz_agent_cli.supervisor.probe_game_running`, which is
+three-valued on purpose. A fresh game heartbeat proves the game is open. Its
+*absence* proves nothing on its own — a game sitting on the main menu, or one
+whose mod was disabled, writes no heartbeat either — so the process table is
+consulted second, and only a listing that actually ran may be read as an
+absence. Everything except a positive "closed" collapses to *refuse*
+(:func:`~pz_agent_cli.supervisor.game_running_for_restore`). There is no flag to
+override that, exactly as ``docs/TROUBLESHOOTING.md`` states.
 """
 
 from __future__ import annotations
@@ -30,6 +34,7 @@ from pz_agent_core.protocol import JsonDict
 from .context import EXIT_FAILURE, EXIT_OK, CliContext, Workspace, resolve_workspace
 from .output import Printer
 from .status import game_liveness
+from .supervisor import game_running_for_restore, list_processes, probe_game_running
 
 #: Depth of a save id under ``Saves``: ``<game mode>/<save name>``.
 _SAVE_DEPTH: Final = 2
@@ -190,18 +195,28 @@ def run_restore_save(ctx: CliContext, *, backup_id: str, as_json: bool) -> int:
     if manager is None:
         return _no_user_dir(printer)
 
-    liveness = game_liveness(ctx, workspace)
-    running = liveness is not None and liveness.alive
+    # ``list_processes`` is read from the module at call time rather than bound
+    # as a default argument: that is the seam the tests drive to stand up a
+    # machine with a Project Zomboid process on it.
+    probe = probe_game_running(
+        heartbeat=game_liveness(ctx, workspace),
+        lister=list_processes,
+    )
+    running = game_running_for_restore(probe)
     if running:
         printer.error(
-            "refusing to restore: the game is writing a heartbeat, so it is open. "
+            f"refusing to restore: {workspace.redactor.text(probe.detail)}. "
             "Close Project Zomboid and run this again — restoring a save under a "
-            "running game is how you get a corrupted one."
+            "running game is how you get a corrupted one, and there is no flag to "
+            "override this."
         )
         return EXIT_FAILURE
 
     try:
-        result = manager.restore(backup_id, game_running=False)
+        # Passed rather than hard-coded: the value the probe produced is the value
+        # the manager checks, so a later edit to the branch above cannot leave a
+        # literal ``False`` behind claiming something nobody established.
+        result = manager.restore(backup_id, game_running=running)
     except BackupError as exc:
         printer.error(f"restore failed: {workspace.redactor.text(str(exc))}")
         return EXIT_FAILURE
@@ -209,9 +224,9 @@ def run_restore_save(ctx: CliContext, *, backup_id: str, as_json: bool) -> int:
     # user to close the game "before restoring" once the files are already back
     # would describe a step that can no longer be taken.
     inference = (
-        "no game heartbeat was found before this restore. That is not proof the game "
-        "was closed — a game sitting on the main menu writes none — so if Project "
-        "Zomboid was open, close it and load the save once before playing on."
+        f"{workspace.redactor.text(probe.detail)}. That was read before the restore "
+        "and not during it, so if Project Zomboid was launched while this ran, close "
+        "it and load the save once before playing on."
     )
     if as_json:
         printer.json(
@@ -221,6 +236,7 @@ def run_restore_save(ctx: CliContext, *, backup_id: str, as_json: bool) -> int:
                 "target_dir": workspace.redact(result.target_dir),
                 "file_count": result.file_count,
                 "total_bytes": result.total_bytes,
+                "game_probe": probe.to_dict(),
                 "game_running_evidence": inference,
             }
         )

@@ -129,6 +129,19 @@ Neither side re-arms itself on recovery. Restart the sidecar with
 a warning, and there is no flag to override it — restoring a save under a
 running game is how you get a corrupted one.
 
+Two things are checked, in this order:
+
+1. **The game heartbeat.** A fresh one proves the game is open. Its absence
+   proves nothing on its own — a game sitting on the main menu, or one whose
+   mod is disabled, writes none either.
+2. **The process table** (`tasklist` on Windows, `ps` elsewhere). Only a listing
+   that actually ran may be read as "the game is closed".
+
+So `restore-save` also refuses when it could not read the process table at all
+(`ps` missing, the command timed out, the listing was truncated). The message
+names which of these happened. That is deliberate: "we could not tell" is not
+permission.
+
 Close the game and retry.
 
 ## Duplicate actions / "it ate twice"

@@ -116,7 +116,9 @@ class StepState(StrEnum):
 class PlanOutcome(StrEnum):
     """How a run ended."""
 
-    #: Every step reached a terminal success or was skipped as already satisfied.
+    #: Every step was accounted for: reached a terminal success, was skipped as
+    #: already satisfied, or failed and was carried past by ``on_failure: skip``.
+    #: The last of those is not a success, and :attr:`PlanReport.detail` says so.
     COMPLETED = "completed"
     #: The plan or its replacement was refused before anything ran.
     REJECTED = "rejected"
@@ -419,11 +421,7 @@ class PlanExecutor:
             if isinstance(replanned, PlanReport):
                 return replanned
             plan, index, attempts = replanned, 0, 0
-        return state.finish(
-            PlanOutcome.COMPLETED,
-            None,
-            f"all {len(plan.steps)} step(s) of the plan are done.",
-        )
+        return state.finish(PlanOutcome.COMPLETED, None, state.completion_detail(len(plan.steps)))
 
     def _execute(self, plan: Plan, step: PlanStep, attempt: int) -> ActionResult:
         return self._engine.execute(
@@ -594,6 +592,22 @@ class _RunState:
 
     def record(self, report: StepReport) -> None:
         self.steps.append(report)
+
+    def completion_detail(self, planned: int) -> str:
+        """How the run ended, without describing a failed step as a finished one.
+
+        ``on_failure: skip`` carries the *run* past a step; it does not carry
+        the step to its postcondition. The run is still ``completed`` — every
+        step was accounted for — but the sentence a user is shown may not round
+        that up to "done", which would report a state nobody observed.
+        """
+        failed = sum(1 for report in self.steps if report.state is StepState.FAILED)
+        if not failed:
+            return f"all {planned} step(s) of the plan are done."
+        return (
+            f"the plan ran to its last step, but {failed} of them failed and were skipped "
+            "by their own on_failure rule rather than reaching what they were for."
+        )
 
     def note(self, attempt: _Attempt) -> None:
         """Remember a step so a replan cannot propose it again unchanged."""

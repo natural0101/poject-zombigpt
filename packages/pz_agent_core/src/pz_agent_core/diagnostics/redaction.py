@@ -345,6 +345,17 @@ class Redactor:
         return tuple(rule.label for rule in self._rules if rule.matches(text))
 
 
+#: Characters a label built from a placeholder may keep. Anything else is
+#: dropped, so a caller who passes something other than a ``<MARKER>`` cannot
+#: turn a label into free text either.
+_LABEL_CHARS: Final = re.compile(r"[^a-z0-9_]+")
+
+
+def _label_for(placeholder: str, index: int) -> str:
+    """A reportable name for an extra literal, derived from its placeholder."""
+    return _LABEL_CHARS.sub("", placeholder.lower()) or str(index)
+
+
 def build_redactor(
     *,
     user_dir: Path | None = None,
@@ -373,8 +384,14 @@ def build_redactor(
         _add("install_dir", str(install_dir), INSTALL_PLACEHOLDER)
     if home_dir is not None:
         _add("home_dir", str(home_dir), USER_HOME_PLACEHOLDER)
-    for name, placeholder in (extra_literals or {}).items():
-        _add(f"literal:{name}", name, placeholder)
+    for index, (literal, placeholder) in enumerate((extra_literals or {}).items(), start=1):
+        # Labelled by the *placeholder*, never by the literal. A label is what
+        # ``Redactor.findings`` returns, and the support-bundle verifier prints
+        # its findings to a terminal and emits them as JSON — so a label built
+        # from the account name would put the account name into the very report
+        # that exists to say the account name is gone. The placeholder is the
+        # caller's own non-secret marker, which is exactly what a label is for.
+        _add(f"literal:{_label_for(placeholder, index)}", literal, placeholder)
 
     # Longest literal first: the Zomboid directory is a child of the home
     # directory, and matching the parent first would leave "<USER_HOME>/Zomboid"

@@ -11,13 +11,23 @@ prevents destroys a save the user cannot get back:
 * **Verify before writing.** Every file's SHA-256 is checked against the
   manifest before a single byte of the target save is touched, and the restore
   is staged into a sibling directory and swapped in, so an interrupted restore
-  leaves either the old save or the new one, never half of each.
+  leaves either the old save or the new one, never half of each. Precisely: the
+  swap is two renames, and a process killed between them leaves the save
+  directory absent and the previous save whole under
+  ``.pz-agent-replaced-<id>``. Re-running the restore completes it.
 * **Prune is the only deletion path**, it keeps the newest N, and it will not
   accept ``keep < 1``. Nothing else in this module removes a backup.
 
 Everything is bounded: the size and file count of a save are measured and
 enforced *while copying*, not only before it, so a save that grows underneath
 the copy still cannot fill the disk.
+
+The two copy passes — plan then copy on the way in, verify then copy on the way
+out — are each two reads of a tree something else may be writing. Every way the
+second read can disagree with the first (the file grew, shrank, changed, or went
+away) surfaces as a :class:`BackupError`, never as a raw :class:`OSError`: the
+CLI renders refusals from this subsystem and would let anything else escape as a
+traceback.
 """
 
 from __future__ import annotations
@@ -308,6 +318,23 @@ def _copy_and_hash(source: Path, destination: Path, *, limit: int) -> tuple[str,
     return digest.hexdigest(), written
 
 
+def _remove_tree(path: Path) -> None:
+    """Remove *path* whatever it is, tolerating its absence.
+
+    :func:`shutil.rmtree` refuses a symbolic link outright, and ``ignore_errors``
+    turns that refusal into silence. That matters here because the paths this is
+    asked to clear are the ones :meth:`BackupManager._swap` is about to
+    ``os.replace`` onto: a link that survived the clear makes the rename fail
+    with ``ENOTDIR``, and it keeps failing on every later attempt, so a save the
+    user moved to another drive and linked back becomes permanently
+    unrestorable. Links are unlinked; real trees are removed.
+    """
+    if path.is_symlink() or path.is_file():
+        path.unlink(missing_ok=True)
+        return
+    shutil.rmtree(path, ignore_errors=True)
+
+
 def _hash_file(path: Path) -> tuple[str, int]:
     digest = hashlib.sha256()
     size = 0
@@ -415,7 +442,7 @@ class BackupManager:
         except BaseException:
             # A half-written backup that survived would be listed and could be
             # restored; the staging directory is removed on every failure path.
-            shutil.rmtree(staging, ignore_errors=True)
+            _remove_tree(staging)
             raise
         if not (final / MANIFEST_NAME).is_file():
             raise BackupCorruptError(f"{final}: backup did not land at its final location")
@@ -480,7 +507,16 @@ class BackupManager:
             relative = entry.relative_to(source)
             destination = data_dir / relative
             destination.parent.mkdir(parents=True, exist_ok=True)
-            digest, written = _copy_and_hash(entry, destination, limit=self._max_bytes - total)
+            try:
+                digest, written = _copy_and_hash(entry, destination, limit=self._max_bytes - total)
+            except OSError as exc:
+                # The plan and the copy are two passes over a directory a live
+                # game is still writing, so a file named by the first can be gone
+                # by the second. That is a refusal this subsystem owns, not an
+                # ``OSError`` for the CLI to let escape as a traceback.
+                raise BackupError(
+                    f"{entry}: changed while it was being backed up ({exc}); no backup was recorded"
+                ) from exc
             total += written
             files.append(BackupFile(path=relative.as_posix(), size=written, sha256=digest))
         return tuple(files), total
@@ -687,8 +723,18 @@ class BackupManager:
         target.parent.mkdir(parents=True, exist_ok=True)
         staging = target.parent / f"{_RESTORE_PREFIX}{record.backup_id}"
         replaced = target.parent / f"{_REPLACED_PREFIX}{record.backup_id}"
-        shutil.rmtree(staging, ignore_errors=True)
-        shutil.rmtree(replaced, ignore_errors=True)
+        _remove_tree(staging)
+        _remove_tree(replaced)
+        for path in (staging, replaced):
+            # Anything still here would be renamed onto, or renamed over, during
+            # the swap. Saying so now is better than an OSError from the middle
+            # of a two-step rename, which is the point where "old save or new
+            # save, never both" stops being obvious.
+            if path.exists() or path.is_symlink():
+                raise BackupError(
+                    f"{path}: left over from an earlier restore and could not be removed; "
+                    "delete it and try again"
+                )
 
         total = 0
         try:
@@ -697,11 +743,20 @@ class BackupManager:
                 segments = _validate_relative_member(entry.path)
                 destination = staging.joinpath(*segments)
                 destination.parent.mkdir(parents=True, exist_ok=True)
-                digest, written = _copy_and_hash(
-                    record.data_dir.joinpath(*segments),
-                    destination,
-                    limit=self._max_bytes - total,
-                )
+                try:
+                    digest, written = _copy_and_hash(
+                        record.data_dir.joinpath(*segments),
+                        destination,
+                        limit=self._max_bytes - total,
+                    )
+                except OSError as exc:
+                    # Same window as the digest check below — the backup was
+                    # intact at the pre-flight verify and is not now — so it is
+                    # reported the same way rather than as a bare OSError.
+                    raise BackupCorruptError(
+                        f"backup {record.backup_id}: {entry.path!r} became unreadable while "
+                        f"it was being restored ({exc}); the save was not touched"
+                    ) from exc
                 # The pre-flight verify proves the backup was intact a moment
                 # ago; this proves the bytes that just went into the staged save
                 # are those bytes, so the swap is never a swap of something
@@ -713,7 +768,7 @@ class BackupManager:
                     )
                 total += written
         except BaseException:
-            shutil.rmtree(staging, ignore_errors=True)
+            _remove_tree(staging)
             raise
 
         self._swap(staging=staging, target=target, replaced=replaced)
@@ -728,8 +783,14 @@ class BackupManager:
         )
 
     def _swap(self, *, staging: Path, target: Path, replaced: Path) -> None:
-        """Move *staging* onto *target*, keeping the old save until it lands."""
-        had_previous = target.exists()
+        """Move *staging* onto *target*, keeping the old save until it lands.
+
+        A *target* that is a symbolic link — a save the user moved to another
+        drive and linked back — is displaced like any other previous save and
+        ends up a real directory here. The linked-to data is left untouched
+        where it is; it simply stops being what the game reads.
+        """
+        had_previous = target.exists() or target.is_symlink()
         if had_previous:
             try:
                 os.replace(target, replaced)
@@ -737,16 +798,16 @@ class BackupManager:
                 # Nothing has moved yet, so the previous save is still whole —
                 # but the staged copy must not be left behind to be mistaken
                 # for a save later.
-                shutil.rmtree(staging, ignore_errors=True)
+                _remove_tree(staging)
                 raise
         try:
             os.replace(staging, target)
         except OSError:
             if had_previous:
                 os.replace(replaced, target)
-            shutil.rmtree(staging, ignore_errors=True)
+            _remove_tree(staging)
             raise
-        shutil.rmtree(replaced, ignore_errors=True)
+        _remove_tree(replaced)
 
     # -- retention --------------------------------------------------------
 

@@ -127,6 +127,13 @@ class ReflexConfig:
     threat: ThreatConfig = DEFAULT_THREAT_CONFIG
     #: Danger at or above this interrupts a vulnerable activity.
     interrupt_at: DangerLevel = DangerLevel.MEDIUM
+    #: Danger at or above this starts nothing new, whether or not there is
+    #: anything to interrupt. It matches
+    #: :attr:`~pz_agent_core.actions.engine.ActionEngine.threat_threshold`,
+    #: because the engine's copy of the rule compares against the level the *mod*
+    #: reports and this one against the zombies actually observed — and only one
+    #: of those two inputs is filled in by anything.
+    block_at: DangerLevel = DangerLevel.HIGH
     #: Danger at or above this interrupts whatever is running, including
     #: nothing: at this point the only correct plan is to deal with the threat.
     flee_at: DangerLevel = DangerLevel.CRITICAL
@@ -142,8 +149,11 @@ class ReflexConfig:
             raise ValueError(f"stall_ms must be positive, got {self.stall_ms}")
         if not 1 <= self.max_events <= MAX_EVENTS:
             raise ValueError(f"max_events must be within 1..{MAX_EVENTS}, got {self.max_events}")
-        if self.interrupt_at > self.flee_at:
-            raise ValueError("interrupt_at must not be stricter than flee_at")
+        if not self.interrupt_at <= self.block_at <= self.flee_at:
+            raise ValueError(
+                "the threat rungs must not decrease: interrupt_at <= block_at <= flee_at, got "
+                f"{self.interrupt_at.value} / {self.block_at.value} / {self.flee_at.value}"
+            )
 
 
 DEFAULT_REFLEX_CONFIG: Final = ReflexConfig()
@@ -343,6 +353,18 @@ class ReflexGuard:
                     f"Danger is {danger.value} ({reason}). Interrupting what I was doing.",
                     cancels_mod_owned_queue=True,
                     cancels_running_action=True,
+                )
+            ]
+        if danger >= self.config.block_at:
+            # Nothing to interrupt, so nothing is cancelled — but a returned
+            # event means "start no new task", and that is the whole point of
+            # this rung. It is not redundant with the engine's own threshold:
+            # that one reads ``safety.danger_level``, which the mod fills from a
+            # value it never computes, so it is ``none`` while this is HIGH.
+            return [
+                _event(
+                    ReasonCode.THREAT_INTERRUPTED,
+                    f"Danger is {danger.value} ({reason}). Starting nothing new.",
                 )
             ]
         return []

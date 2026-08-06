@@ -574,6 +574,20 @@ def test_a_radius_beyond_the_bound_is_refused_rather_than_clamped() -> None:
     assert payload["reason_code"] == ReasonCode.INVALID_ARGUMENT.value
 
 
+def test_a_radius_of_nan_is_refused_rather_than_emptying_the_world() -> None:
+    # NaN sits outside no bound and inside none either: every `distance <=
+    # radius` is false, so the surroundings tool would answer "no zombies, no
+    # objects" for a world that has both — the worst wrong answer this surface
+    # can give — and echo a bare NaN, which is not valid JSON for the client.
+    doubles = armed_doubles()
+    doubles.observations.observation = rich_observation()
+
+    payload = make_router(doubles).call("pz_observe_nearby", {"radius": float("nan")})
+
+    assert payload["ok"] is False
+    assert payload["reason_code"] == ReasonCode.INVALID_ARGUMENT.value
+
+
 # -- session, plans, memory, diagnostics -----------------------------------
 
 
@@ -647,6 +661,39 @@ def test_a_plan_goal_is_bounded_quarantined_and_echoed_back() -> None:
     assert data["steps"][1]["reason_code"] == ReasonCode.THREAT_INTERRUPTED.value
     assert data["content_marker"] == CONTENT_MARKER
     assert "\n" not in data[UNTRUSTED_TEXT_KEY]["goal"]
+
+
+def test_a_finished_plan_is_reported_without_borrowing_the_envelopes_success_word() -> None:
+    """``PlanExecutor.run`` is synchronous, so a plan that worked comes back terminal.
+
+    The envelope's ``succeeded`` promises the observed postcondition under
+    ``data.evidence``, and a plan record carries none — its steps' evidence
+    never reaches this layer. Claiming the word made ``ToolSuccess`` refuse the
+    envelope, which turned every plan that *worked* into an INTERNAL_ERROR; and
+    because the refusal landed after the port had already run the plan and
+    before the idempotency key was recorded, the client's retry ran it twice.
+    """
+    doubles = armed_doubles()
+    doubles.plans.record = PlanRecord(
+        plan_id="plan-done",
+        status=ActionStatus.SUCCEEDED,
+        step_index=1,
+        steps=(
+            PlanStepRecord(index=0, action=ActionName.ACTION_WAIT, status=ActionStatus.SUCCEEDED),
+        ),
+    )
+    router = make_router(doubles)
+    arguments = {"goal": "wait a while", "idempotency_key": "k1"}
+
+    first = router.call("pz_plan_execute", arguments)
+    second = router.call("pz_plan_execute", arguments)
+
+    assert first["ok"] is True
+    assert first["status"] != ActionStatus.SUCCEEDED.value
+    assert first["data"]["status"] == ActionStatus.SUCCEEDED.value
+    assert first["data"]["terminal"] is True
+    assert second["replayed"] is True
+    assert len(doubles.plans.requests) == 1
 
 
 def test_a_plan_with_raw_steps_or_lua_fails_validation_because_there_is_nowhere_to_put_it() -> None:

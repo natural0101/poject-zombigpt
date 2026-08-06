@@ -19,8 +19,16 @@ from typing import Final
 
 #: Session ids are UUIDs; container/item segments are restricted to a safe
 #: alphabet so a reference can never smuggle a path separator or a delimiter.
-_SAFE_SEGMENT: Final = re.compile(r"^[A-Za-z0-9_.\-]+$")
-_SESSION_SEGMENT: Final = re.compile(r"^[A-Za-z0-9\-]{1,64}$")
+#:
+#: Matched with :meth:`re.Pattern.fullmatch`, never ``match``: ``$`` also
+#: matches immediately *before* a trailing newline, so ``match`` would accept
+#: ``"4210\n"`` as a runtime id. The mod's parser
+#: (``pz-mod/42/media/lua/shared/PZAgent/Refs.lua``) anchors the same alphabets
+#: with Lua patterns, where ``$`` is a true end-of-string anchor, so a segment
+#: this side waved through is one the mod refuses — and the two sides agreeing
+#: byte for byte on what a reference is is the whole point of the scheme.
+_SAFE_SEGMENT: Final = re.compile(r"[A-Za-z0-9_.\-]+")
+_SESSION_SEGMENT: Final = re.compile(r"[A-Za-z0-9\-]{1,64}")
 
 REF_SEPARATOR: Final = ":"
 
@@ -41,13 +49,13 @@ class RefError(ValueError):
 
 
 def _check_segment(value: str, *, field: str) -> str:
-    if not value or not _SAFE_SEGMENT.match(value):
+    if not value or not _SAFE_SEGMENT.fullmatch(value):
         raise RefError(f"invalid {field} segment: {value!r}")
     return value
 
 
 def _check_session(value: str) -> str:
-    if not _SESSION_SEGMENT.match(value):
+    if not _SESSION_SEGMENT.fullmatch(value):
         raise RefError(f"invalid session segment: {value!r}")
     return value
 

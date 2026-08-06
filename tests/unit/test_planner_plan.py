@@ -408,6 +408,34 @@ class TestDocumentShape:
             Plan.from_payload(payload)
         assert caught.value.fault is PlanFault.BAD_VALUE
 
+    def test_a_step_id_may_not_end_in_a_control_character(self) -> None:
+        # '$' matches before a trailing newline, so an anchored pattern applied
+        # with `match` is not a whole-string check. A step id is echoed into
+        # refusal messages, into the trace and into the critic's draft
+        # idempotency key, so a newline in one forges a line break in all three.
+        payload = plan_payload(steps=[step_payload(step_id="s1\n")])
+        with pytest.raises(PlanRejected) as caught:
+            Plan.from_payload(payload)
+        assert caught.value.fault is PlanFault.BAD_VALUE
+
+    def test_an_object_reference_may_not_end_in_a_control_character(self) -> None:
+        # The mod's Lua parser anchors the same alphabet with a true
+        # end-of-string anchor, so a reference this side waves through is one
+        # the mod answers INVALID_REF for after the step has been spent.
+        payload = plan_payload(
+            risk_class="P3",
+            steps=[
+                step_payload(
+                    action="movement.move_near",
+                    args={"object_ref": f"{_object_ref()}\n"},
+                    success={"type": "adapter_evidence"},
+                )
+            ],
+        )
+        with pytest.raises(PlanRejected) as caught:
+            Plan.from_payload(payload)
+        assert caught.value.fault is PlanFault.BAD_REF
+
     def test_an_unknown_on_failure_mode_is_refused(self) -> None:
         payload = plan_payload(steps=[step_payload(on_failure="improvise")])
         with pytest.raises(PlanRejected, match="improvise"):

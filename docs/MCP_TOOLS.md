@@ -100,6 +100,12 @@ A plan is a list of typed steps. It has no field for Lua, Python, shell,
 keystrokes or file paths — a plan containing one fails validation, because
 there is nowhere to put it.
 
+Neither plan tool ever puts `succeeded` in the envelope `status`: that word is
+reserved for a result carrying the observed postcondition under `data.evidence`,
+and a plan record has none to carry — its steps' evidence was observed by the
+action engine and stops at the port. A plan that finished answers `"ok"`, and
+`data.status` with `data.terminal` say what it finished as.
+
 ### Safety
 
 | Tool | Risk | Description |

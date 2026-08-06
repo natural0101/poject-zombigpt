@@ -52,6 +52,7 @@ from pz_agent_core.observation.compact import (
 from pz_agent_core.protocol import (
     ON_PERSON_CONTAINERS,
     ActionResult,
+    ActionStatus,
     ContainerKind,
     JsonDict,
     ReasonCode,
@@ -145,6 +146,22 @@ MAX_DOCTOR_CHECKS: Final = 64
 _ZOMBIE_TYPE: Final = "zombie"
 
 Handler = Callable[[ToolSpec, JsonDict], ToolOutcome]
+
+
+def _plan_envelope_status(status: ActionStatus) -> str:
+    """The envelope status for a plan, which never borrows ``succeeded``.
+
+    ``ToolSuccess`` reserves that word for a result carrying the observed
+    postcondition under ``data.evidence`` (``docs/MCP_TOOLS.md``), and a plan
+    record has none to carry: its steps' evidence was observed by the engine and
+    stops at :class:`~.ports.PlanStepRecord`. ``PlanExecutor.run`` is
+    synchronous, so a plan that worked comes back terminal on the *first* call —
+    borrowing the word there refused the envelope, reported a plan that ran as
+    ``INTERNAL_ERROR``, and skipped the idempotency record, so the client's retry
+    ran the plan a second time. ``data.status`` and ``data.terminal`` say what
+    the plan finished as, which is what ``pz_plan_status`` already relies on.
+    """
+    return "ok" if status is ActionStatus.SUCCEEDED else status.value
 
 
 def _omitted_warning(dropped: int, noun: str) -> tuple[str, ...]:
@@ -628,7 +645,9 @@ class ToolRouter:
         data[UNTRUSTED_TEXT_KEY] = {"goal": scrub_text(goal)}
         data["content_marker"] = CONTENT_MARKER
         return ToolOutcome(
-            data=data, status=record.status.value, message=f"plan is {record.status.value}"
+            data=data,
+            status=_plan_envelope_status(record.status),
+            message=f"plan is {record.status.value}",
         )
 
     def _plan_status(self, spec: ToolSpec, args: JsonDict) -> ToolOutcome:

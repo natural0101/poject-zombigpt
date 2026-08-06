@@ -78,12 +78,19 @@ REDACTED_PATH: Final = "[path-redacted]"
 #: Identifier-shaped values: game type ids, categories, semantic tags. Anything
 #: that fails this is dropped rather than quarantined, because a value in one of
 #: those positions is supposed to be a token and a sentence there is a red flag.
-_TOKEN: Final = re.compile(r"^[A-Za-z0-9_.\-]{1,64}$")
+#:
+#: Applied with :meth:`re.Pattern.fullmatch`, as in :mod:`pz_agent_mcp.scrub`
+#: and :mod:`pz_agent_mcp.validation`: ``$`` also matches immediately *before* a
+#: trailing newline, so ``match`` would admit ``"Food\n"``. A token is the one
+#: value this module keeps verbatim — control characters are stripped only from
+#: the quarantined text — so a token ending in a newline is a control character
+#: in a field the planner and the client are told is a safe identifier.
+_TOKEN: Final = re.compile(r"[A-Za-z0-9_.\-]{1,64}")
 
 #: In-game clock, as the mod formats it. Kept separate from :data:`_TOKEN`
 #: because a timestamp legitimately contains colons, and widening the token
 #: pattern to admit them would widen it for item categories too.
-_WORLD_TIME: Final = re.compile(r"^[0-9T:\-. ]{1,32}$")
+_WORLD_TIME: Final = re.compile(r"[0-9T:\-. ]{1,32}")
 
 _CONTROL: Final = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 
@@ -213,7 +220,7 @@ def _untrusted(fields: Mapping[str, str | None]) -> JsonDict:
 
 def _token(value: Any) -> str | None:
     """Keep an identifier-shaped string, drop anything else."""
-    if not isinstance(value, str) or not _TOKEN.match(value):
+    if not isinstance(value, str) or not _TOKEN.fullmatch(value):
         return None
     return value
 
@@ -267,7 +274,7 @@ def _compact_game(observation: Observation) -> JsonDict:
 
 
 def _world_time(value: str | None) -> str | None:
-    if value is None or not _WORLD_TIME.match(value):
+    if value is None or not _WORLD_TIME.fullmatch(value):
         return None
     return value
 

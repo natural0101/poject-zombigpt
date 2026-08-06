@@ -679,6 +679,111 @@ def test_restore_leaves_no_staging_directories_behind(tmp_path: Path) -> None:
     assert leftovers == []
 
 
+def test_a_save_file_that_vanishes_mid_copy_is_a_backup_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The game is allowed to be running while a backup is taken, so it will do this.
+
+    Between the plan and the copy, a live game rotates a chunk file out from
+    under the walk. The copy has to fail as a refusal the CLI can render, not as
+    a bare ``FileNotFoundError`` that escapes ``main`` as a traceback.
+    """
+    manager, user_dir = _manager(tmp_path)
+    make_save(user_dir, SAVE_ID, SAVE_FILES)
+    real_plan = BackupManager._plan
+
+    def plan_then_delete(self: BackupManager, source: Path) -> tuple[tuple[Path, int], ...]:
+        planned = real_plan(self, source)
+        (source / "players.db").unlink()
+        return planned
+
+    monkeypatch.setattr(BackupManager, "_plan", plan_then_delete)
+
+    with pytest.raises(BackupError, match="changed while it was being backed up"):
+        manager.create(SAVE_ID)
+
+    assert list((tmp_path / "backups").glob("*")) == []
+
+
+def test_a_backup_file_that_vanishes_after_verification_is_corruption(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same window as the mutation test, but the file goes away entirely."""
+    manager, user_dir = _manager(tmp_path)
+    save_dir = make_save(user_dir, SAVE_ID, SAVE_FILES)
+    record = manager.create(SAVE_ID)
+    (save_dir / "map_t.bin").write_bytes(b"current state")
+    before = read_save(save_dir)
+    real_verify = BackupManager._verify_record
+
+    def verify_then_delete(self: BackupManager, verified: BackupRecord) -> None:
+        real_verify(self, verified)
+        (verified.data_dir / "players.db").unlink()
+
+    monkeypatch.setattr(BackupManager, "_verify_record", verify_then_delete)
+
+    with pytest.raises(BackupCorruptError, match="became unreadable while it was being restored"):
+        manager.restore(record.backup_id, game_running=False)
+
+    assert read_save(save_dir) == before
+    assert [path.name for path in save_dir.parent.iterdir() if path.name.startswith(".")] == []
+
+
+def test_a_symlinked_save_directory_can_be_restored_more_than_once(tmp_path: Path) -> None:
+    """A save moved to another drive and linked back is a supported layout.
+
+    ``shutil.rmtree`` refuses a symbolic link, and ``ignore_errors=True`` turns
+    that refusal into silence — so the displaced save survives as
+    ``.pz-agent-replaced-<id>`` and the *next* restore's ``os.replace`` onto it
+    fails with ENOTDIR, permanently, until the user deletes a hidden directory
+    nothing ever told them about.
+    """
+    manager, user_dir = _manager(tmp_path)
+    elsewhere = tmp_path / "external" / "09-07-1993"
+    elsewhere.mkdir(parents=True)
+    for relative, payload in SAVE_FILES.items():
+        destination = elsewhere.joinpath(*relative.split("/"))
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(payload)
+    save_dir = user_dir / "Saves" / "Survivor" / "09-07-1993"
+    save_dir.parent.mkdir(parents=True, exist_ok=True)
+    save_dir.symlink_to(elsewhere, target_is_directory=True)
+    record = manager.create(SAVE_ID)
+
+    manager.restore(record.backup_id, game_running=False)
+    assert [path.name for path in save_dir.parent.iterdir() if path.name.startswith(".")] == []
+
+    (save_dir / "map_t.bin").write_bytes(b"ruined again")
+    manager.restore(record.backup_id, game_running=False)
+
+    assert read_save(save_dir) == SAVE_FILES
+    assert [path.name for path in save_dir.parent.iterdir() if path.name.startswith(".")] == []
+
+
+def test_a_leftover_that_cannot_be_cleared_is_refused_before_the_swap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The clear is best-effort; the swap that follows it must not be.
+
+    Whatever the reason a leftover survives — a link, a permission, a file another
+    process holds open — renaming onto it fails from inside the two-step swap,
+    which is the one place an OSError is hardest to reason about. It is refused
+    up front instead, with the path to delete.
+    """
+    manager, user_dir = _manager(tmp_path)
+    save_dir = make_save(user_dir, SAVE_ID, SAVE_FILES)
+    record = manager.create(SAVE_ID)
+    before = read_save(save_dir)
+    leftover = save_dir.parent / f".pz-agent-replaced-{record.backup_id}"
+    leftover.mkdir()
+    monkeypatch.setattr(backup_module, "_remove_tree", lambda path: None)
+
+    with pytest.raises(BackupError, match="left over from an earlier restore"):
+        manager.restore(record.backup_id, game_running=False)
+
+    assert read_save(save_dir) == before
+
+
 # ---------------------------------------------------------------------------
 # prune
 # ---------------------------------------------------------------------------

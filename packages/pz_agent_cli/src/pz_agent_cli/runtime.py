@@ -911,19 +911,33 @@ class SidecarLoop:
     def _consume_control(self, now_ms: int, attached_at_ms: int) -> ControlRequest | None:
         """Take at most one pending request, refusing the ones that prove nothing.
 
-        A request issued before this process attached is refused outright, and so
-        is one that has gone stale. That is the mechanism behind "never re-arms
-        itself": after a crash, the ``arm`` file the user wrote for the *previous*
-        session is still on disk, and consuming it would hand authority to a loop
-        that has just come up knowing nothing about the world. The file is
-        cleared either way — an unconsumable request left in place would be
-        re-judged on every tick forever.
+        An **arm** issued before this process attached is refused outright, and
+        so is one that has gone stale. That is the mechanism behind "never
+        re-arms itself": after a crash, the ``arm`` file the user wrote for the
+        *previous* session is still on disk, and consuming it would hand
+        authority to a loop that has just come up knowing nothing about the
+        world. The file is cleared either way — an unconsumable request left in
+        place would be re-judged on every tick forever.
+
+        Neither test applies to a **stop** or a **disarm**. Both only ever take
+        authority away, so there is no authority a late one could grant, and the
+        two refusals cost opposite things: honouring a stale stop costs a
+        restart, while refusing one leaves the agent armed after the user has
+        been told it stopped. Late is also the ordinary case rather than the
+        exotic one — this channel is read between ticks, and a single tick that
+        drives ``literature.read`` occupies the loop for that adapter's whole
+        two-minute budget, so a request typed seconds into it is already older
+        than :data:`CONTROL_MAX_AGE_MS` by the time this method sees it. The mod
+        makes the same exemption for the same reason: ``safety.stop``,
+        ``session.disarm`` and ``plan.cancel`` bypass its lease check.
         """
         channel = self._control_channel()
         request = channel.read()
         if request is None:
             return None
         channel.clear()
+        if request.kind is not ControlKind.ARM:
+            return request
         if request.issued_at_ms < attached_at_ms:
             return None
         if now_ms - request.issued_at_ms > CONTROL_MAX_AGE_MS:
