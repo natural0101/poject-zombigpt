@@ -26,7 +26,6 @@ import pytest
 from jsonschema import Draft202012Validator
 
 from pz_agent_core.observation.compact import compact_for_planner, save_scope
-from pz_agent_core.version import SCHEMA_VERSION
 from pz_agent_core.protocol import (
     ActionOwnership,
     ContainerKind,
@@ -42,6 +41,7 @@ from pz_agent_core.protocol.refs import (
     ZombieRef,
     ref_kind,
 )
+from pz_agent_core.version import SCHEMA_VERSION
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[2]
 EMITTER: Final = REPO_ROOT / "tests" / "lua" / "support" / "emit_observation.lua"

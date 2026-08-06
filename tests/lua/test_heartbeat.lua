@@ -43,7 +43,7 @@ do
     build_verified = true,
   })
 
-  equal(document.protocol_version, "1.0", "protocol version")
+  equal(document.protocol_version, "1.1", "protocol version")
   equal(document.schema_version, "1.0", "schema version")
   equal(document.mod_version, "0.1.0", "mod version")
   equal(document.build, "42.20", "game build")
