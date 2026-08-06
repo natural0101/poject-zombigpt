@@ -500,6 +500,7 @@ Prove drink selection prefers a safe source over tainted water and that thirst i
 ### Prepare the world
 
 - Provide a water bottle and, if available, a tainted source nearby.
+- Stand within sight of a sink, well or rain collector if the save has one; that is the only way consume.drink_source can be confirmed.
 - Let the character get thirsty.
 
 ### Required starting state
@@ -517,10 +518,11 @@ pz-agent live-test run --scenario S09_DRINK --observations <file>
 
 1. Ask the agent to drink.
 2. Note the source it used.
+3. If a world water source is in view, run the drink again naming it, and check that the vessel was filled rather than emptied — the argument order of ISTakeWaterAction is unconfirmed and a wrong order fills the wrong thing without erroring. See docs/GAME_API_VERIFICATION.md.
 
 ### Expected
 
-The safe source is used and thirst falls.
+The safe source is used and thirst falls. If a world source was named, drink_world_source leaves 'experimental' and reaches 'verified'; if none was in reach it stays experimental, which is a pass for this scenario and an unconfirmed capability in the report.
 
 ### Required postconditions
 

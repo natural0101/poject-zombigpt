@@ -18,6 +18,7 @@ local Toolkit = PZ.Adapters.Toolkit
 local Consumption = PZ.Adapters.Consumption
 local Eat = Consumption.Eat
 local Drink = Consumption.Drink
+local DrinkSource = Consumption.DrinkSource
 local REASON = PZ.Protocol.REASON
 
 --- Eating moves hunger and leaves less nourishment in what is left.
@@ -247,13 +248,22 @@ do
   contains(detail, "tainted", "and the detail says why")
 
   local source = scene({ tainted = true })
-  local _, sourceCode, sourceDetail = Drink:validate({ item_ref = BOTTLE, refill_from = SINK }, source.ctx)
+  local _, sourceCode, sourceDetail =
+    DrinkSource:validate({ item_ref = BOTTLE, source_ref = SINK }, source.ctx)
   equal(sourceCode, REASON.NO_SAFE_DRINK, "and a tainted source is refused before anything is queued")
   contains(sourceDetail, "source", "naming the source rather than the bottle")
 
   local dry = scene({ source_water = 0 })
-  local _, dryCode = Drink:validate({ item_ref = BOTTLE, refill_from = SINK }, dry.ctx)
+  local _, dryCode = DrinkSource:validate({ item_ref = BOTTLE, source_ref = SINK }, dry.ctx)
   equal(dryCode, REASON.NO_SAFE_DRINK, "a source with no water is not a source")
+
+  -- The gate that keeps an unproven capability out of a proven one: the
+  -- carried-container action does not know the argument at all.
+  local mixed = scene()
+  local _, mixedCode, mixedDetail =
+    Drink:validate({ item_ref = BOTTLE, source_ref = SINK }, mixed.ctx)
+  equal(mixedCode, REASON.INVALID_ARGUMENT, "consume.drink cannot be talked onto the source path")
+  contains(mixedDetail, "source_ref", "and says which argument it does not take")
 end
 
 Harness.group("drink verifies against thirst, and falls back to the container")
@@ -290,23 +300,24 @@ Harness.group("a refill needs the water action and names the source in the evide
 do
   local s = scene()
   Support.removeAction("ISTakeWaterAction")
-  local accepted, code, detail = Drink:validate({ item_ref = BOTTLE, refill_from = SINK }, s.ctx)
+  local accepted, code, detail =
+    DrinkSource:validate({ item_ref = BOTTLE, source_ref = SINK }, s.ctx)
   isNil(accepted, "without the water action there is no refill to run")
   equal(code, REASON.CAPABILITY_UNAVAILABLE, "which is a capability gap")
   contains(detail, "ISTakeWaterAction", "naming the experimental symbol §12.4 flags")
 
   local refill = scene()
-  local args = { item_ref = BOTTLE, refill_from = SINK }
-  ok(Drink:validate(args, refill.ctx), "with the action present the refill validates")
-  ok(Drink:prepare(args, refill.ctx), "and prepares")
+  local args = { item_ref = BOTTLE, source_ref = SINK }
+  ok(DrinkSource:validate(args, refill.ctx), "with the action present the refill validates")
+  ok(DrinkSource:prepare(args, refill.ctx), "and prepares")
   equal(#refill.water.actions, 1, "one fill was queued")
   equal(refill.water.actions[1].args[4], refill.bottle, "against the bottle that was named")
 
-  ok(Drink:begin(args, refill.ctx), "the drink starts behind it")
+  ok(DrinkSource:begin(args, refill.ctx), "the drink starts behind it")
   local before = Toolkit.observe(refill.player)
   refill.water.actions[1]:perform()
   refill.drink.actions[1]:perform()
-  local proof = Drink:verify(before, Toolkit.observe(refill.player), args, refill.ctx)
+  local proof = DrinkSource:verify(before, Toolkit.observe(refill.player), args, refill.ctx)
   ok(proof ~= nil, "thirst fell, so the drink happened")
   equal(proof.source_ref, SINK, "and the evidence names the source it was drawn from")
 end
@@ -314,15 +325,15 @@ end
 Harness.group("a refilled container witnesses nothing on its own")
 do
   local s = scene({ no_stats = true })
-  local args = { item_ref = BOTTLE, refill_from = SINK }
-  ok(Drink:validate(args, s.ctx), "the command validates")
-  ok(Drink:prepare(args, s.ctx), "and prepares")
+  local args = { item_ref = BOTTLE, source_ref = SINK }
+  ok(DrinkSource:validate(args, s.ctx), "the command validates")
+  ok(DrinkSource:prepare(args, s.ctx), "and prepares")
   local before = Toolkit.observe(s.player)
   -- The fill runs and the drink does not: the bottle now holds *more*, which
   -- would satisfy no test, and could not distinguish a drink from a top-up even
   -- if it held less.
   s.water.actions[1]:perform()
-  local evidence, code, detail = Drink:verify(before, Toolkit.observe(s.player), args, s.ctx)
+  local evidence, code, detail = DrinkSource:verify(before, Toolkit.observe(s.player), args, s.ctx)
   isNil(evidence, "a fuller bottle is not proof that anything was drunk")
   equal(code, REASON.POSTCONDITION_FAILED, "so the command fails rather than guessing")
   contains(detail, "refilled container proves nothing", "and says exactly why the fallback does not apply")
@@ -332,6 +343,12 @@ Harness.group("the adapters are registered where the dispatcher looks for them")
 do
   equal(PZ.Adapters.BY_NAME["consume.eat"], Eat, "eat is registered under its action name")
   equal(PZ.Adapters.BY_NAME["consume.drink"], Drink, "and so is drink")
+  equal(PZ.Adapters.BY_NAME["consume.drink_source"], DrinkSource, "and the world-source drink")
+  equal(
+    DrinkSource.capability,
+    "drink_world_source",
+    "under the capability §12.4 caps, not the one the scan verifies"
+  )
   ok(PZ.Protocol.isKnownAction(Eat.name), "both names are in the protocol whitelist")
   equal(Eat.capability, "eat_percentage", "eat declares the capability the sidecar gates on")
   equal(Drink.capability, "drink_carried", "and drink declares its own")
@@ -360,11 +377,15 @@ do
   local _, kindCode = checkArgs(Eat, { item_ref = SINK }, Support.SESSION)
   equal(kindCode, REASON.INVALID_REF, "and a square is not something to eat")
 
-  local drunk = checkArgs(Drink, { item_ref = BOTTLE, refill_from = SINK }, Support.SESSION)
-  equal(drunk.refill_from, SINK, "drink's optional source survives too")
+  local drawn = checkArgs(DrinkSource, { item_ref = BOTTLE, source_ref = SINK }, Support.SESSION)
+  equal(drawn.source_ref, SINK, "the world source survives the dispatcher too")
 
-  local _, sourceCode = checkArgs(Drink, { item_ref = BOTTLE, refill_from = BOTTLE }, Support.SESSION)
+  local _, sourceCode =
+    checkArgs(DrinkSource, { item_ref = BOTTLE, source_ref = BOTTLE }, Support.SESSION)
   equal(sourceCode, REASON.INVALID_REF, "but a bottle is not a place to walk to")
+
+  local _, missingCode = checkArgs(DrinkSource, { item_ref = BOTTLE }, Support.SESSION)
+  equal(missingCode, REASON.INVALID_ARGUMENT, "and the source is required, never defaulted")
 end
 
 Harness.finish("adapter_consumption")

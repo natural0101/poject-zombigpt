@@ -13,9 +13,11 @@ drift out of sync with `pz_agent_core.version`.
 ### Changed
 
 - **Protocol 1.0 → 1.1.** The action whitelist grew from fifteen names to
-  twenty-one, seventeen of them game actions. Added: `container.inspect`,
+  twenty-two, seventeen of them owned by the mod's adapter files. Added:
+  `container.inspect`,
   `container.open_nearby`, `inventory.search`, `medical.bandage`,
-  `survival.rest`, `survival.sleep`. `container.open_nearby` is deliberately not
+  `survival.rest`, `survival.sleep`, `consume.drink_source`.
+  `container.open_nearby` is deliberately not
   read-only — opening a container is a timed action the character performs, so
   placing it beside `world.inspect` would let an unarmed session move the
   character.
@@ -27,6 +29,23 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Added
 
+- **`consume.drink_source`: fill a vessel at a sink, well or rain collector and
+  drink from it.** The mod could already do this, behind an optional
+  `refill_from` argument on `consume.drink`; the sidecar had no argument for it
+  at all, so the path was unreachable from Python. Worse, it ran under
+  `drink_carried` — a capability a static scan verifies — while §12.4 caps
+  `drink_world_source` at `experimental`. Splitting it into its own action makes
+  the gate structural: the engine reads `required_capability` from the adapter
+  that owns the action, before that adapter is entered. `consume.drink` now
+  refuses a world-source argument rather than honouring it, and the world-source
+  postcondition accepts only thirst — a refill raises the vessel's volume and
+  the drink lowers it again, so the vessel witnesses nothing in either
+  direction. Published as `pz_action_drink_source`.
+- **`scripts/generate_playbook.py`**, and a gate step that runs it with
+  `--check`. `docs/LIVE_TEST_PLAYBOOK.md` said it was generated from
+  `pz_agent_cli.livetest.scenarios` and had no generator and no check, so it
+  could drift from the runner in silence. The generator reproduces the twenty
+  existing scenarios byte for byte, which is what validates the template.
 - **A real command executor in the mod.** `CommandReader` →
   `CommandDispatcher` → `ActionRuntime` → adapter, with an acknowledgement at
   every transition. One command in flight and one waiting, the lease re-checked

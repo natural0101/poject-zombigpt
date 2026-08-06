@@ -56,6 +56,9 @@ jobs:
       - name: Schema validity
         run: .venv/bin/python scripts/check_schemas.py
 
+      - name: Live test playbook in sync with the scenarios
+        run: .venv/bin/python scripts/generate_playbook.py --check
+
       - name: Tests
         run: .venv/bin/python -m pytest --junitxml=pytest-${{ matrix.python-version }}.xml
 

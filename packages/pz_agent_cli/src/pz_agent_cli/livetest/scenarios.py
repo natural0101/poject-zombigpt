@@ -577,12 +577,26 @@ SCENARIOS: Final[tuple[LiveScenario, ...]] = (
         ),
         world_preparation=(
             "Provide a water bottle and, if available, a tainted source nearby.",
+            "Stand within sight of a sink, well or rain collector if the save has one; "
+            "that is the only way consume.drink_source can be confirmed.",
             "Let the character get thirsty.",
         ),
         required_state=("Session armed in ASSISTED.", "Thirst clearly above zero."),
         command="pz-agent live-test run --scenario S09_DRINK --observations <file>",
-        operator_steps=("Ask the agent to drink.", "Note the source it used."),
-        expected_result="The safe source is used and thirst falls.",
+        operator_steps=(
+            "Ask the agent to drink.",
+            "Note the source it used.",
+            "If a world water source is in view, run the drink again naming it, and "
+            "check that the vessel was filled rather than emptied — the argument order "
+            "of ISTakeWaterAction is unconfirmed and a wrong order fills the wrong "
+            "thing without erroring. See docs/GAME_API_VERIFICATION.md.",
+        ),
+        expected_result=(
+            "The safe source is used and thirst falls. If a world source was named, "
+            "drink_world_source leaves 'experimental' and reaches 'verified'; if none "
+            "was in reach it stays experimental, which is a pass for this scenario and "
+            "an unconfirmed capability in the report."
+        ),
         postconditions=(
             Postcondition(
                 key="thirst_fell",

@@ -43,8 +43,15 @@ from xml.etree import ElementTree
 
 REPO_ROOT: Final = Path(__file__).resolve().parent.parent
 
-sys.path.insert(0, str(REPO_ROOT / "packages" / "pz_agent_core" / "src"))
-sys.path.insert(0, str(REPO_ROOT / "packages" / "pz_agent_cli" / "src"))
+# Every package, not only the two this file names directly. Importing the
+# scenario catalogue pulls ``pz_agent_cli.app``, which reaches through the CLI's
+# voice layer into ``pz_agent_mcp``; with only two paths set up the gate
+# reported "the scenario catalogue could not be imported" and advised running it
+# from a checkout — to someone already standing in one.
+for _package in ("pz_agent_core", "pz_agent_cli", "pz_agent_mcp", "pz_agent_voice"):
+    _source = REPO_ROOT / "packages" / _package / "src"
+    if _source.is_dir():
+        sys.path.insert(0, str(_source))
 sys.path.insert(0, str(REPO_ROOT / "packaging" / "windows"))
 
 import build_rc  # noqa: E402  (path set up above)

@@ -15,12 +15,17 @@ behind, a drink leaves fewer units, and a fully consumed item is gone from the
 inventory. Both are observations of the world after the fact; neither is the
 adapter believing its own ack.
 
-Refilling from a world source is gated twice over. The capability is
-`drink_world_source`, which the probe caps at `experimental` because §12.4 lists
-the action as unconfirmed, and the source itself must report untainted water
-before anything is queued -- an agent that drinks from a tainted rain barrel
-because the field was missing has poisoned the character on the strength of an
-absent reading.
+Drinking from a world source is a *separate action*, `consume.drink_source`,
+and that separation is the gate rather than a naming preference. The capability
+is `drink_world_source`, which the probe caps at `experimental` because §12.4
+lists the action as unconfirmed; while it was an optional `refill_from`
+argument on `consume.drink` the whole path ran under `drink_carried`, so a
+capability the blueprint calls unproven was reachable through one the scan
+verifies. One action, one capability, checked before the adapter is entered.
+
+The source itself must still report untainted water before anything is queued
+-- an agent that drinks from a tainted rain barrel because the field was missing
+has poisoned the character on the strength of an absent reading.
 ]]
 
 PZAgent = PZAgent or {}
@@ -49,9 +54,21 @@ Consumption.POLL_MS = 250
 local EAT_REQUIRES = { "ISEatFoodAction", "ISEatFoodAction.new", "ISTimedActionQueue.add" }
 local DRINK_REQUIRES = { "ISDrinkFromBottle", "ISDrinkFromBottle.new", "ISTimedActionQueue.add" }
 
---- Only checked when a refill was actually asked for, so a build with no water
---- action can still drink from a bottle.
+--- Named by consume.drink_source alone, so a build with no water action can
+--- still drink from a bottle.
 local REFILL_REQUIRES = { "ISTakeWaterAction", "ISTakeWaterAction.new" }
+
+--- The world-source action fills a vessel and then drinks from it, so it needs
+--- both sets. Built here rather than concatenated at declaration time because
+--- Toolkit.requireSymbols reads the list the adapter carries, and a list
+--- assembled twice is a list that can differ.
+local DRINK_SOURCE_REQUIRES = {}
+for _, entry in ipairs(DRINK_REQUIRES) do
+  DRINK_SOURCE_REQUIRES[#DRINK_SOURCE_REQUIRES + 1] = entry
+end
+for _, entry in ipairs(REFILL_REQUIRES) do
+  DRINK_SOURCE_REQUIRES[#DRINK_SOURCE_REQUIRES + 1] = entry
+end
 
 --- Argument kinds, spelled out rather than read from
 --- PZAgent.CommandDispatcher.ARG, because the dispatcher is a sibling file and
@@ -298,7 +315,8 @@ toolkit().register(Eat)
 -- consume.drink
 -- ---------------------------------------------------------------------------
 
-local DRINK_ARGS = { "item_ref", "fraction", "refill_from" }
+local DRINK_ARGS = { "item_ref", "fraction" }
+local DRINK_SOURCE_ARGS = { "item_ref", "fraction", "source_ref" }
 
 --- The first object on `square` that reports water, with how much it holds.
 ---
@@ -358,32 +376,39 @@ end
 
 Consumption.refillSource = refillSource
 
-local Drink = nil
 
-local function drinkSpec(args, ctx)
+--- Read a drink command, in either of the two shapes.
+---
+--- `fromSource` decides which argument list is legal and whether the world
+--- source is mandatory. It is passed in rather than inferred from the presence
+--- of `source_ref`, because inferring it would let a `consume.drink` command
+--- reach the world-source path by naming an extra argument -- which is exactly
+--- the gate this split exists to close.
+local function drinkSpec(args, ctx, fromSource)
   local Toolkit = toolkit()
-  local spec, code, detail = consumableSpec(args, ctx, DRINK_ARGS, { "item_ref" })
+  local allowed = fromSource and DRINK_SOURCE_ARGS or DRINK_ARGS
+  local spec, code, detail = consumableSpec(args, ctx, allowed, { "item_ref" })
   if spec == nil then
     return nil, code, detail
   end
-  if args.refill_from ~= nil then
-    local ref, refCode, refDetail = Toolkit.readRef(args, "refill_from", PZAgent.Refs.KIND.SQUARE, ctx)
+  if fromSource then
+    local ref, refCode, refDetail = Toolkit.readRef(args, "source_ref", PZAgent.Refs.KIND.SQUARE, ctx)
     if ref == nil then
       return nil, refCode, refDetail
     end
-    spec.refill_ref = ref
+    spec.source_ref = ref
   end
   return spec
 end
 
-local function drinkValidate(_, args, ctx)
+local function drinkValidate(self, args, ctx, fromSource)
   local Toolkit = toolkit()
   local reasons = Toolkit.reasons()
-  local required, requiredCode, requiredDetail = Toolkit.requireSymbols(Drink.requires)
+  local required, requiredCode, requiredDetail = Toolkit.requireSymbols(self.requires)
   if required == nil then
     return nil, requiredCode, requiredDetail
   end
-  local spec, code, detail = drinkSpec(args, ctx)
+  local spec, code, detail = drinkSpec(args, ctx, fromSource)
   if spec == nil then
     return nil, code, detail
   end
@@ -403,12 +428,8 @@ local function drinkValidate(_, args, ctx)
   if ok and fluid ~= nil and Toolkit.readBooleanOf(fluid, { "isTainted" }) == true then
     return nil, reasons.NO_SAFE_DRINK, "the fluid in the container is tainted"
   end
-  if spec.refill_ref ~= nil then
-    local refill, refillCode, refillDetail = Toolkit.requireSymbols(REFILL_REQUIRES)
-    if refill == nil then
-      return nil, refillCode, refillDetail
-    end
-    local source, sourceCode, sourceDetail = refillSource(ctx, spec.refill_ref)
+  if fromSource then
+    local source, sourceCode, sourceDetail = refillSource(ctx, spec.source_ref)
     if source == nil then
       return nil, sourceCode, sourceDetail
     end
@@ -429,13 +450,13 @@ end
 --- The refill is a separate timed action queued ahead of the drink rather than
 --- something folded into it, so a build that refuses the water action fails
 --- with the water action's own reason instead of silently drinking nothing.
-local function drinkPrepare(_, args, ctx)
+local function drinkPrepare(_, args, ctx, fromSource)
   local Toolkit = toolkit()
   local code, detail = Toolkit.interruption(ctx)
   if code ~= nil then
     return nil, code, detail
   end
-  local spec, specCode, specDetail = drinkSpec(args, ctx)
+  local spec, specCode, specDetail = drinkSpec(args, ctx, fromSource)
   if spec == nil then
     return nil, specCode, specDetail
   end
@@ -443,10 +464,10 @@ local function drinkPrepare(_, args, ctx)
   if outcome == nil then
     return nil, moveCode, moveDetail
   end
-  if spec.refill_ref == nil then
+  if not fromSource then
     return true
   end
-  local source, sourceCode, sourceDetail = refillSource(ctx, spec.refill_ref)
+  local source, sourceCode, sourceDetail = refillSource(ctx, spec.source_ref)
   if source == nil then
     return nil, sourceCode, sourceDetail
   end
@@ -463,10 +484,12 @@ local function drinkPrepare(_, args, ctx)
   if item == nil then
     return nil, itemCode, itemDetail
   end
-  -- Signature as vanilla's ISTakeWaterAction documents it. This project has no
-  -- Build 42.20 to check it against; a build that orders the arguments
-  -- differently is a wrong fill, not a crash, and the postcondition below is
-  -- what refuses to call it a success.
+  -- (character, waterObject, amount, item). This project has no Build 42.20 to
+  -- check that against, and three places in the repository once stated three
+  -- different orders -- see docs/GAME_API_VERIFICATION.md, where this is the
+  -- first row a live run must confirm. A build that orders them differently is
+  -- a wrong fill, not a crash, and the postcondition below is what refuses to
+  -- call it a success.
   local action, actionCode, actionDetail =
     Toolkit.construct("ISTakeWaterAction", ctx.player, source.object, 50, item)
   if action == nil then
@@ -480,13 +503,13 @@ local function drinkPrepare(_, args, ctx)
   return true
 end
 
-local function drinkStart(_, args, ctx)
+local function drinkStart(_, args, ctx, fromSource)
   local Toolkit = toolkit()
   local code, detail = Toolkit.interruption(ctx)
   if code ~= nil then
     return nil, code, detail
   end
-  local spec, specCode, specDetail = drinkSpec(args, ctx)
+  local spec, specCode, specDetail = drinkSpec(args, ctx, fromSource)
   if spec == nil then
     return nil, specCode, specDetail
   end
@@ -502,15 +525,15 @@ local function drinkStart(_, args, ctx)
   return Toolkit.enqueue(ctx, action)
 end
 
-local function drinkVerify(_, before, after, args, ctx)
+local function drinkVerify(_, before, after, args, ctx, fromSource)
   local Toolkit = toolkit()
-  local spec, code, detail = drinkSpec(args, ctx)
+  local spec, code, detail = drinkSpec(args, ctx, fromSource)
   if spec == nil then
     return nil, code, detail
   end
   local observed = { kind = "thirst_fell", item_ref = spec.item_ref, fraction = spec.fraction }
-  if spec.refill_ref ~= nil then
-    observed.source_ref = spec.refill_ref
+  if fromSource then
+    observed.source_ref = spec.source_ref
   end
   local fell, thirstBefore, thirstAfter = statFell(before, after, "thirst")
   if fell ~= nil then
@@ -520,7 +543,7 @@ local function drinkVerify(_, before, after, args, ctx)
       return observed
     end
   end
-  if spec.refill_ref ~= nil then
+  if fromSource then
     -- A refill raises the vessel's contents and the drink lowers them again, so
     -- the item is no longer a witness either way. Thirst is the only honest
     -- reading left, and if it could not be read there is nothing to report.
@@ -546,27 +569,69 @@ local function drinkVerify(_, before, after, args, ctx)
     string.format("thirst stayed at %.4f and the container is unchanged", thirstAfter)
 end
 
-Drink = toolkit().declare({
+--- The shared argument declaration, minus the source. Written once so the two
+--- adapters cannot drift on the bounds a fraction is checked against.
+local function drinkArgs()
+  return {
+    item_ref = { type = ARG.REF, required = true, kinds = { item = true } },
+    fraction = { type = ARG.NUMBER, min = Consumption.MIN_FRACTION, max = Consumption.MAX_FRACTION },
+  }
+end
+
+local Drink = toolkit().declare({
   name = "consume.drink",
   capability = toolkit().CAPABILITY.DRINK_CARRIED,
   requires = DRINK_REQUIRES,
   timeout_ms = Consumption.TIMEOUT_MS,
   poll_interval_ms = Consumption.POLL_MS,
-  args = {
-    item_ref = { type = ARG.REF, required = true, kinds = { item = true } },
-    fraction = { type = ARG.NUMBER, min = Consumption.MIN_FRACTION, max = Consumption.MAX_FRACTION },
-    -- Optional, and a square only: the source is a place to stand next to, and
-    -- refillSource vets what stands on it before a drop is drawn.
-    refill_from = { type = ARG.REF, kinds = { square = true } },
-  },
-  validate = drinkValidate,
-  prepare = drinkPrepare,
-  begin = drinkStart,
-  verify = drinkVerify,
+  args = drinkArgs(),
+  validate = function(self, args, ctx)
+    return drinkValidate(self, args, ctx, false)
+  end,
+  prepare = function(self, args, ctx)
+    return drinkPrepare(self, args, ctx, false)
+  end,
+  begin = function(self, args, ctx)
+    return drinkStart(self, args, ctx, false)
+  end,
+  verify = function(self, before, after, args, ctx)
+    return drinkVerify(self, before, after, args, ctx, false)
+  end,
+})
+
+local sourceArgs = drinkArgs()
+-- A square, and mandatory: the source is a place to stand next to, and
+-- refillSource vets what stands on it before a drop is drawn. Mandatory rather
+-- than optional because an action that can run without its source is an action
+-- that can quietly become an ordinary sip under a capability §12.4 has not
+-- confirmed.
+sourceArgs.source_ref = { type = ARG.REF, required = true, kinds = { square = true } }
+
+local DrinkSource = toolkit().declare({
+  name = "consume.drink_source",
+  capability = toolkit().CAPABILITY.DRINK_WORLD_SOURCE,
+  requires = DRINK_SOURCE_REQUIRES,
+  timeout_ms = Consumption.TIMEOUT_MS,
+  poll_interval_ms = Consumption.POLL_MS,
+  args = sourceArgs,
+  validate = function(self, args, ctx)
+    return drinkValidate(self, args, ctx, true)
+  end,
+  prepare = function(self, args, ctx)
+    return drinkPrepare(self, args, ctx, true)
+  end,
+  begin = function(self, args, ctx)
+    return drinkStart(self, args, ctx, true)
+  end,
+  verify = function(self, before, after, args, ctx)
+    return drinkVerify(self, before, after, args, ctx, true)
+  end,
 })
 
 Consumption.Drink = Drink
+Consumption.DrinkSource = DrinkSource
 Consumption.REFILL_REQUIRES = REFILL_REQUIRES
 toolkit().register(Drink)
+toolkit().register(DrinkSource)
 
 return Consumption

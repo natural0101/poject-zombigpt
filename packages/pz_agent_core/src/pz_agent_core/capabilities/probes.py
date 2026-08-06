@@ -282,7 +282,10 @@ PROBES: Final[tuple[ProbeDefinition, ...]] = (
         # says nothing about whether driving it is safe for the save.
         required_symbols=("ISTakeWaterAction", "ISTakeWaterAction.new"),
         confirmation=RuntimeConfirmation(
-            action=ActionName.CONSUME_DRINK,
+            # Its own action, not ``consume.drink``. ``source_ref`` is what
+            # separates drinking from a sink from drinking from a bottle, and
+            # while both shared one action a sip could have carried it.
+            action=ActionName.CONSUME_DRINK_SOURCE,
             evidence_keys=("thirst_before", "thirst_after", "source_ref"),
             description="thirst fell after drinking from a world water source",
         ),

@@ -31,6 +31,7 @@ class ActionName(StrEnum):
     INVENTORY_ENSURE_MAIN = "inventory.ensure_main"
     CONSUME_EAT = "consume.eat"
     CONSUME_DRINK = "consume.drink"
+    CONSUME_DRINK_SOURCE = "consume.drink_source"
     LITERATURE_READ = "literature.read"
     EQUIPMENT_EQUIP = "equipment.equip"
     EQUIPMENT_UNEQUIP = "equipment.unequip"

@@ -34,6 +34,7 @@ IMPLEMENTED = {
     ActionName.INVENTORY_ENSURE_MAIN,
     ActionName.CONSUME_EAT,
     ActionName.CONSUME_DRINK,
+    ActionName.CONSUME_DRINK_SOURCE,
     ActionName.LITERATURE_READ,
     ActionName.EQUIPMENT_EQUIP,
     ActionName.EQUIPMENT_UNEQUIP,

@@ -35,6 +35,7 @@ step "mypy" "$PY" -m mypy
 step "forbidden patterns" "$PY" scripts/check_forbidden.py
 step "version sync" "$PY" scripts/check_versions.py
 step "schema validity" "$PY" scripts/check_schemas.py
+step "playbook in sync" "$PY" scripts/generate_playbook.py --check
 
 if [[ "$MODE" == "fast" ]]; then
   step "pytest (unit+contract)" "$PY" -m pytest tests/unit tests/contract

@@ -145,7 +145,8 @@ Everything below ran and passed in the remote environment:
 
 - the Python test suite (unit, contract and integration) under **both**
   supported Python versions, in clean editable installs: 3435 passed and 2
-  skipped, identically, on 3.11.15 and on 3.12.3. This line had been standing
+  skipped, identically, on 3.11.15 and on 3.12.3 — 3450 as of the
+  `consume.drink_source` work, on the interpreter this gate runs under. This line had been standing
   since long before voice, memory, the live-test runner and the packaging landed
   — it was re-run rather than inherited, because a claim about a build is only
   about the build it was made against;
@@ -200,6 +201,14 @@ following was done, and none of it is claimed:
 - **Measured p50/p95 latencies.** Any number here would have been invented.
 - **Build 42.20 API signatures.** Every engine symbol is *declared* and probed;
   none is confirmed. `grep -rn "Build 42:" pz-mod/` lists every guess.
+  **Start with `ISTakeWaterAction`.** Three places in this repository once
+  stated three different argument orders for it; `docs/GAME_API_VERIFICATION.md`
+  now records the one the mod actually calls —
+  `:new(character, waterObject, amount, item)` — and marks it as the first row a
+  live run must confirm. A build that orders them differently fills the wrong
+  thing and does not error, which is exactly why `drink_world_source` is capped
+  at `experimental` and why `consume.drink_source` refuses to treat the vessel's
+  own volume as proof of anything.
 - **`v1.0.0` and its GitHub Release.** `scripts/check_release.py --release`
   fails today because `release/evidence-manifest.json` does not exist. That
   failure is the gate working.
