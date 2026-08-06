@@ -12,16 +12,45 @@ setting inside it.
 
 Validation runs before start rather than on first use, so a value that only the
 planner reads is still rejected while the user is still looking at the terminal.
+That is why a provider's own section is validated by *constructing* its typed
+config here, faults and all: the rules live once, in the provider, and this
+module's job is to run them early rather than to restate them.
+
+**No section of this file ever holds a secret.** A provider names the
+environment variable its API key lives in; the key itself is read from the
+environment at the moment of the call. That is what makes this file safe to
+paste into a bug report, and it is why ``api_key_env`` is validated as a
+variable *name* — a pasted key does not look like one, and is refused.
 """
 
 from __future__ import annotations
 
 import tomllib
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final
 
+from pz_agent_core.planner.providers import (
+    DEFAULT_CONNECT_TIMEOUT_S,
+    DEFAULT_MAX_ATTEMPTS,
+    DEFAULT_MAX_OUTPUT_TOKENS,
+    DEFAULT_MAX_RESPONSE_BYTES,
+    DEFAULT_OPENAI_KEY_ENV,
+    DEFAULT_READ_TIMEOUT_S,
+    DEFAULT_TEAMON_KEY_ENV,
+    MAX_ATTEMPTS,
+    MAX_OUTPUT_TOKENS,
+    MAX_RESPONSE_BYTES,
+    MAX_TIMEOUT_S,
+    PROVIDER_OPENAI_COMPATIBLE,
+    PROVIDER_TEAMON,
+    OpenAICompatibleConfig,
+    TeamONConfig,
+    TransportConfig,
+    ensure_env_name,
+    parse_endpoint,
+)
 from pz_agent_core.protocol import JsonDict, SessionMode
 from pz_agent_core.version import SUPPORTED_BUILDS
 
@@ -37,10 +66,27 @@ MAX_PLAN_STEPS: Final = 32
 
 MAX_HOTKEY_LEN: Final = 16
 
-#: Providers this build can actually run. ``none`` is the fully local path;
-#: an external provider needs the planner, which is not in this build, so
-#: naming one here would validate a configuration that cannot start.
-SUPPORTED_PROVIDERS: Final = ("none",)
+#: Providers this build can actually run. ``none`` — the deterministic path —
+#: stays the default: it needs no network, no key and no endpoint, and it is the
+#: only one that keeps working when the user is offline. The other two each
+#: require their own section, and selecting one without filling that section in
+#: is an error rather than a silent fall back to ``none``.
+SUPPORTED_PROVIDERS: Final = ("none", PROVIDER_OPENAI_COMPATIBLE, PROVIDER_TEAMON)
+
+#: Which table a provider's settings live in. Also the set of providers that
+#: have one: ``none`` is absent because it has nothing to configure.
+PROVIDER_TABLES: Final[Mapping[str, str]] = {
+    PROVIDER_OPENAI_COMPATIBLE: f"planner.{PROVIDER_OPENAI_COMPATIBLE}",
+    PROVIDER_TEAMON: f"planner.{PROVIDER_TEAMON}",
+}
+
+#: Keys with no usable default, per provider. A model name cannot be guessed and
+#: an endpoint cannot be assumed, so selecting the provider without them is a
+#: configuration that could only fail at the first request.
+REQUIRED_PROVIDER_KEYS: Final[Mapping[str, tuple[str, ...]]] = {
+    PROVIDER_OPENAI_COMPATIBLE: ("base_url", "model"),
+    PROVIDER_TEAMON: ("base_url",),
+}
 
 SUPPORTED_CHANNELS: Final = ("stable", "unstable")
 
@@ -54,6 +100,7 @@ CODE_OUT_OF_RANGE: Final = "OUT_OF_RANGE"
 CODE_NOT_ALLOWED: Final = "NOT_ALLOWED"
 CODE_PARSE_ERROR: Final = "PARSE_ERROR"
 CODE_NOT_FOUND: Final = "NOT_FOUND"
+CODE_MISSING_VALUE: Final = "MISSING_VALUE"
 CODE_TOO_LARGE: Final = "TOO_LARGE"
 CODE_UNREADABLE: Final = "UNREADABLE"
 
@@ -103,8 +150,37 @@ _STR: Final = "string"
 _BOOL: Final = "boolean"
 _INT: Final = "integer"
 
+
+def _transport_keys() -> dict[str, FieldSpec]:
+    """The bounds every HTTP-backed provider shares.
+
+    Milliseconds rather than seconds because TOML integers are the one numeric
+    type this validator handles, and a timeout written as ``0.5`` would be
+    refused as a type error for a value the user got right.
+    """
+    return {
+        "connect_timeout_ms": FieldSpec(
+            _INT,
+            int(DEFAULT_CONNECT_TIMEOUT_S * 1000),
+            minimum=1,
+            maximum=int(MAX_TIMEOUT_S * 1000),
+        ),
+        "read_timeout_ms": FieldSpec(
+            _INT, int(DEFAULT_READ_TIMEOUT_S * 1000), minimum=1, maximum=int(MAX_TIMEOUT_S * 1000)
+        ),
+        "max_response_bytes": FieldSpec(
+            _INT, DEFAULT_MAX_RESPONSE_BYTES, minimum=1, maximum=MAX_RESPONSE_BYTES
+        ),
+        "max_attempts": FieldSpec(_INT, DEFAULT_MAX_ATTEMPTS, minimum=1, maximum=MAX_ATTEMPTS),
+    }
+
+
 #: The whole documented surface. Anything not named here is a typo by
 #: definition, which is what makes the unknown-key rule enforceable.
+#:
+#: A dotted name is a sub-table — ``[planner.teamon]`` in the file. Providers get
+#: one each so that the settings for the provider you are *not* using can sit in
+#: the file, validated, without being read.
 SCHEMA: Final[Mapping[str, Mapping[str, FieldSpec]]] = {
     "game": {
         "channel": FieldSpec(_STR, "stable", choices=SUPPORTED_CHANNELS),
@@ -129,6 +205,24 @@ SCHEMA: Final[Mapping[str, Mapping[str, FieldSpec]]] = {
         "provider": FieldSpec(_STR, "none", choices=SUPPORTED_PROVIDERS),
         "max_steps": FieldSpec(_INT, 8, minimum=1, maximum=MAX_PLAN_STEPS),
     },
+    f"planner.{PROVIDER_OPENAI_COMPATIBLE}": {
+        "base_url": FieldSpec(_STR, None, nullable=True),
+        "model": FieldSpec(_STR, None, nullable=True),
+        # The name of a variable, never the key. `_check_value` enforces the
+        # shape, and the shape is what tells a user who pasted their key here
+        # that they have put a secret in a file they may well share.
+        "api_key_env": FieldSpec(_STR, DEFAULT_OPENAI_KEY_ENV),
+        "max_output_tokens": FieldSpec(
+            _INT, DEFAULT_MAX_OUTPUT_TOKENS, minimum=1, maximum=MAX_OUTPUT_TOKENS
+        ),
+        **_transport_keys(),
+    },
+    f"planner.{PROVIDER_TEAMON}": {
+        "base_url": FieldSpec(_STR, None, nullable=True),
+        "assistant": FieldSpec(_STR, None, nullable=True),
+        "api_key_env": FieldSpec(_STR, DEFAULT_TEAMON_KEY_ENV),
+        **_transport_keys(),
+    },
     "voice": {
         "adapter": FieldSpec(_STR, "teamon", choices=SUPPORTED_VOICE_ADAPTERS),
         "enabled": FieldSpec(_BOOL, False),
@@ -148,6 +242,19 @@ class AgentConfig:
     @property
     def default_mode(self) -> SessionMode:
         return SessionMode(str(self.get("session", "default_mode")).upper())
+
+    @property
+    def planner_provider(self) -> OpenAICompatibleConfig | TeamONConfig | None:
+        """The selected provider's typed config, or None for ``provider = "none"``.
+
+        Safe to build without catching: an :class:`AgentConfig` only exists for
+        a document whose provider section already validated.
+        """
+        provider = str(self.get("planner", "provider"))
+        table = PROVIDER_TABLES.get(provider)
+        if table is None:
+            return None
+        return build_provider_config(provider, self.values[table])
 
     @property
     def install_dir(self) -> Path | None:
@@ -268,31 +375,12 @@ def validate_document(document: Mapping[str, Any], *, path: Path) -> ConfigValid
     }
 
     for table, body in document.items():
-        specs = SCHEMA.get(table)
-        if specs is None:
+        if table not in SCHEMA:
             errors.append(_unknown_table(table))
             continue
-        if not isinstance(body, dict):
-            errors.append(
-                ConfigProblem(
-                    path=table,
-                    code=CODE_TYPE_MISMATCH,
-                    detail=f"expected a table, got {type(body).__name__}",
-                    remediation=f"write it as a section header: [{table}]",
-                )
-            )
-            continue
-        for key, raw in body.items():
-            spec = specs.get(key)
-            if spec is None:
-                errors.append(_unknown_key(table, key, specs))
-                continue
-            checked, problem = _check_value(f"{table}.{key}", raw, spec)
-            if problem is not None:
-                errors.append(problem)
-                continue
-            values[table][key] = checked
+        errors.extend(_check_table(table, body, values))
 
+    errors.extend(_provider_problems(values))
     warnings.extend(_advisories(values))
     config = None if errors else AgentConfig(values={t: dict(k) for t, k in values.items()})
     return ConfigValidation(
@@ -332,6 +420,41 @@ def load_config(path: Path) -> ConfigValidation:
             ),
         )
     return validate_document(document, path=path)
+
+
+def _check_table(table: str, body: Any, values: dict[str, dict[str, Any]]) -> list[ConfigProblem]:
+    """Validate one section into *values*, recursing into its sub-tables.
+
+    A sub-table is a key whose dotted name is itself in :data:`SCHEMA`. It is
+    dispatched before the key lookup, so ``[planner.teamon]`` is a section
+    rather than an unknown key in ``[planner]``.
+    """
+    if not isinstance(body, dict):
+        return [
+            ConfigProblem(
+                path=table,
+                code=CODE_TYPE_MISMATCH,
+                detail=f"expected a table, got {type(body).__name__}",
+                remediation=f"write it as a section header: [{table}]",
+            )
+        ]
+    specs = SCHEMA[table]
+    problems: list[ConfigProblem] = []
+    for key, raw in body.items():
+        nested = f"{table}.{key}"
+        if nested in SCHEMA:
+            problems.extend(_check_table(nested, raw, values))
+            continue
+        spec = specs.get(key)
+        if spec is None:
+            problems.append(_unknown_key(table, key, specs))
+            continue
+        checked, problem = _check_value(nested, raw, spec)
+        if problem is not None:
+            problems.append(problem)
+            continue
+        values[table][key] = checked
+    return problems
 
 
 def _unknown_table(table: str) -> ConfigProblem:
@@ -408,7 +531,46 @@ def _check_value(dotted: str, raw: Any, spec: FieldSpec) -> tuple[Any, ConfigPro
         problem = _check_hotkey(dotted, raw)
         if problem is not None:
             return None, problem
+    if dotted.endswith(".base_url"):
+        problem = _refused(
+            dotted,
+            parse_endpoint,
+            raw,
+            "give the endpoint's root, as in "
+            "http://127.0.0.1:8080 — the path is appended by the provider",
+        )
+        if problem is not None:
+            return None, problem
+    if dotted.endswith(".api_key_env"):
+        problem = _refused(
+            dotted,
+            ensure_env_name,
+            raw,
+            "name the environment variable that "
+            "holds the key, such as PZ_AGENT_OPENAI_API_KEY, and set the key "
+            "in your environment — a key written in this file is a key in every "
+            "copy of this file",
+        )
+        if problem is not None:
+            return None, problem
     return raw.lower() if spec.choices else raw, None
+
+
+def _refused(
+    dotted: str, check: Callable[[str], object], raw: str, remediation: str
+) -> ConfigProblem | None:
+    """Run one of the providers' own validators and report what it said.
+
+    The rule stays where it is enforced at runtime; this only moves the moment
+    it fires to before the session starts.
+    """
+    try:
+        check(raw)
+    except ValueError as exc:
+        return ConfigProblem(
+            path=dotted, code=CODE_NOT_ALLOWED, detail=str(exc), remediation=remediation
+        )
+    return None
 
 
 def _check_hotkey(dotted: str, raw: str) -> ConfigProblem | None:
@@ -443,6 +605,77 @@ def _range_problem(dotted: str, raw: int, spec: FieldSpec) -> ConfigProblem:
             "limit and cannot be raised by configuration"
         ),
     )
+
+
+def _provider_problems(values: Mapping[str, Mapping[str, Any]]) -> list[ConfigProblem]:
+    """Check the selected provider's section, by building its typed config.
+
+    Only the *selected* provider is built. A half-filled section for the
+    provider the user is not running is not a reason to refuse to start, and
+    treating it as one would punish keeping two endpoints in one file.
+    """
+    provider = str(values["planner"]["provider"])
+    table = PROVIDER_TABLES.get(provider)
+    if table is None:
+        return []
+    section = values[table]
+    missing = [
+        ConfigProblem(
+            path=f"{table}.{key}",
+            code=CODE_MISSING_VALUE,
+            detail=f"planner.provider is {provider!r} and this key has no value",
+            remediation=f'set {key} under [{table}], or set planner.provider = "none"',
+        )
+        for key in REQUIRED_PROVIDER_KEYS[provider]
+        if not str(section.get(key) or "").strip()
+    ]
+    if missing:
+        return missing
+    try:
+        build_provider_config(provider, section)
+    except ValueError as exc:
+        return [
+            ConfigProblem(
+                path=table,
+                code=CODE_NOT_ALLOWED,
+                detail=str(exc),
+                remediation=f"correct the offending key in [{table}]",
+            )
+        ]
+    return []
+
+
+def build_provider_config(
+    provider: str, section: Mapping[str, Any]
+) -> OpenAICompatibleConfig | TeamONConfig | None:
+    """The typed provider config for *section*, or None for ``provider = "none"``.
+
+    Raises:
+        ValueError: from the provider's own dataclass, which owns every bound
+            here — this function converts units and nothing else.
+    """
+    transport = TransportConfig(
+        connect_timeout_s=int(section["connect_timeout_ms"]) / 1000,
+        read_timeout_s=int(section["read_timeout_ms"]) / 1000,
+        max_response_bytes=int(section["max_response_bytes"]),
+        max_attempts=int(section["max_attempts"]),
+    )
+    if provider == PROVIDER_OPENAI_COMPATIBLE:
+        return OpenAICompatibleConfig(
+            base_url=str(section["base_url"]),
+            model=str(section["model"]),
+            api_key_env=str(section["api_key_env"]),
+            max_output_tokens=int(section["max_output_tokens"]),
+            transport=transport,
+        )
+    if provider == PROVIDER_TEAMON:
+        return TeamONConfig(
+            base_url=str(section["base_url"]),
+            assistant=str(section["assistant"] or ""),
+            api_key_env=str(section["api_key_env"]),
+            transport=transport,
+        )
+    return None
 
 
 def _advisories(values: Mapping[str, Mapping[str, Any]]) -> list[ConfigProblem]:
