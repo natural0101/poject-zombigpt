@@ -459,3 +459,5 @@ remaining work can happen:
 | Blueprint | Here | Why |
 | --- | --- | --- |
 | Python 3.12+ | `requires-python = ">=3.11"` | The build environment runs 3.11; CI tests both 3.11 and 3.12 so the 3.12 target stays honest. No 3.12-only syntax is used. |
+| A single `setup` command (blueprint §14.2) that detects, backs up an existing same-id mod, installs, creates config, runs doctor and prints launch steps | `install-mod`, with `validate-config` and `doctor` as separate steps that `docs/QUICKSTART.md` sequences | The composition is a preference; **the backup step is a deliberate refusal**. `install-mod` audits the destination before writing anything and raises `ForeignFileError` on the first file pz-agent did not install, or on any installed file whose hash has changed. Backing up and overwriting would still have overwritten; refusing and naming the file does not. Nothing is written when the audit fails. |
+| A `support-bundle` command (blueprint §14.7) | `logs --bundle`, with `--verify` | Same subsystem, reached through the command a user is already in when they need it. `docs/TROUBLESHOOTING.md` gives the real invocation. |

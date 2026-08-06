@@ -50,6 +50,21 @@ drift out of sync with `pz_agent_core.version`.
   postcondition accepts only thirst — a refill raises the vessel's volume and
   the drink lowers it again, so the vessel witnesses nothing in either
   direction. Published as `pz_action_drink_source`.
+- **The blueprint's command names are accounted for.** `docs/blueprint/` is the
+  requirement baseline and read-only, and it asks for two commands this build
+  does not have under those names: `setup` (§14.2) and `support-bundle`
+  (§14.7). Both were invisible to every test, because
+  `tests/contract/test_cli_docs_agreement.py` globbed `docs/*.md` and never
+  descended into the blueprint. That check now covers it, against a declared
+  alias map, so a *third* unaccounted name fails rather than sitting there.
+  Neither is a missing feature: the diagnostics bundle is `logs --bundle`, and
+  the install flow is `install-mod` plus the separate steps QUICKSTART
+  sequences. One part of §14.2 is a deliberate refusal rather than a
+  simplification — the blueprint asks to back up an existing same-id mod before
+  overwriting it, and `install-mod` audits first and **refuses**, naming the
+  file, on anything it did not write or anything modified since it did. Backing
+  up and overwriting would still have overwritten. Recorded with its reasoning
+  in `docs/PROGRESS.md`.
 - **The doctor's codes are documented.** `pz-agent doctor` stamps every check
   `PZD001`…`PZD010` and `README.md` bills `docs/TROUBLESHOOTING.md` as "Doctor
   codes and remedies"; `grep -rn 'PZD0' docs/` returned nothing, so the one
