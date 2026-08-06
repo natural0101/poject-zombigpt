@@ -923,6 +923,30 @@ def _minimal_result(*, status: str, present: bool, passed: bool, failure_code: s
 
 @pytest.fixture
 def prepared(tmp_path: Path) -> Iterator[tuple[CliWorld, Path]]:
+    """An evidence tree in the state a completed ``prepare`` leaves it in.
+
+    The prepare record is written here because ``run`` and ``resume`` refuse
+    without it. That refusal is new: ``prepare.json`` was written by ``prepare``
+    and read by nothing, so the check proving a test save and a verified backup
+    exist produced a record nobody consulted. This fixture used to omit it and
+    every test still passed, which is exactly how the gap survived.
+    """
+    world = make_world(tmp_path)
+    root = tmp_path / "evidence"
+    built = EvidenceLayout(root)
+    built.ensure_tree(SCENARIO_IDS)
+    for schema in SCHEMA_SOURCE.glob("*.json"):
+        (built.schema_dir / schema.name).write_bytes(schema.read_bytes())
+    built.prepare_path.write_text(
+        json.dumps({"ready": True, "save_id": "test-world", "backup_id": "backup-1"}),
+        encoding="utf-8",
+    )
+    yield world, root
+
+
+@pytest.fixture
+def unprepared(tmp_path: Path) -> Iterator[tuple[CliWorld, Path]]:
+    """The same tree with no prepare record — what a first run actually meets."""
     world = make_world(tmp_path)
     root = tmp_path / "evidence"
     built = EvidenceLayout(root)
@@ -1164,3 +1188,70 @@ def test_the_run_order_the_batch_files_walk_is_the_declared_order() -> None:
     assert ordered[0] == "S01_INSTALL"
     assert ordered[-1] == "S20_AUTONOMOUS_2_HOURS"
     assert len(set(ordered)) == 20
+
+
+# ---------------------------------------------------------------------------
+# the gate between prepare and the scenarios that destroy things
+# ---------------------------------------------------------------------------
+
+
+class TestPrepareIsRequired:
+    """``prepare`` proves the world is safe to experiment on. Now it is consulted.
+
+    Twenty scenarios that deliberately hurt the character, and one subcommand
+    that checks a test save is named and a backup *reads back* before any of
+    them start. That subcommand wrote ``prepare.json``; nothing read it. The
+    only thing between those scenarios and somebody's main save was a check
+    whose answer went nowhere.
+    """
+
+    @pytest.mark.parametrize("subcommand", ["run", "resume"])
+    def test_the_destructive_subcommands_refuse_without_a_prepare_record(
+        self, unprepared: tuple[CliWorld, Path], subcommand: str
+    ) -> None:
+        world, root = unprepared
+
+        exit_code = cli(world, root, subcommand)
+
+        assert exit_code == EXIT_FAILURE
+        assert "prepare has not completed" in world.stderr
+        assert "live-test prepare --save" in world.stderr, "the refusal must name the way out"
+
+    @pytest.mark.parametrize("subcommand", ["status", "collect"])
+    def test_the_harmless_subcommands_still_work(
+        self, unprepared: tuple[CliWorld, Path], subcommand: str
+    ) -> None:
+        """Reading the table and gathering logs change nothing in the world.
+
+        Gating them would make an operator unable to see why they are stuck.
+        """
+        world, root = unprepared
+
+        cli(world, root, subcommand)
+
+        assert "prepare has not completed" not in world.stderr
+
+    def test_a_record_that_does_not_claim_readiness_is_not_a_record(
+        self, unprepared: tuple[CliWorld, Path]
+    ) -> None:
+        """``prepare`` writes the file only when clean, but a hand-made one exists too."""
+        world, root = unprepared
+        EvidenceLayout(root).prepare_path.write_text(
+            json.dumps({"ready": False, "problems": ["no verified backup"]}), encoding="utf-8"
+        )
+
+        exit_code = cli(world, root, "run")
+
+        assert exit_code == EXIT_FAILURE
+        assert "does not say the tree is ready" in world.stderr
+
+    def test_an_unreadable_record_refuses_rather_than_assuming(
+        self, unprepared: tuple[CliWorld, Path]
+    ) -> None:
+        world, root = unprepared
+        EvidenceLayout(root).prepare_path.write_text("{not json", encoding="utf-8")
+
+        exit_code = cli(world, root, "run")
+
+        assert exit_code == EXIT_FAILURE
+        assert "could not be read" in world.stderr

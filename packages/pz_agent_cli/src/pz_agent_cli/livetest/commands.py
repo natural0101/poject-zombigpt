@@ -21,6 +21,7 @@ decides, and the observations format has no field for a verdict.
 from __future__ import annotations
 
 import argparse
+import json
 import re
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -359,6 +360,35 @@ def _driver_for(observations: Path | None) -> ScenarioDriver:
     return FileDriver(path=observations)
 
 
+def _unprepared(layout: EvidenceLayout) -> str | None:
+    """Why these scenarios may not be driven yet, or None when they may.
+
+    ``prepare`` is the subcommand that proves the world is safe to experiment
+    on: a save whose name marks it as a test world, and a backup that *reads
+    back* rather than merely existing. It wrote ``prepare.json`` when both held
+    — and nothing read it. ``run`` proceeded regardless, so the one check
+    standing between twenty deliberately destructive scenarios and somebody's
+    main save was a check whose answer nobody consulted.
+
+    Read here rather than trusted from memory of an earlier invocation: the
+    record is in the evidence tree, which is what a resumed run picks up.
+    """
+    record = layout.prepare_path
+    if not record.is_file():
+        return (
+            "prepare has not completed for this evidence tree. These scenarios hurt the "
+            "character and end in restores, so they do not run until a test save and a "
+            "verified backup exist. Run: pz-agent live-test prepare --save <mode>/<name>"
+        )
+    try:
+        document = json.loads(record.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return f"the prepare record at {record} could not be read ({exc}); run prepare again"
+    if not isinstance(document, dict) or document.get("ready") is not True:
+        return f"the prepare record at {record} does not say the tree is ready; run prepare again"
+    return None
+
+
 def _run(
     layout: EvidenceLayout,
     store: StateStore,
@@ -368,6 +398,10 @@ def _run(
     observations: Path | None,
     as_json: bool,
 ) -> int:
+    refusal = _unprepared(layout)
+    if refusal is not None:
+        printer.error(refusal)
+        return EXIT_FAILURE
     selected = _selection(store, only)
     if not selected:
         printer.line("nothing to run: every scenario is PASS.")
@@ -395,6 +429,10 @@ def _resume(
     carrying on past a failure produces a column of failures whose first entry
     is the only one worth reading.
     """
+    refusal = _unprepared(layout)
+    if refusal is not None:
+        printer.error(refusal)
+        return EXIT_FAILURE
     start = first_unpassed(store)
     if start is None:
         printer.line("nothing to resume: all twenty scenarios are PASS.")
