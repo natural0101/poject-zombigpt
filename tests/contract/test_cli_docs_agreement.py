@@ -37,10 +37,42 @@ _NOT_A_COMMAND: Final = frozenset({"command", "is", "was", "did", "binary", "rea
 
 
 def _documents() -> list[Path]:
-    """Every document a user is expected to read."""
+    """Every document a user is expected to read.
+
+    ``docs/blueprint/`` is deliberately *not* here — it is the requirement
+    baseline, read-only per AGENTS.md, and it names the commands the design
+    asked for rather than the ones that were built. Those are checked
+    separately, below, against a declared map.
+    """
     found = sorted(REPO_ROOT.joinpath("docs").glob("*.md"))
     found.append(REPO_ROOT / "README.md")
     return [path for path in found if path.is_file()]
+
+
+def _blueprint_documents() -> list[Path]:
+    found = sorted(REPO_ROOT.joinpath("docs", "blueprint").glob("*.md"))
+    return [path for path in found if path.is_file()]
+
+
+def _blueprint_commands() -> set[str]:
+    found: set[str] = set()
+    for path in _blueprint_documents():
+        text = path.read_text(encoding="utf-8")
+        found |= {word for word in _INVOCATION.findall(text) if word not in _NOT_A_COMMAND}
+    return found
+
+
+#: Commands the blueprint asks for that this build delivers under another name,
+#: and what delivers them. Declared rather than ignored: an entry here is a
+#: deviation someone decided on, and ``docs/PROGRESS.md`` records the reasoning.
+#: Anything the blueprint names that is neither a real command nor in this map
+#: fails the check below, which is the state ``setup`` and ``support-bundle``
+#: were in — named in the requirement baseline, absent from the CLI, and
+#: invisible to every test because this file's glob stopped at ``docs/*.md``.
+BLUEPRINT_ALIASES: Final = {
+    "setup": "install-mod, then validate-config and doctor as separate steps",
+    "support-bundle": "logs --bundle [--verify]",
+}
 
 
 def _named_commands() -> dict[str, list[str]]:
@@ -117,3 +149,35 @@ def test_the_documents_this_checks_are_the_ones_a_user_reads() -> None:
     names = {path.name for path in documents}
     for required in ("QUICKSTART.md", "LOCAL_GAME_HANDOFF.md", "TROUBLESHOOTING.md"):
         assert required in names, f"{required} is not being checked"
+
+
+def test_every_command_the_blueprint_asks_for_exists_or_is_a_declared_deviation() -> None:
+    """The requirement baseline is checked too, against a map rather than silently.
+
+    ``docs/blueprint/`` is read-only, so a name it uses cannot simply be
+    corrected. What it can be is *accounted for*: either the command exists, or
+    this file says what delivers it instead. Two do — ``setup`` and
+    ``support-bundle`` — and both were unaccounted for until now, because the
+    glob above never descended into the blueprint at all.
+    """
+    named = _blueprint_commands()
+    assert named, "the blueprint glob found no commands; the check has gone hollow"
+
+    unaccounted = sorted(named - set(COMMANDS) - set(BLUEPRINT_ALIASES))
+    assert unaccounted == [], (
+        "the blueprint asks for these and nothing delivers them under any name; "
+        "either build them or record the deviation in BLUEPRINT_ALIASES"
+    )
+
+
+def test_the_alias_map_does_not_excuse_a_command_that_now_exists() -> None:
+    """An alias outliving the gap it described is a deviation nobody revisited."""
+    stale = sorted(name for name in BLUEPRINT_ALIASES if name in COMMANDS)
+    assert stale == [], "these are real commands now; drop them from BLUEPRINT_ALIASES"
+
+
+def test_every_alias_names_a_command_that_exists() -> None:
+    """The right-hand side has to be reachable, or the map is a shrug."""
+    for spec, delivered in sorted(BLUEPRINT_ALIASES.items()):
+        head = delivered.split()[0].rstrip(",")
+        assert head in COMMANDS, f"{spec} is mapped to {head!r}, which is not a command"

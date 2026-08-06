@@ -97,6 +97,10 @@ mypy_path = [
   "packages/pz_agent_mcp/src",
   "packages/pz_agent_cli/src",
   "packages/pz_agent_voice/src",
+  # The release builder. Not in `files` — it is a script, not shipped code —
+  # but tests/contract/test_release_docs_are_self_contained.py imports it to
+  # read the archive's document list from the one place that defines it.
+  "packaging/windows",
 ]
 files = [
   "packages/pz_agent_core/src",

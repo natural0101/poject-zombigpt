@@ -83,6 +83,14 @@ BAT_NAMES: Final[tuple[str, ...]] = (
 BIN_NAMES: Final[tuple[str, ...]] = ("pz-agent.exe", "pz-agent-mcp.exe")
 
 #: What the operator on the Windows machine needs to have on disk, offline.
+#:
+#: ``GAME_API_VERIFICATION.md`` and ``LOCAL_AGENT_PROMPT.md`` were missing from
+#: this list while ``LOCAL_GAME_HANDOFF.md`` and ``LIVE_TEST_PLAYBOOK.md`` —
+#: both shipped — told the reader to go and read them. An archive that installs
+#: without a checkout left an operator holding two dangling references, one of
+#: them the inventory of everything unconfirmed and the other the prompt the
+#: local agent starts from. ``tests/contract/test_release_docs_are_self_contained.py``
+#: is what keeps that from happening again.
 DOC_NAMES: Final[tuple[str, ...]] = (
     "QUICKSTART.md",
     "TROUBLESHOOTING.md",
@@ -93,6 +101,13 @@ DOC_NAMES: Final[tuple[str, ...]] = (
     "LOCAL_GAME_HANDOFF.md",
     "LOCAL_DEBUG_MAP.md",
     "LIVE_TEST_PLAYBOOK.md",
+    "GAME_API_VERIFICATION.md",
+    "LOCAL_AGENT_PROMPT.md",
+    # LOCAL_AGENT_PROMPT tells the agent to read PROGRESS; LIMITATIONS sends the
+    # reader to RELEASE for the two-catalogue collision. Both were instructions
+    # to open a file the archive did not contain.
+    "PROGRESS.md",
+    "RELEASE.md",
 )
 
 #: Legal and safety text belongs at the root, where nobody has to go looking.
