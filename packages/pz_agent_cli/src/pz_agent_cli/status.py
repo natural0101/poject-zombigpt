@@ -14,6 +14,16 @@ with the one the running sidecar is actually gated on. The planner line is read
 the same way and for the same reason — the record says which provider a running
 loop is on and whether it fell back to the deterministic path, and re-resolving
 the provider here could answer differently from the sidecar that is running.
+
+The backup line is read rather than recorded, because unlike the other two it is
+a fact about *now*: which backups exist, and whether one of them names the save
+the mod is reporting this second. It is three states and never two — no backup
+at all, a backup that cannot be attributed to this save, and an attributed one
+with its id and age — for the reason the capability line is three: collapsing
+the middle case into either neighbour tells a user either that they have no
+backup when they do, or that they are covered when nothing has shown it. It
+deliberately does not re-hash anything, so it never says "verified"; that check
+belongs to the sidecar that is about to rely on it and to the restore itself.
 """
 
 from __future__ import annotations
@@ -24,12 +34,19 @@ from typing import Any
 
 from pz_agent_core.ipc.atomic import DocumentError, read_json_document
 from pz_agent_core.ipc.layout import IpcLayout
+from pz_agent_core.platform.backup import attributed_to
 from pz_agent_core.protocol import JsonDict
 from pz_agent_core.session.handshake import SessionDescriptor, SessionError
 from pz_agent_core.session.heartbeat import Heartbeat, HeartbeatMonitor, Peer, PeerLiveness
 from pz_agent_core.session.lock import LockError, LockInfo
 
-from .autonomy import PLANNER_FILE_NAME, PlannerRecord, read_planner_record
+from .autonomy import (
+    PLANNER_FILE_NAME,
+    PlannerRecord,
+    observed_save,
+    read_planner_record,
+    workspace_backups,
+)
 from .context import EXIT_FAILURE, EXIT_OK, CliContext, Workspace, resolve_workspace
 from .doctor import environment_facts
 from .output import Printer
@@ -61,6 +78,45 @@ class PeerStatus:
 
 
 @dataclass(frozen=True, slots=True)
+class BackupStatus:
+    """Which of three states this machine is in about a backup for this save.
+
+    ``backup_id`` is set only for the third one. The first two are told apart by
+    ``count``: zero backups is "there is no safety net here at all", and backups
+    that exist but name a different save — or no save — is "there is one, and
+    nothing has shown it covers what you are playing". ``detail`` says which of
+    the several ways the middle case was reached, because they need different
+    things done about them: no session attached is a backup to re-take, a save id
+    that simply does not match is a save that was never backed up.
+    """
+
+    root: str
+    count: int
+    detail: str
+    observed_save_id: str = ""
+    backup_id: str = ""
+    created_at: str = ""
+    age_ms: int | None = None
+
+    @property
+    def attributed(self) -> bool:
+        """True only when a backup here names the save the mod is reporting."""
+        return bool(self.backup_id)
+
+    def to_dict(self) -> JsonDict:
+        return {
+            "root": self.root,
+            "count": self.count,
+            "attributed": self.attributed,
+            "detail": self.detail,
+            "observed_save_id": self.observed_save_id,
+            "backup_id": self.backup_id,
+            "created_at": self.created_at,
+            "age_ms": self.age_ms,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class StatusReport:
     """Everything ``status`` read, with nothing inferred from an absence."""
 
@@ -79,6 +135,10 @@ class StatusReport:
     #: Which planner the last sidecar assembled, or None when none has ever
     #: recorded one here. The same three-way distinction applies.
     planner: PlannerRecord | None = None
+    #: What can be said right now about a backup covering the save being played.
+    #: None only when there is no backup root to read, which is the same machine
+    #: on which there is no game profile at all.
+    backup: BackupStatus | None = None
 
     @property
     def attached(self) -> bool:
@@ -101,6 +161,7 @@ class StatusReport:
             "environment": self.environment or {},
             "capabilities": None if self.capabilities is None else self.capabilities.to_dict(),
             "planner": None if self.planner is None else self.planner.to_dict(),
+            "backup": None if self.backup is None else self.backup.to_dict(),
         }
 
 
@@ -129,6 +190,9 @@ def collect_status(ctx: CliContext, workspace: Workspace) -> StatusReport:
     # that a sidecar tried and could not resolve anything.
     capabilities = read_capability_record(workspace.state_dir / CAPABILITY_FILE_NAME)
     planner = read_planner_record(workspace.state_dir / PLANNER_FILE_NAME)
+    # Backups live in the state directory too, so a machine whose exchange
+    # directory has never existed still has a backup answer worth printing.
+    backup = collect_backup_status(ctx, workspace)
     if root is None or not root.is_dir():
         return StatusReport(
             ipc_root=workspace.redact(root),
@@ -136,6 +200,7 @@ def collect_status(ctx: CliContext, workspace: Workspace) -> StatusReport:
             environment=environment_facts(workspace),
             capabilities=capabilities,
             planner=planner,
+            backup=backup,
         )
     layout = IpcLayout(root)
     monitor = HeartbeatMonitor(layout, clock=ctx.clock_ms)
@@ -153,6 +218,66 @@ def collect_status(ctx: CliContext, workspace: Workspace) -> StatusReport:
         environment=environment_facts(workspace),
         capabilities=capabilities,
         planner=planner,
+        backup=backup,
+    )
+
+
+def collect_backup_status(ctx: CliContext, workspace: Workspace) -> BackupStatus | None:
+    """Ask, without guessing, whether a backup here covers the save being played.
+
+    Two reads and one exact comparison: the save id the mod last published, and
+    the save ids the local backups recorded when they were taken. Nothing is
+    inferred from how many backups there are or from which is newest — the
+    middle state exists precisely so that "there is a backup" never has to stand
+    in for "there is a backup of *this*".
+    """
+    manager = workspace_backups(workspace, clock=ctx.now)
+    if manager is None:
+        return None
+    now_ms = ctx.clock_ms()
+    observed = observed_save(workspace.ipc_root, now_ms=now_ms)
+    redact = workspace.redactor.text
+    root = workspace.redact(manager.backup_root)
+    try:
+        records = manager.list_backups()
+    except OSError as exc:
+        return BackupStatus(
+            root=root,
+            count=0,
+            detail=redact(f"the backup root could not be read ({exc.strerror or exc})"),
+            observed_save_id=observed.save_id or "",
+        )
+    if not records:
+        return BackupStatus(
+            root=root,
+            count=0,
+            detail="nothing has been backed up here",
+            observed_save_id=observed.save_id or "",
+        )
+    if observed.save_id is None:
+        return BackupStatus(
+            root=root,
+            count=len(records),
+            detail=redact(observed.detail),
+        )
+    matches = attributed_to(records, observed.save_id)
+    if not matches:
+        return BackupStatus(
+            root=root,
+            count=len(records),
+            detail="no backup here records the save the mod is reporting",
+            observed_save_id=observed.save_id,
+        )
+    newest = matches[0]
+    created_at_ms = newest.created_at_ms
+    return BackupStatus(
+        root=root,
+        count=len(records),
+        detail=redact(observed.detail),
+        observed_save_id=observed.save_id,
+        backup_id=newest.backup_id,
+        created_at=newest.created_at,
+        age_ms=None if created_at_ms is None else now_ms - created_at_ms,
     )
 
 
@@ -196,6 +321,7 @@ def render_status(report: StatusReport, printer: Printer) -> None:
         printer.field("state", "no exchange directory; nothing has ever connected")
         _render_capabilities(report.capabilities, printer)
         _render_planner(report.planner, printer)
+        _render_backup(report.backup, printer)
         printer.line()
         printer.line("Run pz-agent doctor — it distinguishes a missing Zomboid directory")
         printer.line("from a mod that has never been installed.")
@@ -228,6 +354,7 @@ def render_status(report: StatusReport, printer: Printer) -> None:
         printer.field("panic stop", "a panic-stop sentinel is present")
     _render_capabilities(report.capabilities, printer)
     _render_planner(report.planner, printer)
+    _render_backup(report.backup, printer)
     printer.field("attached", "yes" if report.attached else "no")
 
 
@@ -272,8 +399,9 @@ def _render_planner(record: PlannerRecord | None, printer: Printer) -> None:
         printer.field("planner", "no sidecar has assembled one in this state directory")
         return
     if not record.wired:
-        printer.field("planner", f"NOT WIRED — {record.detail}")
-        printer.line("    the sidecar proposes nothing on its own, in any mode")
+        printer.field("planner", "NOT WIRED — this sidecar proposes nothing on its own")
+        printer.field("planner detail", record.detail)
+        printer.line("    arming it in any mode grants an authority nothing exercises")
         return
     if record.fell_back:
         printer.field("planner", f"{record.active} — FELL BACK from {record.configured}")
@@ -282,6 +410,52 @@ def _render_planner(record: PlannerRecord | None, printer: Printer) -> None:
         printer.field("planner", f"{record.active} — {record.detail}")
     for note in record.notes:
         printer.field("planner note", note)
+
+
+def _render_backup(state: BackupStatus | None, printer: Printer) -> None:
+    """The backup line: none, one that is not this save's, or one that is.
+
+    The first two both mean autonomy will ask rather than act, and they are still
+    printed differently, because what the user has to do about them is different
+    and because "you have no backup" is false on a machine with nine of them.
+    """
+    if state is None:
+        printer.field("backup", "no game profile was found, so there is no backup root to read")
+        return
+    if state.count == 0:
+        printer.field("backup", f"none in {state.root} — {state.detail}")
+        printer.line("    autonomy asks rather than acts until a backup covers this save")
+        return
+    if not state.attributed:
+        printer.field("backup", f"{state.count} here, none attributable to this save")
+        printer.field("backup detail", state.detail)
+        printer.line("    autonomy asks rather than acts until a backup covers this save")
+        return
+    printer.field("backup", f"{state.backup_id} — of the save now open ({state.observed_save_id})")
+    printer.field("taken", _age(state.age_ms, state.created_at))
+
+
+def _age(age_ms: int | None, created_at: str) -> str:
+    """How long ago a backup was taken, or the timestamp when that is unreadable.
+
+    A negative age is printed as what it is rather than as "0 seconds ago": a
+    backup stamped in the future means the two clocks disagree, and that is
+    something to see rather than to round away.
+    """
+    if age_ms is None:
+        return f"{created_at} (its timestamp could not be read as an instant)"
+    if age_ms < 0:
+        return f"{created_at}, which is {-age_ms // 1000} s in the future by this clock"
+    seconds = age_ms // 1000
+    if seconds < 90:
+        return f"{seconds} s ago"
+    minutes = seconds // 60
+    if minutes < 90:
+        return f"{minutes} min ago"
+    hours = minutes // 60
+    if hours < 48:
+        return f"{hours} h ago"
+    return f"{hours // 24} days ago"
 
 
 def run_status(ctx: CliContext, *, as_json: bool) -> int:

@@ -18,6 +18,18 @@ prevents destroys a save the user cannot get back:
 * **Prune is the only deletion path**, it keeps the newest N, and it will not
   accept ``keep < 1``. Nothing else in this module removes a backup.
 
+A backup also carries, when there was one to carry, **the save id the mod itself
+reported** while it was being taken (``observed_save_id``). It is copied from the
+mod's own observation and never derived here: the id the autonomy gate compares
+against is a digest computed inside the game over a save key that never crosses
+the boundary, so the only honest way to know a backup covers the save being
+played is to have been told so at the moment it was made. A backup taken with no
+session attached carries none and keeps none — "the newest backup is probably
+this save" is precisely the reassurance
+:class:`~pz_agent_core.policy.autonomy.BackupEvidence` exists to refuse — and a
+manifest written before the field existed reads back the same way, as a backup
+that names no save rather than as a corrupt one.
+
 Everything is bounded: the size and file count of a save are measured and
 enforced *while copying*, not only before it, so a save that grows underneath
 the copy still cannot fill the disk.
@@ -37,7 +49,7 @@ import json
 import os
 import re
 import shutil
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -93,6 +105,13 @@ REDACTED_PLACEHOLDER: Final = "<REDACTED>"
 _SAVE_SEGMENT_RE: Final = re.compile(r'^[^\\/:*?"<>|\x00]+$')
 
 _BACKUP_ID_RE: Final = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+#: What an observed save id may look like. The mod reports a hex digest today,
+#: but the wire type is ``game.save_id`` and this only has to be as strict as
+#: that: no whitespace and no control characters, because the value is rendered
+#: into ``status`` output and into support bundles, and within the protocol's
+#: length bound, because a manifest field is not the place to widen it.
+_OBSERVED_SAVE_ID_RE: Final = re.compile(rf"^[^\s\x00-\x1f\x7f]{{1,{MAX_SAVE_ID_LEN}}}$")
 
 _TIMESTAMP_FORMAT: Final = "%Y%m%dT%H%M%SZ"
 
@@ -159,6 +178,14 @@ class BackupRecord:
     ``source_dir`` is redacted — the manifest travels inside a support bundle,
     and a Windows profile path carries the user's name.  ``directory`` is the
     real local path and is deliberately not serialised.
+
+    ``save_id`` and ``observed_save_id`` are two different names for the same
+    world and neither can be computed from the other. The first is the save
+    *directory* this machine copied (``<mode>/<name>``); the second is what the
+    mod reported over the exchange directory while the copy was being made, and
+    it is the only one the autonomy gate can compare against an observation. A
+    backup taken with nothing attached has ``None`` there, which is what keeps it
+    unattributed instead of attributed by guesswork.
     """
 
     backup_id: str
@@ -170,10 +197,31 @@ class BackupRecord:
     product_version: str
     schema_version: str
     directory: Path
+    #: The mod's own ``observation.game.save_id`` at the moment of the backup,
+    #: or None when no session was attached to report one. Never inferred.
+    observed_save_id: str | None = None
 
     @property
     def file_count(self) -> int:
         return len(self.files)
+
+    @property
+    def created_at_ms(self) -> int | None:
+        """When this backup was taken, in epoch milliseconds, or None.
+
+        None when the timestamp cannot be read as one instant: an unparseable
+        string, or one with no offset, which names a different moment in every
+        time zone. Callers that need an age report having none rather than
+        assuming UTC — a backup whose age is guessed is a backup whose age is
+        wrong on exactly the machines where it matters.
+        """
+        try:
+            moment = datetime.fromisoformat(self.created_at)
+        except ValueError:
+            return None
+        if moment.tzinfo is None:
+            return None
+        return int(moment.timestamp() * 1000)
 
     @property
     def data_dir(self) -> Path:
@@ -185,6 +233,10 @@ class BackupRecord:
             "product_version": self.product_version,
             "backup_id": self.backup_id,
             "save_id": self.save_id,
+            # Written even when it is null, so a reader can tell a backup taken
+            # with nothing attached from one written before the field existed.
+            # Both are unattributed; only the first one was ever asked.
+            "observed_save_id": self.observed_save_id,
             "created_at": self.created_at,
             "source_dir": self.source_dir,
             "total_bytes": self.total_bytes,
@@ -195,6 +247,10 @@ class BackupRecord:
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any], *, directory: Path) -> BackupRecord:
         """Rebuild a record from a manifest document.
+
+        A manifest written before ``observed_save_id`` existed simply has no such
+        key, and that is not a defect: it is a backup nothing told which save it
+        covers, which is exactly what ``None`` means here.
 
         Raises:
             BackupCorruptError: if a required field is missing or ill-typed, or
@@ -218,6 +274,7 @@ class BackupRecord:
         return cls(
             backup_id=_manifest_str(payload, "backup_id"),
             save_id=_manifest_str(payload, "save_id"),
+            observed_save_id=_manifest_observed_save_id(payload),
             created_at=_manifest_str(payload, "created_at"),
             source_dir=_manifest_str(payload, "source_dir"),
             total_bytes=total,
@@ -244,6 +301,62 @@ def _manifest_str(payload: Mapping[str, Any], key: str) -> str:
     if not isinstance(value, str) or not value:
         raise BackupCorruptError(f"manifest field {key!r} is missing or not a string")
     return value
+
+
+def _manifest_observed_save_id(payload: Mapping[str, Any]) -> str | None:
+    """The observed save id in a manifest, or None when it carries none.
+
+    Absent and null are the same answer and both are ordinary: one is an old
+    manifest, the other a backup taken with no session attached. A key that is
+    *present and unusable* is neither, and it is corruption rather than another
+    way of saying None — a manifest this module did not write must not be able to
+    put an arbitrary value in front of the attribution check, and reading it as
+    "unattributed" would hide the fact that something rewrote it.
+    """
+    value = payload.get("observed_save_id")
+    if value is None:
+        return None
+    if not isinstance(value, str) or not _OBSERVED_SAVE_ID_RE.match(value):
+        raise BackupCorruptError(
+            "manifest 'observed_save_id' is present but is not a save id the mod could have "
+            "reported"
+        )
+    return value
+
+
+def _validate_observed_save_id(observed_save_id: str) -> str:
+    """Check a mod-reported save id before it is written into a manifest.
+
+    Raises:
+        BackupError: if it is empty, over-long, or carries whitespace or control
+            characters. Callers that have nothing to record pass None; an empty
+            string is a caller that lost the value on the way here, and silently
+            storing it would produce a backup that claims to name a save and
+            names nothing.
+    """
+    if not _OBSERVED_SAVE_ID_RE.match(observed_save_id):
+        raise BackupError(
+            f"observed save id {observed_save_id!r} is not one the mod could have reported; "
+            f"it must be 1..{MAX_SAVE_ID_LEN} characters with no whitespace"
+        )
+    return observed_save_id
+
+
+def attributed_to(
+    records: Iterable[BackupRecord], observed_save_id: str
+) -> tuple[BackupRecord, ...]:
+    """Those *records* whose manifest names *observed_save_id*, in the given order.
+
+    Exact string equality against the id the mod itself reported, and nothing
+    else. There is deliberately no nearest, newest or only-one-backup fallback:
+    the whole point of recording the id is that "this is probably the right
+    backup" stops being an answer, and a filter that ever returns a record whose
+    ``observed_save_id`` differs would hand the autonomy gate a safety net for
+    another world.
+    """
+    if not observed_save_id:
+        return ()
+    return tuple(record for record in records if record.observed_save_id == observed_save_id)
 
 
 def _validate_relative_member(relative: str) -> tuple[str, ...]:
@@ -389,7 +502,7 @@ class BackupManager:
 
     # -- creation ---------------------------------------------------------
 
-    def create(self, save_id: str) -> BackupRecord:
+    def create(self, save_id: str, *, observed_save_id: str | None = None) -> BackupRecord:
         """Copy the save named by *save_id* into a new, hash-manifested backup.
 
         The staged backup is re-read from disk and re-hashed against its own
@@ -398,12 +511,22 @@ class BackupManager:
         passed, so a returned record means a verified backup exists rather than
         that a copy loop finished without raising.
 
+        *observed_save_id* is the save id the mod reported for the session that
+        was attached while this ran, and it is the caller's to establish: this
+        module reads save *directories* and cannot compute it. None means no
+        session reported one, and it is recorded as none — this is the parameter
+        that must never be filled in with a plausible value.
+
         Raises:
-            BackupError: if the save id is unusable.
+            BackupError: if the save id, or a supplied observed save id, is
+                unusable.
             SaveNotFoundError: if the save directory does not exist.
             BackupTooLargeError: if the save exceeds the size or file-count cap.
             BackupCorruptError: if the backup does not read back as written.
         """
+        observed = (
+            None if observed_save_id is None else _validate_observed_save_id(observed_save_id)
+        )
         segments = _validate_save_id(save_id)
         source = self.saves_dir.joinpath(*segments)
         if not source.is_dir():
@@ -421,6 +544,7 @@ class BackupManager:
             record = BackupRecord(
                 backup_id=backup_id,
                 save_id="/".join(segments),
+                observed_save_id=observed,
                 created_at=created_at.astimezone(UTC).isoformat(),
                 source_dir=self._redact(source),
                 total_bytes=total,
@@ -584,6 +708,15 @@ class BackupManager:
                 if problems is not None:
                     problems.append(f"{directory.name}: {exc}")
                 continue
+
+    def attributed_to(self, observed_save_id: str) -> tuple[BackupRecord, ...]:
+        """Readable backups whose manifest names *observed_save_id*, newest first.
+
+        Empty when nothing names it, including when *observed_save_id* is empty:
+        "no session reported a save" must not select every backup that reported
+        none either. See :func:`attributed_to` for why the match is exact.
+        """
+        return attributed_to(self.list_backups(), observed_save_id)
 
     def get(self, backup_id: str) -> BackupRecord:
         """Load one backup's record.

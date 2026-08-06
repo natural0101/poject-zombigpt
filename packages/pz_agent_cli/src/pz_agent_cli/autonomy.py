@@ -37,16 +37,26 @@ back from the gate, and a plan naming a different item is refused rather than
 run: the gate removed everything the user reserved (§7.9) before it chose, and a
 provider that named something else would be reaching around that.
 
-**The backup is the one thing this build cannot witness.** §7.7 puts an
-unbacked save on the ask-the-user side, so
+**The backup is witnessed, never guessed.** §7.7 puts an unbacked save on the
+ask-the-user side, so
 :meth:`~pz_agent_core.policy.autonomy.AutonomyGate.evaluate` takes the evidence
-as a parameter with no default. Local backups are named by save *directory*;
-the mod reports the save as a digest of a key this side never sees
-(``PZAgent.ObserveModel.saveId``). Nothing bridges those two identifier spaces,
-so :data:`no_attributable_backup` is what ``pz-agent start`` passes, autonomy
-asks instead of acting, and :data:`BACKUP_NOT_ATTRIBUTABLE` says so through
-``pz-agent status``. It is a parameter rather than a hard-coded ``None`` because
-the missing half is an attribution, not the evidence type.
+as a parameter with no default. Local backups are named by save *directory*; the
+mod reports the save as a digest of a key this side never sees
+(``PZAgent.ObserveModel.saveId``), and nothing on this side can compute one from
+the other. The bridge is therefore not a computation but a record: ``pz-agent
+backup-save`` reads the save id out of the mod's own published snapshot and
+writes it into the backup's manifest, and :class:`BackupAttribution` hands the
+gate a backup whose manifest names the very id the observation carries — the
+same value produced by the same code the gate compares against, so no hash is
+re-implemented here and nothing is assumed.
+
+When no backup names the observed save the answer is still None and the gate
+still asks: :func:`no_attributable_backup` remains what an unattributed machine
+gets, and :data:`BACKUP_NOT_ATTRIBUTABLE` still says so through ``pz-agent
+status``. A backup taken with no session attached records no save id at all, and
+it stays unattributed for the rest of its life — the identifier can only be
+learned from a mod that was running, and inventing it afterwards is the failure
+this whole path exists to make impossible.
 """
 
 from __future__ import annotations
@@ -54,6 +64,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
+from datetime import datetime
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Final, TypeAlias
@@ -61,7 +72,10 @@ from typing import Any, Final, TypeAlias
 from pz_agent_core.actions.adapter import AdapterRegistry
 from pz_agent_core.actions.engine import ActionRequest
 from pz_agent_core.capabilities import MAX_NOTES
+from pz_agent_core.ipc.atomic import DocumentError, read_json_document
 from pz_agent_core.ipc.clocks import Clock, system_clock_ms
+from pz_agent_core.ipc.layout import IpcLayout, SnapshotSlot
+from pz_agent_core.ipc.snapshot import POINTER_SLOT
 from pz_agent_core.planner import (
     MAX_PLAN_STEPS,
     PROVIDER_NONE,
@@ -80,6 +94,7 @@ from pz_agent_core.planner import (
     TeamONProvider,
     TransportError,
 )
+from pz_agent_core.platform.backup import BackupError, BackupManager, BackupRecord
 from pz_agent_core.policy.autonomy import (
     DEFAULT_AUTONOMY_CONFIG,
     NEED_BOREDOM,
@@ -95,26 +110,42 @@ from pz_agent_core.policy.autonomy import (
 from pz_agent_core.policy.config import DEFAULT_POLICY_CONFIG, PolicyConfig
 from pz_agent_core.policy.permissions import Initiative
 from pz_agent_core.policy.selection import NO_CAPABILITIES, CapabilityLookup
-from pz_agent_core.protocol import CapabilityState, JsonDict, Observation, RefKind
+from pz_agent_core.protocol import (
+    CapabilityState,
+    JsonDict,
+    Observation,
+    ProtocolError,
+    RefKind,
+)
 
 from .config import AgentConfig
+from .context import Workspace
 from .runtime import CapabilityLedger
 from .supervisor import _read_json, _write_json
 
 __all__ = [
+    "BACKUP_ATTRIBUTION_AVAILABLE",
     "BACKUP_NOT_ATTRIBUTABLE",
+    "MAX_SNAPSHOT_AGE_MS",
     "PLANNER_FILE_NAME",
+    "UNKNOWN_SAVE_ID",
     "AutonomyPlanner",
+    "BackupAttribution",
     "BackupWitness",
     "LedgerCapabilities",
+    "ObservedSave",
     "PlannerError",
     "PlannerRecord",
     "autonomy_config",
+    "backup_note",
+    "build_backup_witness",
     "build_planner",
     "no_attributable_backup",
+    "observed_save",
     "publish_planner_record",
     "read_planner_record",
     "resolve_provider",
+    "workspace_backups",
 ]
 
 #: Where the sidecar writes what it planned *with*, beside the capability record
@@ -122,28 +153,305 @@ __all__ = [
 #: running loop is on without re-deriving it and reaching a second opinion.
 PLANNER_FILE_NAME: Final = "sidecar.planner.json"
 
-#: Why ``pz-agent start`` can supply no backup evidence. Carried into the
-#: planner record so the silence has a reason a user can read.
+#: Why ``pz-agent start`` can supply no backup evidence on this machine.
+#: Carried into the planner record so the silence has a reason a user can read.
 BACKUP_NOT_ATTRIBUTABLE: Final = (
-    "autonomy will ask rather than act: a backup here is named by its save directory and "
-    "the mod reports the save as a digest, so this build cannot show that any local backup "
-    "covers the save being played. Everything else in the autonomous path is wired."
+    "autonomy will ask rather than act: no backup here records the save id the mod reported "
+    "when it was taken, so none of them can be shown to cover the save being played. Run "
+    "'pz-agent backup-save' with the game open and the save loaded, and the backup it takes "
+    "will carry that id."
 )
 
-#: What the gate needs and the filesystem cannot yet answer: the backup covering
-#: the save an observation names. A callable rather than an object because the
-#: only input a witness has is the save it is asked about.
+#: The other half of the same statement, for a machine that has one. It is still
+#: conditional: a recorded id only attributes a backup to the save it names.
+BACKUP_ATTRIBUTION_AVAILABLE: Final = (
+    "autonomy acts unasked only while a backup here records the save id the mod is reporting "
+    "now; a backup of another save is not a safety net for this one, and the backup's hashes "
+    "are re-checked before it counts as one at all."
+)
+
+#: What the mod publishes when it could not read the save key
+#: (``PZAgent.ObserveModel.UNKNOWN_SAVE_ID``). Every unreadable save reports the
+#: same string, so it names no save in particular and must never be recorded on
+#: a backup or matched against one — two different worlds would attribute to
+#: each other through it.
+UNKNOWN_SAVE_ID: Final = "unknown"
+
+#: How old the mod's last published snapshot may be and still describe the save
+#: that is open *now*. The mod publishes at the 4 Hz cadence of §3.3 while a save
+#: is loaded, so this is generous by two orders of magnitude — a save pause, a
+#: slow disk or a GC hitch cannot reach it — while still being far short of the
+#: case that matters: a game that has quit leaves its last snapshot on disk
+#: forever, and reading that as the save being played is how a backup would get
+#: attributed to a world nobody is in.
+MAX_SNAPSHOT_AGE_MS: Final = 30_000
+
+#: What the gate needs and only a record can answer: the backup covering the save
+#: an observation names. A callable rather than an object because the only input
+#: a witness has is the save it is asked about.
 BackupWitness: TypeAlias = Callable[[str], "BackupEvidence | None"]
 
 
 def no_attributable_backup(save_id: str) -> BackupEvidence | None:
-    """The honest witness for this build: nothing can be attributed to *save_id*.
+    """The witness for a machine where nothing can be attributed to *save_id*.
 
-    Not a placeholder for a check that was skipped — the check cannot be made
-    from local files at all, and :data:`BACKUP_NOT_ATTRIBUTABLE` is published so
-    the refusal it produces is explained rather than mysterious.
+    Not a placeholder for a check that was skipped: it is what
+    :func:`build_backup_witness` returns when no backup under the backup root
+    carries a save id at all, and :data:`BACKUP_NOT_ATTRIBUTABLE` is published
+    alongside it so the refusal it produces is explained rather than mysterious.
     """
     return None
+
+
+# ---------------------------------------------------------------------------
+# the save the mod itself is reporting
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class ObservedSave:
+    """The save id the mod last published, or why there is none to have.
+
+    ``detail`` is written for the person reading ``backup-save`` or ``status``
+    output, and it is never empty: "no save id was recorded" is only an honest
+    thing to print next to the reason it was not.
+    """
+
+    save_id: str | None
+    detail: str
+
+    def __post_init__(self) -> None:
+        if not self.detail.strip():
+            raise ValueError("an observed-save reading must say how it reached its answer")
+
+
+def observed_save(
+    ipc_root: Path | None,
+    *,
+    now_ms: int,
+    max_age_ms: int = MAX_SNAPSHOT_AGE_MS,
+) -> ObservedSave:
+    """Read ``observation.game.save_id`` out of the mod's own published snapshot.
+
+    The pointer is read first because the mod writes it *last* (§3.5): it is the
+    commit point, and the slot it names is the only file that holds a snapshot
+    the mod finished publishing. When that slot cannot be read this reports no
+    save id rather than following
+    :class:`~pz_agent_core.ipc.snapshot.SnapshotReader` to the other slot — that
+    fallback exists to keep a *world model* moving across a torn write, and the
+    older snapshot it recovers may name the save before the one now loaded.
+    Attributing a backup to it would be exactly the guess this module refuses.
+
+    Every failure is the same answer, ``None`` with a reason: no exchange
+    directory, no pointer, an unusable slot, a document that is not an
+    observation, one older than *max_age_ms*, or one the mod itself could not
+    name a save for (:data:`UNKNOWN_SAVE_ID`).
+    """
+    if ipc_root is None or not ipc_root.is_dir():
+        return ObservedSave(None, "there is no exchange directory, so no session reported a save")
+    layout = IpcLayout(ipc_root)
+    slot = _pointed_slot(layout)
+    if slot is None:
+        return ObservedSave(
+            None,
+            "no session has published a snapshot here that this can read the save id from",
+        )
+    try:
+        document = read_json_document(layout.snapshot_slot(slot))
+    except DocumentError as exc:
+        return ObservedSave(
+            None,
+            f"the snapshot pointer names slot {slot.value}, which could not be read ({exc}); "
+            "the other slot holds an older snapshot and is not what the mod last published",
+        )
+    try:
+        observation = Observation.from_dict(document)
+    except ProtocolError as exc:
+        return ObservedSave(None, f"slot {slot.value} does not hold a whole observation ({exc})")
+    age_ms = now_ms - observation.timestamp_ms
+    if age_ms > max_age_ms:
+        return ObservedSave(
+            None,
+            f"the last snapshot the mod published is {age_ms} ms old, past the {max_age_ms} ms "
+            "that still describes the save open now",
+        )
+    if age_ms < -max_age_ms:
+        return ObservedSave(
+            None,
+            f"the last snapshot the mod published is stamped {-age_ms} ms in the future; the two "
+            "clocks disagree, so its save id is not something to record against this moment",
+        )
+    save_id = observation.game.save_id
+    if save_id == UNKNOWN_SAVE_ID:
+        return ObservedSave(
+            None,
+            "the mod could not read the save key and reported it as unknown, which every "
+            "unreadable save reports; it names no save to attribute a backup to",
+        )
+    return ObservedSave(save_id, f"the mod reported it {age_ms} ms ago in slot {slot.value}")
+
+
+def _pointed_slot(layout: IpcLayout) -> SnapshotSlot | None:
+    """Which slot the snapshot pointer names, or None when it cannot be trusted."""
+    try:
+        payload = read_json_document(layout.snapshot_pointer)
+    except DocumentError:
+        return None
+    raw = payload.get(POINTER_SLOT)
+    if not isinstance(raw, str):
+        return None
+    try:
+        return SnapshotSlot(raw)
+    except ValueError:
+        return None
+
+
+# ---------------------------------------------------------------------------
+# from a recorded save id to evidence the gate accepts
+# ---------------------------------------------------------------------------
+
+
+def workspace_backups(
+    workspace: Workspace, *, clock: Callable[[], datetime] | None = None
+) -> BackupManager | None:
+    """The backup manager for this machine, or None when no game profile was found.
+
+    One construction site for the three commands that need it, so ``status``,
+    ``backup-save`` and the sidecar cannot end up reading different roots and
+    disagreeing about whether a save is backed up.
+
+    *clock* is the CLI's injected one where the caller has it. A manifest's
+    timestamp and the age ``status`` prints beside it are then read from the same
+    frame of reference; left out, the manager keeps its own wall clock, which is
+    the same instant in production and a different one under a test harness.
+    """
+    user_dir = workspace.user_dir
+    if user_dir is None:
+        return None
+    if clock is None:
+        return BackupManager(user_dir, workspace.backup_root)
+    return BackupManager(user_dir, workspace.backup_root, clock=clock)
+
+
+@dataclass
+class BackupAttribution:
+    """Witness: the backup whose manifest names this save, with its hashes checked.
+
+    Two rules, and the second is why this is a class rather than a function.
+
+    **The match is exact.** :func:`~pz_agent_core.platform.backup.attributed_to`
+    compares the observation's save id against the id the mod reported when the
+    backup was taken. Newest-wins, only-one-backup and same-save-directory are
+    all absent on purpose: each of them answers "probably", and a probable safety
+    net is the thing :class:`~pz_agent_core.policy.autonomy.BackupEvidence`
+    refuses to be.
+
+    **``verified`` means the hashes were read.**
+    :meth:`~pz_agent_core.platform.backup.BackupManager.verify` re-hashes every
+    file in the backup against its manifest, which is the only evidence that it
+    would restore — a manifest that merely lists files proves nothing. That is
+    also gigabytes of reading, and this is called on every tick, so the result is
+    remembered per backup id for the life of the process. What is remembered is
+    therefore precisely "these hashes were checked, in this process, and they
+    matched", which is what the flag claims; the check that guards the actual
+    restore is run again by
+    :meth:`~pz_agent_core.platform.backup.BackupManager.restore` immediately
+    before it writes anything.
+
+    A backup that fails verification is skipped rather than offered unverified: a
+    corrupt backup is not a weaker safety net, it is none, and a deployment that
+    turned ``require_verified_backup`` off would otherwise be handed one.
+    """
+
+    manager: BackupManager
+    _checked: dict[str, bool] = field(default_factory=dict, init=False, repr=False)
+    _detail: str = field(default="nothing has been asked about yet", init=False, repr=False)
+
+    @property
+    def last_detail(self) -> str:
+        """Why the last question answered as it did, for a readout that asks."""
+        return self._detail
+
+    def __call__(self, save_id: str) -> BackupEvidence | None:
+        """The :data:`BackupWitness` entry point: evidence for *save_id*, or None."""
+        if not save_id or save_id == UNKNOWN_SAVE_ID:
+            self._detail = "the observation names no save id I could attribute a backup to"
+            return None
+        candidates = self.manager.attributed_to(save_id)
+        if not candidates:
+            self._detail = f"no backup here records the save id {save_id}"
+            return None
+        for record in candidates:
+            created_at_ms = record.created_at_ms
+            if created_at_ms is None or created_at_ms < 0:
+                self._detail = (
+                    f"backup {record.backup_id} records this save but its timestamp cannot be "
+                    "read as one instant, so I cannot say how old the safety net is"
+                )
+                continue
+            if not self._hashes_check_out(record.backup_id):
+                self._detail = (
+                    f"backup {record.backup_id} records this save but failed its hash check, "
+                    "so it is not a safety net for it"
+                )
+                continue
+            self._detail = f"backup {record.backup_id} records this save and its hashes check out"
+            return BackupEvidence(save_id=save_id, created_at_ms=created_at_ms, verified=True)
+        return None
+
+    def _hashes_check_out(self, backup_id: str) -> bool:
+        remembered = self._checked.get(backup_id)
+        if remembered is not None:
+            return remembered
+        try:
+            self.manager.verify(backup_id)
+        except BackupError:
+            # Every refusal from the subsystem — missing, corrupt, unreadable —
+            # is the same answer here: this one cannot be relied on.
+            checked = False
+        else:
+            checked = True
+        self._checked[backup_id] = checked
+        return checked
+
+
+def backup_note(records: tuple[BackupRecord, ...]) -> str:
+    """What to tell ``status`` about what the backups here could ever prove.
+
+    Read at assembly time, when no observation exists yet, so it is deliberately
+    the weaker of the two statements it could make: whether *any* backup carries
+    a save id at all. Whether one covers the save actually being played is a
+    per-tick question, and the gate answers it every tick.
+    """
+    if any(record.observed_save_id for record in records):
+        return BACKUP_ATTRIBUTION_AVAILABLE
+    return BACKUP_NOT_ATTRIBUTABLE
+
+
+def build_backup_witness(workspace: Workspace) -> tuple[BackupWitness, str]:
+    """The witness ``build_loop`` passes the planner, and the note explaining it.
+
+    Falls back to :func:`no_attributable_backup` — the same honest refusal this
+    path had before anything could be attributed — when there is no backup root
+    to read or nothing in it carries a save id. The fallback is a separate object
+    rather than an empty :class:`BackupAttribution` so that the sidecar does not
+    re-list a backup root on every tick to keep discovering that it is empty.
+    """
+    manager = workspace_backups(workspace)
+    if manager is None:
+        return no_attributable_backup, BACKUP_NOT_ATTRIBUTABLE
+    try:
+        records = manager.list_backups()
+    except OSError as exc:
+        # Listing reads a manifest per backup; a root that cannot be read is a
+        # machine with no attributable backup, said out loud rather than a
+        # traceback out of a sidecar that was only assembling itself.
+        return no_attributable_backup, (
+            f"{BACKUP_NOT_ATTRIBUTABLE} The backup root could not be read ({exc.strerror or exc})."
+        )
+    if not any(record.observed_save_id for record in records):
+        return no_attributable_backup, BACKUP_NOT_ATTRIBUTABLE
+    return BackupAttribution(manager), backup_note(records)
 
 
 #: Which goal serves which need. The three are exactly the needs

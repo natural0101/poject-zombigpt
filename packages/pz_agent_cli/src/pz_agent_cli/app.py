@@ -35,10 +35,10 @@ from pz_agent_core.protocol import SessionMode
 from pz_agent_core.version import PRODUCT_VERSION
 
 from .autonomy import (
-    BACKUP_NOT_ATTRIBUTABLE,
     PLANNER_FILE_NAME,
     AutonomyPlanner,
     PlannerRecord,
+    build_backup_witness,
     build_planner,
     publish_planner_record,
 )
@@ -522,23 +522,36 @@ def _build_planner(
     that does not validate does not stop the assembly: the loop still has to come
     up so the user can be told what is wrong, and the documented defaults —
     ``provider = "none"``, the deterministic path — are what runs meanwhile.
+
+    The backup witness is built here rather than defaulted for the same reason
+    the capability ledger is: the fail-closed default
+    (:func:`~pz_agent_cli.autonomy.no_attributable_backup`) makes an armed
+    autonomous sidecar ask about every need, and which of the two a machine gets
+    is a fact about its backups, not about this function. The note that comes
+    back with it says which one happened, so ``status`` can report it.
     """
     validation = load_config(workspace.config_path)
     config: AgentConfig = validation.config or default_config()
-    notes = [BACKUP_NOT_ATTRIBUTABLE]
+    backup, backup_note = build_backup_witness(workspace)
+    notes = [backup_note]
     if validation.config is None:
         notes.append(
             f"the configuration did not validate ({len(validation.errors)} problem(s)), so the "
             "documented defaults are in force; run 'pz-agent validate-config' to see them"
         )
-    return build_planner(
+    planner, record = build_planner(
         registry=registry,
         capabilities=capabilities,
         config=config,
         env=ctx.env,
         clock=ctx.clock_ms,
+        backup=backup,
         notes=tuple(workspace.redactor.text(note) for note in notes),
     )
+    # A fallback reason is a provider's own message about an endpoint or a
+    # credential, and it is printed by ``status`` and carried in its ``--json``
+    # — which is the form that ends up in a bug report.
+    return planner, replace(record, fallback_reason=workspace.redactor.text(record.fallback_reason))
 
 
 def _sidecar_argv(workspace: Workspace) -> list[str]:

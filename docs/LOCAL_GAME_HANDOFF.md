@@ -85,12 +85,14 @@ MCP — so nothing above affects it.
 safe direction, and each will make S19 and S20 look like an agent that does
 nothing until it is resolved:
 
-1. **No attributable backup.** `AutonomyGate` refuses to act unless a backup
-   exists whose save id equals the one the mod reported for the open save — "a
-   backup exists somewhere" is not a safety net. Local backups are named by save
-   directory while the mod's save id is a hash it computes itself, and bridging
-   the two is in progress. Until it lands, take the backup and expect autonomy
-   to ask.
+1. **A backup that covers *this* save.** `AutonomyGate` refuses to act unless a
+   backup exists whose save id equals the one the mod reported for the open
+   save — "a backup exists somewhere" is not a safety net. That id is recorded
+   by `pz-agent backup-save` from the mod's own snapshot, so **take the backup
+   while the game is running and the sidecar is attached**. A backup taken with
+   nothing attached is complete and restorable; it simply cannot prove which
+   save it covers, and `--list` marks it `no save id`. This is the one step here
+   that inherently needs a live session.
 2. **A capability must be *verified*, not merely available, before autonomy uses
    it.** A static scan can never reach `verified`; only a live, user-directed run
    does. So a fresh install's first autonomous meal is refused until you have
