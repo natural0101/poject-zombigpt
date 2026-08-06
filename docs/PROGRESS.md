@@ -20,18 +20,31 @@ with them. See [the playable-agent section](#the-playable-agent-branch) below,
 and [`LOCAL_GAME_HANDOFF.md`](LOCAL_GAME_HANDOFF.md) for what still needs a
 machine with the game on it.
 
-**Three defects that branch found are worth reading before any further work**,
+**Five defects that branch found are worth reading before any further work**,
 because they are one family and the family is not closed. Every subsystem was
 written, tested and green; what nothing tested was whether the subsystems were
-*connected*. Thirteen of sixteen game actions never reached the dispatcher.
-Every `movement.move_to` and `movement.move_near` command would have been
-refused, because the two halves named their arguments differently. And
-`move_near` could not be called at all, because it demanded a reference kind the
-mod never mints. Each was found by a test that crossed a seam rather than
-covering a unit — `tests/lua/test_adapter_registry.lua`,
-`tests/contract/test_adapter_args_agreement.py`, and the round-trip property
-that an adapter must be able to read back what it ships. The live run is the
-fourth such seam.
+*connected*.
+
+| # | The defect | What it cost |
+| --- | --- | --- |
+| 1 | Adapters published under `name`; the dispatcher reads `action` | Thirteen of sixteen game actions unreachable |
+| 2 | The two halves of the wire named arguments differently | Every movement and transfer command refused |
+| 3 | `move_near` demanded a reference kind the mod never mints | The action could not be called from a real observation |
+| 4 | `build_loop` passed no capability check, so it kept `deny_capability` | The assembled sidecar refused *every* action |
+| 5 | `build_loop` passes no planner | Autonomous mode proposes nothing |
+
+Every one was found by a test that crosses a seam rather than covering a unit,
+and each of those tests now exists: `tests/lua/test_adapter_registry.lua`,
+`tests/contract/test_adapter_args_agreement.py`,
+`tests/contract/test_capability_evidence_agreement.py`,
+`tests/contract/test_mcp_action_coverage.py` and
+`tests/contract/test_sidecar_capability_wiring.py`.
+
+The pattern is worth naming, because it will recur. A unit test written beside
+the code it covers cannot fail for the reason these failed: both sides were
+correct in isolation and the assumption connecting them was never stated
+anywhere a test could read it. **The live run is the next seam of the same
+kind**, and it is the only one that cannot be closed from here.
 
 ## Status
 
