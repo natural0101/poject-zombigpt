@@ -108,7 +108,13 @@ max_response_bytes = 1000000
 max_attempts = 3
 
 [voice]
-# "teamon" or "none". No voice adapter ships in this build, so enabling voice
-# means nothing will listen; validate-config says so rather than failing.
+# "teamon" or "none". The TeamON adapter is wired and reachable through
+# `pz-agent voice run`; the fake adapter the tests use is deliberately not
+# selectable here. Enabling voice with "teamon" needs the SDK installed and the
+# key in the environment variable named below — `pz-agent voice run` refuses
+# clearly rather than falling back to something that only looks like listening.
 adapter = "teamon"
 enabled = false
+# The NAME of an environment variable, never the key itself. A credential in a
+# file the user might paste into a bug report is the leak this prevents.
+api_key_env = "PZ_AGENT_TEAMON_API_KEY"

@@ -179,7 +179,18 @@ max_steps = 8
 [voice]
 adapter = "teamon"
 enabled = false
+api_key_env = "PZ_AGENT_TEAMON_API_KEY"   # the variable's name, never the key
 ```
+
+Voice is off by default. To try the parser without a microphone or a session:
+
+```powershell
+.venv\Scripts\pz-agent voice check стоп
+```
+
+That prints the intent a phrase resolves to, and says plainly when nothing
+matched — which is how you find out why a word was not recognised without
+having to be in a game.
 
 ```powershell
 .venv\Scripts\pz-agent validate-config

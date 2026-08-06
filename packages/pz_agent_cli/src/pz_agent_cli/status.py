@@ -20,6 +20,14 @@ visible is "wired but nothing loaded yet": an agent that honours no reservation
 because none has been read is indistinguishable from one that honours them and
 has none, right up until it eats something.
 
+The voice line is the record *and* the setting, kept apart on purpose. Nothing
+starts the companion but the user — no sidecar spawns it — so "configured" and
+"listening" are separate facts, and a machine where they disagree is exactly the
+one whose owner is talking to a microphone nothing is reading. It also carries
+the one thing this build cannot do: a spoken goal reaches no planner, and that
+gap is printed here rather than left as a companion that refuses every goal for
+a reason the user has nowhere to read.
+
 The backup line is read rather than recorded, because unlike the other two it is
 a fact about *now*: which backups exist, and whether one of them names the save
 the mod is reporting this second. It is three states and never two — no backup
@@ -57,6 +65,7 @@ from .doctor import environment_facts
 from .memory import MEMORY_RECORD_NAME, MemoryRecord, read_memory_record
 from .output import Printer
 from .runtime import CAPABILITY_FILE_NAME, CapabilityRecord, read_capability_record
+from .voice import VoiceStatus, collect_voice_status
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,6 +157,10 @@ class StatusReport:
     #: None only when there is no backup root to read, which is the same machine
     #: on which there is no game profile at all.
     backup: BackupStatus | None = None
+    #: Whether voice is configured, on which adapter, and whether a companion is
+    #: listening. Never None: the configuration answers even on a machine where
+    #: no companion has ever run, and "not configured" is an answer.
+    voice: VoiceStatus | None = None
 
     @property
     def attached(self) -> bool:
@@ -172,6 +185,7 @@ class StatusReport:
             "planner": None if self.planner is None else self.planner.to_dict(),
             "memory": None if self.memory is None else self.memory.to_dict(),
             "backup": None if self.backup is None else self.backup.to_dict(),
+            "voice": None if self.voice is None else self.voice.to_dict(),
         }
 
 
@@ -204,6 +218,10 @@ def collect_status(ctx: CliContext, workspace: Workspace) -> StatusReport:
     # Backups live in the state directory too, so a machine whose exchange
     # directory has never existed still has a backup answer worth printing.
     backup = collect_backup_status(ctx, workspace)
+    # Voice for the same reason twice over: the setting lives in config.toml and
+    # the record in the state directory, and neither needs an exchange directory
+    # to be readable — a user whose game has never run still asked for voice.
+    voice = collect_voice_status(ctx, workspace)
     if root is None or not root.is_dir():
         return StatusReport(
             ipc_root=workspace.redact(root),
@@ -213,6 +231,7 @@ def collect_status(ctx: CliContext, workspace: Workspace) -> StatusReport:
             planner=planner,
             memory=memory,
             backup=backup,
+            voice=voice,
         )
     layout = IpcLayout(root)
     monitor = HeartbeatMonitor(layout, clock=ctx.clock_ms)
@@ -232,6 +251,7 @@ def collect_status(ctx: CliContext, workspace: Workspace) -> StatusReport:
         planner=planner,
         memory=memory,
         backup=backup,
+        voice=voice,
     )
 
 
@@ -336,6 +356,7 @@ def render_status(report: StatusReport, printer: Printer) -> None:
         _render_planner(report.planner, printer)
         _render_memory(report.memory, printer)
         _render_backup(report.backup, printer)
+        _render_voice(report.voice, printer)
         printer.line()
         printer.line("Run pz-agent doctor — it distinguishes a missing Zomboid directory")
         printer.line("from a mod that has never been installed.")
@@ -370,6 +391,7 @@ def render_status(report: StatusReport, printer: Printer) -> None:
     _render_planner(report.planner, printer)
     _render_memory(report.memory, printer)
     _render_backup(report.backup, printer)
+    _render_voice(report.voice, printer)
     printer.field("attached", "yes" if report.attached else "no")
 
 
@@ -460,6 +482,41 @@ def _render_memory(record: MemoryRecord | None, printer: Printer) -> None:
     printer.field("memory file", record.root)
     for note in record.notes:
         printer.field("memory note", note)
+
+
+def _render_voice(state: VoiceStatus | None, printer: Printer) -> None:
+    """Whether anything is listening, on what, and what it cannot do.
+
+    The adapter printed for a running companion is the one it *constructed*, not
+    the one the file names: they are the same in every ordinary case, and the
+    case where they differ is the only one worth a line here. The goal route is
+    printed whenever it is absent, because an agent that hears «поешь» and does
+    nothing looks exactly like one that did not hear it.
+    """
+    if state is None:
+        printer.field("voice", "not read")
+        return
+    record = state.record
+    if record is not None and record.running:
+        started = f"pid {record.pid}" if record.pid else "pid not recorded"
+        printer.field("voice", f"{record.adapter} — LISTENING ({started})")
+        if record.adapter != state.adapter:
+            printer.field(
+                "voice detail",
+                f"config.toml names {state.adapter}; the running companion is on {record.adapter}",
+            )
+        if not record.goals_routed:
+            printer.line("    a spoken stop reaches the game; a spoken goal reaches no planner")
+        for note in record.notes:
+            printer.field("voice note", note)
+        return
+    if not state.enabled:
+        printer.field("voice", f"off — {state.detail}")
+        return
+    printer.field("voice", f"{state.adapter} — configured, nothing listening")
+    printer.field("voice detail", state.detail)
+    if record is not None:
+        printer.field("last companion", record.detail)
 
 
 def _render_backup(state: BackupStatus | None, printer: Printer) -> None:

@@ -117,7 +117,24 @@ nothing until it is resolved:
 None of the three affects ASSISTED mode.
 
 **Voice.** A Russian intent parser, stop on the interim transcript rather than
-the final one, a TeamON adapter, and a fake transport for tests.
+the final one, and a TeamON adapter, reachable through `pz-agent voice run`.
+`pz-agent voice check <фраза>` resolves a phrase to an intent without a
+microphone or a session, which is how you find out why a word was not
+recognised.
+
+A spoken «стоп» writes the mod's own panic latch directly — not through the
+sidecar, not through the control channel — so it works whether or not a sidecar
+is running, and the residual delay is the mod's next heartbeat tick. What that
+call returns is that the *request* is in force, not that the game has already
+stopped; the second is not observable from outside the game, and nothing here
+pretends otherwise.
+
+**A spoken goal reaches no planner.** Nothing in this build carries a goal from
+a second process into the running sidecar, and writing one to the command queue
+would put the microphone past the reflex guard, the capability gate and the
+policy engine in a single step. So goals are refused, `status` says so, and
+`voice check` says so for any goal phrase. Stopping by voice works; commanding
+by voice does not.
 
 **Windows packaging.** Self-contained executables, the BAT files listed in §6,
 an installer and uninstaller, and the RC ZIP.

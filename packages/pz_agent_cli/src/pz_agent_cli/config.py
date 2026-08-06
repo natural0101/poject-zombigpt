@@ -90,7 +90,16 @@ REQUIRED_PROVIDER_KEYS: Final[Mapping[str, tuple[str, ...]]] = {
 
 SUPPORTED_CHANNELS: Final = ("stable", "unstable")
 
-SUPPORTED_VOICE_ADAPTERS: Final = ("teamon", "none")
+#: The voice backends a shipped configuration may select. Named as constants
+#: because :mod:`pz_agent_cli.voice` dispatches on them, and a second spelling of
+#: "teamon" there would be an adapter that validates and never gets built.
+#: ``FakeVoiceAdapter`` is deliberately absent and must stay absent: it answers
+#: scripted transcripts, so selecting it would leave a user talking to a test
+#: double while the command reported that the companion was listening.
+ADAPTER_TEAMON: Final = "teamon"
+ADAPTER_NONE: Final = "none"
+
+SUPPORTED_VOICE_ADAPTERS: Final = (ADAPTER_TEAMON, ADAPTER_NONE)
 
 #: Problem codes. Stable, because they are what a script or a bug report cites.
 CODE_UNKNOWN_TABLE: Final = "UNKNOWN_TABLE"
@@ -224,8 +233,13 @@ SCHEMA: Final[Mapping[str, Mapping[str, FieldSpec]]] = {
         **_transport_keys(),
     },
     "voice": {
-        "adapter": FieldSpec(_STR, "teamon", choices=SUPPORTED_VOICE_ADAPTERS),
+        "adapter": FieldSpec(_STR, ADAPTER_TEAMON, choices=SUPPORTED_VOICE_ADAPTERS),
         "enabled": FieldSpec(_BOOL, False),
+        # The same rule and the same validator as the planner's providers: this
+        # names the variable holding the key, never the key. The voice backend
+        # and the planner are the same vendor, so the default is the same
+        # variable — a user running both sets it once.
+        "api_key_env": FieldSpec(_STR, DEFAULT_TEAMON_KEY_ENV),
     },
 }
 
@@ -699,13 +713,32 @@ def _advisories(values: Mapping[str, Mapping[str, Any]]) -> list[ConfigProblem]:
                 remediation="leave it true, or run pz-agent backup-save yourself before arming",
             )
         )
-    if values["voice"]["enabled"]:
+    if values["voice"]["enabled"] and values["voice"]["adapter"] == ADAPTER_NONE:
         problems.append(
             ConfigProblem(
                 path="voice.enabled",
                 code=CODE_NOT_ALLOWED,
-                detail="no voice adapter ships in this build, so nothing will listen",
-                remediation="set it to false until a voice adapter is installed",
+                detail='voice.adapter is "none", so nothing will listen however this is set',
+                remediation=(
+                    f'set voice.adapter = "{ADAPTER_TEAMON}", or set voice.enabled = false '
+                    "so the file says what happens"
+                ),
+            )
+        )
+    elif values["voice"]["enabled"]:
+        # Not a problem with the file: it is the one thing about voice that the
+        # file cannot say. Nothing starts the companion — not the sidecar, not
+        # arming — so a user who set this and heard nothing needs the command,
+        # and the advisory is where they will be looking.
+        problems.append(
+            ConfigProblem(
+                path="voice.enabled",
+                code=CODE_NOT_ALLOWED,
+                detail="voice is enabled, but no process starts the companion on its own",
+                remediation=(
+                    "run 'pz-agent voice run' in its own terminal; 'pz-agent voice check "
+                    "<phrase>' says what a phrase resolves to without one"
+                ),
             )
         )
     expected = str(values["game"]["expected_build"])

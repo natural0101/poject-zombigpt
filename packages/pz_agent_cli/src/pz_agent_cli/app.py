@@ -13,6 +13,12 @@ it would look like a runtime failure rather than an honest absence.
 there: arming is a separate command, on purpose, and no flag on ``start``
 changes that.
 
+``voice`` is the same shape of command pointed at the same exchange directory
+from a second process: ``voice run`` drives the companion in
+:mod:`pz_agent_voice` over the ports in :mod:`pz_agent_cli.voice`, and ``voice
+check`` answers what a phrase resolves to with no game, no session and no
+microphone — which is how a user finds out why «стоп» was not recognised.
+
 :func:`main` returns an exit code and never calls :func:`sys.exit` itself, so a
 test drives the real command in-process and reads what a user would have seen.
 """
@@ -67,6 +73,7 @@ from .smoke import default_scenario_dir, run_smoke
 from .status import game_liveness, run_status
 from .supervisor import GameRunningProbe, SidecarSupervisor, SupervisorState, probe_game_running
 from .support import DEFAULT_LOG_LINES, DEFAULT_REPLAY_LIMIT, run_logs, run_replay
+from .voice import add_voice_parser, run_voice
 
 PROGRAM: Final = "pz-agent"
 
@@ -83,6 +90,7 @@ COMMANDS: Final[tuple[str, ...]] = (
     "backup-save",
     "restore-save",
     "remember",
+    "voice",
     "logs",
     "replay",
     "validate-config",
@@ -192,6 +200,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     _add_save_parsers(subparsers)
     add_remember_parser(subparsers)
+    add_voice_parser(subparsers)
 
     logs = subparsers.add_parser("logs", help="recent diagnostics, or a support bundle")
     logs.add_argument("--lines", type=int, default=DEFAULT_LOG_LINES)
@@ -827,6 +836,8 @@ def dispatch(ctx: CliContext, args: argparse.Namespace) -> int:
         return run_restore_save(ctx, backup_id=args.backup_id, as_json=args.json)
     if command == "remember":
         return run_remember(ctx, args)
+    if command == "voice":
+        return run_voice(ctx, args)
     if command == "logs":
         return run_logs(
             ctx,
