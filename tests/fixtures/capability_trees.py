@@ -100,6 +100,41 @@ VANILLA_SOURCES: Mapping[str, str] = {
         "    return o\n"
         "end\n"
     ),
+    "client/TimedActions/ISEquipWeaponAction.lua": (
+        'ISEquipWeaponAction = ISBaseTimedAction:derive("ISEquipWeaponAction")\n'
+        "\n"
+        "function ISEquipWeaponAction:new(character, item, time, primary, twoHands)\n"
+        "    local o = ISBaseTimedAction.new(self, character)\n"
+        "    return o\n"
+        "end\n"
+    ),
+    "client/TimedActions/ISUnequipAction.lua": (
+        'ISUnequipAction = ISBaseTimedAction:derive("ISUnequipAction")\n'
+        "\n"
+        "function ISUnequipAction:new(character, item, time)\n"
+        "    local o = ISBaseTimedAction.new(self, character)\n"
+        "    return o\n"
+        "end\n"
+    ),
+    "client/TimedActions/ISApplyBandage.lua": (
+        'ISApplyBandage = ISBaseTimedAction:derive("ISApplyBandage")\n'
+        "\n"
+        "function ISApplyBandage:new(character, patient, item, bodyPart)\n"
+        "    local o = ISBaseTimedAction.new(self, character)\n"
+        "    return o\n"
+        "end\n"
+    ),
+    # Sleeping has no constructible timed action: it is reached through the bed's
+    # context menu. The fixture mirrors that shape rather than inventing an
+    # ISSleepAction, because a probe written against a class that does not exist
+    # would pass here and fail in the only place that counts.
+    "client/context/ISWorldObjectContextMenu.lua": (
+        "ISWorldObjectContextMenu = ISWorldObjectContextMenu or {}\n"
+        "\n"
+        "function ISWorldObjectContextMenu.onSleep(worldobjects, player, bed)\n"
+        "    return bed\n"
+        "end\n"
+    ),
     "server/NotLua.txt": "this file is not Lua and must be ignored\n",
 }
 

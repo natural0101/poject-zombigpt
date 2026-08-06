@@ -116,7 +116,10 @@ class StepState(StrEnum):
 class PlanOutcome(StrEnum):
     """How a run ended."""
 
-    #: Every step reached a terminal success or was skipped as already satisfied.
+    #: Every step was accounted for: reached a terminal success, was skipped as
+    #: already satisfied, or failed and was carried past by its ``on_failure``
+    #: rule — ``skip`` moves on, ``replan_once`` moves on into a different plan.
+    #: The last of those is not a success, and :attr:`PlanReport.detail` says so.
     COMPLETED = "completed"
     #: The plan or its replacement was refused before anything ran.
     REJECTED = "rejected"
@@ -419,11 +422,7 @@ class PlanExecutor:
             if isinstance(replanned, PlanReport):
                 return replanned
             plan, index, attempts = replanned, 0, 0
-        return state.finish(
-            PlanOutcome.COMPLETED,
-            None,
-            f"all {len(plan.steps)} step(s) of the plan are done.",
-        )
+        return state.finish(PlanOutcome.COMPLETED, None, state.completion_detail(len(plan.steps)))
 
     def _execute(self, plan: Plan, step: PlanStep, attempt: int) -> ActionResult:
         return self._engine.execute(
@@ -594,6 +593,27 @@ class _RunState:
 
     def record(self, report: StepReport) -> None:
         self.steps.append(report)
+
+    def completion_detail(self, planned: int) -> str:
+        """How the run ended, without describing a failed step as a finished one.
+
+        A run reaches this sentence once no step is left to try, which is not
+        the same as every step having reached its postcondition: ``on_failure:
+        skip`` carries the run past a failure, and ``replan_once`` carries it
+        past one into a different plan. Both leave a ``failed`` step report
+        behind, and the run is still ``completed`` — every step was accounted
+        for — but the sentence a user is shown may not round that up to "done",
+        which would report a state nobody observed. The mechanism that carried
+        the run past each one is deliberately not named here: the step reports
+        say which steps failed and why, and this line would have to guess.
+        """
+        failed = sum(1 for report in self.steps if report.state is StepState.FAILED)
+        if not failed:
+            return f"all {planned} step(s) of the plan are done."
+        return (
+            f"the run reached the end of the plan, but {failed} step(s) failed along the way "
+            "and never reached what they were for."
+        )
 
     def note(self, attempt: _Attempt) -> None:
         """Remember a step so a replan cannot propose it again unchanged."""

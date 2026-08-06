@@ -24,6 +24,7 @@ from pz_agent_core.memory import (
     TaskRecord,
     container_tail,
 )
+from pz_agent_core.memory import store as memory_store
 from pz_agent_core.protocol import ContainerKind
 from tests.fixtures import DEFAULT_SAVE, DEFAULT_SESSION, backpack_container_ref, main_container_ref
 from tests.fixtures.autonomy_worlds import (
@@ -279,6 +280,55 @@ def test_failed_tasks_are_counted_per_key() -> None:
     memory.record_task(key="loot", outcome=TaskOutcome.SUCCEEDED, now_ms=NOW_MS + 2)
 
     assert memory.task_failures("loot") == 2
+
+
+def test_trimming_an_oversized_document_costs_work_linear_in_its_size(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The byte cap bounds a memory file's size; it does not bound its record count.
+
+    ``MAX_MEMORY_BYTES`` is the guard against a corrupt or hostile file, and a
+    document that passes it can still hold tens of thousands of small container
+    records. Evicting them one ``min`` at a time is quadratic in that count, so
+    the byte cap was a bound on the wrong axis: it let a file the store accepts
+    cost minutes of CPU inside :meth:`SaveMemory.from_document`. Eviction is
+    counted here rather than timed, so the bound is the same on any machine.
+    """
+    count = 4_000
+    ages = 0
+
+    def counting_age(record: KnownContainer) -> int:
+        nonlocal ages
+        ages += 1
+        return record.last_seen_ms
+
+    document = {
+        "schema_version": 2,
+        "save_scope": _memory().scope,
+        "containers": [
+            {
+                "tail": f"world:{1200 + index}:3400:0:1:0",
+                "kind": "world",
+                "label": "Shelf",
+                "last_seen_ms": NOW_MS + index,
+                "last_inspected_ms": 0,
+                "categories": [],
+            }
+            for index in range(count)
+        ],
+    }
+
+    monkeypatch.setattr(memory_store, "_container_age", counting_age)
+    restored = SaveMemory.from_document(
+        document, save_id=DEFAULT_SAVE, config=MemoryConfig(max_containers=64)
+    )
+
+    assert len(restored.containers()) == 64
+    assert restored.containers()[0].tail == f"world:{1200 + count - 1}:3400:0:1:0"
+    assert restored.evicted_count == count - 64
+    # One ordering pass, not one pass per evicted record. The quadratic version
+    # asked for roughly eight million ages here.
+    assert ages <= 4 * count
 
 
 def test_the_category_list_of_one_container_is_capped() -> None:

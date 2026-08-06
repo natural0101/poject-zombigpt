@@ -66,6 +66,22 @@ READ_LITERATURE: Final = "read_literature"
 DRINK_WORLD_SOURCE: Final = "drink_world_source"
 AUTONOMOUS_ATTACK: Final = "autonomous_attack"
 
+# The skills added with the Build 42 adapter set. Each names the Lua class the
+# action is actually built from (``docs/GAME_API_VERIFICATION.md``), which is
+# what a scan of the user's install can answer for.
+#
+# Three actions in that set have no entry here on purpose. ``world.inspect``,
+# ``container.inspect`` and ``inventory.search`` only *read*, and everything
+# they read — squares, containers, items — is reached through Java accessors
+# that never appear in the game's Lua. A probe over those names would report
+# ``unsupported`` on a perfectly healthy install, so those adapters gate on the
+# observation tier they need instead, which is a fact this side can check.
+EQUIPMENT_EQUIP: Final = "equipment_equip"
+EQUIPMENT_UNEQUIP: Final = "equipment_unequip"
+MEDICAL_BANDAGE: Final = "medical_bandage"
+SURVIVAL_REST: Final = "survival_rest"
+SURVIVAL_SLEEP: Final = "survival_sleep"
+
 
 @dataclass(frozen=True, slots=True)
 class RuntimeConfirmation:
@@ -186,6 +202,78 @@ PROBES: Final[tuple[ProbeDefinition, ...]] = (
             description="the reading action is running and owned by the mod",
         ),
         description="read a book or magazine using ISReadABook",
+    ),
+    ProbeDefinition(
+        capability=EQUIPMENT_EQUIP,
+        # The weapon branch only. Wearing a garment goes through ISWearClothing,
+        # which the mod resolves at construction time and reports as
+        # CAPABILITY_UNAVAILABLE naming the class: a probe is an AND over its
+        # symbols, so requiring both here would refuse to draw a weapon on a
+        # build that merely spells the clothing action differently.
+        required_symbols=(
+            "ISEquipWeaponAction",
+            "ISEquipWeaponAction.new",
+            "ISTimedActionQueue.add",
+        ),
+        confirmation=RuntimeConfirmation(
+            action=ActionName.EQUIPMENT_EQUIP,
+            evidence_keys=("item_ref", "slot"),
+            description="the item is observed in the hand or body slot it was equipped to",
+        ),
+        description="put an item in a hand using ISEquipWeaponAction",
+    ),
+    ProbeDefinition(
+        capability=EQUIPMENT_UNEQUIP,
+        required_symbols=("ISUnequipAction", "ISUnequipAction.new", "ISTimedActionQueue.add"),
+        confirmation=RuntimeConfirmation(
+            action=ActionName.EQUIPMENT_UNEQUIP,
+            evidence_keys=("item_ref", "container_ref"),
+            description="the item is in no slot and still in a container on the character",
+        ),
+        description="take an item off using ISUnequipAction",
+    ),
+    ProbeDefinition(
+        capability=MEDICAL_BANDAGE,
+        required_symbols=("ISApplyBandage", "ISApplyBandage.new", "ISTimedActionQueue.add"),
+        confirmation=RuntimeConfirmation(
+            action=ActionName.MEDICAL_BANDAGE,
+            evidence_keys=("body_part", "bleeding_after"),
+            description="the dressed body part is no longer reported bleeding",
+        ),
+        description="dress a bleeding body part using ISApplyBandage",
+    ),
+    ProbeDefinition(
+        capability=SURVIVAL_REST,
+        # Resting is mostly the *absence* of a queued action, and the two
+        # sitting classes differ between builds — a build with only one must
+        # degrade to that one rather than refuse to rest — so the queue is the
+        # single symbol every branch of this action needs. Which posture was
+        # actually available is reported by the mod, per attempt.
+        required_symbols=("ISTimedActionQueue.add",),
+        confirmation=RuntimeConfirmation(
+            action=ActionName.SURVIVAL_REST,
+            evidence_keys=("endurance_before", "endurance_after"),
+            description="endurance rose to the target that was asked for",
+        ),
+        description="recover endurance by standing or sitting still",
+    ),
+    ProbeDefinition(
+        capability=SURVIVAL_SLEEP,
+        # Sleeping has no timed-action class: vanilla drives it from a context
+        # menu callback, which is the least certain entry in
+        # docs/GAME_API_VERIFICATION.md and the most consequential one, since a
+        # sleeping character cannot be woken. 'experimental' is therefore the
+        # best a healthy scan may report — the symbol being present says nothing
+        # about whether driving it is safe for the save.
+        required_symbols=("ISWorldObjectContextMenu", "ISWorldObjectContextMenu.onSleep"),
+        confirmation=RuntimeConfirmation(
+            action=ActionName.SURVIVAL_SLEEP,
+            evidence_keys=("fatigue_before", "fatigue_after", "elapsed_game_seconds"),
+            description="fatigue fell and the world clock advanced across the night",
+        ),
+        static_state=CapabilityState.EXPERIMENTAL,
+        static_reason=REASON_EXPERIMENTAL_API,
+        description="sleep in a bed using the vanilla context-menu entry point",
     ),
     ProbeDefinition(
         capability=DRINK_WORLD_SOURCE,

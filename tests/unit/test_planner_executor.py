@@ -27,6 +27,7 @@ from pz_agent_core.planner.plan import (
     ConsumeArgs,
     FailureMode,
     ItemArgs,
+    MoveToArgs,
     Plan,
     PlanStep,
     SuccessCriterion,
@@ -38,6 +39,7 @@ from pz_agent_core.protocol import (
     ActionOwnership,
     ActionStatus,
     Observation,
+    Position,
     Priority,
     ReasonCode,
     RiskClass,
@@ -45,7 +47,7 @@ from pz_agent_core.protocol import (
     Wound,
 )
 from pz_agent_core.safety.priority import AntiLoopConfig
-from tests.fixtures import DEFAULT_SESSION, make_action_state, make_safety
+from tests.fixtures import DEFAULT_SESSION, make_action_state, make_player, make_safety
 from tests.fixtures.action_doubles import (
     AckPlan,
     FakeClock,
@@ -282,6 +284,61 @@ class TestRecovery:
         assert [step.state for step in report.steps] == [StepState.FAILED, StepState.FAILED]
         assert report.engine_calls == 2
 
+    def test_a_run_that_skipped_past_a_failure_does_not_say_its_steps_are_done(self) -> None:
+        """``on_failure: skip`` finishes the run; it does not finish the step.
+
+        The report is what a user is told, so a completed run whose step failed
+        must not describe that step as done.
+        """
+        plan = eat_plan(eat_step("s1", on_failure=FailureMode.SKIP))
+        harness = Harness(
+            plan=plan,
+            acks=(AckPlan(status=ActionStatus.FAILED, reason=ReasonCode.PATH_NOT_FOUND),),
+            verify_after=None,
+        ).world(calm())
+        report = harness.run()
+        assert report.outcome is PlanOutcome.COMPLETED
+        assert [step.state for step in report.steps] == [StepState.FAILED]
+        assert "are done" not in report.detail
+        assert "1" in report.detail and "fail" in report.detail
+
+    def test_a_run_in_which_nothing_failed_still_says_so_plainly(self) -> None:
+        harness = Harness().world(calm())
+        report = harness.run()
+        assert report.outcome is PlanOutcome.COMPLETED
+        assert report.detail == "all 1 step(s) of the plan are done."
+
+    def test_a_completed_run_does_not_name_the_rule_that_carried_it_past_a_failure(self) -> None:
+        """``skip`` is not the only way a completed run leaves a failed step behind.
+
+        ``replan_once`` records the failure and then runs a *different* plan, so
+        a sentence that blamed ``on_failure: skip`` would be describing recovery
+        that did not happen. The line says a step failed; the step reports say
+        which one and why.
+        """
+        first = eat_plan(eat_step("s1", on_failure=FailureMode.REPLAN_ONCE))
+        replacement = eat_plan(
+            eat_step(
+                "s1",
+                args=ConsumeArgs(item_ref=item_ref("beans"), fraction=0.5),
+                success=SuccessCriterion(kind=SuccessKind.ITEM_CONSUMED),
+            )
+        )
+        harness = Harness(
+            plan=first,
+            proposals=(
+                PlanProposal.proposed(first, "eat it all"),
+                PlanProposal.proposed(replacement, "eat half"),
+            ),
+        ).world(hungry_observation(inventory=inventory()))
+
+        report = harness.run(goal=goal())
+
+        assert report.outcome is PlanOutcome.COMPLETED
+        assert [step.state for step in report.steps] == [StepState.FAILED, StepState.SKIPPED]
+        assert "are done" not in report.detail
+        assert "skip" not in report.detail
+
     def test_a_replan_that_proposes_the_step_that_just_failed_is_refused(self) -> None:
         # The scripted provider repeats its last plan, which is exactly the loop
         # §7.8 exists to catch: the critic recognises the signature and the run
@@ -501,3 +558,96 @@ def test_a_two_step_plan_moves_the_item_before_eating_it() -> None:
         ActionName.INVENTORY_ENSURE_MAIN,
         ActionName.CONSUME_EAT,
     ]
+
+
+class TestASkippedStepIsOnlySkippedOnTheAdaptersOwnTerms:
+    """A skip is a claim that the action's postcondition already holds.
+
+    The executor spends no command on such a step and the run can still end
+    ``COMPLETED``, so a criterion that is *looser* than the adapter's own
+    postcondition is a report of a state nobody observed.
+    """
+
+    @staticmethod
+    def _walk_plan(radius: float | None = None) -> Plan:
+        args = (
+            MoveToArgs(x=1200, y=3400, z=0)
+            if radius is None
+            else MoveToArgs(x=1200, y=3400, z=0, radius=radius)
+        )
+        return Plan(
+            goal_id=GOAL_ID,
+            summary="Walk to the crate",
+            steps=(
+                PlanStep(
+                    step_id="s1",
+                    action=ActionName.MOVEMENT_MOVE_TO,
+                    args=args,
+                    success=SuccessCriterion(kind=SuccessKind.POSITION_REACHED),
+                ),
+            ),
+        )
+
+    @staticmethod
+    def _walker() -> tuple[StubAdapter, ...]:
+        return (StubAdapter(name=ActionName.MOVEMENT_MOVE_TO, risk=RiskClass.P2, verify_after=1),)
+
+    def test_a_diagonal_corner_of_the_radius_box_is_not_an_arrival(self) -> None:
+        """(0.7, 0.7) from the target is inside a 0.75 *box* and outside the circle.
+
+        ``MoveToAdapter.arrived`` measures the arrival radius with
+        ``plane_distance`` — Euclidean, hypot(0.7, 0.7) = 0.99 — so the step's
+        postcondition does not hold here and the walk has to happen.
+        """
+        harness = Harness(plan=self._walk_plan(), adapters=self._walker()).world(
+            hungry_observation(player=make_player(position=Position(x=1200.7, y=3400.7, z=0)))
+        )
+        report = harness.run()
+        assert [step.state for step in report.steps] == [StepState.SUCCEEDED]
+        assert [c.action for c in harness.sink.sent] == [ActionName.MOVEMENT_MOVE_TO]
+
+    def test_standing_on_the_target_square_is_still_skipped(self) -> None:
+        """The tightening must not cost the skip it exists for."""
+        harness = Harness(plan=self._walk_plan(), adapters=self._walker()).world(
+            hungry_observation(player=make_player(position=Position(x=1200.5, y=3400.5, z=0)))
+        )
+        report = harness.run()
+        assert report.outcome is PlanOutcome.COMPLETED
+        assert [step.state for step in report.steps] == [StepState.SKIPPED]
+        assert harness.sink.sent == []
+
+    def test_an_item_that_only_moved_has_not_been_consumed(self) -> None:
+        """An item reference embeds its container, so a transfer re-mints it.
+
+        The beans are in the main inventory, exactly where ``inventory.ensure_main``
+        puts them before a meal — matching on the reference string reads that as
+        "the item is gone", and the meal is skipped as already eaten.
+        """
+        stowed = food_item("beans", container_ref=BACKPACK_REF)
+        moved = food_item("beans")  # same runtime id, now in the main inventory
+        assert stowed.ref != moved.ref
+        plan = eat_plan(
+            eat_step(
+                "s1",
+                args=ConsumeArgs(item_ref=stowed.ref),
+                success=SuccessCriterion(kind=SuccessKind.ITEM_CONSUMED),
+            )
+        )
+        harness = Harness(plan=plan).world(hungry_observation(inventory=inventory(moved)))
+        report = harness.run(goal=goal())
+        assert [step.state for step in report.steps] != [StepState.SKIPPED]
+        assert report.outcome is not PlanOutcome.COMPLETED
+
+    def test_an_item_nobody_can_find_still_counts_as_consumed(self) -> None:
+        plan = eat_plan(
+            eat_step(
+                "s1",
+                args=ConsumeArgs(item_ref=item_ref("beans")),
+                success=SuccessCriterion(kind=SuccessKind.ITEM_CONSUMED),
+            )
+        )
+        harness = Harness(plan=plan).world(hungry_observation(inventory=inventory()))
+        report = harness.run(goal=goal())
+        assert report.outcome is PlanOutcome.COMPLETED
+        assert [step.state for step in report.steps] == [StepState.SKIPPED]
+        assert harness.sink.sent == []

@@ -1,0 +1,19 @@
+# The evidence tree ships as a *shape*, not as content.
+#
+# The twenty scenario directories and the two schemas are in git so a fresh
+# clone has somewhere for evidence to land and something to validate it
+# against. Everything a run produces — results, ledgers, copied logs, journals,
+# snapshots, screenshots — is generated on the machine that has the game, and is
+# committed deliberately, if at all, rather than by default.
+#
+# The order matters. `*` ignores everything, `!*/` lets git descend into
+# directories again (an ignored directory cannot have its contents re-included),
+# and the rules after that name what stays.
+
+*
+!*/
+
+!.gitignore
+!README.md
+!schema/*.json
+!**/.gitkeep

@@ -34,6 +34,22 @@ Observe.MAX_SQUARES = 256
 Observe.MAX_OBJECTS_PER_SQUARE = 16
 Observe.MAX_ZOMBIE_SCAN = 256
 
+--- Objects one nearby scan may read out of the engine, shared across every
+--- square it visits.
+---
+--- The per-square cap does not bound the walk, for the same reason the
+--- per-container cap does not bound the inventory: the number of squares is the
+--- other factor, and (2R+1)^2 of them at MAX_OBJECTS_PER_SQUARE is thousands of
+--- descriptors for a document that keeps ObserveModel.MAX_OBJECTS of them. The
+--- rest is engine work on the game thread that the model's sort throws away a
+--- moment later, four times a second.
+---
+--- Four times the document's cap rather than exactly it: the model discards an
+--- object whose kind is not a reference-safe token, so a budget of exactly
+--- MAX_OBJECTS could leave the snapshot short of what it had room for. Spending
+--- it nearest-square-first is what makes the bound safe -- see nearbyObjects.
+Observe.MAX_OBJECTS_SCANNED = 256
+
 --- Worn slots inspected. Build 42 gives a fully dressed character rather more
 --- than a dozen body locations, so this sits above what a player can wear
 --- rather than in the middle of it -- a backpack dropped for being the
@@ -595,7 +611,53 @@ local function objectFields(object, objectIndex, position, distance)
   return fields
 end
 
---- Objects on the squares around the player.
+--- Read one square into `result`, spending the walk's shared object budget.
+---
+--- `stopped` mirrors walkItemContainer: where the shared budget ran out, if it
+--- did, so "the square holds four things" is never said of a square whose fifth
+--- was not read.
+local function scanSquare(cell, playerPosition, x, y, result, budget)
+  local square = invoke(cell, "getGridSquare", x, y, playerPosition.z)
+  local objects = invoke(square, "getObjects")
+  local size = listSize(objects)
+  if size == nil then
+    return
+  end
+  local scanned = math.min(size, Observe.MAX_OBJECTS_PER_SQUARE)
+  local position = { x = x, y = y, z = playerPosition.z }
+  local distance = PZAgent.Refs.chebyshevDistance(playerPosition, position)
+  local stopped = nil
+  for index = 0, scanned - 1 do
+    if budget.objects <= 0 then
+      stopped = index
+      break
+    end
+    budget.objects = budget.objects - 1
+    local fields = objectFields(listGet(objects, index), index, position, distance)
+    if fields ~= nil then
+      budget.count = budget.count + 1
+      result.objects[budget.count] = fields
+    end
+  end
+  local unread = size - scanned
+  if stopped ~= nil then
+    unread = size - stopped
+  end
+  if unread > 0 then
+    result.truncated = true
+    result.dropped = result.dropped + unread
+  end
+end
+
+--- Objects on the squares around the player, nearest ring first.
+---
+--- The order is load-bearing, not cosmetic. The walk spends one shared object
+--- budget (Observe.MAX_OBJECTS_SCANNED) across every square, and a budget is
+--- only safe to spend if what it runs out on is what the document was going to
+--- discard anyway. Raster order starts in the far corner, so a budget spent
+--- that way would drop the square under the player's feet; walking outward in
+--- Chebyshev rings means the squares that go unread are the farthest, which is
+--- exactly the end ObserveModel's nearest-first sort cuts off.
 function Observe.nearbyObjects(playerPosition)
   local result = { objects = {}, truncated = false, dropped = 0 }
   if type(getCell) ~= "function" then
@@ -606,40 +668,31 @@ function Observe.nearbyObjects(playerPosition)
     return result
   end
   local radius = Observe.RADIUS
-  local budget = Observe.MAX_SQUARES
-  local count = 0
-  for dx = -radius, radius do
-    for dy = -radius, radius do
-      if budget <= 0 then
-        -- One per square nobody looked at. A lower bound on what was missed,
-        -- which is the only honest number available without looking.
-        result.truncated = true
-        result.dropped = result.dropped + 1
-      else
-        budget = budget - 1
-        local x = math.floor(playerPosition.x) + dx
-        local y = math.floor(playerPosition.y) + dy
-        local square = invoke(cell, "getGridSquare", x, y, playerPosition.z)
-        local objects = invoke(square, "getObjects")
-        local size = listSize(objects)
-        if size ~= nil then
-          local scanned = math.min(size, Observe.MAX_OBJECTS_PER_SQUARE)
-          if size > scanned then
-            result.truncated = true
-            result.dropped = result.dropped + (size - scanned)
-          end
-          local position = { x = x, y = y, z = playerPosition.z }
-          local distance = PZAgent.Refs.chebyshevDistance(playerPosition, position)
-          for index = 0, scanned - 1 do
-            local fields = objectFields(listGet(objects, index), index, position, distance)
-            if fields ~= nil then
-              count = count + 1
-              result.objects[count] = fields
-            end
-          end
+  local originX = math.floor(playerPosition.x)
+  local originY = math.floor(playerPosition.y)
+  local budget = { squares = Observe.MAX_SQUARES, objects = Observe.MAX_OBJECTS_SCANNED, count = 0 }
+  local visited = 0
+  for ring = 0, radius do
+    if budget.squares <= 0 or budget.objects <= 0 then
+      break
+    end
+    for dx = -ring, ring do
+      for dy = -ring, ring do
+        local onRing = dx == -ring or dx == ring or dy == -ring or dy == ring
+        if onRing and budget.squares > 0 and budget.objects > 0 then
+          budget.squares = budget.squares - 1
+          visited = visited + 1
+          scanSquare(cell, playerPosition, originX + dx, originY + dy, result, budget)
         end
       end
     end
+  end
+  local unvisited = (2 * radius + 1) * (2 * radius + 1) - visited
+  if unvisited > 0 then
+    -- One per square nobody looked at. A lower bound on what was missed, which
+    -- is the only honest number available without looking.
+    result.truncated = true
+    result.dropped = result.dropped + unvisited
   end
   return result
 end
@@ -743,6 +796,17 @@ function Observe.context(agent, player, sessionId, seq, nowMs)
   if roots == nil and rootsError ~= nil then
     agent.safety.last_error = rootsError
   end
+  local nearby = Observe.nearbyFields(player, playerFields.position)
+  -- The safety snapshot is taken *after* this, because until it was set here
+  -- `danger_level` was written by nothing and read by three consumers: the
+  -- mod's own gate in Safety.mayStart, the action engine's threat threshold,
+  -- and the compact view the planner sees. All three were told the situation
+  -- was calm during a horde. The floor is deliberately coarser than
+  -- `pz_agent_core.safety.threat`, which stays authoritative for policy.
+  PZAgent.Safety.setDanger(
+    agent.safety,
+    PZAgent.ObserveModel.dangerFloor(nearby, playerFields.position)
+  )
   return {
     session_id = sessionId,
     seq = seq,
@@ -753,7 +817,7 @@ function Observe.context(agent, player, sessionId, seq, nowMs)
     game = gameFields,
     player = playerFields,
     inventory = roots,
-    nearby = Observe.nearbyFields(player, playerFields.position),
+    nearby = nearby,
     action = agent.queue_description,
     safety = PZAgent.Safety.snapshot(agent.safety, nowMs),
   }

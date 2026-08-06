@@ -1,0 +1,120 @@
+# pz-agent configuration — every key this build knows, with its default.
+#
+# Copy it to the place the agent reads:
+#
+#     %USERPROFILE%\Zomboid\pz-agent\config.toml
+#
+# and then run  pz-agent validate-config . An unknown key is an *error*, not a
+# warning: `manual_takover = false` that validated as "ignored" would leave you
+# believing you had turned something off. The same goes for a mistyped section
+# header, which would otherwise discard every setting under it.
+#
+# Every value below is the documented default, so a file identical to this one
+# behaves exactly like no file at all. Commented-out keys have no default worth
+# guessing; they are shown with the shape they expect.
+#
+# THERE IS NO SECRET IN THIS FILE, AND NONE MAY BE ADDED. A provider names the
+# *environment variable* its key lives in; the key itself is read from the
+# environment when a request is made. That is what makes this file safe to paste
+# into a bug report, and why a value that looks like a pasted key is refused.
+
+[game]
+# "stable" or "unstable" — which Project Zomboid branch you are on.
+channel = "stable"
+
+# The build this release was designed against. Set it to the build shown in the
+# game's main menu. A build outside the supported set is a warning, not a
+# refusal: every capability is then reported unverified until a probe confirms
+# it against your install.
+expected_build = "42.20"
+
+# Only for a copy Steam does not list — a GOG or manual install, or a profile
+# moved by OneDrive. Left unset, both are discovered.
+# install_dir = "D:\\Games\\ProjectZomboid"
+# user_dir = "D:\\Zomboid"
+
+[session]
+# The mode `pz-agent arm` selects when you do not name one. The sidecar always
+# *attaches* in OBSERVE whatever this says; arming is a separate, explicit act.
+default_mode = "observe"
+
+# Refuse the first autonomous run on a save that has no verified backup.
+# Leave it true. If you set it false, take a backup yourself first:
+#     pz-agent backup-save
+require_backup = true
+
+[safety]
+# A single key name, not a combination. Pressing it clears the mod-owned queue
+# and disarms; work you queued by hand is deliberately left alone.
+panic_hotkey = "F12"
+
+# Detect that you took control — moving, or queueing your own action — and end
+# the action in flight as USER_TAKEOVER.
+manual_takeover = true
+
+# How far from its anchor the agent may go in AUTONOMOUS, in squares. The
+# product caps this at 100; configuration can lower it and cannot raise it.
+max_autonomous_radius = 30
+
+# Multiplayer is refused at the handshake regardless of this value. It exists so
+# the configuration can say out loud what the code does; setting it true changes
+# nothing except that validate-config will tell you so.
+allow_multiplayer = false
+
+[planner]
+# "none", "openai_compatible" or "teamon".
+#
+# "none" is the deterministic planner: no network, no key, no endpoint, and it
+# keeps working offline. It is the default because everything that decides
+# anything safety-relevant — which food is safe, which book, what the reflex
+# guard does — is deterministic policy code in either case. A model may express
+# a goal; it never picks the sandwich.
+provider = "none"
+
+# Longest plan accepted, 1..32. Plans are short by design.
+max_steps = 8
+
+[planner.openai_compatible]
+# Read only when provider = "openai_compatible". Both keys below are required
+# then, and there is no default for either: an endpoint cannot be assumed and a
+# model name cannot be guessed.
+#
+# base_url is the endpoint's *root*; the provider appends the path.
+# base_url = "http://127.0.0.1:8080"
+# model = "your-local-model"
+
+# The NAME of the environment variable holding the key. Set the key in the
+# environment you start pz-agent from:
+#     setx PZ_AGENT_OPENAI_API_KEY <your key>
+# A key written here is a key in every copy of this file.
+api_key_env = "PZ_AGENT_OPENAI_API_KEY"
+
+# Response ceiling and transport bounds. Milliseconds, because TOML integers are
+# the numeric type this validator handles.
+max_output_tokens = 1024
+connect_timeout_ms = 5000
+read_timeout_ms = 60000
+max_response_bytes = 1000000
+max_attempts = 3
+
+[planner.teamon]
+# Read only when provider = "teamon". base_url is required then.
+# base_url = "https://your-teamon-endpoint.example"
+# assistant = "the assistant id to address"
+api_key_env = "PZ_AGENT_TEAMON_API_KEY"
+connect_timeout_ms = 5000
+read_timeout_ms = 60000
+max_response_bytes = 1000000
+max_attempts = 3
+
+[voice]
+# "teamon" or "none". The TeamON adapter is wired and reachable through
+# `pz-agent voice run`; the fake adapter the tests use is deliberately not
+# selectable here. Enabling voice with "teamon" needs the SDK installed and the
+# key in the environment variable named below — `pz-agent voice run` refuses
+# clearly rather than falling back to something that only looks like listening.
+adapter = "teamon"
+enabled = false
+# The NAME of an environment variable, never the key itself. A credential in a
+# file the user might paste into a bug report is the leak this prevents.
+api_key_env = "PZ_AGENT_TEAMON_API_KEY"

@@ -25,6 +25,14 @@ always available, in every mode, armed or not.
 
 **Read tools work in `OBSERVE`.** Observation never requires arming.
 
+**Query tools work in `OBSERVE` too.** `pz_action_inspect_world`,
+`pz_action_inspect_container` and `pz_action_search_inventory` submit a command
+and change nothing — they are the protocol's `READ_ONLY_ACTIONS` — so they run
+on a disarmed session and come back with an action id like any other action.
+`pz_action_open_container` is *not* one of them, whatever its name suggests: it
+walks the character across a room, and an unarmed session must not move the
+character.
+
 **Long-running tools return an action id.** Movement, eating and reading take
 game-seconds. The tool returns immediately with an id; you poll it with the same
 idempotency key, which replays the call and refreshes it to the action's current
@@ -65,29 +73,88 @@ Every observation returned here has passed through `observation/compact.py`: no
 absolute paths, no OS username, no save paths, no raw chat or book text. Item
 display names are carried as **untrusted data** and marked as such.
 
+### Queries
+
+These three submit a command and change nothing, so they need no arming. None
+of them names a capability: what each needs is an observation tier the mod
+either produced or did not, and every capability probe resolves a *Lua* symbol —
+a probe over the Java accessors behind a look would report `unsupported` on a
+perfectly healthy install.
+
+| Tool | Risk | Arguments | Verified by |
+| --- | --- | --- | --- |
+| `pz_action_inspect_world` | P0 | `ref?`, `radius?` (≤ 2) | The report names squares that were asked about |
+| `pz_action_inspect_container` | P0 | `container_ref`, `limit?` (≤ 64) | The report names the container that was asked about |
+| `pz_action_search_inventory` | P0 | `full_type?`, `type_prefix?`, `edible?`, `drinkable?`, `readable?`, `exclude_equipped?`, `limit?` (≤ 32) | Every reference returned resolves on the character |
+
+`inspect_world` with no `ref` looks around the character. The three filters
+`edible`, `drinkable` and `readable` have no default on purpose: absent means
+"do not filter on this", `false` means "must not be edible", and a default would
+silently narrow every search that left one out. `min_uses` and `name_contains`
+are not offered — the mod supports both, and the observation carries neither a
+use counter nor free item text, so a result filtered on them could not be
+checked against anything this side sees.
+
 ### Actions
 
-| Tool | Risk | Verified by |
-| --- | --- | --- |
-| `pz_action_move_to` | P2/P3 | Character position within the target radius, correct floor |
-| `pz_action_transfer` | P1 | Item ref resolves inside the destination container |
-| `pz_action_eat` | P2 | Hunger decreased, or item uses decremented |
-| `pz_action_drink` | P2 | Thirst decreased, or container volume decreased |
-| `pz_action_read` | P2 | Reading started and progress observed |
-| `pz_action_wait` | P0 | Observed elapsed game time |
-| `pz_action_cancel` | — | Mod-owned entry no longer in the action queue |
+| Tool | Risk | Arguments | Verified by |
+| --- | --- | --- | --- |
+| `pz_action_move_to` | P2/P3 | `target`, `radius?`, `max_distance?`, `allow_doors?`, `allow_stairs?` | Character position within the target radius, correct floor |
+| `pz_action_move_near` | P3 | `object_ref`, `radius?`, `max_distance?` | The object is within reach, on its floor, *re-observed* after the walk |
+| `pz_action_open_container` | P3 | `container_ref`, `radius?` | The container is reported, accessible, and within the reach asked for |
+| `pz_action_transfer` | P1/P3 | `item_ref`, `destination_container_ref`, `source_container_ref?` | Item ref resolves inside the destination container |
+| `pz_action_ensure_main` | P1/P3 | `item_ref` | The item is in player-main |
+| `pz_action_eat` | P2 | `item_ref`, `fraction?` | Hunger decreased, or item uses decremented |
+| `pz_action_drink` | P2 | `item_ref`, `fraction?` | Thirst decreased, or container volume decreased |
+| `pz_action_read` | P2 | `item_ref`, `pages?` | Reading started and progress observed |
+| `pz_action_equip` | P2 | `item_ref`, `hand?` | The requested slot holds the item |
+| `pz_action_unequip` | P2 | exactly one of `item_ref`, `hand`, `slot` | No slot holds it **and** it is still on the character |
+| `pz_action_bandage` | P2 | `body_part`, `item_ref` | The dressed part is no longer reported bleeding |
+| `pz_action_rest` | P2 | `target_endurance?`, `seat_ref?`, `allow_ground?`, `max_wait_ms?` | Endurance reached the target, or the posture was taken |
+| `pz_action_sleep` | P4 | `bed_ref?`, `hours?`, `allow_vehicle_seat?`, `max_wait_ms?` | Fatigue fell **and** the world clock advanced |
+| `pz_action_wait` | P0 | `game_seconds` | Observed elapsed game time |
+| `pz_action_cancel` | — | `command_id?` | Mod-owned entry no longer in the action queue |
 
 The "verified by" column is not documentation of intent — it is the
 postcondition the action engine actually checks. If it does not hold, the result
 is `POSTCONDITION_FAILED`, even when the mod acked success.
 
+Every bound in the arguments column is stated in the published schema, not only
+in the adapter, so a value this surface accepts is one the adapter accepts.
+
 Note what is absent: eating takes an item ref *and optionally a fraction*, but
 there is no tool to choose *which* item. That decision belongs to
 `policy/food.py`, which is deterministic and testable. A model that picks the
-sandwich is a model that will eventually pick the rotten one.
+sandwich is a model that will eventually pick the rotten one. The same rule puts
+`body_part` and the dressing in `pz_action_bandage`'s arguments rather than
+leaving the tool to triage: `policy/medical.py` decides both.
 
 Also absent: `allow_windows`. The movement adapter refuses it with
-`POLICY_DENIED`, so publishing it would advertise something policy forbids.
+`POLICY_DENIED`, so publishing it would advertise something policy forbids. And
+`pz_action_ensure_main` does not publish a destination — the only container the
+adapter accepts is the main inventory, and any other one is `inventory.transfer`
+under a different name.
+
+`pz_action_unequip` names its target exactly one way. An item reference resolves
+for anything in a container, but a worn garment lives in no container of its own
+and a held weapon may be reported in neither, so `hand` and `slot` name those
+directly. Two namings at once are refused rather than reconciled: they can
+disagree, and there is no defensible rule for which wins.
+
+**`pz_action_sleep` is the most consequential tool on this surface**, and it is
+`P4` for a reason that is not severity-by-adjective: once the character is
+asleep the mod cannot wake them. Sleep runs through the bed's context menu, so
+there is no timed action to interrupt and no queue entry to cancel — a panic
+stop cannot reach it. It is refused outright while the reflex guard reports any
+danger at all, a stricter bar than the engine's own threat threshold, and it is
+never taken on the agent's own initiative. Its capability probe resolves to
+`experimental` on a clean scan, so on most installs the tool is withheld with
+that reason rather than offered.
+
+`max_wait_ms` on `pz_action_rest` and `pz_action_sleep` is how long the *mod*
+may hold the action, and it is a different clock from `timeout_ms`, which is the
+sidecar's lease on the command and is bounded by the protocol's `MAX_LEASE_MS`.
+A rest may legitimately ask the mod to wait longer than one lease covers.
 
 ### Plans
 
@@ -99,6 +166,12 @@ Also absent: `allow_windows`. The movement adapter refuses it with
 A plan is a list of typed steps. It has no field for Lua, Python, shell,
 keystrokes or file paths — a plan containing one fails validation, because
 there is nowhere to put it.
+
+Neither plan tool ever puts `succeeded` in the envelope `status`: that word is
+reserved for a result carrying the observed postcondition under `data.evidence`,
+and a plan record has none to carry — its steps' evidence was observed by the
+action engine and stops at the port. A plan that finished answers `"ok"`, and
+`data.status` with `data.terminal` say what it finished as.
 
 ### Safety
 

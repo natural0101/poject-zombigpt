@@ -15,7 +15,10 @@ from a step to a command is
 ``provider = "none"`` — :class:`~pz_agent_core.planner.provider.NullProvider` —
 is a full participant here, not a fallback: it plans from the deterministic
 selection policies, needs no network and no key, and goes through exactly the
-same critic and executor as anything else would.
+same critic and executor as anything else would. The model-backed providers in
+:mod:`pz_agent_core.planner.providers` join at the same seam and get no more
+trust for it: their answers reach the executor only as a ``Plan`` the parser
+built and the critic approved.
 """
 
 from __future__ import annotations
@@ -65,27 +68,56 @@ from .provider import (
     PlanProvider,
     PlanRequest,
 )
+from .providers import (
+    DEFAULT_TRANSPORT_CONFIG,
+    PROVIDER_OPENAI_COMPATIBLE,
+    PROVIDER_TEAMON,
+    CredentialUnavailable,
+    HttpRequest,
+    HttpResponse,
+    HttpTransport,
+    InvalidEndpoint,
+    OpenAICompatibleConfig,
+    OpenAICompatibleProvider,
+    StdlibHttpTransport,
+    TeamONConfig,
+    TeamONHealth,
+    TeamONProvider,
+    TransportConfig,
+    TransportError,
+    key_from_env,
+)
 
 __all__ = [
     "ACTION_RISK",
     "AMBIGUOUS_CODES",
     "DEFAULT_EXECUTOR_CONFIG",
+    "DEFAULT_TRANSPORT_CONFIG",
     "MAX_ENGINE_CALLS",
     "MAX_PLAN_STEPS",
     "PLANNABLE_ACTIONS",
     "PLAN_SCHEMA_VERSION",
     "PROVIDER_NONE",
+    "PROVIDER_OPENAI_COMPATIBLE",
+    "PROVIDER_TEAMON",
     "ConsumeArgs",
+    "CredentialUnavailable",
     "CriticRule",
     "CriticVerdict",
     "ExecutorConfig",
     "FailureMode",
     "Goal",
     "GoalKind",
+    "HttpRequest",
+    "HttpResponse",
+    "HttpTransport",
+    "InvalidEndpoint",
     "ItemArgs",
     "MoveNearArgs",
     "MoveToArgs",
     "NullProvider",
+    "OpenAICompatibleConfig",
+    "OpenAICompatibleProvider",
     "Plan",
     "PlanCritic",
     "PlanExecutor",
@@ -100,13 +132,20 @@ __all__ = [
     "PlanStep",
     "ReadArgs",
     "RiskAssessor",
+    "StdlibHttpTransport",
     "StepArgs",
     "StepFailure",
     "StepReport",
     "StepState",
     "SuccessCriterion",
     "SuccessKind",
+    "TeamONConfig",
+    "TeamONHealth",
+    "TeamONProvider",
     "TransferArgs",
+    "TransportConfig",
+    "TransportError",
     "WaitArgs",
+    "key_from_env",
     "step_signature",
 ]

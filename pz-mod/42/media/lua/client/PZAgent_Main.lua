@@ -77,6 +77,10 @@ local function start()
   if hud == nil then
     agent.safety.last_error = hudError
   end
+  local actions, actionsError = PZAgent.ActionRuntime.install(agent, now())
+  if actions == nil then
+    agent.safety.last_error = actionsError
+  end
   PZAgent.Runtime.refresh(agent, now())
 end
 
@@ -101,6 +105,9 @@ local function onTick()
   if tickCounter >= HEARTBEAT_TICK_INTERVAL then
     tickCounter = 0
     PZAgent.Runtime.tick(agent, now())
+    -- After the safety tick, never before: a stop that arrived this tick must
+    -- have taken effect before any command is admitted or stepped.
+    PZAgent.ActionRuntime.tick(agent, now())
   end
   if observationCounter >= OBSERVATION_TICK_INTERVAL then
     observationCounter = 0

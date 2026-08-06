@@ -11,7 +11,7 @@ success into a refusal to claim anything.
 Three refusals are structural rather than advisory:
 
 * an equipped item is never moved implicitly — the caller is handed the
-  ``inventory.unequip`` prerequisite instead (§5.12);
+  ``equipment.unequip`` prerequisite instead (§5.12);
 * a container is never put inside itself, however deep the nesting;
 * a world container out of arm's reach yields a walk-to-it prerequisite rather
   than a transfer that would fail at the far end (§4.6).
@@ -20,6 +20,13 @@ Three refusals are structural rather than advisory:
 the main inventory. It is the preparation step every consumption and reading
 action depends on (§4.7), which is why it is an action with its own command id
 and its own evidence rather than something the eat adapter does on the side.
+
+``inventory.search`` sits alongside them and changes nothing at all. It is a
+reading of what the character carries, and its postcondition is the one thing
+worth guaranteeing about a list of references handed to a planner: every
+reference in it resolves inside the character's *own* container tree. A search
+that returned a reference into a crate across the room would look identical to
+the caller and would produce a plan whose first step silently needs a walk.
 """
 
 from __future__ import annotations
@@ -28,6 +35,9 @@ from dataclasses import dataclass
 from typing import ClassVar, Final
 
 from ...capabilities import INVENTORY_TRANSFER
+from ...policy.drink import DrinkView
+from ...policy.food import FoodView
+from ...policy.literature import LiteratureView
 from ...protocol import (
     ActionName,
     Command,
@@ -54,6 +64,7 @@ from .common import (
     identity_of,
     player_main,
     read_count,
+    read_flag,
     read_ref,
     refused,
     require_inventory,
@@ -64,11 +75,15 @@ from .common import (
 
 __all__ = [
     "DEFAULT_ENSURE_MAIN_TIMEOUT_MS",
+    "DEFAULT_SEARCH_POLL_MS",
+    "DEFAULT_SEARCH_TIMEOUT_MS",
     "DEFAULT_TRANSFER_POLL_MS",
     "DEFAULT_TRANSFER_TIMEOUT_MS",
+    "MAX_SEARCH_RESULTS",
     "MAX_TRANSFER_QUANTITY",
     "WORLD_REACH_SQUARES",
     "EnsureMainAdapter",
+    "SearchAdapter",
     "TransferAdapter",
     "unequip_prerequisite",
 ]
@@ -91,11 +106,25 @@ DEFAULT_TRANSFER_POLL_MS: Final = 200
 
 DEFAULT_ENSURE_MAIN_TIMEOUT_MS: Final = 15_000
 
+#: References one search reports. The list travels in an ack and is read by a
+#: planner with a bounded plan length, so a hundred hits would be a hundred
+#: references nothing could act on.
+MAX_SEARCH_RESULTS: Final = 32
+
+#: A search is answered by the next observation; waiting longer would not make
+#: the mod describe more of the inventory.
+DEFAULT_SEARCH_TIMEOUT_MS: Final = 5_000
+DEFAULT_SEARCH_POLL_MS: Final = 100
+
+#: Longest type filter a search accepts. An item type is ``Base.Bandage``-sized;
+#: anything longer is not a type this install has.
+MAX_TYPE_FILTER_LEN: Final = 128
+
 
 def unequip_prerequisite(item: ItemView) -> Prerequisite:
     """The preparation an equipped item needs before it can be moved."""
     return Prerequisite(
-        action=ActionName.INVENTORY_UNEQUIP,
+        action=ActionName.EQUIPMENT_UNEQUIP,
         args={"item_ref": item.ref},
         detail=f"{item.display_name} is equipped and must be put away first",
     )
@@ -238,6 +267,30 @@ def _transfer_evidence(
     )
 
 
+def _origin_from(before: Observation, identity: ItemIdentity) -> JsonDict:
+    """Where the item stood before the move, read from the observation.
+
+    This used to be handed to `verify` inside the command, put there by
+    `build_args`. Reading it from `before` is not just the fix for an argument
+    the mod refused — it is the better source. An origin the sidecar wrote down
+    is an assertion about the world; an origin recovered from the observation
+    the mod sent is a reading of it, and the difference is exactly the one this
+    project draws everywhere else.
+
+    An empty dict when the item cannot be found in `before`: an origin nobody
+    observed is not a fact to put in evidence.
+    """
+    if before.inventory is None:
+        return {}
+    candidates = find_by_identity(before.inventory, identity)
+    if len(candidates) != 1:
+        return {}
+    source = before.inventory.container(candidates[0].container_ref)
+    if source is None:
+        return {}
+    return describe_container(source)
+
+
 def _verify_landed(
     identity: ItemIdentity,
     destination_ref: str,
@@ -274,7 +327,6 @@ class _TransferSpec:
                 "source_container_ref",
                 "destination_container_ref",
                 "quantity",
-                "origin",
             ),
             required=("item_ref", "destination_container_ref"),
         )
@@ -350,10 +402,14 @@ class TransferAdapter:
             "source_container_ref": source.ref,
             "destination_container_ref": spec.destination_ref,
             "quantity": 1,
-            # Carried so a caller — or a later undo — can put the item back
-            # without having to have kept the pre-move observation (§4.6).
-            "origin": describe_container(source),
         }
+        # `origin` used to travel here too, as a nested object describing the
+        # source container, so a caller could undo the move without having kept
+        # the pre-move observation. It could never arrive: the mod's dispatcher
+        # accepts only scalar arguments and refuses an undeclared key outright,
+        # so the whole transfer came back INVALID_ARGUMENT. `verify` now reads
+        # the origin from the before-observation, which is a better source
+        # anyway — it is observed rather than asserted.
 
     def verify(self, command: Command, before: Observation, after: Observation) -> Evidence | None:
         spec = _TransferSpec.parse(command)
@@ -364,11 +420,10 @@ class TransferAdapter:
         destination = after.inventory.container(spec.destination_ref)
         if destination is None:
             return None
-        origin = command.args.get("origin")
         return _transfer_evidence(
             "item_in_destination_container",
             identity=identity,
-            origin=dict(origin) if isinstance(origin, dict) else {},
+            origin=_origin_from(before, identity),
             destination=destination,
             moved=landed,
             after=after,
@@ -391,14 +446,14 @@ class TransferAdapter:
 def _ensure_main_item_ref(command: Command) -> str:
     """The one argument ``ensure_main`` takes, read the same way three times.
 
-    The prepared command also carries the destination and the origin that
-    ``build_args`` filled in, so they are accepted here: ``verify`` re-reads the
-    command as it was *shipped*, and an argument check that refused the
-    adapter's own output would fail every verification.
+    The prepared command also carries the destination ``build_args`` filled
+    in, so it is accepted here: ``verify`` re-reads the command as it was
+    *shipped*, and an argument check that refused the adapter's own output would
+    fail every verification.
     """
     check_args(
         command,
-        allowed=("item_ref", "destination_container_ref", "origin"),
+        allowed=("item_ref", "destination_container_ref"),
         required=("item_ref",),
     )
     return read_ref(command, "item_ref", kind=RefKind.ITEM)
@@ -461,11 +516,15 @@ class EnsureMainAdapter:
         item_ref = _ensure_main_item_ref(command)
         inventory = require_inventory(observation)
         item = resolve_item(inventory, item_ref)
-        source = resolve_container(inventory, item.container_ref, field_name="source_container_ref")
+        # Called for the refusal, not the value: an item whose container the
+        # observation does not describe is one the mod cannot be asked to move,
+        # and finding that out here costs a rejected command rather than a
+        # transfer that fails at the far end. `verify` recovers the origin from
+        # the before-observation, so nothing needs the container itself.
+        resolve_container(inventory, item.container_ref, field_name="source_container_ref")
         return {
             "item_ref": item.ref,
             "destination_container_ref": player_main(inventory).ref,
-            "origin": describe_container(source),
         }
 
     def verify(self, command: Command, before: Observation, after: Observation) -> Evidence | None:
@@ -478,11 +537,10 @@ class EnsureMainAdapter:
         landed = _verify_landed(identity, main.ref, after)
         if landed is None:
             return None
-        origin = command.args.get("origin")
         return _transfer_evidence(
             "item_in_player_main",
             identity=identity,
-            origin=dict(origin) if isinstance(origin, dict) else {},
+            origin=_origin_from(before, identity),
             destination=main,
             moved=landed,
             after=after,
@@ -493,3 +551,209 @@ class EnsureMainAdapter:
         item = resolve_item(inventory, _ensure_main_item_ref(command))
         source = resolve_container(inventory, item.container_ref, field_name="source_container_ref")
         return RiskClass.P3 if container_kind_is_world(source) else self.risk
+
+
+# --------------------------------------------------------------------------
+# inventory.search
+# --------------------------------------------------------------------------
+
+
+def _read_type_text(command: Command, key: str) -> str | None:
+    """Read one of the two type filters, or None when it was not given.
+
+    Bounded and alphabet-checked because the value arrives from a model and is
+    matched against game data: an item type is ``Base.Bandage``-shaped, and
+    anything carrying a space, a colon or a wildcard is a pattern this adapter
+    does not implement rather than a type it failed to find.
+    """
+    raw = command.args.get(key)
+    if raw is None:
+        return None
+    if not isinstance(raw, str) or not raw:
+        raise PreconditionFailed(
+            f"{key} must be a non-empty string", reason_code=ReasonCode.INVALID_ARGUMENT
+        )
+    if len(raw) > MAX_TYPE_FILTER_LEN:
+        raise PreconditionFailed(
+            f"{key} must be at most {MAX_TYPE_FILTER_LEN} characters",
+            reason_code=ReasonCode.INVALID_ARGUMENT,
+        )
+    if not all(character.isalnum() or character in "._-" for character in raw):
+        raise PreconditionFailed(
+            f"{key} may only hold letters, digits, '.', '_' and '-'",
+            reason_code=ReasonCode.INVALID_ARGUMENT,
+        )
+    return raw
+
+
+def _read_tristate(command: Command, key: str) -> bool | None:
+    """A flag that may also be absent.
+
+    ``None`` is "do not filter on this", which is a different request from
+    ``false`` ("must not be edible"). Collapsing the two would silently widen
+    every search that left a filter out.
+    """
+    if command.args.get(key) is None:
+        return None
+    return read_flag(command, key, default=False)
+
+
+@dataclass(frozen=True, slots=True)
+class _SearchSpec:
+    """The filter one search applies, normalised.
+
+    ``min_uses`` and ``name_contains`` are deliberately not here. The mod
+    supports both; the observation carries neither a use counter nor free item
+    text, so a result filtered on them could not be checked against anything
+    this side sees. An argument that cannot be verified is refused rather than
+    forwarded — the alternative is a search whose report is taken on trust.
+    """
+
+    full_type: str | None
+    type_prefix: str | None
+    edible: bool | None
+    drinkable: bool | None
+    readable: bool | None
+    exclude_equipped: bool
+    limit: int
+
+    @classmethod
+    def parse(cls, command: Command) -> _SearchSpec:
+        check_args(
+            command,
+            allowed=(
+                "full_type",
+                "type_prefix",
+                "edible",
+                "drinkable",
+                "readable",
+                "exclude_equipped",
+                "limit",
+            ),
+        )
+        return cls(
+            full_type=_read_type_text(command, "full_type"),
+            type_prefix=_read_type_text(command, "type_prefix"),
+            edible=_read_tristate(command, "edible"),
+            drinkable=_read_tristate(command, "drinkable"),
+            readable=_read_tristate(command, "readable"),
+            exclude_equipped=read_flag(command, "exclude_equipped", default=False),
+            limit=read_count(
+                command, "limit", default=MAX_SEARCH_RESULTS, minimum=1, maximum=MAX_SEARCH_RESULTS
+            ),
+        )
+
+    def as_args(self) -> JsonDict:
+        args: JsonDict = {"exclude_equipped": self.exclude_equipped, "limit": self.limit}
+        for key, value in (
+            ("full_type", self.full_type),
+            ("type_prefix", self.type_prefix),
+            ("edible", self.edible),
+            ("drinkable", self.drinkable),
+            ("readable", self.readable),
+        ):
+            if value is not None:
+                args[key] = value
+        return args
+
+    def matches(self, item: ItemView, observation: Observation) -> bool:
+        if self.full_type is not None and item.full_type != self.full_type:
+            return False
+        if self.type_prefix is not None and not item.full_type.startswith(self.type_prefix):
+            return False
+        if self.exclude_equipped and (item.equipped or observation.player.hands.holds(item.ref)):
+            return False
+        if self.edible is not None and self.edible is not _is_edible(item):
+            return False
+        if self.drinkable is not None and self.drinkable is not _is_drinkable(item):
+            return False
+        readable = LiteratureView.from_item(item) is not None
+        return self.readable is None or self.readable is readable
+
+
+def _is_edible(item: ItemView) -> bool:
+    """Whether the game itself would let the character eat this.
+
+    Read through :class:`~pz_agent_core.policy.food.FoodView` rather than by
+    looking for a ``food`` key, so "edible" means here exactly what it means to
+    the policy that will later be asked to choose between the results.
+    """
+    view = FoodView.from_item(item)
+    return view is not None and view.edible and not view.destroyed
+
+
+def _is_drinkable(item: ItemView) -> bool:
+    view = DrinkView.from_item(item)
+    return view is not None and view.drinkable and not view.destroyed
+
+
+@dataclass(frozen=True, slots=True)
+class SearchAdapter:
+    """``inventory.search``: list what the character is carrying that matches.
+
+    Read-only: it queues nothing and needs no arming, so it names no
+    ``required_capability`` — what it needs is the observation's inventory tier,
+    and :func:`require_inventory` refuses when the mod did not produce one.
+
+    The postcondition is not "the mod answered". It is that every reference the
+    report carries resolves to an item inside the character's own container
+    tree, checked chain by chain against the observation the report was built
+    from. An item in a world container can therefore never appear in a search
+    result, which is what lets a planner treat these references as things it can
+    act on without walking anywhere first.
+    """
+
+    timeout_ms: int = DEFAULT_SEARCH_TIMEOUT_MS
+    poll_interval_ms: int = DEFAULT_SEARCH_POLL_MS
+
+    name: ClassVar[ActionName] = ActionName.INVENTORY_SEARCH
+    risk: ClassVar[RiskClass] = RiskClass.P0
+    required_capability: ClassVar[str | None] = None
+
+    def validate(self, command: Command, observation: Observation) -> None:
+        _SearchSpec.parse(command)
+        require_inventory(observation)
+
+    def build_args(self, command: Command, observation: Observation) -> JsonDict:
+        return _SearchSpec.parse(command).as_args()
+
+    def verify(self, command: Command, before: Observation, after: Observation) -> Evidence | None:
+        spec = _SearchSpec.parse(command)
+        inventory = after.inventory
+        if inventory is None:
+            return None
+        matches: list[JsonDict] = []
+        off_person = 0
+        for item in inventory.items:
+            if len(matches) >= spec.limit:
+                break
+            if not spec.matches(item, after):
+                continue
+            container = inventory.container(item.container_ref)
+            if container is None or not container_chain(inventory, container).on_person:
+                # The filter is not what keeps a crate out of the results; this
+                # is. A reference the character cannot reach without walking is
+                # dropped and counted, never quietly listed.
+                off_person += 1
+                continue
+            matches.append(
+                {
+                    "item_ref": item.ref,
+                    "container_ref": item.container_ref,
+                    "full_type": item.full_type,
+                    "display_name": item.display_name,
+                    "weight": item.weight,
+                    "equipped": item.equipped,
+                }
+            )
+        return Evidence(
+            kind="inventory_searched",
+            observation_seq=after.seq,
+            observed={
+                "matches": matches,
+                "match_count": len(matches),
+                "limit": spec.limit,
+                "off_person_skipped": off_person,
+                "items_examined": len(inventory.items),
+            },
+        )

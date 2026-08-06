@@ -8,9 +8,11 @@ from pathlib import Path
 
 import pytest
 
+from pz_agent_cli import saves as saves_module
 from pz_agent_cli.app import COMMANDS, build_parser, main
 from pz_agent_cli.context import EXIT_FAILURE, EXIT_OK, EXIT_USAGE, resolve_workspace
 from pz_agent_cli.saves import MAX_LISTED_SAVES, find_saves
+from pz_agent_cli.supervisor import ProcessListing
 from pz_agent_cli.support import DEFAULT_LOG_LINES, MAX_LOG_LINES, _add_directory
 from pz_agent_core.diagnostics import BundleBuilder, DiagnosticLog, LogLevel, TraceWriter
 from pz_agent_core.diagnostics.log import LogLimits
@@ -464,10 +466,18 @@ def test_restore_refuses_while_the_game_writes_a_heartbeat(tmp_path: Path) -> No
     exit_code = world.run("restore-save", backup_id)
 
     assert exit_code == EXIT_FAILURE
-    assert "the game is writing a heartbeat, so it is open" in world.stderr
+    assert "writing a game heartbeat, so the game is open" in world.stderr
 
 
-def test_restore_states_what_it_could_not_prove_about_the_game(tmp_path: Path) -> None:
+def test_restore_states_the_evidence_the_game_was_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The whole-command path, with the process table pinned so it is deterministic.
+
+    The refusal cases live in ``tests/unit/test_cli_saves.py``; this one only
+    proves the command still restores when the probe positively reports a closed
+    game, and that it says what that verdict rested on.
+    """
     world = make_world(tmp_path)
     assert world.user_dir is not None
     save = make_save(world.user_dir, "Survivor/09-07-1993", SAVE_FILES)
@@ -475,15 +485,16 @@ def test_restore_states_what_it_could_not_prove_about_the_game(tmp_path: Path) -
     backup_id = _first_backup_id(world)
     world.reset_streams()
     (save / "map_t.bin").write_bytes(b"corrupted")
+    monkeypatch.setattr(saves_module, "list_processes", lambda: ProcessListing(names=("init",)))
 
     exit_code = world.run("restore-save", backup_id)
 
     assert exit_code == EXIT_OK
     assert (save / "map_t.bin").read_bytes() == b"tiles"
-    # Printed after the restore, so it states what was not proved rather than
-    # advising a step the user can no longer take.
-    assert "not proof the game was closed" in world.stderr
-    assert "main menu writes none" in world.stderr
+    # Printed after the restore, so it states what was read rather than advising a
+    # step the user can no longer take.
+    assert "none of the 1 running process(es) is Project Zomboid" in world.stderr
+    assert "read before the restore and not during it" in world.stderr
 
 
 def test_restoring_an_unknown_backup_fails_with_its_id(tmp_path: Path) -> None:

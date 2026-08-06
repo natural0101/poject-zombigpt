@@ -221,3 +221,32 @@ def test_a_schema_without_a_type_is_our_bug() -> None:
 
     with pytest.raises(SchemaError, match="single type"):
         validate_arguments(schema, {"x": 2})
+
+
+def test_nan_does_not_pass_a_bound_it_cannot_satisfy() -> None:
+    # NaN compares false against every bound, so `value < minimum` and
+    # `value > maximum` are both false and an unchecked implementation lets it
+    # through a range it plainly does not sit inside. A caller that then
+    # filtered on it — `distance <= radius` — would see an empty world.
+    schema = object_schema({"radius": {"type": "number", "minimum": 0.0, "maximum": 30.0}})
+
+    with pytest.raises(ToolFailure) as caught:
+        validate_arguments(schema, {"radius": float("nan")})
+
+    assert caught.value.reason_code is ReasonCode.INVALID_ARGUMENT
+    assert "finite" in caught.value.message
+
+
+def test_infinity_is_refused_even_where_no_maximum_is_declared() -> None:
+    schema = object_schema({"weight": {"type": "number", "minimum": 0.0}})
+
+    with pytest.raises(ToolFailure) as caught:
+        validate_arguments(schema, {"weight": float("inf")})
+
+    assert "finite" in caught.value.message
+
+
+def test_a_finite_number_at_the_bound_is_still_accepted() -> None:
+    schema = object_schema({"radius": {"type": "number", "minimum": 0.0, "maximum": 30.0}})
+
+    assert validate_arguments(schema, {"radius": 30.0}) == {"radius": 30.0}

@@ -7,12 +7,17 @@ bound cannot drift apart.
 Three properties of the set are decided here rather than in the handlers:
 
 * **What requires arming.** :class:`ToolKind` splits read tools (permitted in
-  ``OBSERVE``) from write tools (armed session required) from control tools.
-  Control is arming, disarming, cancelling and stopping — the four that must
-  work *because* something has gone wrong, and gating them on a healthy session
-  would make the agent unstoppable by the mechanism meant to stop it. It is the
-  same set as the protocol's :data:`~pz_agent_core.protocol.ALWAYS_ALLOWED_ACTIONS`
-  plus arming, which cannot require the state it establishes.
+  ``OBSERVE``) from query tools (a command that only looks) from write tools
+  (armed session required) from control tools. Control is arming, disarming,
+  cancelling and stopping — the four that must work *because* something has gone
+  wrong, and gating them on a healthy session would make the agent unstoppable
+  by the mechanism meant to stop it. It is the same set as the protocol's
+  :data:`~pz_agent_core.protocol.ALWAYS_ALLOWED_ACTIONS` plus arming, which
+  cannot require the state it establishes. Which side of the read/write line an
+  *action* falls on is never decided here either: it is read from
+  :data:`~pz_agent_core.protocol.READ_ONLY_ACTIONS`, so
+  ``container.open_nearby`` — whose name reads like a query and whose body walks
+  the character across a room — cannot be talked into the unarmed half.
 * **What is published.** A tool naming a capability that is not
   :meth:`~pz_agent_core.capabilities.model.CapabilityReport.usable` is withheld
   with its reason instead of being offered and then failing. ``experimental``
@@ -53,24 +58,52 @@ from enum import StrEnum
 from typing import Final
 
 from pz_agent_core.actions.adapters.consume import MIN_CONSUME_FRACTION
+from pz_agent_core.actions.adapters.container import (
+    DEFAULT_OPEN_RADIUS,
+    MAX_LISTED_ITEMS,
+    MIN_OPEN_RADIUS,
+)
+from pz_agent_core.actions.adapters.equipment import HANDS, MAX_SLOT_NAME_LEN
+from pz_agent_core.actions.adapters.inventory import MAX_SEARCH_RESULTS, MAX_TYPE_FILTER_LEN
 from pz_agent_core.actions.adapters.literature import DEFAULT_READ_PAGES, MAX_READ_PAGES
+from pz_agent_core.actions.adapters.medical import BODY_PARTS
 from pz_agent_core.actions.adapters.movement import (
     DEFAULT_ARRIVAL_RADIUS,
     DEFAULT_MOVE_DISTANCE_SQUARES,
+    DEFAULT_NEAR_RADIUS,
     MAX_ARRIVAL_RADIUS,
     MAX_MOVE_DISTANCE_SQUARES,
 )
+from pz_agent_core.actions.adapters.survival import (
+    DEFAULT_REST_TARGET,
+    DEFAULT_REST_WAIT_MS,
+    DEFAULT_SLEEP_HOURS,
+    DEFAULT_SLEEP_WAIT_MS,
+    MAX_REST_TARGET,
+    MAX_REST_WAIT_MS,
+    MAX_SLEEP_HOURS,
+    MAX_SLEEP_WAIT_MS,
+    MIN_REST_TARGET,
+    MIN_SLEEP_HOURS,
+    MIN_WAIT_MS,
+)
+from pz_agent_core.actions.adapters.world import DEFAULT_INSPECT_RADIUS, MAX_INSPECT_RADIUS
 from pz_agent_core.actions.builtin import MAX_WAIT_GAME_SECONDS
 from pz_agent_core.actions.engine import DEFAULT_LEASE_MS
 from pz_agent_core.capabilities.model import CapabilityReport
 from pz_agent_core.capabilities.probes import (
     DRINK_CARRIED,
     EAT_PERCENTAGE,
+    EQUIPMENT_EQUIP,
+    EQUIPMENT_UNEQUIP,
     INVENTORY_TRANSFER,
+    MEDICAL_BANDAGE,
     MOVE_TO_SQUARE,
     READ_LITERATURE,
+    SURVIVAL_REST,
+    SURVIVAL_SLEEP,
 )
-from pz_agent_core.protocol import ActionName, JsonDict, RefKind, RiskClass
+from pz_agent_core.protocol import READ_ONLY_ACTIONS, ActionName, JsonDict, RefKind, RiskClass
 from pz_agent_core.protocol.messages import MAX_LEASE_MS, MIN_LEASE_MS
 
 from .validation import validate_arguments
@@ -80,6 +113,7 @@ __all__ = [
     "DEFAULT_OBSERVE_RADIUS",
     "DEFAULT_PLAN_REAL_SECONDS",
     "DEFAULT_TAIL_RECORDS",
+    "EXAMPLE_SESSION_ID",
     "MAX_GOAL_CHARS",
     "MAX_IDEMPOTENCY_KEY_CHARS",
     "MAX_MEMORY_RESULTS",
@@ -87,6 +121,7 @@ __all__ = [
     "MAX_PLAN_REAL_SECONDS",
     "MAX_PLAN_STEPS",
     "MAX_TAIL_RECORDS",
+    "MIN_APPROACH_RADIUS",
     "RESOURCES",
     "RESOURCES_BY_URI",
     "TOOLS",
@@ -113,26 +148,66 @@ MAX_PLAN_STEPS: Final = 8
 MAX_PLAN_REAL_SECONDS: Final = 600
 DEFAULT_PLAN_REAL_SECONDS: Final = 120
 
+#: The floor ``movement.move_near`` applies to an approach radius. Restated
+#: rather than imported because the adapter inlines it in its own reader instead
+#: of naming it; a radius this schema waved through would be one the adapter
+#: refuses with ``INVALID_ARGUMENT`` after the call has already been made.
+MIN_APPROACH_RADIUS: Final = 0.1
+
+#: The session every ``example`` below is minted under. A reference is
+#: session-scoped, so an example has to name *some* session — naming one constant
+#: is what lets ``tests/contract/test_mcp_action_coverage.py`` replay the
+#: examples against the adapters that would receive them.
+EXAMPLE_SESSION_ID: Final = "00000000-0000-4000-8000-000000000001"
+
+_EXAMPLE_ITEM: Final = f"item:{EXAMPLE_SESSION_ID}:worn:Back:99001:4210:0"
+_EXAMPLE_MAIN: Final = f"container:{EXAMPLE_SESSION_ID}:player-main"
+_EXAMPLE_CRATE: Final = f"container:{EXAMPLE_SESSION_ID}:world:1200:3400:0:0:0"
+_EXAMPLE_SQUARE: Final = f"square:{EXAMPLE_SESSION_ID}:1200:3400:0"
+
 #: Filter tokens (categories, components, memory kinds) are identifiers, not
 #: prose. A sentence in one of those positions is a red flag, so the pattern is
 #: strict rather than merely length-bounded.
 _IDENTIFIER_PATTERN: Final = r"^[a-z][a-z0-9_.\-]{0,63}$"
 
-_REF_PATTERN: Final = r"^{kind}:[A-Za-z0-9:_.\-]{{1,200}}$"
+#: An item type as the game spells it — ``Base.Bandage``. The alphabet is the
+#: one :mod:`~pz_agent_core.actions.adapters.inventory` accepts; a value with a
+#: space, a colon or a wildcard is a pattern nothing implements rather than a
+#: type that was not found.
+_TYPE_FILTER_PATTERN: Final = rf"^[A-Za-z0-9._\-]{{1,{MAX_TYPE_FILTER_LEN}}}$"
+
+#: A body location as the engine spells it — ``Torso``, ``Jacket``, ``Back``.
+_SLOT_PATTERN: Final = rf"^[A-Za-z0-9._\-]{{1,{MAX_SLOT_NAME_LEN}}}$"
+
+#: The hands an unequip may name: :data:`~pz_agent_core.actions.adapters.equipment.HANDS`
+#: without ``both``, because a hand is emptied one at a time and "take off both"
+#: is two commands with two results. Derived rather than typed out so the two
+#: cannot drift into disagreeing about what a hand is called.
+_UNEQUIP_HANDS: Final[tuple[str, ...]] = tuple(sorted(HANDS - {"both"}))
+
+_REF_PATTERN: Final = r"^{head}:[A-Za-z0-9:_.\-]{{1,200}}$"
 
 
-def _ref_schema(kind: RefKind, description: str) -> JsonDict:
+def _ref_schema(kind: RefKind | tuple[RefKind, ...], description: str) -> JsonDict:
     """A reference argument. Shape only — the adapter decides whether it resolves.
 
     Session ownership is checked in
     :func:`pz_agent_core.actions.adapters.common.read_ref`, which is where
     ``INVALID_REF`` for a reference minted by another session is decided once
     for every adapter.
+
+    *kind* takes a tuple for the same reason ``read_ref`` does: the mod names a
+    nearby thing as a ``container`` reference when it holds one and as a
+    ``square`` reference otherwise, so an argument meaning "something to walk up
+    to" that insisted on one kind would refuse most of what the observer
+    actually reports.
     """
+    kinds = (kind,) if isinstance(kind, RefKind) else kind
+    head = kinds[0].value if len(kinds) == 1 else f"(?:{'|'.join(k.value for k in kinds)})"
     return {
         "type": "string",
         "description": description,
-        "pattern": _REF_PATTERN.format(kind=kind.value),
+        "pattern": _REF_PATTERN.format(head=head),
         "maxLength": 220,
     }
 
@@ -159,10 +234,16 @@ _TIMEOUT_MS: Final[JsonDict] = {
 def _mutating(
     properties: Mapping[str, JsonDict], *, required: Iterable[str], lease: bool = True
 ) -> JsonDict:
-    """An input schema for a tool that changes the world.
+    """An input schema for a tool that submits a command.
 
     Every one of them carries an idempotency key, and nothing else free-form:
     there is deliberately no field for prose on a write path.
+
+    The three read-only actions take the same envelope, which is not an
+    oversight: a look is still a command with a lease, it still comes back as an
+    action id, and replaying its key is how a client polls it. What makes them
+    read-only is what the character does — nothing — not whether they queue
+    anything.
 
     ``lease`` is false for the one mutating tool that does not submit a single
     command — a plan is bounded by ``limits.max_real_seconds``, not by a command
@@ -191,8 +272,14 @@ _NO_ARGUMENTS: Final[JsonDict] = {
 class ToolKind(StrEnum):
     """What a tool needs from the session before it may run."""
 
-    #: Observation and diagnostics. Permitted in ``OBSERVE``; never gated.
+    #: Observation and diagnostics, answered from state the sidecar already
+    #: holds. Permitted in ``OBSERVE``; never gated.
     READ = "read"
+    #: Asks the *game* to describe something: one of the protocol's
+    #: :data:`~pz_agent_core.protocol.READ_ONLY_ACTIONS`, so it comes back with
+    #: an action id and its own evidence, and still needs no arming because the
+    #: character neither moves nor touches anything.
+    QUERY = "query"
     #: Changes the world. Refused with ``NOT_ARMED`` on a disarmed session.
     WRITE = "write"
     #: Arming, disarming, cancelling, stopping. Never gated on arming, because
@@ -219,6 +306,14 @@ class ToolSpec:
             raise ValueError(f"{self.name}: a long-running tool must name the action it submits")
         if self.kind is ToolKind.READ and self.action is not None:
             raise ValueError(f"{self.name}: a read tool must not submit an action")
+        if self.kind is ToolKind.QUERY and self.action not in READ_ONLY_ACTIONS:
+            # The one place a mistake here would be silent and expensive: a
+            # query tool is exempt from the arming gate, so an action that moves
+            # the character wearing this kind would move it on a disarmed
+            # session. The protocol's own list is the authority, not the name.
+            raise ValueError(
+                f"{self.name}: a query tool must submit a read-only action, not {self.action}"
+            )
         try:
             validate_arguments(self.input_schema, self.example)
         except Exception as rejected:
@@ -386,6 +481,131 @@ TOOLS: Final[tuple[ToolSpec, ...]] = (
             "required": [],
         },
     ),
+    # --- looking, through the character -----------------------------------
+    # These three submit a command and change nothing. They are the protocol's
+    # READ_ONLY_ACTIONS, so they run in OBSERVE and on a disarmed session, and
+    # none of them names a capability: what each needs is an observation tier
+    # the mod either produced or did not, and every probe resolves a *Lua*
+    # symbol, so a probe over the Java accessors behind a look would report
+    # 'unsupported' on a perfectly healthy install.
+    ToolSpec(
+        name="pz_action_inspect_world",
+        kind=ToolKind.QUERY,
+        risk=RiskClass.P0,
+        summary=(
+            "Describe the block of squares around a centre, with what the mod "
+            "makes of each one. Omit 'ref' to look around the character. Nothing "
+            "moves: an inspect that walked round a corner to see better would be "
+            "a mutating command wearing a read-only command's permissions."
+        ),
+        action=ActionName.WORLD_INSPECT,
+        long_running=True,
+        input_schema=_mutating(
+            {
+                "ref": _ref_schema(
+                    RefKind.SQUARE,
+                    "Centre of the block; omit for the square the character stands on.",
+                ),
+                "radius": {
+                    "type": "integer",
+                    "description": "Squares out from the centre; 2 is a five-by-five block.",
+                    "minimum": 0,
+                    "maximum": MAX_INSPECT_RADIUS,
+                    "default": DEFAULT_INSPECT_RADIUS,
+                },
+            },
+            required=(),
+        ),
+        example={"radius": 1, "idempotency_key": "goal-1:look:attempt-1"},
+    ),
+    ToolSpec(
+        name="pz_action_inspect_container",
+        kind=ToolKind.QUERY,
+        risk=RiskClass.P0,
+        summary=(
+            "List what one container holds, with the real total beside the "
+            "bounded listing. Reads the engine's own item list; no UI is driven "
+            "and nothing is opened, so the character does not move."
+        ),
+        action=ActionName.CONTAINER_INSPECT,
+        long_running=True,
+        input_schema=_mutating(
+            {
+                "container_ref": _ref_schema(RefKind.CONTAINER, "The container to read."),
+                "limit": {
+                    "type": "integer",
+                    "description": "Most items to list; the untruncated count is reported too.",
+                    "minimum": 1,
+                    "maximum": MAX_LISTED_ITEMS,
+                    "default": MAX_LISTED_ITEMS,
+                },
+            },
+            required=("container_ref",),
+        ),
+        example={
+            "container_ref": _EXAMPLE_MAIN,
+            "idempotency_key": "goal-1:look:attempt-1",
+        },
+    ),
+    ToolSpec(
+        name="pz_action_search_inventory",
+        kind=ToolKind.QUERY,
+        risk=RiskClass.P0,
+        summary=(
+            "List what the character is carrying that matches a filter. Every "
+            "reference returned resolves inside the character's own containers, "
+            "so a result is something the next step can act on without walking "
+            "anywhere. It reports what matches; it never picks one."
+        ),
+        action=ActionName.INVENTORY_SEARCH,
+        long_running=True,
+        input_schema=_mutating(
+            {
+                "full_type": {
+                    "type": "string",
+                    "description": "Keep only items of exactly this game type.",
+                    "pattern": _TYPE_FILTER_PATTERN,
+                    "maxLength": MAX_TYPE_FILTER_LEN,
+                },
+                "type_prefix": {
+                    "type": "string",
+                    "description": "Keep only items whose game type starts with this.",
+                    "pattern": _TYPE_FILTER_PATTERN,
+                    "maxLength": MAX_TYPE_FILTER_LEN,
+                },
+                # No default on the three tristates, deliberately. Absent means
+                # "do not filter on this"; false means "must not be edible", and
+                # a default of false would silently narrow every search that
+                # left one out.
+                "edible": {
+                    "type": "boolean",
+                    "description": "Keep only items the game would let the character eat.",
+                },
+                "drinkable": {
+                    "type": "boolean",
+                    "description": "Keep only items the game would let the character drink.",
+                },
+                "readable": {
+                    "type": "boolean",
+                    "description": "Keep only literature.",
+                },
+                "exclude_equipped": {
+                    "type": "boolean",
+                    "description": "Drop what the character is holding or wearing.",
+                    "default": False,
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Most references to return.",
+                    "minimum": 1,
+                    "maximum": MAX_SEARCH_RESULTS,
+                    "default": MAX_SEARCH_RESULTS,
+                },
+            },
+            required=(),
+        ),
+        example={"edible": True, "limit": 8, "idempotency_key": "goal-1:search:attempt-1"},
+    ),
     # --- actions ----------------------------------------------------------
     ToolSpec(
         name="pz_action_move_to",
@@ -444,6 +664,75 @@ TOOLS: Final[tuple[ToolSpec, ...]] = (
         },
     ),
     ToolSpec(
+        name="pz_action_move_near",
+        kind=ToolKind.WRITE,
+        risk=RiskClass.P3,
+        summary=(
+            "Walk to within interaction range of something in the world. "
+            "Verified against the object's *re-observed* position, not the one "
+            "it had when the call was made: an object that is no longer in view "
+            "cannot be proven to be within arm's reach."
+        ),
+        required_capability=MOVE_TO_SQUARE,
+        action=ActionName.MOVEMENT_MOVE_NEAR,
+        long_running=True,
+        input_schema=_mutating(
+            {
+                "object_ref": _ref_schema(
+                    (RefKind.CONTAINER, RefKind.SQUARE, RefKind.ITEM),
+                    "What to walk up to, as the observation named it.",
+                ),
+                "radius": {
+                    "type": "number",
+                    "description": "How close counts as within reach, in squares.",
+                    "minimum": MIN_APPROACH_RADIUS,
+                    "maximum": MAX_ARRIVAL_RADIUS,
+                    "default": DEFAULT_NEAR_RADIUS,
+                },
+                "max_distance": {
+                    "type": "integer",
+                    "description": "Refuse if the object is further than this.",
+                    "minimum": 1,
+                    "maximum": MAX_MOVE_DISTANCE_SQUARES,
+                    "default": DEFAULT_MOVE_DISTANCE_SQUARES,
+                },
+            },
+            required=("object_ref",),
+        ),
+        example={"object_ref": _EXAMPLE_CRATE, "idempotency_key": "goal-1:step-1:attempt-1"},
+    ),
+    ToolSpec(
+        name="pz_action_open_container",
+        kind=ToolKind.WRITE,
+        risk=RiskClass.P3,
+        summary=(
+            "Get within reach of a world container, so its contents can be "
+            "taken. Its name reads like a query and it is not one: this walks "
+            "the character across a room, so it needs an armed session like any "
+            "other move. A door in the way is not opened — that is a different "
+            "object and a different action."
+        ),
+        required_capability=MOVE_TO_SQUARE,
+        action=ActionName.CONTAINER_OPEN_NEARBY,
+        long_running=True,
+        input_schema=_mutating(
+            {
+                "container_ref": _ref_schema(
+                    RefKind.CONTAINER, "The world container to stand next to."
+                ),
+                "radius": {
+                    "type": "number",
+                    "description": "How close counts as within reach, in squares.",
+                    "minimum": MIN_OPEN_RADIUS,
+                    "maximum": MAX_ARRIVAL_RADIUS,
+                    "default": DEFAULT_OPEN_RADIUS,
+                },
+            },
+            required=("container_ref",),
+        ),
+        example={"container_ref": _EXAMPLE_CRATE, "idempotency_key": "goal-1:step-1:attempt-1"},
+    ),
+    ToolSpec(
         name="pz_action_transfer",
         kind=ToolKind.WRITE,
         risk=RiskClass.P1,
@@ -467,12 +756,34 @@ TOOLS: Final[tuple[ToolSpec, ...]] = (
             required=("item_ref", "destination_container_ref"),
         ),
         example={
-            "item_ref": "item:00000000-0000-4000-8000-000000000001:worn:Back:99001:4210:0",
-            "destination_container_ref": (
-                "container:00000000-0000-4000-8000-000000000001:player-main"
-            ),
+            "item_ref": _EXAMPLE_ITEM,
+            "destination_container_ref": _EXAMPLE_MAIN,
             "idempotency_key": "goal-1:step-1:attempt-1",
         },
+    ),
+    ToolSpec(
+        name="pz_action_ensure_main",
+        kind=ToolKind.WRITE,
+        risk=RiskClass.P1,
+        summary=(
+            "Bring one item into the main inventory. This is the preparation "
+            "step eating, drinking, reading, equipping and bandaging all "
+            "require, and it is its own action with its own evidence rather "
+            "than something those adapters do on the side."
+        ),
+        required_capability=INVENTORY_TRANSFER,
+        action=ActionName.INVENTORY_ENSURE_MAIN,
+        long_running=True,
+        input_schema=_mutating(
+            # `destination_container_ref` is not published although the adapter
+            # accepts it: the only value it accepts is the main inventory, which
+            # its own build_args fills in, and any other container is refused as
+            # "that is inventory.transfer". An argument with one legal value the
+            # caller cannot name is an argument that only produces mistakes.
+            {"item_ref": _ref_schema(RefKind.ITEM, "The item to bring to hand.")},
+            required=("item_ref",),
+        ),
+        example={"item_ref": _EXAMPLE_ITEM, "idempotency_key": "goal-1:step-1:attempt-1"},
     ),
     ToolSpec(
         name="pz_action_eat",
@@ -500,7 +811,7 @@ TOOLS: Final[tuple[ToolSpec, ...]] = (
             required=("item_ref",),
         ),
         example={
-            "item_ref": "item:00000000-0000-4000-8000-000000000001:worn:Back:99001:4210:0",
+            "item_ref": _EXAMPLE_ITEM,
             "idempotency_key": "goal-1:step-2:attempt-1",
         },
     ),
@@ -529,7 +840,7 @@ TOOLS: Final[tuple[ToolSpec, ...]] = (
             required=("item_ref",),
         ),
         example={
-            "item_ref": "item:00000000-0000-4000-8000-000000000001:worn:Back:99001:4210:0",
+            "item_ref": _EXAMPLE_ITEM,
             "idempotency_key": "goal-1:step-2:attempt-1",
         },
     ),
@@ -555,7 +866,193 @@ TOOLS: Final[tuple[ToolSpec, ...]] = (
             required=("item_ref",),
         ),
         example={
-            "item_ref": "item:00000000-0000-4000-8000-000000000001:worn:Back:99001:4210:0",
+            "item_ref": _EXAMPLE_ITEM,
+            "idempotency_key": "goal-1:step-1:attempt-1",
+        },
+    ),
+    ToolSpec(
+        name="pz_action_equip",
+        kind=ToolKind.WRITE,
+        risk=RiskClass.P2,
+        summary=(
+            "Put one item in a hand or on the body. Omit 'hand' for anything "
+            "the character wears: the item's own body location is what decides "
+            "between a hand and a slot, and naming a hand for a garment would "
+            "refuse every garment. Verified by the requested slot holding it."
+        ),
+        required_capability=EQUIPMENT_EQUIP,
+        action=ActionName.EQUIPMENT_EQUIP,
+        long_running=True,
+        input_schema=_mutating(
+            {
+                "item_ref": _ref_schema(RefKind.ITEM, "The item to equip."),
+                "hand": {
+                    "type": "string",
+                    "description": "Which hand to fill; 'both' is a two-handed grip.",
+                    "enum": sorted(HANDS),
+                },
+            },
+            required=("item_ref",),
+        ),
+        example={"item_ref": _EXAMPLE_ITEM, "idempotency_key": "goal-1:step-1:attempt-1"},
+    ),
+    ToolSpec(
+        name="pz_action_unequip",
+        kind=ToolKind.WRITE,
+        risk=RiskClass.P2,
+        summary=(
+            "Take one item off and keep it. Name it exactly one way — by item, "
+            "by hand or by slot — because the three can disagree and there is no "
+            "defensible rule for which would win. Verified by no slot holding it "
+            "*and* it still being on the character: an item that left the hand "
+            "and the inventory was dropped, not unequipped."
+        ),
+        required_capability=EQUIPMENT_UNEQUIP,
+        action=ActionName.EQUIPMENT_UNEQUIP,
+        long_running=True,
+        input_schema=_mutating(
+            # "Exactly one of three" is not expressible in the schema subset this
+            # boundary validates, so it is not half-stated here: the adapter
+            # refuses both none and two, and that is the single place the rule
+            # lives. What the schema does state is that there is nothing else.
+            {
+                "item_ref": _ref_schema(RefKind.ITEM, "The item to take off."),
+                "hand": {
+                    "type": "string",
+                    "description": "Empty this hand; one hand per command.",
+                    "enum": list(_UNEQUIP_HANDS),
+                },
+                "slot": {
+                    "type": "string",
+                    "description": "Empty this body location, as the engine spells it.",
+                    "pattern": _SLOT_PATTERN,
+                    "maxLength": MAX_SLOT_NAME_LEN,
+                },
+            },
+            required=(),
+        ),
+        example={"hand": "primary", "idempotency_key": "goal-1:step-1:attempt-1"},
+    ),
+    ToolSpec(
+        name="pz_action_bandage",
+        kind=ToolKind.WRITE,
+        risk=RiskClass.P2,
+        summary=(
+            "Dress one bleeding wound with one carried dressing. Verified by the "
+            "named body part no longer being reported as bleeding — never by the "
+            "dressing leaving the inventory, which is equally true of one that "
+            "was dropped. A part that is not bleeding is refused rather than "
+            "attempted: the observation carries no dressing state to check "
+            "against. Which part and which dressing are core policy's decision."
+        ),
+        required_capability=MEDICAL_BANDAGE,
+        action=ActionName.MEDICAL_BANDAGE,
+        long_running=True,
+        input_schema=_mutating(
+            {
+                "body_part": {
+                    "type": "string",
+                    "description": "The part to dress, as BodyPartType spells it.",
+                    "enum": sorted(BODY_PARTS),
+                },
+                "item_ref": _ref_schema(RefKind.ITEM, "The dressing to use."),
+            },
+            required=("body_part", "item_ref"),
+        ),
+        example={
+            "body_part": "ForeArm_L",
+            "item_ref": _EXAMPLE_ITEM,
+            "idempotency_key": "goal-1:step-1:attempt-1",
+        },
+    ),
+    ToolSpec(
+        name="pz_action_rest",
+        kind=ToolKind.WRITE,
+        risk=RiskClass.P2,
+        summary=(
+            "Recover endurance up to a target. Verified by the endurance reading "
+            "rising to it — or, on a build that reports no endurance, by the "
+            "character being observed sitting, but only if sitting is what was "
+            "asked for. A standing rest with no readable stat has nothing to "
+            "show for itself and times out."
+        ),
+        required_capability=SURVIVAL_REST,
+        action=ActionName.SURVIVAL_REST,
+        long_running=True,
+        input_schema=_mutating(
+            {
+                "target_endurance": {
+                    "type": "number",
+                    "description": "Endurance to reach; the stat runs 0..1.",
+                    "minimum": MIN_REST_TARGET,
+                    "maximum": MAX_REST_TARGET,
+                    "default": DEFAULT_REST_TARGET,
+                },
+                "seat_ref": _ref_schema(RefKind.SQUARE, "A square with something to sit on."),
+                "allow_ground": {
+                    "type": "boolean",
+                    "description": "May sit on the ground when there is no seat.",
+                    "default": False,
+                },
+                "max_wait_ms": {
+                    "type": "integer",
+                    "description": "How long the mod may hold the rest, in milliseconds.",
+                    "minimum": MIN_WAIT_MS,
+                    "maximum": MAX_REST_WAIT_MS,
+                    "default": DEFAULT_REST_WAIT_MS,
+                },
+            },
+            required=(),
+        ),
+        example={"target_endurance": 0.95, "idempotency_key": "goal-1:step-1:attempt-1"},
+    ),
+    ToolSpec(
+        name="pz_action_sleep",
+        kind=ToolKind.WRITE,
+        risk=RiskClass.P4,
+        summary=(
+            "Sleep a night off in a named bed. The most consequential action in "
+            "this build, and the reason it is P4: once the character is asleep "
+            "the mod cannot wake them — sleep runs through the bed's context "
+            "menu, so there is no timed action to interrupt and no queue entry "
+            "to cancel, and a panic stop cannot reach it. It is refused outright "
+            "while the guard reports any danger at all, and it is never taken on "
+            "the agent's own initiative. Its capability is 'experimental' on a "
+            "clean scan, so on most installs this tool is withheld rather than "
+            "offered. Verified by fatigue falling *and* the world clock "
+            "advancing; fatigue alone is a quiet afternoon."
+        ),
+        required_capability=SURVIVAL_SLEEP,
+        action=ActionName.SURVIVAL_SLEEP,
+        long_running=True,
+        input_schema=_mutating(
+            {
+                "bed_ref": _ref_schema(RefKind.SQUARE, "The square the bed stands on."),
+                "hours": {
+                    "type": "integer",
+                    "description": "In-game hours to sleep for.",
+                    "minimum": MIN_SLEEP_HOURS,
+                    "maximum": MAX_SLEEP_HOURS,
+                    "default": DEFAULT_SLEEP_HOURS,
+                },
+                "allow_vehicle_seat": {
+                    "type": "boolean",
+                    "description": "Sleep in a vehicle seat when no bed is named.",
+                    "default": False,
+                },
+                "max_wait_ms": {
+                    "type": "integer",
+                    "description": "How long the mod may hold the sleep, in milliseconds.",
+                    "minimum": MIN_WAIT_MS,
+                    "maximum": MAX_SLEEP_WAIT_MS,
+                    "default": DEFAULT_SLEEP_WAIT_MS,
+                },
+            },
+            required=(),
+        ),
+        example={
+            "bed_ref": _EXAMPLE_SQUARE,
+            "hours": 8,
             "idempotency_key": "goal-1:step-1:attempt-1",
         },
     ),

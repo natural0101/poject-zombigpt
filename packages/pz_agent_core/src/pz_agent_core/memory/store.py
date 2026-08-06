@@ -429,10 +429,27 @@ class SaveMemory:
         cap: int,
         age_key: Callable[[_Record], int],
     ) -> None:
-        while len(collection) > cap:
-            oldest_key = min(collection, key=lambda key: (age_key(collection[key]), key))
-            del collection[oldest_key]
-            self._evicted += 1
+        """Drop the oldest records until *collection* fits its cap.
+
+        Ordered once, not once per eviction. The record removed by a repeated
+        ``min`` never changes as its neighbours go, so a single sort drops
+        exactly the same records in exactly the same order — and it costs
+        O(n log n) rather than O(n * evicted).
+
+        The difference is not academic, because the number this is handed is not
+        the number the writer bounds. On load it is whatever the document held,
+        and a memory file is bounded in *bytes*
+        (:data:`~pz_agent_core.memory.persistence.MAX_MEMORY_BYTES`), which the
+        smallest legal container record turns into tens of thousands of entries.
+        Quadratic eviction made a file the store accepts cost minutes of CPU.
+        """
+        overflow = len(collection) - cap
+        if overflow <= 0:
+            return
+        oldest_first = sorted(collection, key=lambda key: (age_key(collection[key]), key))
+        for key in oldest_first[:overflow]:
+            del collection[key]
+        self._evicted += overflow
 
     def _latest_timestamp(self) -> int:
         """The newest moment the loaded document knows about.

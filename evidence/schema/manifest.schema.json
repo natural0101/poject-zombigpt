@@ -1,0 +1,135 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/natural0101/poject-zombigpt/evidence/schema/manifest.schema.json",
+  "title": "Live-test evidence manifest",
+  "description": "The release gate's input: every artefact from every scenario, with a SHA-256 apiece. There is no incomplete form of this document — 'complete' is a constant, and pz-agent live-test finalize refuses to write anything at all while a required artefact is missing, a result does not match its recorded digest, or a scenario has not passed.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "complete",
+    "commit",
+    "game_builds",
+    "product_version",
+    "mod_version",
+    "schema_version",
+    "generated_at_ms",
+    "generated_at",
+    "scenario_count",
+    "scenarios",
+    "artefacts",
+    "totals"
+  ],
+  "properties": {
+    "format": { "const": "pz-agent/livetest-manifest/1" },
+    "complete": {
+      "const": true,
+      "description": "Constant by design. A manifest that could describe itself as partial is one a release gate would accept."
+    },
+    "commit": { "type": "string", "minLength": 1 },
+    "game_builds": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": { "type": "string", "minLength": 1 },
+      "description": "Every distinct build string the results carry. More than one means the evidence spans builds, which a reviewer needs to see rather than have averaged away."
+    },
+    "product_version": { "type": "string", "minLength": 1 },
+    "mod_version": { "type": "string", "minLength": 1 },
+    "schema_version": { "type": "string", "minLength": 1 },
+    "generated_at_ms": { "type": "integer", "minimum": 0 },
+    "generated_at": { "type": "string", "minLength": 1 },
+    "scenario_count": { "type": "integer", "minimum": 1 },
+    "scenarios": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": { "$ref": "#/$defs/scenario" }
+    },
+    "artefacts": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4096,
+      "items": { "$ref": "#/$defs/artefact" }
+    },
+    "totals": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artefact_count", "bytes"],
+      "properties": {
+        "artefact_count": { "type": "integer", "minimum": 1 },
+        "bytes": { "type": "integer", "minimum": 0 }
+      }
+    }
+  },
+  "$defs": {
+    "scenario": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scenario_id",
+        "state",
+        "attempt_count",
+        "last_run_ms",
+        "result_sha256"
+      ],
+      "properties": {
+        "scenario_id": { "type": "string", "pattern": "^S[0-9]{2}_[A-Z0-9_]+$" },
+        "state": {
+          "const": "PASS",
+          "description": "Only PASS reaches a manifest. Everything else is a refusal, named in the error rather than recorded here."
+        },
+        "attempt_count": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "More than one is normal and is kept: a scenario fixed after a failure carries both attempts."
+        },
+        "last_run_ms": { "type": ["integer", "null"], "minimum": 0 },
+        "result_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "artefact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scenario_id",
+        "kind",
+        "path",
+        "required",
+        "present",
+        "sha256",
+        "size_bytes",
+        "problem"
+      ],
+      "properties": {
+        "scenario_id": { "type": "string", "minLength": 1 },
+        "kind": {
+          "enum": ["state", "result", "attempt", "log", "journal", "snapshot", "screenshot"]
+        },
+        "path": { "type": "string", "minLength": 1 },
+        "required": { "type": "boolean" },
+        "present": { "type": "boolean" },
+        "sha256": { "type": "string", "pattern": "^([0-9a-f]{64})?$" },
+        "size_bytes": { "type": "integer", "minimum": 0 },
+        "problem": { "type": "string" }
+      },
+      "allOf": [
+        {
+          "description": "A required artefact that reached the manifest is present, hashed and non-empty.",
+          "if": {
+            "properties": { "required": { "const": true } },
+            "required": ["required"]
+          },
+          "then": {
+            "properties": {
+              "present": { "const": true },
+              "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+              "size_bytes": { "type": "integer", "minimum": 1 },
+              "problem": { "const": "" }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

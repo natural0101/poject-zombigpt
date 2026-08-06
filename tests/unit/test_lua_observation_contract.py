@@ -41,6 +41,7 @@ from pz_agent_core.protocol.refs import (
     ZombieRef,
     ref_kind,
 )
+from pz_agent_core.version import SCHEMA_VERSION
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[2]
 EMITTER: Final = REPO_ROOT / "tests" / "lua" / "support" / "emit_observation.lua"
@@ -97,7 +98,7 @@ def test_the_emitted_document_validates_against_the_schema(
 
 
 def test_the_emitted_document_parses_into_an_observation(observation: Observation) -> None:
-    assert observation.schema_version == "1.0"
+    assert observation.schema_version == SCHEMA_VERSION
     assert observation.session_id == SESSION
     assert observation.seq == 12
     assert observation.full is True

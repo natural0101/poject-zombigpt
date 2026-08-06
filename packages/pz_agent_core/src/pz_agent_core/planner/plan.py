@@ -29,6 +29,7 @@ restate them so validation and serialisation cannot disagree.
 from __future__ import annotations
 
 import json
+import math
 import re
 import uuid
 from collections.abc import Callable, Mapping, Sequence
@@ -123,11 +124,17 @@ MAX_MOVE_DISTANCE: Final = 30
 PLAN_COORDINATE_LIMIT: Final = 100_000
 PLAN_FLOOR_LIMIT: Final = 32
 
-_STEP_ID: Final = re.compile(r"^[A-Za-z0-9_-]+$")
+#: Both patterns are applied with :meth:`re.Pattern.fullmatch`, never ``match``:
+#: ``$`` also matches immediately *before* a trailing newline, so ``match``
+#: would admit a step id of ``"s1\n"`` and an object reference ending in one.
+#: The mod's reference parser anchors its alphabets with Lua patterns, where
+#: ``$`` is a true end-of-string anchor, so a reference this side accepted would
+#: be refused there after the step had already been spent.
+_STEP_ID: Final = re.compile(r"[A-Za-z0-9_-]+")
 
 #: References whose kind has no typed parser are checked against this instead:
 #: ``<kind>:<session>:<tail>`` with a safe alphabet throughout.
-_UNTYPED_REF: Final = re.compile(r"^[a-z]+:[A-Za-z0-9\-]{1,64}(?::[A-Za-z0-9_.\-]+)+$")
+_UNTYPED_REF: Final = re.compile(r"[a-z]+:[A-Za-z0-9\-]{1,64}(?::[A-Za-z0-9_.\-]+)+")
 
 _CONTROL: Final = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 
@@ -318,28 +325,71 @@ def _threshold(value: float | None) -> float:
 
 
 def _position_reached(args: StepArgs, observation: Observation) -> bool | None:
+    """Euclidean, because that is the metric the move adapter's radius is in.
+
+    A criterion that says a step's goal already holds spends no command and
+    still lets the run finish ``completed``, so anything looser than
+    ``MoveToAdapter.arrived`` reports an arrival nobody observed. Chebyshev
+    makes the radius a *box*: (0.7, 0.7) from the target is inside a 0.75 box
+    and 0.99 away from the point the adapter measures to.
+    """
     if not isinstance(args, MoveToArgs):
         return None
     position = observation.player.position
     if position.z != args.z:
         return False
-    return max(abs(position.x - args.x), abs(position.y - args.y)) <= args.radius
+    return math.hypot(position.x - args.x, position.y - args.y) <= args.radius
 
 
 def _item_criterion(kind: SuccessKind, args: StepArgs, observation: Observation) -> bool | None:
+    """Follow the *object*, not the string that named it.
+
+    An item reference embeds the container holding it, so ``inventory.ensure_main``
+    — the step that precedes every meal and every read — re-mints the reference
+    of the item it moved. Looking the old string up then finds nothing, which
+    under ``item_consumed`` reads as "already eaten" and skips the meal, and
+    under ``item_in_main_inventory`` reads as "not there" for an item that is.
+    What survives a move is the runtime id and the generation, which is the
+    same identity the adapters verify a transfer with.
+    """
     inventory = observation.inventory
     if inventory is None:
         return None
     item_ref = next((r.value for r in args.refs() if r.kind is RefKind.ITEM), None)
     if item_ref is None:
         return None
-    item = inventory.item(item_ref)
+    try:
+        named = ItemRef.parse(item_ref)
+    except RefError:
+        # Unanswerable rather than false: a reference this side cannot read is
+        # not evidence about where the object is, or whether it still exists.
+        return None
+    found = [
+        item
+        for item in inventory.items
+        if _same_object(item.ref, named.runtime_id, named.generation)
+    ]
     if kind is SuccessKind.ITEM_CONSUMED:
-        return item is None
+        return not found
     main = inventory.main_container()
-    if item is None or main is None:
+    # Two entries for one runtime id is a duplication, not a completed move.
+    if len(found) != 1 or main is None:
         return False
-    return item.container_ref == main.ref
+    return found[0].container_ref == main.ref
+
+
+def _same_object(observed_ref: str, runtime_id: str, generation: int) -> bool:
+    """Whether *observed_ref* names the same object as this id and generation.
+
+    A reference the mod sent that this side cannot parse is dropped rather than
+    raised on: it can only ever fail to match, and one malformed entry must not
+    blind the search for the others.
+    """
+    try:
+        parsed = ItemRef.parse(observed_ref)
+    except RefError:
+        return False
+    return parsed.runtime_id == runtime_id and parsed.generation == generation
 
 
 # --------------------------------------------------------------------------
@@ -523,7 +573,9 @@ class MoveNearArgs:
         }
 
     def refs(self) -> tuple[PlanRef, ...]:
-        return (PlanRef(value=self.object_ref, kind=RefKind.OBJECT),)
+        # The kind is read back off the reference rather than declared, because
+        # this argument accepts whichever of them the mod minted for the thing.
+        return (PlanRef(value=self.object_ref, kind=ref_kind(self.object_ref)),)
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any], step_id: str) -> MoveNearArgs:
@@ -538,7 +590,7 @@ class MoveNearArgs:
             step_id,
             object_ref=_ref(
                 _require(payload, "object_ref", field="args.object_ref", step_id=step_id),
-                kind=RefKind.OBJECT,
+                kind=(RefKind.CONTAINER, RefKind.SQUARE, RefKind.ITEM),
                 field="args.object_ref",
                 step_id=step_id,
             ),
@@ -867,7 +919,7 @@ class PlanStep:
     requires_confirmation: bool = False
 
     def __post_init__(self) -> None:
-        if not _STEP_ID.match(self.step_id) or len(self.step_id) > MAX_STEP_ID_CHARS:
+        if not _STEP_ID.fullmatch(self.step_id) or len(self.step_id) > MAX_STEP_ID_CHARS:
             raise ValueError(
                 f"step_id must be 1..{MAX_STEP_ID_CHARS} characters of [A-Za-z0-9_-], "
                 f"got {self.step_id!r}"
@@ -1248,7 +1300,17 @@ _REF_PARSERS: Final[Mapping[RefKind, Callable[[str], object]]] = MappingProxyTyp
 )
 
 
-def _ref(value: Any, *, kind: RefKind, field: str, step_id: str) -> str:
+def _ref(value: Any, *, kind: RefKind | tuple[RefKind, ...], field: str, step_id: str) -> str:
+    """Validate one reference in a plan, against one acceptable kind or several.
+
+    Several is not a loosening. ``PZAgent.ObserveModel`` describes a nearby
+    thing as a ``container`` reference when it holds one and a ``square``
+    reference otherwise — it never mints an ``object`` reference at all — so a
+    step naming something to walk up to has to accept the kinds the mod is
+    capable of producing, or it refuses every plan built from a real
+    observation.
+    """
+    accepted = (kind,) if isinstance(kind, RefKind) else kind
     raw = _string(value, field=field, step_id=step_id)
     try:
         actual = ref_kind(raw)
@@ -1256,19 +1318,20 @@ def _ref(value: Any, *, kind: RefKind, field: str, step_id: str) -> str:
         raise PlanRejected(
             PlanFault.BAD_REF, f"{raw!r} is not a reference", field=field, step_id=step_id
         ) from exc
-    if actual is not kind:
+    if actual not in accepted:
+        wanted = " or ".join(sorted(k.value for k in accepted))
         raise PlanRejected(
             PlanFault.BAD_REF,
-            f"expected a {kind.value} reference, got a {actual.value} one",
+            f"expected a {wanted} reference, got a {actual.value} one",
             field=field,
             step_id=step_id,
         )
-    parser = _REF_PARSERS.get(kind)
+    parser = _REF_PARSERS.get(actual)
     if parser is None:
-        if not _UNTYPED_REF.match(raw):
+        if not _UNTYPED_REF.fullmatch(raw):
             raise PlanRejected(
                 PlanFault.BAD_REF,
-                f"{raw!r} is not a well-formed {kind.value} reference",
+                f"{raw!r} is not a well-formed {actual.value} reference",
                 field=field,
                 step_id=step_id,
             )
@@ -1282,7 +1345,7 @@ def _ref(value: Any, *, kind: RefKind, field: str, step_id: str) -> str:
 
 def _step_id(value: Any) -> str:
     raw = _string(value, field="step_id")
-    if not _STEP_ID.match(raw) or len(raw) > MAX_STEP_ID_CHARS:
+    if not _STEP_ID.fullmatch(raw) or len(raw) > MAX_STEP_ID_CHARS:
         raise PlanRejected(
             PlanFault.BAD_VALUE,
             f"step_id must be 1..{MAX_STEP_ID_CHARS} characters of [A-Za-z0-9_-], got {raw!r}",

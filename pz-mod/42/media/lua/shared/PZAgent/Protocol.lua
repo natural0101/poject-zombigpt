@@ -19,7 +19,7 @@ local Protocol = {}
 PZAgent.Protocol = Protocol
 
 --- Mirrors pz_agent_core.version.
-Protocol.PROTOCOL_VERSION = "1.0"
+Protocol.PROTOCOL_VERSION = "1.1"
 Protocol.SCHEMA_VERSION = "1.0"
 Protocol.MOD_VERSION = "0.1.0"
 Protocol.TARGET_BUILD = "42.20"
@@ -34,14 +34,20 @@ Protocol.ACTION_NAMES = {
   "action.wait",
   "movement.move_to",
   "movement.move_near",
+  "world.inspect",
+  "container.inspect",
+  "container.open_nearby",
+  "inventory.search",
   "inventory.transfer",
   "inventory.ensure_main",
-  "inventory.equip",
-  "inventory.unequip",
   "consume.eat",
   "consume.drink",
   "literature.read",
-  "world.inspect",
+  "equipment.equip",
+  "equipment.unequip",
+  "medical.bandage",
+  "survival.rest",
+  "survival.sleep",
   "plan.cancel",
 }
 
@@ -56,7 +62,8 @@ end
 Protocol.ACTIONS = toSet(Protocol.ACTION_NAMES)
 
 --- Actions that only read state: allowed in OBSERVE and without arming.
-Protocol.READ_ONLY_ACTIONS = toSet({ "world.inspect", "action.wait" })
+Protocol.READ_ONLY_ACTIONS =
+  toSet({ "world.inspect", "container.inspect", "inventory.search", "action.wait" })
 
 --- Actions that bypass the arming check entirely -- stopping must always work.
 Protocol.ALWAYS_ALLOWED_ACTIONS = toSet({ "safety.stop", "session.disarm", "plan.cancel" })

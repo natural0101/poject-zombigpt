@@ -52,6 +52,7 @@ from pz_agent_core.observation.compact import (
 from pz_agent_core.protocol import (
     ON_PERSON_CONTAINERS,
     ActionResult,
+    ActionStatus,
     ContainerKind,
     JsonDict,
     ReasonCode,
@@ -147,6 +148,22 @@ _ZOMBIE_TYPE: Final = "zombie"
 Handler = Callable[[ToolSpec, JsonDict], ToolOutcome]
 
 
+def _plan_envelope_status(status: ActionStatus) -> str:
+    """The envelope status for a plan, which never borrows ``succeeded``.
+
+    ``ToolSuccess`` reserves that word for a result carrying the observed
+    postcondition under ``data.evidence`` (``docs/MCP_TOOLS.md``), and a plan
+    record has none to carry: its steps' evidence was observed by the engine and
+    stops at :class:`~.ports.PlanStepRecord`. ``PlanExecutor.run`` is
+    synchronous, so a plan that worked comes back terminal on the *first* call —
+    borrowing the word there refused the envelope, reported a plan that ran as
+    ``INTERNAL_ERROR``, and skipped the idempotency record, so the client's retry
+    ran the plan a second time. ``data.status`` and ``data.terminal`` say what
+    the plan finished as, which is what ``pz_plan_status`` already relies on.
+    """
+    return "ok" if status is ActionStatus.SUCCEEDED else status.value
+
+
 def _omitted_warning(dropped: int, noun: str) -> tuple[str, ...]:
     """Say out loud that the answer is shorter than what the port offered.
 
@@ -183,11 +200,27 @@ class ToolRouter:
             "pz_observe_snapshot": self._observe_snapshot,
             "pz_observe_inventory": self._observe_inventory,
             "pz_observe_nearby": self._observe_nearby,
+            # Every tool that names an action is routed to the same handler, and
+            # that is the point: the schema field is the adapter argument, so
+            # there is nothing per-action to translate. A handler that knew
+            # which arguments `medical.bandage` takes would be a second copy of
+            # the adapter's own parser, and the copy is what drifts.
+            "pz_action_inspect_world": self._submit,
+            "pz_action_inspect_container": self._submit,
+            "pz_action_search_inventory": self._submit,
             "pz_action_move_to": self._submit,
+            "pz_action_move_near": self._submit,
+            "pz_action_open_container": self._submit,
             "pz_action_transfer": self._submit,
+            "pz_action_ensure_main": self._submit,
             "pz_action_eat": self._submit,
             "pz_action_drink": self._submit,
             "pz_action_read": self._submit,
+            "pz_action_equip": self._submit,
+            "pz_action_unequip": self._submit,
+            "pz_action_bandage": self._submit,
+            "pz_action_rest": self._submit,
+            "pz_action_sleep": self._submit,
             "pz_action_wait": self._submit,
             "pz_action_cancel": self._submit,
             "pz_plan_execute": self._plan_execute,
@@ -571,13 +604,27 @@ class ToolRouter:
         )
 
     def _result_payload(self, result: ActionResult) -> JsonDict:
-        """The terminal ack, with its own text redacted and its evidence scrubbed."""
+        """The terminal ack, with its own text quarantined and its evidence scrubbed.
+
+        ``detail`` and ``diagnostics`` are the adapter's refusal wording, and the
+        adapters interpolate game-authored text into it — ``consume.eat`` answers
+        ``f"{item.display_name} has no portions left"``, and the display name is
+        whatever a mod called the item. Redaction alone is not the rule this
+        boundary states: free text leaves it *marked*, so a client can tell the
+        game's words from the protocol's. Carried under the quarantine key with
+        the marker beside it, exactly as ``_plan_execute`` carries the echoed
+        goal — ``reason_code`` is what a client should branch on, and that stays
+        outside because it is a member of a closed protocol vocabulary.
+        """
         payload: JsonDict = {
             "reason_code": result.reason_code.value,
             "retryable": is_retryable(result.reason_code),
             "attempt": result.attempt,
-            "detail": scrub_text(result.message),
-            "diagnostics": [scrub_text(line) for line in result.diagnostics[:MAX_DIAGNOSTICS]],
+            UNTRUSTED_TEXT_KEY: {
+                "detail": scrub_text(result.message),
+                "diagnostics": [scrub_text(line) for line in result.diagnostics[:MAX_DIAGNOSTICS]],
+            },
+            "content_marker": CONTENT_MARKER,
         }
         evidence = self._evidence_payload(result)
         if evidence:
@@ -628,7 +675,9 @@ class ToolRouter:
         data[UNTRUSTED_TEXT_KEY] = {"goal": scrub_text(goal)}
         data["content_marker"] = CONTENT_MARKER
         return ToolOutcome(
-            data=data, status=record.status.value, message=f"plan is {record.status.value}"
+            data=data,
+            status=_plan_envelope_status(record.status),
+            message=f"plan is {record.status.value}",
         )
 
     def _plan_status(self, spec: ToolSpec, args: JsonDict) -> ToolOutcome:

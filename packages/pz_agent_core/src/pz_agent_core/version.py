@@ -15,7 +15,7 @@ PRODUCT_VERSION: Final = "0.1.0"
 
 #: Wire protocol spoken between the Lua mod and the sidecar. Major bumps break
 #: compatibility; the mod refuses a session whose major differs.
-PROTOCOL_VERSION: Final = "1.0"
+PROTOCOL_VERSION: Final = "1.1"
 
 #: Version stamped into every observation/action-result payload. Tied to the
 #: JSON Schema documents under ``schemas/``.

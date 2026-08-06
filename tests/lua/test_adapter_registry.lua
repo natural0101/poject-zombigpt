@@ -1,0 +1,186 @@
+--[[
+Every adapter the mod ships must actually reach the dispatcher.
+
+This is the test the rest of the Lua suite cannot be: each adapter file has its
+own tests, and each of those loads the one adapter it is about and calls it
+directly. None of them asks the question that decides whether the mod does
+anything at all in a real session -- does PZAgent.ActionRuntime, walking
+PZAgent.Adapters.ALL and handing each entry to PZAgent.CommandDispatcher, end up
+with a registry that covers the protocol's game actions?
+
+An adapter that is well-written, well-tested and never registered is a mod that
+loads cleanly and answers CAPABILITY_UNAVAILABLE to everything.
+]]
+
+local ROOT = arg[0]:match("^(.*)test_adapter_registry%.lua$") or ""
+local Harness = dofile(ROOT .. "support/harness.lua")
+local Support = dofile(ROOT .. "support/adapter_support.lua")
+
+local equal, ok = Harness.equal, Harness.ok
+
+local PZ = Harness.loadModules()
+dofile(ROOT .. "../../pz-mod/42/media/lua/client/PZAgent/CommandDispatcher.lua")
+dofile(ROOT .. "../../pz-mod/42/media/lua/client/PZAgent/CommandReader.lua")
+dofile(ROOT .. "../../pz-mod/42/media/lua/client/PZAgent/CapabilityRuntime.lua")
+dofile(ROOT .. "../../pz-mod/42/media/lua/client/PZAgent/ActionRuntime.lua")
+
+--- Every adapter file in the shipped mod, in the order the engine loads them.
+--- Listed explicitly rather than globbed: a file that stops loading should break
+--- this test, not silently drop out of the expected set.
+local ADAPTER_FILES = {
+  "Movement",
+  "World",
+  "Containers",
+  "Inventory",
+  "Consumption",
+  "Literature",
+  "Equipment",
+  "Medical",
+  "Rest",
+  "Sleep",
+}
+
+--- The game actions an adapter file is responsible for. The control plane --
+--- session.arm, session.disarm, safety.stop, plan.cancel, action.wait -- is
+--- served by PZAgent.ActionRuntime itself and is checked separately below.
+local GAME_ACTIONS = {
+  "movement.move_to",
+  "movement.move_near",
+  "world.inspect",
+  "container.inspect",
+  "container.open_nearby",
+  "inventory.search",
+  "inventory.transfer",
+  "inventory.ensure_main",
+  "consume.eat",
+  "consume.drink",
+  "literature.read",
+  "equipment.equip",
+  "equipment.unequip",
+  "medical.bandage",
+  "survival.rest",
+  "survival.sleep",
+}
+
+local CONTROL_ACTIONS = {
+  "session.arm",
+  "session.disarm",
+  "safety.stop",
+  "plan.cancel",
+  "action.wait",
+}
+
+Support.loadModules(Harness.root, ADAPTER_FILES)
+
+print("- every shipped adapter declares itself the way the dispatcher demands")
+
+local published = PZ.Adapters.ALL
+ok(type(published) == "table", "the adapters publish themselves into a registry")
+ok(#published > 0, "the registry is not empty")
+
+--- The dispatcher reads `adapter.action`; an adapter that names itself under any
+--- other key is invisible to it. This ran red first: eight of the ten files
+--- published a `name` instead, so they registered nowhere and every game action
+--- answered CAPABILITY_UNAVAILABLE in a mod that otherwise looked healthy.
+for index = 1, #published do
+  local adapter = published[index]
+  ok(
+    type(adapter.action) == "string",
+    string.format("registry entry %d names its action under `action`", index)
+  )
+  ok(
+    type(adapter.start) == "function",
+    string.format("registry entry %d (%s) provides start()", index, tostring(adapter.action))
+  )
+end
+
+print("- the registry covers every game action in the protocol")
+
+local byAction = {}
+for index = 1, #published do
+  local adapter = published[index]
+  if type(adapter.action) == "string" then
+    ok(byAction[adapter.action] == nil, "no two adapters claim " .. adapter.action)
+    byAction[adapter.action] = adapter
+  end
+end
+
+for index = 1, #GAME_ACTIONS do
+  local action = GAME_ACTIONS[index]
+  ok(byAction[action] ~= nil, "an adapter is published for " .. action)
+end
+
+print("- the dispatcher accepts every published adapter")
+
+local dispatcher = PZ.CommandDispatcher.new()
+for index = 1, #published do
+  local adapter = published[index]
+  local registered, reason = dispatcher:register(adapter)
+  ok(
+    registered == true,
+    string.format(
+      "the dispatcher registers %s (%s)",
+      tostring(adapter.action),
+      tostring(reason or "accepted")
+    )
+  )
+end
+
+print("- installing the runtime yields a registry that answers for every action")
+
+-- A real PZAgent.Ipc over a mock filesystem rather than a hand-written double.
+-- The install path publishes a capability report through it, and a double that
+-- happened to implement only the methods this test expected would pass while the
+-- real one raised -- which is what happened on the first run of this file.
+local Mock = dofile(ROOT .. "support/mock_game.lua")
+local CommandSupport = dofile(ROOT .. "support/command_support.lua")
+
+local agent = CommandSupport.agent(Mock)
+local runtime, installError = PZ.ActionRuntime.install(agent, CommandSupport.NOW, {})
+ok(runtime ~= nil, "the runtime installs: " .. tostring(installError or "ok"))
+
+if runtime ~= nil then
+  local registry = agent.dispatcher
+  ok(registry ~= nil, "the install leaves its dispatcher on the agent")
+  if registry ~= nil then
+    local names = registry:registered()
+    local covered = {}
+    for index = 1, #names do
+      covered[names[index]] = true
+    end
+
+    for index = 1, #GAME_ACTIONS do
+      local action = GAME_ACTIONS[index]
+      ok(covered[action] == true, "the installed registry answers for " .. action)
+    end
+
+    for index = 1, #CONTROL_ACTIONS do
+      local action = CONTROL_ACTIONS[index]
+      ok(covered[action] == true, "the installed registry answers for " .. action)
+    end
+
+    equal(
+      #names,
+      #GAME_ACTIONS + #CONTROL_ACTIONS,
+      "the registry holds exactly the protocol's actions and nothing else"
+    )
+  end
+end
+
+print("- nothing published claims an action outside the whitelist")
+
+local pending = PZ.Adapters.PENDING_PROTOCOL or {}
+equal(#pending, 0, "no adapter claims an action the protocol does not know")
+
+print("- every adapter names the engine symbols it needs")
+
+for index = 1, #published do
+  local adapter = published[index]
+  local symbols = adapter.required_symbols or adapter.requires or {}
+  ok(
+    type(symbols) == "table",
+    string.format("%s declares its engine symbols as a table", tostring(adapter.action))
+  )
+end
+
+Harness.finish("adapter_registry")

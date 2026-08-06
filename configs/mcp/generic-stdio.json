@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "pz-agent": {
+      "command": "python",
+      "args": ["-m", "pz_agent_mcp"],
+      "env": {}
+    }
+  }
+}

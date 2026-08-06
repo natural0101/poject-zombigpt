@@ -7,6 +7,7 @@ happy path is the easy part; these are the reasons the reader is stateful.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -228,6 +229,38 @@ def test_pruned_generations_are_reported_rather_than_hidden(tmp_path: Path) -> N
     # What survived is still delivered; only the pruned generation is missing.
     assert [r.payload for r in read.records] == [{"also_lost": True}, {"n": 3}]
     writer.close()
+
+
+def test_a_far_future_header_serial_costs_bounded_work(tmp_path: Path) -> None:
+    """The serial gap the reader walks is bounded by `keep`, not by the header.
+
+    ``probe_header`` accepts any non-negative integer serial, and the file it
+    reads is written by the mod, not by this process. Walking every serial
+    between the reader's own and the header's turned a ~100-byte file into one
+    ``lost`` entry per missing generation — measured at 4.7 GiB and minutes of
+    CPU for a header claiming serial 20,000,000. Only ``keep`` generations can
+    still exist on disk, so anything older is reported as pruned without being
+    enumerated.
+    """
+    layout = make_layout(tmp_path)
+    writer = JournalWriter(layout, layout.command_ack, keep=3)
+    reader = JournalReader(layout, layout.command_ack, keep=3)
+    writer.append({"n": 0})
+    reader.read()
+    writer.close()
+
+    header = json.dumps({"type": "journal.header", "serial": 20_000_000}) + "\n"
+    layout.command_ack.write_text(header + json.dumps({"n": 1}) + "\n", encoding="utf-8")
+
+    read = reader.read()
+
+    assert read.lost_records
+    assert len(read.lost_serials) <= reader.keep + 1
+    assert len(read.diagnostics) <= reader.keep + 1
+    # The live generation is still delivered: the bound drops enumeration of
+    # generations that cannot exist, not records that do.
+    assert [r.payload for r in read.records] == [{"n": 1}]
+    assert read.serial == 20_000_000
 
 
 def test_rotation_keeps_a_bounded_number_of_files(tmp_path: Path) -> None:

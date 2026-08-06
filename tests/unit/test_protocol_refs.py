@@ -113,6 +113,35 @@ class TestZombieRef:
             ZombieRef.parse(f"zombie:{SESSION}:z-771:latest")
 
 
+class TestTrailingControlCharacters:
+    """'$' matches before a trailing newline; the Lua parser's does not.
+
+    ``pz-mod/42/media/lua/shared/PZAgent/Refs.lua`` anchors the same alphabets
+    with Lua patterns, where ``$`` is a true end-of-string anchor, and its
+    header states the invariant these two implementations exist to keep: the
+    strings one builds and parses are byte-identical to the other's. A segment
+    that Python accepts and the mod refuses is that invariant broken — the
+    sidecar validates a plan step, submits it, and the mod answers
+    ``INVALID_REF`` for a reference this side called well-formed.
+    """
+
+    def test_a_runtime_id_may_not_end_in_a_newline(self) -> None:
+        with pytest.raises(RefError):
+            ItemRef.parse(f"item:{SESSION}:player-main:4210\n:0")
+
+    def test_a_container_tail_segment_may_not_end_in_a_newline(self) -> None:
+        with pytest.raises(RefError):
+            ContainerRef.parse(f"container:{SESSION}:worn:Back\n:99001")
+
+    def test_a_session_segment_may_not_end_in_a_newline(self) -> None:
+        with pytest.raises(RefError):
+            ContainerRef.parse(f"container:{SESSION}\n:player-main")
+
+    def test_a_zombie_runtime_id_may_not_end_in_a_newline(self) -> None:
+        with pytest.raises(RefError):
+            ZombieRef.parse(f"zombie:{SESSION}:z-771\n:2")
+
+
 class TestSessionScoping:
     def test_ref_from_another_session_is_not_ours(self) -> None:
         other = "5e5510aa-0000-4000-8000-000000000002"

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import uuid
 from collections.abc import Iterator
@@ -14,9 +15,14 @@ from pz_agent_core.actions import PreconditionFailed
 from pz_agent_core.capabilities.probes import (
     DRINK_CARRIED,
     EAT_PERCENTAGE,
+    EQUIPMENT_EQUIP,
+    EQUIPMENT_UNEQUIP,
     INVENTORY_TRANSFER,
+    MEDICAL_BANDAGE,
     MOVE_TO_SQUARE,
     READ_LITERATURE,
+    SURVIVAL_REST,
+    SURVIVAL_SLEEP,
 )
 from pz_agent_core.observation.compact import (
     CONTENT_MARKER,
@@ -65,6 +71,11 @@ ALL_CAPABILITIES = (
     EAT_PERCENTAGE,
     DRINK_CARRIED,
     READ_LITERATURE,
+    EQUIPMENT_EQUIP,
+    EQUIPMENT_UNEQUIP,
+    MEDICAL_BANDAGE,
+    SURVIVAL_REST,
+    SURVIVAL_SLEEP,
 )
 
 #: A username that cannot occur by accident inside another word.
@@ -75,6 +86,9 @@ OTHER_SESSION = str(uuid.UUID(int=0x5E5511))
 
 BEAN_REF = item_ref("501", "player-main")
 BOOK_REF = item_ref("502", "worn:Back:99001")
+MAIN_REF = main_container_ref()
+CRATE_REF = f"container:{DEFAULT_SESSION}:world:1200:3400:0:crate:0"
+SQUARE_REF = f"square:{DEFAULT_SESSION}:1200:3400:0"
 
 #: Windows drive paths, UNC paths and POSIX system paths — §3.13 forbids all of
 #: them from crossing this boundary in any field.
@@ -574,6 +588,20 @@ def test_a_radius_beyond_the_bound_is_refused_rather_than_clamped() -> None:
     assert payload["reason_code"] == ReasonCode.INVALID_ARGUMENT.value
 
 
+def test_a_radius_of_nan_is_refused_rather_than_emptying_the_world() -> None:
+    # NaN sits outside no bound and inside none either: every `distance <=
+    # radius` is false, so the surroundings tool would answer "no zombies, no
+    # objects" for a world that has both — the worst wrong answer this surface
+    # can give — and echo a bare NaN, which is not valid JSON for the client.
+    doubles = armed_doubles()
+    doubles.observations.observation = rich_observation()
+
+    payload = make_router(doubles).call("pz_observe_nearby", {"radius": float("nan")})
+
+    assert payload["ok"] is False
+    assert payload["reason_code"] == ReasonCode.INVALID_ARGUMENT.value
+
+
 # -- session, plans, memory, diagnostics -----------------------------------
 
 
@@ -649,6 +677,39 @@ def test_a_plan_goal_is_bounded_quarantined_and_echoed_back() -> None:
     assert "\n" not in data[UNTRUSTED_TEXT_KEY]["goal"]
 
 
+def test_a_finished_plan_is_reported_without_borrowing_the_envelopes_success_word() -> None:
+    """``PlanExecutor.run`` is synchronous, so a plan that worked comes back terminal.
+
+    The envelope's ``succeeded`` promises the observed postcondition under
+    ``data.evidence``, and a plan record carries none — its steps' evidence
+    never reaches this layer. Claiming the word made ``ToolSuccess`` refuse the
+    envelope, which turned every plan that *worked* into an INTERNAL_ERROR; and
+    because the refusal landed after the port had already run the plan and
+    before the idempotency key was recorded, the client's retry ran it twice.
+    """
+    doubles = armed_doubles()
+    doubles.plans.record = PlanRecord(
+        plan_id="plan-done",
+        status=ActionStatus.SUCCEEDED,
+        step_index=1,
+        steps=(
+            PlanStepRecord(index=0, action=ActionName.ACTION_WAIT, status=ActionStatus.SUCCEEDED),
+        ),
+    )
+    router = make_router(doubles)
+    arguments = {"goal": "wait a while", "idempotency_key": "k1"}
+
+    first = router.call("pz_plan_execute", arguments)
+    second = router.call("pz_plan_execute", arguments)
+
+    assert first["ok"] is True
+    assert first["status"] != ActionStatus.SUCCEEDED.value
+    assert first["data"]["status"] == ActionStatus.SUCCEEDED.value
+    assert first["data"]["terminal"] is True
+    assert second["replayed"] is True
+    assert len(doubles.plans.requests) == 1
+
+
 def test_a_plan_with_raw_steps_or_lua_fails_validation_because_there_is_nowhere_to_put_it() -> None:
     router = make_router(armed_doubles())
 
@@ -709,7 +770,47 @@ def test_a_terminal_results_diagnostics_are_bounded_before_they_are_relayed() ->
 
     payload = router.call("pz_action_wait", arguments)
 
-    assert len(payload["data"]["diagnostics"]) == MAX_DIAGNOSTICS
+    assert len(payload["data"][UNTRUSTED_TEXT_KEY]["diagnostics"]) == MAX_DIAGNOSTICS
+
+
+def test_a_terminal_refusal_quotes_the_item_name_only_inside_the_quarantine() -> None:
+    """An adapter's refusal wording carries game text, so it leaves marked.
+
+    ``consume.eat`` answers ``f"{item.display_name} has no portions left"`` and
+    the display name is whatever a mod called the item. The terminal ack reaches
+    a client through the replay path — re-calling with the same idempotency key
+    is how a client polls — so this is the ordinary route, not a corner. Putting
+    that sentence in a bare ``data.detail`` hands a client a string it has no
+    way to tell from the protocol's own words.
+    """
+    doubles = armed_doubles()
+    doubles.observations.observation = rich_observation()
+    router = make_router(doubles)
+    router.call("pz_session_arm", {"mode": "ASSISTED", "idempotency_key": "arm"})
+    arguments = {"item_ref": BEAN_REF, "fraction": 1.0, "idempotency_key": "eat-1"}
+    first = router.call("pz_action_eat", arguments)
+    doubles.actions.finish(
+        first["action_id"],
+        replace(
+            failed_result(ActionName.CONSUME_EAT, ReasonCode.PRECONDITION_FAILED),
+            message=f"{HOSTILE_NAME} has no portions left",
+        ),
+    )
+
+    data = router.call("pz_action_eat", arguments)["data"]
+
+    # The name is present exactly once, and only under the quarantine key.
+    assert "detail" not in data
+    assert "diagnostics" not in data
+    assert data["content_marker"] == CONTENT_MARKER
+    # Redaction still applies inside the quarantine: bounded, and no line break
+    # with which to end the sentence a client wrapped it in.
+    assert "SYSTEM:" in data[UNTRUSTED_TEXT_KEY]["detail"]
+    assert "\n" not in data[UNTRUSTED_TEXT_KEY]["detail"]
+    unmarked = {key: value for key, value in data.items() if key != UNTRUSTED_TEXT_KEY}
+    assert "SYSTEM:" not in json.dumps(unmarked)
+    # `reason_code` is closed protocol vocabulary and stays where a client branches on it.
+    assert data["reason_code"] == ReasonCode.PRECONDITION_FAILED.value
 
 
 def test_plan_status_says_so_plainly_when_nothing_is_running() -> None:
@@ -858,7 +959,12 @@ def every_payload(router: ToolRouter) -> Iterator[tuple[str, Any]]:
         ("pz_observe_snapshot", {"detail": "full"}),
         ("pz_observe_inventory", {}),
         ("pz_observe_nearby", {"radius": 30}),
+        ("pz_action_inspect_world", {"idempotency_key": "iw1"}),
+        ("pz_action_inspect_container", {"container_ref": MAIN_REF, "idempotency_key": "ic1"}),
+        ("pz_action_search_inventory", {"edible": True, "idempotency_key": "is1"}),
         ("pz_action_move_to", {"target": {"x": 1, "y": 2, "z": 0}, "idempotency_key": "m1"}),
+        ("pz_action_move_near", {"object_ref": CRATE_REF, "idempotency_key": "mn1"}),
+        ("pz_action_open_container", {"container_ref": CRATE_REF, "idempotency_key": "oc1"}),
         (
             "pz_action_transfer",
             {
@@ -867,9 +973,18 @@ def every_payload(router: ToolRouter) -> Iterator[tuple[str, Any]]:
                 "idempotency_key": "t1",
             },
         ),
+        ("pz_action_ensure_main", {"item_ref": BOOK_REF, "idempotency_key": "em1"}),
         ("pz_action_eat", {"item_ref": BEAN_REF, "idempotency_key": "e1"}),
         ("pz_action_drink", {"item_ref": BEAN_REF, "idempotency_key": "d1"}),
         ("pz_action_read", {"item_ref": BOOK_REF, "idempotency_key": "r1"}),
+        ("pz_action_equip", {"item_ref": BEAN_REF, "idempotency_key": "eq1"}),
+        ("pz_action_unequip", {"hand": "primary", "idempotency_key": "uq1"}),
+        (
+            "pz_action_bandage",
+            {"body_part": "ForeArm_L", "item_ref": BEAN_REF, "idempotency_key": "bd1"},
+        ),
+        ("pz_action_rest", {"target_endurance": 0.95, "idempotency_key": "rs1"}),
+        ("pz_action_sleep", {"bed_ref": SQUARE_REF, "idempotency_key": "sl1"}),
         ("pz_action_wait", {"game_seconds": 10, "idempotency_key": "w1"}),
         ("pz_action_cancel", {"idempotency_key": "c1"}),
         ("pz_plan_execute", {"goal": "eat then read", "idempotency_key": "p1"}),

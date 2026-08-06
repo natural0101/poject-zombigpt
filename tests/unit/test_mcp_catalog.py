@@ -13,9 +13,14 @@ from pz_agent_core.actions.adapters.movement import MAX_ARRIVAL_RADIUS, MAX_MOVE
 from pz_agent_core.capabilities.probes import (
     DRINK_CARRIED,
     EAT_PERCENTAGE,
+    EQUIPMENT_EQUIP,
+    EQUIPMENT_UNEQUIP,
     INVENTORY_TRANSFER,
+    MEDICAL_BANDAGE,
     MOVE_TO_SQUARE,
     READ_LITERATURE,
+    SURVIVAL_REST,
+    SURVIVAL_SLEEP,
 )
 from pz_agent_core.protocol import (
     ALWAYS_ALLOWED_ACTIONS,
@@ -47,6 +52,8 @@ from tests.fixtures.mcp_doubles import make_report
 ITEM = item_ref("501", "player-main")
 MAIN = main_container_ref()
 BACKPACK = backpack_container_ref()
+SQUARE = f"square:{DEFAULT_SESSION}:1200:3400:0"
+CRATE = f"container:{DEFAULT_SESSION}:world:1200:3400:0:0:0"
 
 #: The set named by docs/MCP_TOOLS.md, written out rather than derived, so a
 #: tool appearing or vanishing has to be a deliberate edit in two places.
@@ -57,11 +64,22 @@ DOCUMENTED_TOOLS = {
     "pz_observe_snapshot",
     "pz_observe_inventory",
     "pz_observe_nearby",
+    "pz_action_inspect_world",
+    "pz_action_inspect_container",
+    "pz_action_search_inventory",
     "pz_action_move_to",
+    "pz_action_move_near",
+    "pz_action_open_container",
     "pz_action_transfer",
+    "pz_action_ensure_main",
     "pz_action_eat",
     "pz_action_drink",
     "pz_action_read",
+    "pz_action_equip",
+    "pz_action_unequip",
+    "pz_action_bandage",
+    "pz_action_rest",
+    "pz_action_sleep",
     "pz_action_wait",
     "pz_action_cancel",
     "pz_plan_execute",
@@ -88,6 +106,11 @@ ALL_CAPABILITIES = (
     EAT_PERCENTAGE,
     DRINK_CARRIED,
     READ_LITERATURE,
+    EQUIPMENT_EQUIP,
+    EQUIPMENT_UNEQUIP,
+    MEDICAL_BANDAGE,
+    SURVIVAL_REST,
+    SURVIVAL_SLEEP,
 )
 
 
@@ -234,6 +257,17 @@ def test_the_stop_tool_takes_no_arguments_so_nothing_can_make_it_fail() -> None:
 #: One filled-in payload per action tool: every optional argument the schema
 #: offers, so the adapter sees the widest set of names this boundary can send.
 FULL_ACTION_PAYLOADS: dict[str, dict[str, Any]] = {
+    "pz_action_inspect_world": {"ref": SQUARE, "radius": 2},
+    "pz_action_inspect_container": {"container_ref": MAIN, "limit": 10},
+    "pz_action_search_inventory": {
+        "full_type": "Base.Bandage",
+        "type_prefix": "Base.",
+        "edible": True,
+        "drinkable": False,
+        "readable": False,
+        "exclude_equipped": True,
+        "limit": 5,
+    },
     "pz_action_move_to": {
         "target": {"x": 1210, "y": 3405, "z": 0},
         "radius": 1.5,
@@ -241,14 +275,36 @@ FULL_ACTION_PAYLOADS: dict[str, dict[str, Any]] = {
         "allow_doors": True,
         "allow_stairs": False,
     },
+    "pz_action_move_near": {"object_ref": CRATE, "radius": 1.5, "max_distance": 10},
+    "pz_action_open_container": {"container_ref": CRATE, "radius": 1.5},
     "pz_action_transfer": {
         "item_ref": ITEM,
         "destination_container_ref": BACKPACK,
         "source_container_ref": MAIN,
     },
+    "pz_action_ensure_main": {"item_ref": ITEM},
     "pz_action_eat": {"item_ref": ITEM, "fraction": 0.5},
     "pz_action_drink": {"item_ref": ITEM, "fraction": 0.5},
     "pz_action_read": {"item_ref": ITEM, "pages": 3},
+    "pz_action_equip": {"item_ref": ITEM, "hand": "primary"},
+    # All three namings at once, which the adapter refuses as a *domain* error —
+    # "name what to take off exactly once". That is the refusal this check wants
+    # to see: it proves check_args knows all three names, which naming only one
+    # of them would leave untested for the other two.
+    "pz_action_unequip": {"item_ref": ITEM, "hand": "primary", "slot": "Back"},
+    "pz_action_bandage": {"body_part": "ForeArm_L", "item_ref": ITEM},
+    "pz_action_rest": {
+        "target_endurance": 0.95,
+        "seat_ref": SQUARE,
+        "allow_ground": True,
+        "max_wait_ms": 60_000,
+    },
+    "pz_action_sleep": {
+        "bed_ref": SQUARE,
+        "hours": 6,
+        "allow_vehicle_seat": True,
+        "max_wait_ms": 120_000,
+    },
     "pz_action_wait": {"game_seconds": 30},
     "pz_action_cancel": {"command_id": str(uuid.UUID(int=0xC0FFEE))},
 }

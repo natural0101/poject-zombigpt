@@ -46,20 +46,24 @@ from pz_agent_core.protocol import (
 from tests.fixtures import DEFAULT_SESSION, make_observation, make_safety
 from tests.fixtures.action_doubles import AckPlan, FakeClock, FakeCommandSink, FakeObservationSource
 from tests.fixtures.adapter_worlds import (
+    CRATE_REF,
     HOME_X,
     HOME_Y,
     a_command,
     a_square,
     a_world,
     a_world_object,
-    object_ref,
     prepare,
     square_ref,
 )
 
 TARGET_X = HOME_X + 4
 TARGET_Y = HOME_Y
-CRATE = object_ref("crate-1")
+#: A container reference, not an `object:` one. PZAgent.ObserveModel mints a
+#: container reference for a nearby thing that holds a container and a square
+#: reference for everything else; it never mints an object reference at all,
+#: so a test built on one was testing a command the mod could not have sent.
+CRATE = CRATE_REF
 
 
 def move_command(**args: object) -> Command:
@@ -154,12 +158,30 @@ def test_the_right_square_on_the_wrong_floor_is_not_arrival() -> None:
     )
 
 
-def test_the_prepared_command_carries_a_square_ref_and_never_permits_windows() -> None:
+def test_the_prepared_command_is_the_three_scalars_the_mod_declares() -> None:
+    """The payload is the destination, and nothing the mod would refuse.
+
+    ``PZAgent.CommandDispatcher`` rebuilds the argument table from the adapter's
+    own declaration and refuses an undeclared key outright, so the ``target``
+    object, the recomputed ``square_ref`` and the four policy flags this command
+    used to carry were not ignored — they refused every move the agent made.
+
+    The flags are gone rather than renamed. ``max_distance``, ``allow_doors``,
+    ``allow_windows`` and ``allow_stairs`` are decisions, and ``parse`` and the
+    square check have already made them here, against an observation the mod is
+    not holding; sending them would ask the mod to re-derive a policy it has
+    nothing to re-derive it from.
+    """
     adapter = MoveToAdapter()
+
     args = adapter.build_args(move_command(), world_with_target())
 
-    assert args["square_ref"] == square_ref(TARGET_X, TARGET_Y)
-    assert args["allow_windows"] is False
+    assert args == {
+        "x": TARGET_X,
+        "y": TARGET_Y,
+        "z": 0,
+        "radius": DEFAULT_ARRIVAL_RADIUS,
+    }
 
 
 # --------------------------------------------------------------------------
@@ -329,7 +351,11 @@ def test_the_adapters_own_prepared_command_still_passes_its_own_checks() -> None
     prepared = prepare(adapter, move_command(), world)
 
     adapter.validate(prepared, world)
-    assert prepared.args["square_ref"] == square_ref(TARGET_X, TARGET_Y)
+    # The shipped shape names the destination as three scalars, so the parser
+    # has to read that shape as readily as the ``target`` object it was issued
+    # with — the prepared command no longer carries one.
+    assert "target" not in prepared.args
+    assert (prepared.args["x"], prepared.args["y"], prepared.args["z"]) == (TARGET_X, TARGET_Y, 0)
 
 
 def test_movement_without_a_nearby_view_cannot_be_verified() -> None:
@@ -582,10 +608,24 @@ def test_move_near_refuses_an_object_reported_without_a_position() -> None:
     assert caught.value.reason_code is ReasonCode.TARGET_NOT_LOADED
 
 
-def test_move_near_refuses_a_container_reference_in_place_of_an_object() -> None:
-    command = a_command(
-        ActionName.MOVEMENT_MOVE_NEAR, {"object_ref": f"container:{DEFAULT_SESSION}:player-main"}
-    )
+@pytest.mark.parametrize(
+    "reference",
+    [
+        f"zombie:{DEFAULT_SESSION}:9:0",
+        f"wound:{DEFAULT_SESSION}:torso:0",
+    ],
+)
+def test_move_near_refuses_a_reference_kind_the_mod_never_mints(reference: str) -> None:
+    """A container reference is the normal case here; these two never are.
+
+    ``PZAgent.ObserveModel`` describes a nearby thing as a ``container``
+    reference when it holds a container and as a ``square`` reference otherwise,
+    so those — and ``item`` — are what "something to walk up to" can mean. A
+    zombie and a wound are minted by other tiers entirely, and walking up to one
+    is a different action with a different risk tier, not this one with an
+    unusual argument.
+    """
+    command = a_command(ActionName.MOVEMENT_MOVE_NEAR, {"object_ref": reference})
 
     with pytest.raises(PreconditionFailed) as caught:
         MoveNearAdapter().validate(command, near_world())
@@ -593,17 +633,53 @@ def test_move_near_refuses_a_container_reference_in_place_of_an_object() -> None
 
 
 def test_move_near_refuses_a_reference_from_another_session() -> None:
-    command = a_command(
-        ActionName.MOVEMENT_MOVE_NEAR,
-        {"object_ref": "object:11111111-2222-3333-4444-555555555555:9:0"},
-    )
+    """An accepted *kind*, so the refusal can only be about the session.
+
+    A reference minted by an earlier session is not stale but wrong: its runtime
+    ids now denote different objects.
+    """
+    foreign = "container:11111111-2222-3333-4444-555555555555:world:1200:3400:0:1:0"
+    command = a_command(ActionName.MOVEMENT_MOVE_NEAR, {"object_ref": foreign})
 
     with pytest.raises(PreconditionFailed) as caught:
         MoveNearAdapter().validate(command, near_world())
     assert caught.value.reason_code is ReasonCode.INVALID_REF
+    assert "session" in str(caught.value)
 
 
 def test_approaching_a_world_object_is_always_the_world_tier() -> None:
     adapter = MoveNearAdapter()
     assert adapter.risk is RiskClass.P3
     assert adapter.risk_for(near_command(), near_world()) is RiskClass.P3
+
+
+# --------------------------------------------------------------------------
+# the shipped shape
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("adapter", "command", "world"),
+    [
+        (MoveToAdapter(), move_command(), world_with_target()),
+        (MoveNearAdapter(), near_command(), near_world()),
+    ],
+    ids=["move_to", "move_near"],
+)
+def test_the_adapter_can_read_back_the_arguments_it_ships(
+    adapter: MoveToAdapter | MoveNearAdapter,
+    command: Command,
+    world: Observation,
+) -> None:
+    """``build_args`` output must survive the adapter's own parser, unchanged.
+
+    Nothing checked this, and both move adapters failed it: the payload was
+    written in the mod's spelling and read back in the command's, so ``verify``
+    — which is handed the *prepared* command, never the issued one — could not
+    parse a single thing it had sent. The property is a fixpoint, so a payload
+    the parser silently rewrites fails it just as loudly as one it refuses.
+    """
+    prepared = prepare(adapter, command, world)
+
+    assert adapter.build_args(prepared, world) == prepared.args
+    adapter.validate(prepared, world)

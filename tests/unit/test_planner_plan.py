@@ -136,7 +136,7 @@ class TestActionVocabulary:
             ActionName.SESSION_ARM,
             ActionName.PLAN_CANCEL,
             ActionName.WORLD_INSPECT,
-            ActionName.INVENTORY_EQUIP,
+            ActionName.EQUIPMENT_EQUIP,
         ],
     )
     def test_a_known_action_a_plan_may_not_name_is_refused_as_such(
@@ -214,18 +214,42 @@ class TestReferences:
         plan = Plan.from_payload(payload)
         assert plan.steps[0].args.refs()[0].value == foreign_item_ref()
 
-    def test_an_object_reference_has_no_typed_parser_and_is_still_validated(self) -> None:
+    def test_move_near_refuses_a_kind_the_mod_never_mints(self) -> None:
+        """``object:`` parses on both sides and still may not be planned.
+
+        ``PZAgent.ObserveModel`` describes a nearby thing as a ``container``
+        reference when it holds one and a ``square`` reference otherwise. It
+        never mints an ``object`` reference, so one arriving in a plan came from
+        a model inventing a reference rather than copying an observed one —
+        which is the single thing reference validation exists to catch.
+        """
         payload = plan_payload(
             steps=[
                 step_payload(
                     action="movement.move_near",
-                    args={"object_ref": "object:not a session:1"},
+                    args={"object_ref": f"object:{DEFAULT_SESSION}:1:0"},
                     success={"type": "adapter_evidence"},
                 )
             ]
         )
-        with pytest.raises(PlanRejected, match="well-formed object reference"):
+        with pytest.raises(PlanRejected, match="got a object one"):
             Plan.from_payload(payload)
+
+    def test_move_near_accepts_the_kinds_the_mod_does_mint(self) -> None:
+        square = f"square:{DEFAULT_SESSION}:1200:3400:0"
+        for ref in (MAIN_REF, square):
+            payload = plan_payload(
+                risk_class="P3",
+                steps=[
+                    step_payload(
+                        action="movement.move_near",
+                        args={"object_ref": ref},
+                        success={"type": "adapter_evidence"},
+                    )
+                ],
+            )
+            plan = Plan.from_payload(payload)
+            assert [r.value for r in plan.steps[0].args.refs()] == [ref]
 
     def test_refs_report_the_kind_they_were_validated_as(self) -> None:
         args = TransferArgs(
@@ -407,6 +431,34 @@ class TestDocumentShape:
         with pytest.raises(PlanRejected) as caught:
             Plan.from_payload(payload)
         assert caught.value.fault is PlanFault.BAD_VALUE
+
+    def test_a_step_id_may_not_end_in_a_control_character(self) -> None:
+        # '$' matches before a trailing newline, so an anchored pattern applied
+        # with `match` is not a whole-string check. A step id is echoed into
+        # refusal messages, into the trace and into the critic's draft
+        # idempotency key, so a newline in one forges a line break in all three.
+        payload = plan_payload(steps=[step_payload(step_id="s1\n")])
+        with pytest.raises(PlanRejected) as caught:
+            Plan.from_payload(payload)
+        assert caught.value.fault is PlanFault.BAD_VALUE
+
+    def test_an_object_reference_may_not_end_in_a_control_character(self) -> None:
+        # The mod's Lua parser anchors the same alphabet with a true
+        # end-of-string anchor, so a reference this side waves through is one
+        # the mod answers INVALID_REF for after the step has been spent.
+        payload = plan_payload(
+            risk_class="P3",
+            steps=[
+                step_payload(
+                    action="movement.move_near",
+                    args={"object_ref": f"{_object_ref()}\n"},
+                    success={"type": "adapter_evidence"},
+                )
+            ],
+        )
+        with pytest.raises(PlanRejected) as caught:
+            Plan.from_payload(payload)
+        assert caught.value.fault is PlanFault.BAD_REF
 
     def test_an_unknown_on_failure_mode_is_refused(self) -> None:
         payload = plan_payload(steps=[step_payload(on_failure="improvise")])

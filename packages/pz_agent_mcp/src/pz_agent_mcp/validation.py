@@ -18,6 +18,7 @@ process rather than the contract: :data:`MAX_DEPTH`, :data:`MAX_ARRAY_ITEMS` and
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Mapping, Sequence
 from typing import Any, Final
@@ -131,6 +132,14 @@ def _check_type(declared: str, value: Any, *, path: str) -> None:
         raise _fail(path, f"must be a {declared}, got boolean")
     if not isinstance(value, expected):
         raise _fail(path, f"must be a {declared}, got {type(value).__name__}")
+    # ``NaN`` and the infinities are what a JSON parser that accepts them hands
+    # back, and every comparison in :func:`_number` is false against a NaN — so
+    # a bound like ``maximum: 30`` would let one through as satisfied. Refused
+    # here rather than in ``_number`` because a schema that declares no bound at
+    # all must not become the way one gets in: a non-finite number is never a
+    # legal argument to any tool on this surface.
+    if isinstance(value, float) and not math.isfinite(value):
+        raise _fail(path, f"must be a finite {declared}, got {value}")
 
 
 def _enum(schema: Mapping[str, Any], value: Any, *, path: str) -> None:

@@ -39,7 +39,10 @@ from pz_agent_core.observation.store import ObservationStore
 from pz_agent_core.protocol import (
     ActionName,
     ActionStatus,
+    NearbyView,
+    NearbyZombie,
     Observation,
+    Position,
     ReasonCode,
     SessionMode,
 )
@@ -200,6 +203,43 @@ def test_the_guard_runs_with_no_planner_attached_at_all(tmp_path: Path) -> None:
 
         assert trace == ["guard"]
         assert outcome.results == ()
+
+
+def test_a_chasing_zombie_stops_the_planner_being_asked(tmp_path: Path) -> None:
+    """The observed threat is the only one there is; nothing else in the loop sees it.
+
+    ``ActionEngine`` has its own HIGH threshold, but it reads
+    ``observation.safety.danger_level`` — a field the mod publishes from a value
+    nothing in the mod ever assigns, so it arrives as ``none`` however many
+    zombies are on the tile. The guard's assessment of ``nearby`` is what has to
+    stop the tick, or a command is composed and shipped with a zombie four tiles
+    away and closing.
+    """
+    with attached_world(tmp_path) as world:
+        planner = RecordingPlanner(world.session_id)
+        world.loop.planner = planner
+        assert world.loop.arm().armed is True
+        world.observe(
+            nearby=NearbyView(
+                zombies=[
+                    NearbyZombie(
+                        ref=f"zombie:{world.session_id}:1:0",
+                        distance=4.0,
+                        visible=True,
+                        chasing=True,
+                        position=Position(x=1200.0, y=3400.0, z=0),
+                    )
+                ]
+            )
+        )
+
+        outcome = world.loop.tick()
+
+        assert [event.reason_code for event in outcome.events] == [ReasonCode.THREAT_INTERRUPTED]
+        assert planner.calls == 0
+        queue = world.loop.queue
+        assert queue is not None
+        assert queue.in_flight is None
 
 
 def test_a_guard_event_stops_the_planner_being_asked_at_all(tmp_path: Path) -> None:
@@ -458,6 +498,63 @@ def test_a_stop_request_ends_the_run_and_names_why(tmp_path: Path) -> None:
 
         assert summary.cause is StopCause.STOP_REQUESTED
         assert summary.ticks == 1
+
+
+def test_a_disarm_request_older_than_the_ceiling_is_still_obeyed(tmp_path: Path) -> None:
+    """A stale disarm is still a disarm: honouring one only ever removes authority.
+
+    The interleaving is ordinary. One tick that drives a ``literature.read``
+    occupies the loop for that adapter's whole budget — two minutes — and the
+    control channel is only read between ticks. A user who types
+    ``pz-agent disarm`` a few seconds into the read has their request judged
+    when the tick finally ends, by which time it is far older than
+    :data:`CONTROL_MAX_AGE_MS`. Refusing it there leaves the agent armed while
+    the user has been told it was disarmed, which is the one direction a stop
+    may never fail in.
+    """
+    with attached_world(tmp_path) as world:
+        assert world.loop.arm().armed is True
+        world.control.write(ControlKind.DISARM)
+        world.clock.advance(CONTROL_MAX_AGE_MS + 1)
+        world.beat_game()
+        world.observe()
+
+        world.loop.tick()
+
+        assert world.loop.armed is False
+        assert world.control.pending() is False
+
+
+def test_a_stop_request_older_than_the_ceiling_is_still_obeyed(tmp_path: Path) -> None:
+    with attached_world(tmp_path) as world:
+        world.control.write(ControlKind.STOP)
+        world.clock.advance(CONTROL_MAX_AGE_MS + 1)
+        world.beat_game()
+        world.observe()
+
+        outcome = world.loop.tick()
+
+        assert outcome.stop is StopCause.STOP_REQUESTED
+
+
+def test_a_stop_request_issued_before_the_attach_is_still_obeyed(tmp_path: Path) -> None:
+    """``pz-agent stop`` racing the attach must not be swallowed.
+
+    The pre-attach rule exists so a leftover *arm* cannot hand authority to a
+    loop that has just come up knowing nothing. A stop grants nothing, so the
+    rule has nothing to protect against — and dropping one deletes the request
+    file too, so the user's stop is gone rather than retried.
+    """
+    with attached_world(tmp_path) as world:
+        world.control.write(ControlKind.STOP)
+        world.clock.advance(1)
+        world.restart()
+        world.beat_game()
+        world.observe()
+
+        outcome = world.loop.tick()
+
+        assert outcome.stop is StopCause.STOP_REQUESTED
 
 
 # ---------------------------------------------------------------------------

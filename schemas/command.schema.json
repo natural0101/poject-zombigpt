@@ -17,7 +17,7 @@
   ],
   "properties": {
     "protocol_version": {
-      "const": "1.0"
+      "const": "1.1"
     },
     "session_id": {
       "type": "string",
@@ -60,14 +60,20 @@
         "action.wait",
         "movement.move_to",
         "movement.move_near",
+        "world.inspect",
+        "container.inspect",
+        "container.open_nearby",
+        "inventory.search",
         "inventory.transfer",
         "inventory.ensure_main",
-        "inventory.equip",
-        "inventory.unequip",
         "consume.eat",
         "consume.drink",
         "literature.read",
-        "world.inspect",
+        "equipment.equip",
+        "equipment.unequip",
+        "medical.bandage",
+        "survival.rest",
+        "survival.sleep",
         "plan.cancel"
       ]
     },

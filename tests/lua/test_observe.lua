@@ -403,6 +403,61 @@ do
   removeCell()
 end
 
+Harness.group("the nearby scan spends one object budget, nearest squares first")
+do
+  -- A cluttered warehouse: every square inside the radius holding as many
+  -- objects as the per-square cap allows. The per-square cap alone does not
+  -- bound this walk -- the square count is the other factor -- and the document
+  -- keeps only the nearest MAX_OBJECTS of whatever the walk produced, so
+  -- everything past that was engine work on the game thread thrown away by the
+  -- sort a moment later.
+  local position = { x = 500, y = 600, z = 0 }
+  local radius = Observe.RADIUS
+  local squares = {}
+  for dx = -radius, radius do
+    for dy = -radius, radius do
+      local objects = {}
+      for n = 1, Observe.MAX_OBJECTS_PER_SQUARE do
+        objects[n] = Support.worldObject({ name = "Shelf", container_type = "shelf" })
+      end
+      squares[string.format("%d,%d,%d", position.x + dx, position.y + dy, position.z)] = Support.square(objects)
+    end
+  end
+  local removeCell = Support.installCell(squares, {})
+
+  local scanned = Observe.nearbyObjects(position)
+
+  ok(
+    #scanned.objects <= 4 * Model.MAX_OBJECTS,
+    "the walk stops within a small multiple of the document's cap, not (2R+1)^2 * per-square: "
+      .. tostring(#scanned.objects)
+  )
+  equal(scanned.truncated, true, "and says the scan was cut short")
+  ok(scanned.dropped > 0, "counting what it never looked at")
+  equal(Observe.MAX_OBJECTS_SCANNED, 4 * Model.MAX_OBJECTS, "the budget is stated against that cap")
+
+  -- Ordering is what makes a total budget safe: raster order would spend it on
+  -- the far corner it starts in and never reach the square under the player.
+  local nearest = nil
+  for index = 1, #scanned.objects do
+    if nearest == nil or scanned.objects[index].distance < nearest then
+      nearest = scanned.objects[index].distance
+    end
+  end
+  equal(nearest, 0, "the square the player stands on is read before the far corners")
+
+  local document = Model.build({
+    session_id = SESSION,
+    seq = 9,
+    timestamp_ms = NOW,
+    game = { build = "42.20" },
+    player = Observe.playerFields(furnishedPlayer()),
+    nearby = Observe.nearbyFields(furnishedPlayer(), position),
+  })
+  equal(#document.nearby.objects, Model.MAX_OBJECTS, "and the document is still filled to its cap")
+  removeCell()
+end
+
 Harness.group("a tick publishes a snapshot, or says why it did not")
 do
   local removeCore = installCore("42.20")

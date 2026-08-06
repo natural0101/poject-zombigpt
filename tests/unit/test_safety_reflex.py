@@ -229,6 +229,42 @@ def test_the_reported_level_can_only_raise_the_computed_one() -> None:
     assert _codes(GUARD.evaluate(_eating(), current)) == [ReasonCode.THREAT_INTERRUPTED]
 
 
+def test_a_high_threat_starts_nothing_new_even_with_nothing_to_interrupt() -> None:
+    """One chaser inside reaction range is HIGH, and HIGH is not a moment to act in.
+
+    The guard is the only thing in the process that can see the zombies:
+    ``ActionEngine`` compares its own HIGH threshold against
+    ``observation.safety.danger_level``, which the mod fills from a level nothing
+    in the mod ever sets. So a returned event is what actually stops the loop
+    composing a command, and at HIGH there must be one — with no cancel flags,
+    because there is nothing of ours running to cancel.
+    """
+    idle = _obs(seq=2, nearby=make_nearby(make_zombie("z1", 4.0, chasing=True)))
+    event = _one(GUARD.evaluate(_obs(), idle), ReasonCode.THREAT_INTERRUPTED)
+
+    assert event.priority is Priority.LETHAL_THREAT
+    assert not event.cancels_running_action
+    assert not event.cancels_mod_owned_queue
+
+
+def test_a_high_threat_the_player_is_busy_in_still_leaves_their_action_alone() -> None:
+    theirs = _obs(
+        seq=2,
+        action=make_action_state(busy=True, ownership=ActionOwnership.MANUAL, type="consume.eat"),
+        nearby=make_nearby(make_zombie("z1", 4.0, chasing=True)),
+    )
+    event = _one(GUARD.evaluate(_obs(), theirs), ReasonCode.THREAT_INTERRUPTED)
+
+    assert not event.cancels_running_action
+    assert not event.cancels_mod_owned_queue
+
+
+def test_a_medium_threat_with_nothing_vulnerable_running_is_not_an_event() -> None:
+    """The rung below still lets ordinary work start; only HIGH and up do not."""
+    idle = _obs(seq=2, nearby=make_nearby(make_zombie("z1", 12.0, chasing=True)))
+    assert GUARD.evaluate(_obs(), idle) == []
+
+
 # --------------------------------------------------------------------------
 # liveness and lifecycle
 # --------------------------------------------------------------------------
@@ -464,6 +500,8 @@ def test_a_blank_message_is_refused() -> None:
         {"max_events": 0},
         {"max_events": MAX_EVENTS + 1},
         {"interrupt_at": DangerLevel.CRITICAL, "flee_at": DangerLevel.MEDIUM},
+        {"block_at": DangerLevel.LOW},
+        {"block_at": DangerLevel.CRITICAL, "flee_at": DangerLevel.HIGH},
     ],
 )
 def test_an_incoherent_config_is_refused(kwargs: dict[str, Any]) -> None:

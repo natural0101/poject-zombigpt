@@ -13,6 +13,12 @@ it would look like a runtime failure rather than an honest absence.
 there: arming is a separate command, on purpose, and no flag on ``start``
 changes that.
 
+``voice`` is the same shape of command pointed at the same exchange directory
+from a second process: ``voice run`` drives the companion in
+:mod:`pz_agent_voice` over the ports in :mod:`pz_agent_cli.voice`, and ``voice
+check`` answers what a phrase resolves to with no game, no session and no
+microphone — which is how a user finds out why «стоп» was not recognised.
+
 :func:`main` returns an exit code and never calls :func:`sys.exit` itself, so a
 test drives the real command in-process and reads what a user would have seen.
 """
@@ -23,6 +29,7 @@ import argparse
 import os
 import sys
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Final
 
@@ -33,9 +40,19 @@ from pz_agent_core.ipc.layout import IpcLayout
 from pz_agent_core.protocol import SessionMode
 from pz_agent_core.version import PRODUCT_VERSION
 
-from .config import ConfigValidation, load_config
+from .autonomy import (
+    PLANNER_FILE_NAME,
+    AutonomyPlanner,
+    PlannerRecord,
+    build_backup_witness,
+    build_planner,
+    publish_planner_record,
+)
+from .config import AgentConfig, ConfigValidation, default_config, load_config
 from .context import EXIT_FAILURE, EXIT_OK, EXIT_USAGE, CliContext, Workspace, resolve_workspace
-from .doctor import run_checks
+from .doctor import check_capabilities, run_checks
+from .livetest import add_live_test_parser, run_live_test
+from .memory import SidecarMemory, add_remember_parser, build_sidecar_memory, run_remember
 from .modinstall import (
     ForeignFileError,
     InstallError,
@@ -44,12 +61,19 @@ from .modinstall import (
     uninstall_mod,
 )
 from .output import Printer
-from .runtime import DEFAULT_LIMITS, LoopLimits, SidecarLoop
+from .runtime import (
+    CAPABILITY_FILE_NAME,
+    DEFAULT_LIMITS,
+    CapabilityLedger,
+    LoopLimits,
+    SidecarLoop,
+)
 from .saves import run_backup_save, run_restore_save
 from .smoke import default_scenario_dir, run_smoke
 from .status import game_liveness, run_status
 from .supervisor import GameRunningProbe, SidecarSupervisor, SupervisorState, probe_game_running
 from .support import DEFAULT_LOG_LINES, DEFAULT_REPLAY_LIMIT, run_logs, run_replay
+from .voice import add_voice_parser, run_voice
 
 PROGRAM: Final = "pz-agent"
 
@@ -65,9 +89,12 @@ COMMANDS: Final[tuple[str, ...]] = (
     "disarm",
     "backup-save",
     "restore-save",
+    "remember",
+    "voice",
     "logs",
     "replay",
     "validate-config",
+    "live-test",
 )
 
 #: Modes ``pz-agent arm`` accepts on the command line, lowercased for typing.
@@ -171,19 +198,9 @@ def build_parser() -> argparse.ArgumentParser:
     disarm = subparsers.add_parser("disarm", help="return a running sidecar to OBSERVE")
     disarm.add_argument("--json", action="store_true")
 
-    backup = subparsers.add_parser("backup-save", help="hash-manifested copy of a save")
-    backup.add_argument("save_id", nargs="?", default=None, help="<mode>/<save name>")
-    backup.add_argument("--list", action="store_true", dest="list_only", help="list backups")
-    backup.add_argument(
-        "--prune", type=int, default=None, metavar="KEEP", help="delete all but the newest KEEP"
-    )
-    backup.add_argument("--json", action="store_true")
-
-    restore = subparsers.add_parser(
-        "restore-save", help="restore a verified backup; refuses while the game is open"
-    )
-    restore.add_argument("backup_id")
-    restore.add_argument("--json", action="store_true")
+    _add_save_parsers(subparsers)
+    add_remember_parser(subparsers)
+    add_voice_parser(subparsers)
 
     logs = subparsers.add_parser("logs", help="recent diagnostics, or a support bundle")
     logs.add_argument("--lines", type=int, default=DEFAULT_LOG_LINES)
@@ -203,8 +220,26 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("--json", action="store_true")
 
     _add_smoke_parser(subparsers)
+    add_live_test_parser(subparsers)
 
     return parser
+
+
+def _add_save_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """The two save commands, split out to keep ``build_parser`` readable."""
+    backup = subparsers.add_parser("backup-save", help="hash-manifested copy of a save")
+    backup.add_argument("save_id", nargs="?", default=None, help="<mode>/<save name>")
+    backup.add_argument("--list", action="store_true", dest="list_only", help="list backups")
+    backup.add_argument(
+        "--prune", type=int, default=None, metavar="KEEP", help="delete all but the newest KEEP"
+    )
+    backup.add_argument("--json", action="store_true")
+
+    restore = subparsers.add_parser(
+        "restore-save", help="restore a verified backup; refuses while the game is open"
+    )
+    restore.add_argument("backup_id")
+    restore.add_argument("--json", action="store_true")
 
 
 def _add_smoke_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -410,25 +445,160 @@ def build_supervisor(ctx: CliContext, workspace: Workspace) -> SidecarSupervisor
     return SidecarSupervisor(workspace.state_dir, clock=ctx.clock_ms)
 
 
+def build_capabilities(workspace: Workspace) -> CapabilityLedger:
+    """Resolve this machine's capability surface for a sidecar session.
+
+    ``doctor``'s check is reused rather than re-implemented: it already scans the
+    installed Lua read-only, resolves every declared probe against it and writes
+    the report, and a second scanner here would be a second opinion about the
+    same install that nothing compares.
+
+    A scan that cannot run — no installation found, ``media/lua`` unreadable —
+    produces a ledger with no report, which answers False to every capability.
+    That is the only honest direction: allowing everything because the scan
+    failed is precisely the assumption
+    :func:`~pz_agent_core.actions.engine.deny_capability` exists to prevent. The
+    reason is carried on the ledger and published to the state directory, so
+    ``pz-agent status`` says capabilities were not resolved *and why* rather than
+    the sidecar refusing every command with no explanation anywhere.
+    """
+    check, report, notes = check_capabilities(workspace)
+    redact = workspace.redactor.text
+    if report is None:
+        detail = redact(f"the capability scan could not run: {check.detail}. {check.remediation}")
+    else:
+        detail = redact(f"{check.code}: {check.detail}")
+    install = workspace.install_dir
+    return CapabilityLedger(
+        record_path=workspace.state_dir / CAPABILITY_FILE_NAME,
+        report=report,
+        detail=detail,
+        report_path=workspace.capability_report_path,
+        protected_roots=(install,) if install is not None else (),
+        notes=tuple(redact(note) for note in notes),
+    )
+
+
 def build_loop(ctx: CliContext, workspace: Workspace, *, limits: LoopLimits) -> SidecarLoop:
     """Assemble the loop from the parts that already exist.
 
     The registry is built here rather than shared, because registration is
     single-assignment: a module-level singleton reused by two sessions would
     raise on the second one.
+
+    The capability ledger is built here for the opposite reason: it is the one
+    thing the loop cannot default to safely. Every game adapter names a
+    ``required_capability``, and the engine's fail-closed default refuses all of
+    them, so a sidecar assembled without a ledger attaches, arms and then
+    declines every action a user asks for.
+
+    The planner is the same shape of defect one layer up. ``SidecarLoop._act``
+    returns immediately when there is none, so a sidecar assembled without one
+    observes, guards, and never proposes anything — ``arm --mode autonomous``
+    grants an authority nothing exercises. It is assembled here and its record
+    is written from the loop that was actually built, so ``status`` reports what
+    is running rather than what this function meant to build.
+
+    The memory is the same defect one layer deeper again, and quieter than
+    either: a planner whose memory is the empty one answers "nothing is
+    reserved" to every question, so §7.9 rests on nothing and the user has no
+    way to protect an item at all. It is built here, handed to the planner, and
+    its record is read back off the loop for the same reason the planner's is.
     """
     ipc_root = workspace.ipc_root
     if ipc_root is None:
         raise InstallError("no Zomboid directory was found, so there is no exchange directory")
     registry = register_game_adapters(register_builtins(AdapterRegistry()))
-    return SidecarLoop(
+    capabilities = build_capabilities(workspace)
+    capabilities.publish()
+    memory = build_sidecar_memory(workspace)
+    planner, record = _build_planner(
+        ctx, workspace, registry=registry, capabilities=capabilities, memory=memory
+    )
+    loop = SidecarLoop(
         layout=IpcLayout(ipc_root),
         state_dir=workspace.state_dir,
         registry=registry,
         clock=ctx.clock_ms,
         limits=limits,
         pid_file=build_supervisor(ctx, workspace).pid_file,
+        capabilities=capabilities,
+        planner=planner,
     )
+    publish_planner_record(
+        workspace.state_dir / PLANNER_FILE_NAME,
+        # Read off the loop, not off the intent above: this is the field that
+        # would have caught the planner never reaching the constructor.
+        replace(record, wired=loop.planner is not None),
+    )
+    # The same reading for memory, one level further in: it is not enough that a
+    # planner reached the loop, it has to be the planner holding *this* memory.
+    memory.wired = _planner_memory(loop) is memory
+    memory.publish()
+    return loop
+
+
+def _planner_memory(loop: SidecarLoop) -> object | None:
+    """What the assembled loop's planner will actually ask about reservations.
+
+    Read off the loop rather than off the local that was passed in, so a memory
+    that stopped short of the planner is a fact ``status`` reports rather than
+    an assembly that only looks right.
+    """
+    planner = loop.planner
+    return planner.memory if isinstance(planner, AutonomyPlanner) else None
+
+
+def _build_planner(
+    ctx: CliContext,
+    workspace: Workspace,
+    *,
+    registry: AdapterRegistry,
+    capabilities: CapabilityLedger,
+    memory: SidecarMemory,
+) -> tuple[AutonomyPlanner, PlannerRecord]:
+    """The planner for this workspace, and what to tell ``status`` about it.
+
+    The configuration is read again rather than passed in, because ``build_loop``
+    is reached from a detached sidecar as well as from ``run_start``. A document
+    that does not validate does not stop the assembly: the loop still has to come
+    up so the user can be told what is wrong, and the documented defaults —
+    ``provider = "none"``, the deterministic path — are what runs meanwhile.
+
+    The backup witness is built here rather than defaulted for the same reason
+    the capability ledger is: the fail-closed default
+    (:func:`~pz_agent_cli.autonomy.no_attributable_backup`) makes an armed
+    autonomous sidecar ask about every need, and which of the two a machine gets
+    is a fact about its backups, not about this function. The note that comes
+    back with it says which one happened, so ``status`` can report it.
+
+    The memory is passed in rather than built here because the caller has to
+    keep hold of it: it publishes its own record, and only the caller can see
+    whether it reached the loop.
+    """
+    validation = load_config(workspace.config_path)
+    config: AgentConfig = validation.config or default_config()
+    backup, backup_note = build_backup_witness(workspace)
+    notes = [backup_note]
+    if validation.config is None:
+        notes.append(
+            f"the configuration did not validate ({len(validation.errors)} problem(s)), so the "
+            "documented defaults are in force; run 'pz-agent validate-config' to see them"
+        )
+    planner, record = build_planner(
+        registry=registry,
+        capabilities=capabilities,
+        config=config,
+        env=ctx.env,
+        clock=ctx.clock_ms,
+        backup=backup,
+        memory=memory,
+        notes=tuple(workspace.redactor.text(note) for note in notes),
+    )
+    # A fallback reason is a provider's own message about an endpoint or a
+    # credential, and it is printed by ``status`` and carried in its ``--json``
+    # — which is the form that ends up in a bug report.
+    return planner, replace(record, fallback_reason=workspace.redactor.text(record.fallback_reason))
 
 
 def _sidecar_argv(workspace: Workspace) -> list[str]:
@@ -664,6 +834,10 @@ def dispatch(ctx: CliContext, args: argparse.Namespace) -> int:
         )
     if command == "restore-save":
         return run_restore_save(ctx, backup_id=args.backup_id, as_json=args.json)
+    if command == "remember":
+        return run_remember(ctx, args)
+    if command == "voice":
+        return run_voice(ctx, args)
     if command == "logs":
         return run_logs(
             ctx,
@@ -687,6 +861,8 @@ def dispatch(ctx: CliContext, args: argparse.Namespace) -> int:
             emit=Printer(ctx.stdout, ctx.stderr).line,
             as_json=args.json,
         )
+    if command == "live-test":
+        return run_live_test(ctx, args)
     # Unreachable through the parser: every choice it accepts is handled above,
     # and an unknown one is rejected before dispatch.
     raise AssertionError(f"unrouted command: {command!r}")

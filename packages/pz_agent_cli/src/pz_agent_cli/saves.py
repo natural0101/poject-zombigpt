@@ -6,12 +6,26 @@ the argument handling and the output.
 
 The one judgement call lives here. ``BackupManager.restore`` takes
 ``game_running`` as a required keyword and refuses when it is true, so something
-has to decide. The only evidence available without inspecting processes is the
-game's own heartbeat: a fresh one proves the game is open, and the restore is
-refused. Its *absence* proves nothing — a game sitting on the main menu writes
-no heartbeat either — so the command says so in as many words instead of
-reporting "the game is closed", and leaves the last word to the user, exactly as
-``docs/TROUBLESHOOTING.md`` describes.
+has to decide, and a wrong answer overwrites a live save.
+
+The decision is :func:`~pz_agent_cli.supervisor.probe_game_running`, which is
+three-valued on purpose. A fresh game heartbeat proves the game is open. Its
+*absence* proves nothing on its own — a game sitting on the main menu, or one
+whose mod was disabled, writes no heartbeat either — so the process table is
+consulted second, and only a listing that actually ran may be read as an
+absence. Everything except a positive "closed" collapses to *refuse*
+(:func:`~pz_agent_cli.supervisor.game_running_for_restore`). There is no flag to
+override that, exactly as ``docs/TROUBLESHOOTING.md`` states.
+
+``backup-save`` carries one more thing across, and it can only be collected
+while the game is open: the save id the *mod* reports. It is read out of the
+mod's own published snapshot (:func:`~pz_agent_cli.autonomy.observed_save`) and
+recorded in the manifest, which is what later lets autonomy see that a backup
+covers the save being played. A backup taken with nothing attached — before the
+mod is installed, or from a machine whose game is closed — records no save id
+and says so; it is a real backup and a real safety net, it simply is not one
+anything can *attribute*, and the output says which of the two the user just
+took.
 """
 
 from __future__ import annotations
@@ -27,9 +41,11 @@ from pz_agent_core.platform.backup import (
 )
 from pz_agent_core.protocol import JsonDict
 
+from .autonomy import ObservedSave, observed_save, workspace_backups
 from .context import EXIT_FAILURE, EXIT_OK, CliContext, Workspace, resolve_workspace
 from .output import Printer
 from .status import game_liveness
+from .supervisor import game_running_for_restore, list_processes, probe_game_running
 
 #: Depth of a save id under ``Saves``: ``<game mode>/<save name>``.
 _SAVE_DEPTH: Final = 2
@@ -60,10 +76,13 @@ def find_saves(saves_dir: Path) -> tuple[str, ...]:
 
 
 def _manager(ctx: CliContext, workspace: Workspace) -> BackupManager | None:
-    user_dir = workspace.user_dir
-    if user_dir is None:
-        return None
-    return BackupManager(user_dir, workspace.backup_root)
+    """The one this workspace's other commands use, so all three read one root.
+
+    On the CLI's clock, not the wall clock: a manifest's ``created_at`` is what
+    ``status`` later measures a backup's age against, and the two have to be read
+    from the same place for that subtraction to mean anything.
+    """
+    return workspace_backups(workspace, clock=ctx.now)
 
 
 def _record_dict(record: BackupRecord, workspace: Workspace) -> JsonDict:
@@ -104,20 +123,57 @@ def run_backup_save(
     if target is None:
         printer.error(problem)
         return EXIT_FAILURE
+    # Read before the copy rather than after it: the id is the one that was
+    # being played when this backup was taken, and a copy of a large save can
+    # outlast a session that ends halfway through it.
+    observed = _observed_save(ctx, workspace)
     try:
-        record = manager.create(target)
+        record = manager.create(target, observed_save_id=observed.save_id)
     except BackupError as exc:
         printer.error(f"backup failed: {workspace.redactor.text(str(exc))}")
         return EXIT_FAILURE
     if as_json:
-        printer.json(_record_dict(record, workspace))
+        payload = _record_dict(record, workspace)
+        payload["observed_save_detail"] = workspace.redactor.text(observed.detail)
+        printer.json(payload)
     else:
         printer.line(f"backed up {record.save_id} as {record.backup_id}")
         printer.field("files", str(record.file_count))
         printer.field("bytes", str(record.total_bytes))
         printer.field("location", workspace.redact(record.directory))
         printer.field("verified", "every file re-hashed against the manifest")
+        _render_attribution(record.observed_save_id, observed, workspace, printer)
     return EXIT_OK
+
+
+def _observed_save(ctx: CliContext, workspace: Workspace) -> ObservedSave:
+    """The save id the mod is reporting right now, or why there is none."""
+    return observed_save(workspace.ipc_root, now_ms=ctx.clock_ms())
+
+
+def _render_attribution(
+    recorded: str | None,
+    observed: ObservedSave,
+    workspace: Workspace,
+    printer: Printer,
+) -> None:
+    """Say which of the two kinds of backup this is, and never imply the other.
+
+    An unattributed backup is not a lesser copy of the save — the bytes and their
+    hashes are the same — but it is one autonomy can never accept as covering the
+    save being played, and a user who took it expecting otherwise would find that
+    out from a sidecar that quietly keeps asking.
+    """
+    if recorded is not None:
+        printer.field("save id", f"{recorded} — reported by the mod while this ran")
+        return
+    printer.field("save id", "none recorded")
+    printer.error(
+        f"no save id was recorded for this backup: {workspace.redactor.text(observed.detail)}. "
+        "The backup itself is complete and restorable; what it cannot do is prove to autonomy "
+        "that it covers the save you are playing. Take another with the game open and the save "
+        "loaded if you want that."
+    )
 
 
 def _resolve_save_id(manager: BackupManager, save_id: str | None) -> tuple[str | None, str]:
@@ -155,9 +211,17 @@ def _list_backups(
     if not records:
         printer.line(f"no backups in {workspace.redact(manager.backup_root)}")
     for record in records:
+        # The recorded save id is part of the identity of a backup here, not a
+        # detail: it is what decides whether autonomy can ever treat this one as
+        # a safety net, so the listing says which kind each row is.
+        attribution = (
+            f"save id {record.observed_save_id}"
+            if record.observed_save_id is not None
+            else "no save id"
+        )
         printer.line(
             f"{record.backup_id}  {record.save_id}  {record.file_count} file(s)  "
-            f"{record.total_bytes} B  {record.created_at}"
+            f"{record.total_bytes} B  {record.created_at}  {attribution}"
         )
     for problem in unreadable:
         printer.error(f"unreadable: {workspace.redactor.text(problem)}")
@@ -190,18 +254,28 @@ def run_restore_save(ctx: CliContext, *, backup_id: str, as_json: bool) -> int:
     if manager is None:
         return _no_user_dir(printer)
 
-    liveness = game_liveness(ctx, workspace)
-    running = liveness is not None and liveness.alive
+    # ``list_processes`` is read from the module at call time rather than bound
+    # as a default argument: that is the seam the tests drive to stand up a
+    # machine with a Project Zomboid process on it.
+    probe = probe_game_running(
+        heartbeat=game_liveness(ctx, workspace),
+        lister=list_processes,
+    )
+    running = game_running_for_restore(probe)
     if running:
         printer.error(
-            "refusing to restore: the game is writing a heartbeat, so it is open. "
+            f"refusing to restore: {workspace.redactor.text(probe.detail)}. "
             "Close Project Zomboid and run this again — restoring a save under a "
-            "running game is how you get a corrupted one."
+            "running game is how you get a corrupted one, and there is no flag to "
+            "override this."
         )
         return EXIT_FAILURE
 
     try:
-        result = manager.restore(backup_id, game_running=False)
+        # Passed rather than hard-coded: the value the probe produced is the value
+        # the manager checks, so a later edit to the branch above cannot leave a
+        # literal ``False`` behind claiming something nobody established.
+        result = manager.restore(backup_id, game_running=running)
     except BackupError as exc:
         printer.error(f"restore failed: {workspace.redactor.text(str(exc))}")
         return EXIT_FAILURE
@@ -209,9 +283,9 @@ def run_restore_save(ctx: CliContext, *, backup_id: str, as_json: bool) -> int:
     # user to close the game "before restoring" once the files are already back
     # would describe a step that can no longer be taken.
     inference = (
-        "no game heartbeat was found before this restore. That is not proof the game "
-        "was closed — a game sitting on the main menu writes none — so if Project "
-        "Zomboid was open, close it and load the save once before playing on."
+        f"{workspace.redactor.text(probe.detail)}. That was read before the restore "
+        "and not during it, so if Project Zomboid was launched while this ran, close "
+        "it and load the save once before playing on."
     )
     if as_json:
         printer.json(
@@ -221,6 +295,7 @@ def run_restore_save(ctx: CliContext, *, backup_id: str, as_json: bool) -> int:
                 "target_dir": workspace.redact(result.target_dir),
                 "file_count": result.file_count,
                 "total_bytes": result.total_bytes,
+                "game_probe": probe.to_dict(),
                 "game_running_evidence": inference,
             }
         )

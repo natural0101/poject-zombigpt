@@ -63,6 +63,11 @@ def test_every_capability_named_by_the_blueprint_has_a_probe() -> None:
         "eat_percentage",
         "drink_carried",
         "read_literature",
+        "equipment_equip",
+        "equipment_unequip",
+        "medical_bandage",
+        "survival_rest",
+        "survival_sleep",
         "drink_world_source",
         "autonomous_attack",
     }
@@ -383,10 +388,19 @@ def test_resolve_all_produces_one_entry_per_probe_and_a_revision(tmp_path: Path)
     assert len(report.capabilities) == len(PROBES)
     assert report.revision == 4
     assert report.generated_at == WHEN
+    # survival_sleep and drink_world_source are absent on purpose: both resolve
+    # to `experimental`, which is not usable. Sleep reaches the game through a
+    # context menu rather than a constructible timed action, and a sleeping
+    # character cannot react — so it stays behind an explicit opt-in even on an
+    # install where every symbol it needs was found.
     assert set(report.usable_names()) == {
         "drink_carried",
         "eat_percentage",
+        "equipment_equip",
+        "equipment_unequip",
         "inventory_transfer",
+        "medical_bandage",
         "move_to_square",
         "read_literature",
+        "survival_rest",
     }
