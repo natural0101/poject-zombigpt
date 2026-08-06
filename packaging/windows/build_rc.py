@@ -413,7 +413,12 @@ def render(report: BuildReport, checksum: Path, *, stream: TextIO) -> None:
     say(f"  release       v{RELEASE_VERSION}-{RC_TAG}\n")
     say(f"  code version  {PRODUCT_VERSION} (product), {MOD_VERSION} (mod)\n")
     say(f"  path          {report.archive}\n")
-    say(f"  files         {len(report.files)}\n")
+    # The manifest counts what it has digests for; the archive also holds
+    # BUILD-MANIFEST.json itself, which cannot digest itself. Both totals are
+    # printed because check_release.py reports the zip's entry count, and two
+    # tools quoting different numbers for one artefact reads like a defect.
+    digested = len(report.files)
+    say(f"  files         {digested} digested, {digested + 1} entries in the zip\n")
     say(f"  size          {report.size_bytes} bytes\n")
     say(f"  sha256        {report.sha256}\n")
     say(f"  checksum      {checksum}\n")

@@ -53,7 +53,11 @@ downgrades — a report from 42.19 proves nothing about 42.20.
 reported `unsupported` with reason `NO_VERIFIED_API`. It stays that way. Faking
 it by writing stats would be a lie shaped like a feature.
 
-**Drive.** Vehicles are not modelled.
+**Drive.** Driving is not modelled and no action steers, starts or moves a
+vehicle. Vehicles themselves are not entirely absent: `ContainerKind.VEHICLE`
+exists, so a vehicle's storage can be named as a container, and `survival.sleep`
+takes an `allow_vehicle_seat` flag (off by default). "Vehicles are not modelled"
+was the wording here, and it was too broad.
 
 **Anything requiring an unverified API.** Where a capability cannot be probed,
 it is reported unavailable. There is no synthetic-input fallback that pretends
@@ -114,16 +118,54 @@ but it is a bound, not an impossibility.
 
 ---
 
+## Not published, and why
+
+**`pz_action_sleep` is normally absent from `list_tools`.** `survival_sleep`
+resolves to `experimental` on a clean scan, and an experimental capability is
+upgradeable but not usable. The reason is specific: once the character is
+asleep there is no timed action to interrupt and no queue entry to cancel, so a
+panic stop cannot reach them. `pz_action_drink_source` is withheld the same way,
+because §12.4 lists the world water action as unconfirmed. A missing tool here
+is a capability answer, not an error, and `pz://capabilities` says which ones
+are withheld and why.
+
+**`world.inspect`, `container.inspect` and `inventory.search` carry no
+capability evidence at all.** They gate on the observation tier they read rather
+than on a probe, because everything they read is reached through Java accessors
+that never appear in the game's Lua — a probe over those names would report
+`unsupported` on a perfectly healthy install. So "the scan says nothing about
+these three" is by design, and it does mean they are the three actions whose
+availability rests on no runtime evidence.
+
+**The Windows executables have never been built.** The unsigned-binary warning
+below is about a launcher that does not exist yet: `bin/pz-agent.exe` and
+`bin/pz-agent-mcp.exe` are absent from the release archive, whose
+`BUILD-MANIFEST.json` records `complete: false`. They need PyInstaller on
+Windows.
+
 ## Things mocks do not prove
 
-`tests/lua/` runs the mod's pure logic under a plain Lua interpreter with mocked
-engine globals. It proves the JSON encoder round-trips and that reference
-parsing agrees with the Python side.
+**Not one engine symbol has been confirmed against a running game.** Every
+row in `docs/GAME_API_VERIFICATION.md` is `requires_live` with an empty "Actual"
+column, and all twenty live-test scenarios are `NOT_RUN`. That includes
+`ISTakeWaterAction`, whose argument order the document flags as unconfirmed and
+silently wrong-filling if the build differs, and `isClient`/`isServer`, without
+which the agent refuses every mutating command.
+
+`tests/lua/` runs the mod's real modules under a plain Lua interpreter with
+mocked engine globals — 26 suites and 2864 assertions covering the command
+dispatcher, the action runtime, the safety layer, the observation model,
+ownership, sequence handling and all ten adapter files. The cross-language
+reference agreement is asserted from the Python side, in
+`tests/unit/test_lua_observation_contract.py`, which runs the mod's own
+observation builder and puts its bytes through the schema and the dataclasses.
 
 It does **not** prove that `ISInventoryTransferAction`, `ISEatFoodAction` or
-`ISReadABook` behave as expected in Build 42.20. Only a live session does that,
-which is why `tests/game-smoke/` exists and why its scenarios are tracked
-individually rather than declared complete in aggregate.
+`ISReadABook` behave as expected in Build 42.20. Only a live session does that.
+Two catalogues track those runs — `pz_agent_cli.livetest` (20 scenarios, which
+the release gate enforces) and `tests/game-smoke/` (15 plus an endurance run,
+judged by a reviewer) — and their numbers collide, so a scenario id is ambiguous
+unless the catalogue is named with it. See `docs/RELEASE.md`.
 
 Any claim of engine compatibility that is not backed by a run against the
 installed game is a claim this project does not make.

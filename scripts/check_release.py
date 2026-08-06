@@ -401,6 +401,11 @@ def check_tests(report: Path | None) -> list[Finding]:
     total = sum(int(suite.get("tests", "0")) for suite in suites)
     failures = sum(int(suite.get("failures", "0")) for suite in suites)
     errors = sum(int(suite.get("errors", "0")) for suite in suites)
+    # JUnit's ``tests`` is everything collected, skips included. Reporting it as
+    # "N test(s) passed" overstated the result by however many were skipped, in
+    # the one document whose whole job is not to overstate a result.
+    skipped = sum(int(suite.get("skipped", "0")) for suite in suites)
+    passed = total - failures - errors - skipped
     if not suites or total == 0:
         return [
             Finding(
@@ -419,11 +424,14 @@ def check_tests(report: Path | None) -> list[Finding]:
                 remediation="fix them; a release candidate is not cut from a red suite",
             )
         ]
+    detail = f"{passed} of {total} test(s) passed, no failures and no errors"
+    if skipped:
+        detail += f"; {skipped} skipped"
     return [
         Finding(
             check="tests",
             ok=True,
-            detail=f"{total} test(s) passed, no failures and no errors",
+            detail=detail,
         )
     ]
 

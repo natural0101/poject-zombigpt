@@ -20,6 +20,7 @@ A green run here is a green run in CI. If they disagree, that is a bug in
 | forbidden | `scripts/check_forbidden.py` | Stubs, banned primitives, committed secrets |
 | versions | `scripts/check_versions.py` | The five versions drifting apart |
 | schemas | `scripts/check_schemas.py` | A schema that no longer compiles |
+| playbook | `scripts/generate_playbook.py --check` | The live-test playbook drifting from the scenarios the runner executes |
 | tests | `pytest` | Behaviour |
 | lua | `luacheck` + `lua5.4 tests/lua/*.lua` | Mod logic |
 
@@ -43,6 +44,12 @@ like a crash.
 **`check_schemas.py`** asserts each document in `schemas/` still compiles as
 Draft 2020-12. A broken `$ref` does not error at validation time — it silently
 makes the validator accept everything, which is worse than failing.
+
+**`generate_playbook.py --check`** rebuilds `docs/LIVE_TEST_PLAYBOOK.md` from
+the scenario module and fails on any difference. The document claimed to be
+generated and nothing generated it, so it could drift from the runner in
+silence — which for a playbook means handing an operator a procedure that no
+longer matches what will run.
 
 ---
 
