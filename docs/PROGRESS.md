@@ -9,16 +9,29 @@ green · `wip` in progress · `todo` not started · `live` blocked on a step tha
 physically requires a running game.
 
 Last updated: 28 of 30 tasks closed; T029 and T030 are blocked on a live game,
-not deferred. 2668 Python tests, 2840 Lua assertions, `scripts/check.sh` green.
+not deferred. 2950 Python tests, 2840 Lua assertions, `scripts/check.sh` green.
 See FINAL_IMPLEMENTATION_REPORT.md.
 
-Work beyond the original graph is under way on `feature/playable-agent-1.0`:
+Work beyond the original graph is complete on `feature/playable-agent-1.0`:
 the protocol grew from fifteen actions to twenty-one, the mod gained a real
 command executor and seventeen game adapters, and the sidecar gained the
-adapters, providers and live-test harness that go with them. See
-[the playable-agent section](#the-playable-agent-branch) below, and
-[`LOCAL_GAME_HANDOFF.md`](LOCAL_GAME_HANDOFF.md) for what still needs a machine
-with the game on it.
+adapters, providers, live-test harness and Windows release candidate that go
+with them. See [the playable-agent section](#the-playable-agent-branch) below,
+and [`LOCAL_GAME_HANDOFF.md`](LOCAL_GAME_HANDOFF.md) for what still needs a
+machine with the game on it.
+
+**Three defects that branch found are worth reading before any further work**,
+because they are one family and the family is not closed. Every subsystem was
+written, tested and green; what nothing tested was whether the subsystems were
+*connected*. Thirteen of sixteen game actions never reached the dispatcher.
+Every `movement.move_to` and `movement.move_near` command would have been
+refused, because the two halves named their arguments differently. And
+`move_near` could not be called at all, because it demanded a reference kind the
+mod never mints. Each was found by a test that crossed a seam rather than
+covering a unit — `tests/lua/test_adapter_registry.lua`,
+`tests/contract/test_adapter_args_agreement.py`, and the round-trip property
+that an adapter must be able to read back what it ships. The live run is the
+fourth such seam.
 
 ## Status
 
@@ -186,17 +199,29 @@ side exists hides the gap rather than closing it.
 | T029 endurance | `S99_endurance.yaml` and every bound it asserts | The run itself, which needs a live game |
 | T030 release | The artefact, its checksums and `FINAL_IMPLEMENTATION_REPORT.md` | The smoke and endurance evidence T029 would produce |
 
-Seven action adapters are registered — `movement.move_to`, `movement.move_near`,
-`inventory.transfer`, `inventory.ensure_main`, `consume.eat`, `consume.drink`,
-`literature.read` — alongside the two that need no game API, `action.wait` and
-`plan.cancel`. `world.inspect` and the session/safety commands are handled by
-the mod directly.
+Seventeen game action adapters are registered on both sides:
+`movement.move_to`, `movement.move_near`, `world.inspect`, `container.inspect`,
+`container.open_nearby`, `inventory.search`, `inventory.transfer`,
+`inventory.ensure_main`, `consume.eat`, `consume.drink`, `literature.read`,
+`equipment.equip`, `equipment.unequip`, `medical.bandage`, `survival.rest` and
+`survival.sleep`, plus `plan.cancel`. The control plane — `session.arm`,
+`session.disarm`, `safety.stop`, `action.wait` — is served by
+`PZAgent.ActionRuntime` itself, so a stop can never be queued behind the thing
+it is stopping.
 
-The CLI exposes `doctor`, `install-mod`, `uninstall-mod`, `status`,
-`backup-save`, `restore-save`, `logs`, `replay` and `validate-config`. `start`,
-`stop`, `arm` and `disarm` are not in the parser, because the sidecar loop they
-would drive is not written — a command that parsed and then did nothing would
-be worse than its absence.
+`tests/lua/test_adapter_registry.lua` asserts that every one of them reaches
+the dispatcher through the real install path, and that the registry holds
+exactly the protocol's actions and nothing else. That test exists because the
+count above was true of the source and false of the running mod: the adapters
+were published under a key the dispatcher does not read.
+
+The CLI exposes `doctor`, `install-mod`, `uninstall-mod`, `status`, `start`,
+`stop`, `arm`, `disarm`, `backup-save`, `restore-save`, `logs`, `replay`,
+`validate-config` and the `live-test` group (`prepare`, `run`, `status`,
+`resume`, `collect`, `finalize`). An earlier revision of this file said
+`start`/`stop`/`arm`/`disarm` were deliberately absent because the sidecar loop
+was not written. The loop is written and they are in the parser; the note was
+left standing after the code moved past it.
 
 ## Deviations found by verification
 
@@ -222,8 +247,18 @@ session; until then the coarse invalidation is the safer reading.
 
 **`Refs.KIND.OBJECT` has no builder on either side.** Two non-container world
 objects standing on the same square therefore share one `square:` reference.
-Harmless today — `diff.py` degrades to a whole-list diff when references
-repeat — but it means `nearby.objects` will rarely diff compactly in real play.
+Harmless for diffing — `diff.py` degrades to a whole-list diff when references
+repeat — but it turned out not to be harmless everywhere.
+
+`movement.move_near` required exactly that kind. `PZAgent.ObserveModel` mints a
+`container:` reference for a nearby thing that holds a container and a `square:`
+reference for everything else, so the adapter refused every reference the mod is
+capable of producing, and the action could not be reached from a real
+observation at all. Both the adapter and the plan parser now accept
+`container`, `square` or `item`, which is what the mod actually emits.
+
+The note above had been sitting in this file, correct and unread, while the
+defect it describes was live. A deviation recorded is not a deviation handled.
 
 **Build 42.20 accessor names are unverified.** The mod's probes degrade to an
 absent field rather than guessing, so the behaviour is honest, but which
@@ -231,13 +266,14 @@ accessors actually exist needs a live session.
 
 ## Known gaps and caveats
 
-- **T003 is not done, but T006 was built anyway.** The task graph has T006
-  depending on T003 (the compatibility scanner). The mod's *pure* logic —
-  JSON, refs, protocol constants, ownership — needs no scanner, so it was
-  written first. Nothing in the mod yet calls an unprobed game API. Any action
-  adapter must wait for T003.
-- **T028 is partial.** The 16 scenario definitions exist with their evidence
-  requirements; the runner that drives them does not. Marked `wip`, not `done`.
+- **Both entries that used to stand here are out of date and are recorded as
+  such rather than deleted.** One said T003 was unfinished and that any action
+  adapter had to wait for it; the scanner has since closed and seventeen
+  adapters are registered. The other said T028 was partial because the scenario
+  definitions existed without a runner; `pz-agent live-test` now drives twenty
+  of them and refuses to finalize without evidence. Both notes outlived the work
+  they described, which is the failure mode this section is most prone to — a
+  caveat nobody deletes reads as a caveat that still applies.
 - **`tests/lua/` proves logic, not compatibility.** It runs under mocked engine
   globals. It cannot demonstrate that `ISInventoryTransferAction` or
   `ISEatFoodAction` behave as expected in Build 42.20, and nothing in this repo
