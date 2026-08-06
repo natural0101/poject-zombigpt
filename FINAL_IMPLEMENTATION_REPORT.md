@@ -2,8 +2,38 @@
 
 Prepared to the gate in [`docs/RELEASE.md`](docs/RELEASE.md).
 
+> **This report describes the state at `main`. The build has moved past it.**
+>
+> `dev` and `feature/playable-agent-1.0` carry a stage of work that closed the
+> gap between "every subsystem exists" and "the agent can act in a game": the
+> protocol grew from fifteen actions to twenty-one, the mod gained a real
+> command executor and seventeen game adapters, the sidecar gained the matching
+> adapters, two model-backed plan providers, a resumable live-test harness and a
+> Windows release candidate.
+>
+> That stage also found three defects in code this report called done, and they
+> are the reason this box exists rather than a line in a changelog. **Thirteen of
+> the sixteen game actions never reached the dispatcher** — the adapters
+> published themselves under a key the dispatcher does not read, so the mod
+> would have loaded cleanly, reported healthy and answered
+> `CAPABILITY_UNAVAILABLE` to everything. **Every `movement.move_to` and
+> `movement.move_near` command would have been refused**, because the two halves
+> of the wire named their arguments differently and an undeclared argument is a
+> refusal by design. And **`move_near` could not be called at all**: it demanded
+> a reference kind `PZAgent.ObserveModel` never mints.
+>
+> Every subsystem involved was written, tested and green. What nothing tested
+> was whether the subsystems were connected. Read §3 of this report knowing
+> that: the counts it gives are real, and they were not enough.
+>
+> Current state: [`docs/PROGRESS.md`](docs/PROGRESS.md). What still needs a
+> machine with the game on it:
+> [`docs/LOCAL_GAME_HANDOFF.md`](docs/LOCAL_GAME_HANDOFF.md).
+
 **Release commit:** `main` at `6a57f748f0e7875e9dca6678aab9ab44d12d3677`
 **Versions:** product 0.1.0 · protocol 1.0 · schema 1.0 · mod 0.1.0 · target build 42.20
+
+Protocol is **1.1** on `dev`; the line above is the version this report covers.
 
 A report cannot name the commit that contains it — the hash does not exist
 until after the commit is made. The hash above is the merge on `main` that this
