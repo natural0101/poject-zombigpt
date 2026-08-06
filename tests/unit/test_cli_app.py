@@ -10,6 +10,7 @@ import pytest
 
 from pz_agent_cli.app import COMMANDS, build_parser, main
 from pz_agent_cli.context import EXIT_FAILURE, EXIT_OK, EXIT_USAGE, resolve_workspace
+from pz_agent_cli.saves import MAX_LISTED_SAVES, find_saves
 from pz_agent_cli.support import DEFAULT_LOG_LINES, MAX_LOG_LINES, _add_directory
 from pz_agent_core.diagnostics import BundleBuilder, DiagnosticLog, LogLevel, TraceWriter
 from pz_agent_core.diagnostics.log import LogLimits
@@ -390,6 +391,21 @@ def test_status_without_a_zomboid_directory_is_a_failure(tmp_path: Path) -> None
 # ---------------------------------------------------------------------------
 # backup-save / restore-save
 # ---------------------------------------------------------------------------
+
+
+def test_the_list_of_saves_offered_to_the_user_is_bounded(tmp_path: Path) -> None:
+    """A profile with hundreds of characters must not print hundreds of lines."""
+    world = make_world(tmp_path)
+    assert world.user_dir is not None
+    for index in range(MAX_LISTED_SAVES + 5):
+        make_save(world.user_dir, f"Survivor/save-{index:03d}", SAVE_FILES)
+
+    found = find_saves(world.user_dir / "Saves")
+
+    assert len(found) == MAX_LISTED_SAVES
+    assert world.run("backup-save") == EXIT_FAILURE
+    named = [line for line in world.stderr.splitlines() if line.strip().startswith("Survivor/")]
+    assert len(named) == MAX_LISTED_SAVES
 
 
 def test_a_single_save_is_backed_up_without_being_named(tmp_path: Path) -> None:

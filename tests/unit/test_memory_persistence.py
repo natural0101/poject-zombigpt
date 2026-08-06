@@ -182,13 +182,18 @@ def test_an_oversized_file_is_refused_before_it_is_parsed(store: MemoryStore) ->
 
 
 def test_a_memory_at_every_ceiling_still_fits_under_the_byte_cap(tmp_path: Path) -> None:
-    """The per-collection caps and the byte cap have to agree, or one is a lie."""
+    """The per-collection caps and the byte cap have to agree, or one is a lie.
+
+    Every collection is filled to its ceiling with its longest legal strings —
+    a version that filled only two of the six would leave the cheapest half of
+    the document standing in for the whole of it.
+    """
     config = MemoryConfig(**{name: ceiling for name, ceiling in CEILINGS.items()})
     store = MemoryStore(tmp_path, config=config)
     memory = SaveMemory(DEFAULT_SAVE, config=config)
     for index in range(CEILINGS["max_tasks"]):
         memory.record_task(
-            key=f"task-{index}",
+            key=f"task-{index}".ljust(64, "x"),
             outcome=TaskOutcome.FAILED,
             now_ms=NOW_MS + index,
             detail="d" * 120,
@@ -197,10 +202,38 @@ def test_a_memory_at_every_ceiling_still_fits_under_the_byte_cap(tmp_path: Path)
         memory.note_container(
             container_ref=world_container_ref(x=1200 + index),
             kind=ContainerKind.WORLD,
-            name=f"Shelf {index}",
+            name=f"Shelf {index}".ljust(64, "x"),
+            now_ms=NOW_MS + index,
+            categories=[
+                f"category-{slot}".ljust(32, "y")
+                for slot in range(CEILINGS["max_categories_per_container"])
+            ],
+            inspected=True,
+        )
+    for index in range(CEILINGS["max_failed_paths"]):
+        memory.note_failed_path(
+            origin=Square(0, 0, 0),
+            target=Square(index, 10, 0),
+            reason="r" * 120,
+            now_ms=NOW_MS + index,
+        )
+    for index in range(CEILINGS["max_reservations"]):
+        memory.reserve(
+            full_type=f"Base.Item{index}".ljust(96, "z"), reason="z" * 120, now_ms=NOW_MS
+        )
+    for index in range(CEILINGS["max_preferences"]):
+        memory.set_preference(key=f"pref{index}".ljust(48, "p"), value="v" * 64, now_ms=NOW_MS)
+    for index in range(CEILINGS["max_safe_zones"]):
+        memory.add_safe_zone(
+            key=f"zone{index}".ljust(64, "q"),
+            centre=Square(index, 0, 0),
+            radius=5,
+            label="L" * 64,
             now_ms=NOW_MS + index,
         )
 
+    assert len(memory.reservations()) == CEILINGS["max_reservations"]
+    assert len(memory.containers()) == CEILINGS["max_containers"]
     assert store.save(memory) <= MAX_MEMORY_BYTES
 
 

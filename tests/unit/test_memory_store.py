@@ -531,6 +531,62 @@ def test_a_document_written_with_looser_caps_is_trimmed_on_load() -> None:
     assert len(restored.containers()) == 2
 
 
+def test_a_document_holding_more_reservations_than_fit_refuses_to_load() -> None:
+    """Trimming here would hand back a subset of the user's words looking complete."""
+    memory = _memory(max_reservations=4)
+    for index in range(4):
+        memory.reserve(full_type=f"Base.Item{index}", reason="mine", now_ms=NOW_MS)
+    document = memory.to_document(schema_version=2)
+
+    with pytest.raises(MemoryCapacityError, match="holds 4 reservations"):
+        SaveMemory.from_document(
+            document, save_id=DEFAULT_SAVE, config=MemoryConfig(max_reservations=3)
+        )
+
+
+def test_a_document_holding_more_preferences_than_fit_refuses_to_load() -> None:
+    memory = _memory(max_preferences=3)
+    for index in range(3):
+        memory.set_preference(key=f"k{index}", value="v", now_ms=NOW_MS)
+    document = memory.to_document(schema_version=2)
+
+    with pytest.raises(MemoryCapacityError, match="holds 3 preferences"):
+        SaveMemory.from_document(
+            document, save_id=DEFAULT_SAVE, config=MemoryConfig(max_preferences=2)
+        )
+
+
+def test_a_document_exactly_at_the_reservation_cap_still_loads() -> None:
+    memory = _memory(max_reservations=2)
+    memory.reserve(full_type="Base.Whiskey", reason="mine", now_ms=NOW_MS)
+    memory.reserve(full_type="Base.Beans", reason="mine", now_ms=NOW_MS)
+
+    restored = SaveMemory.from_document(
+        memory.to_document(schema_version=2),
+        save_id=DEFAULT_SAVE,
+        config=MemoryConfig(max_reservations=2),
+    )
+
+    assert len(restored.reservations()) == 2
+
+
+def test_a_stored_container_that_travels_with_the_player_is_refused_on_load() -> None:
+    """The write path refuses one; a file from elsewhere must not sneak one back in."""
+    document = _memory().to_document(schema_version=2)
+    document["containers"] = [
+        {
+            "tail": "worn:back:998877",
+            "kind": "worn",
+            "label": "Backpack",
+            "last_seen_ms": NOW_MS,
+            "last_inspected_ms": 0,
+        }
+    ]
+
+    with pytest.raises(MemoryValueError, match="not a world container tail"):
+        SaveMemory.from_document(document, save_id=DEFAULT_SAVE)
+
+
 def test_a_malformed_collection_is_refused_rather_than_partly_read() -> None:
     document = _memory().to_document(schema_version=2)
     document["containers"] = "not an array"

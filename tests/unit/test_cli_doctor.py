@@ -12,9 +12,11 @@ import pytest
 
 from pz_agent_cli.context import EXIT_FAILURE, EXIT_OK, Workspace, resolve_workspace
 from pz_agent_cli.doctor import (
+    MAX_LISTED_PATHS,
     CheckResult,
     CheckStatus,
     DoctorError,
+    _listed,
     check_permissions,
 )
 from pz_agent_cli.modinstall import MOD_ID, install_mod
@@ -118,6 +120,22 @@ def test_the_human_rendering_prints_the_code_and_the_remedy(tmp_path: Path) -> N
     assert exit_code == EXIT_FAILURE  # the mod is not installed yet
     assert "PZD005" in world.stdout
     assert "run pz-agent install-mod" in world.stdout
+
+
+def test_the_paths_listed_in_the_report_are_bounded_and_counted(tmp_path: Path) -> None:
+    """Discovery bounds its own search; the report bounds what it prints of it.
+
+    A corrupt ``libraryfolders.vdf`` can name a great many locations, and a
+    report that pasted all of them would be the thing nobody could read.
+    """
+    workspace = resolve_workspace(make_world(tmp_path).ctx)
+    paths = [f"/drive/library-{index}/steamapps" for index in range(MAX_LISTED_PATHS + 9)]
+
+    shown = _listed(paths, workspace)
+
+    assert len(shown) == MAX_LISTED_PATHS + 1
+    assert shown[-1] == "... and 9 more"
+    assert all(entry.startswith("<PATH>/") for entry in shown[:MAX_LISTED_PATHS])
 
 
 # ---------------------------------------------------------------------------

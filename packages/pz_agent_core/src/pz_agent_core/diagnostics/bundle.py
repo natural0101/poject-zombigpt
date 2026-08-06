@@ -336,20 +336,23 @@ def verify_bundle(
     path: Path,
     *,
     redactor: Redactor | None = None,
-    forbidden: Sequence[str] = (),
+    forbidden: Mapping[str, str] | None = None,
 ) -> BundleVerification:
     """List an archive's members and re-scan each for anything that should be gone.
 
-    ``forbidden`` holds literals the caller knows must not appear — the home
-    directory, the account name. They are checked in addition to the redactor's
-    rules, because a literal the redactor was never told about is exactly the
-    case a rule-based scan cannot catch.
+    ``forbidden`` maps a *label* to a literal the caller knows must not appear —
+    ``{"account_name": "Пользователь"}``. The literals are checked in addition to
+    the redactor's rules, because one the redactor was never told about is
+    exactly the case a rule-based scan cannot catch; the finding names the label
+    and never the literal, since this report is printed to a terminal and
+    emitted as JSON, and quoting the account name to warn about the account name
+    would be the leak it is reporting.
 
     Raises:
         BundleError: when the file is not a readable zip archive.
     """
     scanner = null_redactor() if redactor is None else redactor
-    literals = tuple(item for item in forbidden if item)
+    literals = tuple((label, item) for label, item in (forbidden or {}).items() if item)
     entries: list[VerifiedEntry] = []
     problems: list[str] = []
     try:
@@ -369,7 +372,7 @@ def _verify_member(
     archive: zipfile.ZipFile,
     info: zipfile.ZipInfo,
     scanner: Redactor,
-    literals: Sequence[str],
+    literals: Sequence[tuple[str, str]],
 ) -> tuple[VerifiedEntry | None, str]:
     """Scan one member. Returns ``(entry, problem)``; either may be empty."""
     if info.is_dir():
@@ -394,7 +397,7 @@ def _verify_member(
         findings.append("not utf-8 text; contents were not scanned")
         text = ""
     findings.extend(scanner.findings(text))
-    findings.extend(f"literal:{literal[:24]}" for literal in literals if literal in text)
+    findings.extend(f"literal:{label}" for label, literal in literals if literal in text)
     return (
         VerifiedEntry(
             name=info.filename,

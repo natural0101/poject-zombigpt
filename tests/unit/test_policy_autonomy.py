@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -28,6 +29,7 @@ from pz_agent_core.policy.autonomy import (
     NeedPlan,
     derive_needs,
 )
+from pz_agent_core.policy.config import DEFAULT_POLICY_CONFIG
 from pz_agent_core.policy.selection import CapabilitySnapshot
 from pz_agent_core.protocol import (
     ActionName,
@@ -372,6 +374,51 @@ def test_a_reserved_item_does_not_block_an_unreserved_one() -> None:
 def test_a_favourited_item_is_reported_as_reserved_rather_than_as_missing() -> None:
     """The selection policy already refuses it; autonomy turns that into a question."""
     decision = _evaluate(AutonomyGate(), _hungry_world(items=(food_item("f1", favorite=True),)))
+
+    assert decision.outcome is AutonomyOutcome.ASK_USER
+    assert decision.reason_code is ReasonCode.RESOURCE_RESERVED
+
+
+def test_a_reserved_item_that_could_not_serve_the_need_is_not_blamed_for_it() -> None:
+    """A reserved book is not an answer to hunger.
+
+    "Everything that would serve it is reserved, say the word" reads as a fact:
+    saying the word has to actually produce something to eat.
+    """
+    book = literature_item("b1")
+    observation = autonomous_observation(
+        player=hungry_player(0.80), inventory=inventory(book, drink_item("d1"))
+    )
+    memory = FakeMemory(reserved=frozenset({book.full_type, "Base.WaterBottleFull"}))
+
+    decision = _evaluate(AutonomyGate(), observation, memory=memory)
+
+    assert decision.outcome is AutonomyOutcome.HOLD
+    assert decision.reason_code is ReasonCode.NO_SAFE_FOOD
+    assert "reserved" not in decision.detail
+
+
+def test_a_reserved_item_that_is_also_inedible_is_not_offered_either() -> None:
+    """Lifting the reservation would still leave nothing safe, so it is not asked about."""
+    rotten = food_item("f1", rot_progress=1.0, freshness="rotten")
+    memory = FakeMemory(reserved=frozenset({rotten.full_type}))
+
+    decision = _evaluate(AutonomyGate(), _hungry_world(items=(rotten,)), memory=memory)
+
+    assert decision.outcome is AutonomyOutcome.HOLD
+    assert decision.reason_code is ReasonCode.NO_SAFE_FOOD
+
+
+def test_a_reserve_the_rejection_list_had_to_trim_is_still_asked_about() -> None:
+    """The reported rejections are bounded, so they cannot be the only signal."""
+    tight = replace(DEFAULT_POLICY_CONFIG, max_reported_rejections=1)
+    rotten = tuple(
+        food_item(f"r{index}", rot_progress=1.0, freshness="rotten") for index in range(4)
+    )
+    good = food_item("keep", favorite=True)
+    gate = AutonomyGate(policy=tight)
+
+    decision = _evaluate(gate, _hungry_world(items=(*rotten, good)))
 
     assert decision.outcome is AutonomyOutcome.ASK_USER
     assert decision.reason_code is ReasonCode.RESOURCE_RESERVED

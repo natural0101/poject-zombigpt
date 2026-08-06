@@ -38,7 +38,15 @@ __all__ = [
 
 #: A memory file holds a few hundred bounded records. Anything far larger is
 #: corrupt or hostile and is refused before it is parsed, not after.
-MAX_MEMORY_BYTES: Final = 1024 * 1024
+#:
+#: Set *above* the largest document :data:`~pz_agent_core.memory.store.CEILINGS`
+#: permits, which is a shade over 1.1 MiB when every collection is full of
+#: maximum-length strings. The two bounds have to agree in this direction or the
+#: byte cap becomes a trap: a store built entirely of accepted writes would
+#: refuse to persist itself, and the user would lose the reservations they had
+#: just been told were recorded. ``test_a_memory_at_every_ceiling_still_fits_
+#: under_the_byte_cap`` is what keeps the relation true as the caps move.
+MAX_MEMORY_BYTES: Final = 2 * 1024 * 1024
 
 MEMORY_FILE_PREFIX: Final = "memory."
 _TEMP_SUFFIX: Final = ".tmp"
@@ -88,6 +96,8 @@ class MemoryStore:
                 complete JSON object, or is over :data:`MAX_MEMORY_BYTES`.
             MemorySchemaError: when its schema version is unsupported.
             MemoryScopeError: when it belongs to a different save.
+            MemoryCapacityError: when it holds more of the user's own records
+                than the configuration allows; those are never silently trimmed.
         """
         path = self.path_for(save_id)
         try:

@@ -105,10 +105,10 @@ _SEG_WORD: Final = r"[^\s\"'<>|*?\r\n\\/:]+"
 #: One path segment. ``C:\Users\John Smith\Zomboid`` is an ordinary Windows
 #: profile (blueprint §14.8 requires spaces to work), and a segment that stopped
 #: at the first space would replace ``C:\Users\John`` and leave the surname in
-#: the output. The spanning form is taken only when a separator or the end of
-#: the value follows, and it spans at most four words, so the rule can neither
-#: eat a whole sentence following a path nor backtrack unboundedly.
-_SEGMENT: Final = rf"(?:{_SEG_CHARS}+(?:[ ]+{_SEG_WORD}){{1,4}}(?=[\\/]|$)|{_SEG_CHARS}+)"
+#: the output. The spanning form is taken only when a separator, a line ending
+#: or the end of the value follows, and it spans at most four words, so the rule
+#: can neither eat a whole sentence following a path nor backtrack unboundedly.
+_SEGMENT: Final = rf"(?:{_SEG_CHARS}+(?:[ ]+{_SEG_WORD}){{1,4}}(?=[\\/\r\n]|$)|{_SEG_CHARS}+)"
 
 
 class RedactionError(ValueError):

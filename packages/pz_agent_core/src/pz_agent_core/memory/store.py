@@ -484,6 +484,10 @@ class SaveMemory:
                 caller is not offered a "load anyway" flag: every world
                 reference inside would name a place in a different world.
             MemoryValueError: when a record is malformed.
+            MemoryCapacityError: when it holds more reservations or preferences
+                than the configuration allows. Those two are the user's own
+                words, so the same rule applies on the way in as on the way out:
+                the store refuses rather than picking which of them to drop.
         """
         memory = cls(save_id, config=config)
         stored_scope = document.get("save_scope")
@@ -498,9 +502,31 @@ class SaveMemory:
         memory._load_home(document)
         # Caps are applied on load as well as on write: the file may have been
         # produced by a build with looser bounds, and "bounded" has to mean
-        # bounded for the object in memory, not only for the writer.
+        # bounded for the object in memory, not only for the writer. The two
+        # user-authored collections cannot be pruned into shape, so they are
+        # checked separately and refuse.
+        memory._check_user_collections()
         memory._prune(memory._latest_timestamp())
         return memory
+
+    def _check_user_collections(self) -> None:
+        """Refuse a document holding more of the user's own records than fit.
+
+        Evicting here would be the silent-drop this store exists to avoid, only
+        worse: the caller asked to read what the user said, and would be handed
+        a subset that looks complete. Raising names both numbers so the fix —
+        raise the cap, or release something — is the caller's to make.
+        """
+        for label, held, cap in (
+            ("reservations", len(self._reservations), self._config.max_reservations),
+            ("preferences", len(self._preferences), self._config.max_preferences),
+        ):
+            if held > cap:
+                raise MemoryCapacityError(
+                    f"the stored memory holds {held} {label} and this build is configured for "
+                    f"{cap}; raise max_{label} (up to {CEILINGS[f'max_{label}']}) or remove some "
+                    "before loading — I will not choose which of yours to drop"
+                )
 
     def _load_collections(self, document: Mapping[str, Any]) -> None:
         for record in _records(document, "containers"):
