@@ -181,10 +181,21 @@ Everything below ran and passed in the remote environment:
   `live-test status` on a fresh state directory lists all twenty scenarios as
   `NOT_RUN`. `live-test prepare` refuses without `--save <mode>/<name>` — there
   is no default, because guessing which world to experiment on is how a main
-  save gets used — and it writes nothing when it refuses. `live-test finalize`
-  refuses and names every missing artefact, one line each. All three behave
-  correctly on a machine that has never run them, which is the state yours will
-  be in;
+  save gets used — and exits 1. **An earlier revision of this line said prepare
+  "writes nothing when it refuses". That was wrong.** It creates the twenty
+  scenario directories first, every time, and then refuses; what it withholds is
+  `prepare.json`, the record that says the tree is ready. Scaffolding, not
+  evidence — but "writes nothing" invited you to believe a failed prepare left
+  no trace, and it leaves twenty directories. `live-test finalize` refuses and
+  names every missing artefact, one line each;
+- **that `run` and `resume` refuse until prepare has completed.** They did not.
+  `prepare.json` was written by `prepare` and read by nothing, so the check
+  proving you named a test save and hold a backup that reads back produced a
+  record nobody consulted, and twenty deliberately destructive scenarios would
+  start regardless. They now refuse and name the command to fix it. `status` and
+  `collect` are deliberately not gated: reading the table and gathering logs
+  change nothing, and gating them would leave you unable to see why you are
+  stuck;
 - the Lua↔Python reference agreement, directly, for a world container reference
   carrying five colons — the case a naive left-to-right split resolves to a
   *different object* without erroring.

@@ -50,6 +50,26 @@ drift out of sync with `pz_agent_core.version`.
   postcondition accepts only thirst — a refill raises the vessel's volume and
   the drink lowers it again, so the vessel witnesses nothing in either
   direction. Published as `pz_action_drink_source`.
+- **`live-test run` and `resume` refuse until `prepare` has completed.** They
+  did not. `prepare` is the subcommand that proves the world is safe to
+  experiment on — a save whose name marks it a test world, and a backup that
+  *reads back* rather than merely existing — and it wrote `prepare.json` only
+  when both held. Nothing read that file. So twenty scenarios that deliberately
+  hurt the character and end in restores would start against any save at all,
+  and the only thing between them and somebody's main world was a check whose
+  answer went nowhere. `status` and `collect` stay ungated: reading the table
+  and gathering logs change nothing, and gating them would leave an operator
+  unable to see why they are stuck. The runner's own test fixture had never
+  written a prepare record and every test passed, which is how this survived;
+  the fixture writes one now and a second fixture exercises the refusal.
+- **The eleven `.bat` wrappers are checked against the real parser.** They are
+  the entire interface of the release — an operator installing from the ZIP
+  never types `pz-agent` — and not one had ever been executed, here or on
+  Windows. `tests/contract/test_bat_wrappers_invoke_the_real_cli.py` extracts
+  every command line they build, expands the batch variables, and parses it.
+  The risk is concrete: `--evidence-dir` belongs on the `live-test` group and
+  not on its subcommands, so one transposed token would fail an operator's
+  first command with an argparse usage message they could not act on.
 - **The release archive carries the documents it tells you to read.** Fixing
   the "grep lists every guess" claim pointed five documents at
   `docs/GAME_API_VERIFICATION.md`, and `DOC_NAMES` did not ship it — so two

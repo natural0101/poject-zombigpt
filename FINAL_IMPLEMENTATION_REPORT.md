@@ -4,12 +4,12 @@ Prepared to the gate in [`docs/RELEASE.md`](docs/RELEASE.md), whose "The final
 report" section lists nine things this document must state. They are §1 to §9
 below, in that order.
 
-**Base commit:** `dev` at `319a87a` (see below — it is refreshed each time this file is)
+**Base commit:** `dev` at `f5e8441` (see below — it is refreshed each time this file is)
 **Versions:** product 0.1.0 · protocol 1.1 · schema 1.0 · mod 0.1.0 · supported build 42.20
 
 A report cannot name the commit that contains it — the hash does not exist until
 the commit is made. The hash above is this report's parent. Check
-`git log 319a87a..HEAD` before trusting any number here against a newer tree.
+`git log f5e8441..HEAD` before trusting any number here against a newer tree.
 
 **Note the version.** The release candidate is named `v1.0.0-rc1`, and every
 version constant in the tree says `0.1.0`. No `1.0.0` exists in `version.py`,
@@ -19,7 +19,7 @@ filename is a target, not a state.
 Every figure below was produced by running something at this commit. The
 previous revision of this document was written against `main` at `6a57f74`, 36
 commits back, and had drifted badly: it claimed 2338 Python tests (there are
-3488), 1269 Lua assertions (2864), 202 mypy files (261), 7 schemas (6), 30
+3508), 1269 Lua assertions (2864), 202 mypy files (262), 7 schemas (6), 30
 luacheck files (62), nine registered adapters (19) and an installer that placed
 17 files (30). None of that was dishonest when written. All of it was wrong by
 the time anyone read it, which is why this revision states its base commit at
@@ -69,11 +69,11 @@ Measured at this commit:
 | Capability probes | 12 |
 | Live-test scenarios | 20 |
 
-### Twelve defects, found and closed
+### Fourteen defects, found and closed
 
 Every subsystem in this build was written, tested and green. What nothing tested
 was whether the subsystems were *connected*, or whether the documents describing
-them were true. Twelve defects of those two shapes were found, each by a test
+them were true. Fourteen defects of those two shapes were found, each by a test
 that crosses a seam rather than covering a unit, and each mutation-checked:
 
 **Nine were wiring** — a subsystem complete and connected to nothing:
@@ -116,8 +116,21 @@ harder shape, because a reader has no reason to doubt them:
     lines in two files against 52 `requires_live` rows — about an eighth. An
     agent following that would have checked six symbols and concluded the
     unconfirmed surface was covered.
+13. **The release archive omitted two documents its own shipped documents told
+    the operator to open** — `GAME_API_VERIFICATION.md` and
+    `LOCAL_AGENT_PROMPT.md`. Introduced by fixing number 12: the correction
+    pointed five documents at a file `DOC_NAMES` did not carry. Found only by
+    opening the ZIP for an unrelated reason.
+14. **`live-test run` never consulted the prepare record.** `prepare` proves the
+    world is safe to experiment on — a save whose name marks it a test world,
+    and a backup that *reads back* — and writes `prepare.json` when both hold.
+    Nothing read it. So twenty scenarios that deliberately hurt the character
+    and end in restores would start against any save at all, and the only thing
+    between them and somebody's main world was a check whose answer went
+    nowhere. `run` and `resume` refuse now; `status` and `collect` deliberately
+    do not, because reading the table changes nothing.
 
-Numbers 10 to 12 are the reason this report states its base commit and
+Numbers 10 to 14 are the reason this report states its base commit and
 re-measures rather than carrying figures forward. A stale number is a small
 lie; a document describing a safety gate that does not exist is a different
 thing.
@@ -167,12 +180,12 @@ Two symbols deserve naming individually, because their failure modes are quiet:
 ```
 ruff format        ok    316 files already formatted
 ruff lint          ok    All checks passed!
-mypy               ok    no issues found in 261 source files
+mypy               ok    no issues found in 262 source files
 forbidden patterns ok    no stub bodies, no TODO markers, no eval/exec/loadstring, no secrets
 version sync       ok    product=0.1.0 protocol=1.1 schema=1.0 mod=0.1.0
 schema validity    ok    6 schema(s) valid
 playbook in sync   ok    docs/LIVE_TEST_PLAYBOOK.md matches its 20 scenarios
-pytest             ok    3488 passed, 2 skipped
+pytest             ok    3508 passed, 2 skipped
 luacheck           ok    0 warnings / 0 errors in 62 files
 lua tests          ok    2864 assertions across 26 suites, 0 failed
 ```
@@ -324,8 +337,8 @@ Full walkthrough: [`docs/QUICKSTART.md`](docs/QUICKSTART.md).
 
 ## 7. The commit hash
 
-`319a87a` on `dev`. See the header for why this is the parent rather than the
-containing commit; `git log 319a87a..HEAD --oneline` shows anything this
+`f5e8441` on `dev`. See the header for why this is the parent rather than the
+containing commit; `git log f5e8441..HEAD --oneline` shows anything this
 document does not cover.
 
 ---
@@ -334,8 +347,8 @@ document does not cover.
 
 ```
 dist/pz-agent-windows-v1.0.0-rc1.zip
-  sha256   9db872fde5d05463ef08c52f61e4c8222466e3ea992b9ad3762bddcae2f489a7
-  size     258 528 bytes
+  sha256   1f8f1f163744bc5a4f0a791ecc4c557c88837cbf320a0a5b669502230a32762a
+  size     259 035 bytes
   entries  66 (65 files plus BUILD-MANIFEST.json)
 ```
 
@@ -349,7 +362,7 @@ own gate.** `BUILD-MANIFEST.json` records `complete: false`, `build_rc.py` exits
 [ok  ] archive.bat:      all 11 wrappers are at the root
 [ok  ] archive.digests:  65 file(s) match the digests recorded for them
 [ok  ] archive.claims:   the archive claims no live-test evidence
-[ok  ] tests:            3488 of 3490 passed, 2 skipped
+[ok  ] tests:            3508 of 3510 passed, 2 skipped
 ```
 
 Both executables need PyInstaller on Windows. `.github/workflows/windows.yml`
@@ -440,7 +453,7 @@ Project Zomboid Build 42.20 on Windows, and on nothing else.
 It does not say the architecture is ready and only needs testing. It does not
 say a user can take it from here.
 
-It says: twenty-eight tasks are implemented and covered by 3488 Python tests and
+It says: twenty-eight tasks are implemented and covered by 3508 Python tests and
 2864 Lua assertions; ten wiring defects were found by seam tests and closed, one
 of them a safety gate that had been documented for weeks and never written; two
 tasks are blocked on a game that does not exist in this environment; and §9 is
