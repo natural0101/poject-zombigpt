@@ -10,6 +10,66 @@ drift out of sync with `pz_agent_core.version`.
 
 ## [Unreleased]
 
+### Changed
+
+- **Protocol 1.0 → 1.1.** The action whitelist grew from fifteen names to
+  twenty-one, seventeen of them game actions. Added: `container.inspect`,
+  `container.open_nearby`, `inventory.search`, `medical.bandage`,
+  `survival.rest`, `survival.sleep`. `container.open_nearby` is deliberately not
+  read-only — opening a container is a timed action the character performs, so
+  placing it beside `world.inspect` would let an unarmed session move the
+  character.
+- **`inventory.equip` and `inventory.unequip` are now `equipment.equip` and
+  `equipment.unequip`.** A rename, not an alias: the dispatcher's whitelist
+  decides what may reach an adapter at all, and two spellings for one action is
+  a second door. `SCHEMA_VERSION` stays at 1.0 — the document shapes did not
+  change, only an enum inside them gained members.
+
+### Added
+
+- **A real command executor in the mod.** `CommandReader` →
+  `CommandDispatcher` → `ActionRuntime` → adapter, with an acknowledgement at
+  every transition. One command in flight and one waiting, the lease re-checked
+  before each step, TTL, idempotent replay, session validation, panic stop,
+  manual takeover and heartbeat-loss stop. A success acknowledgement has one
+  constructor and it requires observed evidence.
+- **Seventeen Lua game adapters** covering movement, world and container
+  inspection, inventory search/transfer/ensure-main, eating, drinking, reading,
+  equipping, bandaging, resting and sleeping.
+- **`tests/lua/test_adapter_registry.lua`**, which asks whether the adapters
+  actually reach the dispatcher. They did not: thirteen of sixteen game actions
+  were unreachable while every individual adapter test passed.
+- **Python adapters** for the new actions, a deterministic medical triage
+  policy, and capability probes for each.
+- **`openai_compatible` and `teamon` plan providers**, over a standard-library
+  HTTP transport with bounded retries, a response byte ceiling and separate
+  connect and read timeouts. Credentials come from an environment variable named
+  in config, never from the config file.
+- **Handoff documentation** for a machine with the game installed:
+  `docs/LOCAL_GAME_HANDOFF.md`, `docs/LIVE_TEST_PLAYBOOK.md`,
+  `docs/LOCAL_DEBUG_MAP.md`, `docs/GAME_API_VERIFICATION.md` and
+  `docs/LOCAL_AGENT_PROMPT.md`.
+
+### Fixed
+
+- **Adapters registered nowhere.** `Toolkit.declare` produced tables naming
+  themselves under `name`, while `ActionRuntime` looks an adapter up by
+  `adapter.action`. The mod would have loaded cleanly, reported healthy and
+  answered `CAPABILITY_UNAVAILABLE` to every game action.
+- **Adapter arguments were silently dropped.** `CommandDispatcher` builds the
+  argument table from the adapter's declaration, so an adapter that declared no
+  arguments ran with all of them gone rather than being refused. Declarations
+  are now mandatory and asserted at load time.
+- **`RUNTIME_OWNED` was referenced and never defined**, so `ActionRuntime.install`
+  raised on any build where the adapters directory had published anything.
+- **A lease expiring mid-flight was reported as `ACTION_TIMEOUT`**, which tells
+  the sidecar its adapter is slow when in fact its own grant lapsed. It is now
+  `LEASE_EXPIRED`; whether anything reached the character's queue is carried by
+  the phase, which already distinguished `interrupted` from `rejected`.
+- **`pz-agent restore-save` passed `game_running=False` unconditionally**, so it
+  would have overwritten a save with the game open — the exact failure the
+  keyword-only argument exists to prevent.
+
 ### Added
 
 - Game-smoke harness (`pz-agent smoke`). A scenario that did not run is

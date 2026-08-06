@@ -9,8 +9,16 @@ green · `wip` in progress · `todo` not started · `live` blocked on a step tha
 physically requires a running game.
 
 Last updated: 28 of 30 tasks closed; T029 and T030 are blocked on a live game,
-not deferred. 2338 Python tests, 1269 Lua assertions, `scripts/check.sh` green.
+not deferred. 2668 Python tests, 2840 Lua assertions, `scripts/check.sh` green.
 See FINAL_IMPLEMENTATION_REPORT.md.
+
+Work beyond the original graph is under way on `feature/playable-agent-1.0`:
+the protocol grew from fifteen actions to twenty-one, the mod gained a real
+command executor and seventeen game adapters, and the sidecar gained the
+adapters, providers and live-test harness that go with them. See
+[the playable-agent section](#the-playable-agent-branch) below, and
+[`LOCAL_GAME_HANDOFF.md`](LOCAL_GAME_HANDOFF.md) for what still needs a machine
+with the game on it.
 
 ## Status
 
@@ -270,6 +278,84 @@ Two non-scenario items also need a real installation:
 | S99 endurance | not run | everything above |
 
 "Not run" is the honest status and stays until an evidence artefact exists.
+
+## The playable-agent branch
+
+`feature/playable-agent-1.0` takes the build from "every subsystem exists" to
+"the mod can execute a command and prove what it did". It is not merged, and it
+must not be merged before the live evidence exists.
+
+### The protocol grew
+
+Fifteen action names became twenty-one, seventeen of them game actions. Six were
+missing outright — `container.inspect`, `container.open_nearby`,
+`inventory.search`, `medical.bandage`, `survival.rest`, `survival.sleep` — and
+two were renamed rather than aliased: `inventory.equip`/`inventory.unequip` are
+`equipment.equip`/`equipment.unequip`, because the dispatcher's whitelist decides
+what may reach an adapter at all and two keys for one action is a second door.
+
+`PROTOCOL_VERSION` is `1.1`. `SCHEMA_VERSION` stays `1.0`: the document shapes
+did not change, only an enum inside them gained members, and a schema bump would
+have invalidated every stored plan and observation for a change they read fine.
+
+### The mod can now execute
+
+`CommandReader` → `CommandDispatcher` → `ActionRuntime` → an adapter, with an
+acknowledgement written at every transition. One command in flight, one waiting,
+lease checked before each step, TTL, idempotent replay, session validation,
+panic stop, manual takeover and heartbeat-loss stop.
+
+`ActionRuntime` holds the invariant everything else rests on: there is a single
+constructor for a success ack, it requires a non-empty evidence table, and an
+adapter that finishes with nothing to show yields `POSTCONDITION_FAILED`.
+
+### What running it found that reading it had not
+
+Four defects, each caught by executing the code rather than reviewing it:
+
+- **Thirteen of sixteen game actions were unreachable.** The adapters were
+  written and individually tested; they named themselves under `name` while the
+  runtime looks up `adapter.action`, so they registered nowhere. Every adapter
+  test passed against code wired to nothing. `tests/lua/test_adapter_registry.lua`
+  is the question none of them asked, and it went red immediately.
+- **Arguments were silently dropped.** The dispatcher builds the argument table
+  it hands an adapter *from the adapter's declaration*. An adapter that declared
+  nothing was not refused — it ran with every argument gone. Declarations are now
+  mandatory, asserted at load, and carry real bounds.
+- **`RUNTIME_OWNED` was referenced and never defined**, in the branch deciding
+  whether a published adapter supersedes a built-in one. `install` raised on any
+  build where `adapters/` had published anything.
+- **A lease expiring mid-flight reported `ACTION_TIMEOUT`**, telling the sidecar
+  its adapter was slow when its own grant had lapsed.
+
+### Status of the new work
+
+| Block | Status |
+| --- | --- |
+| Protocol extension to 21 actions | **done** |
+| Lua command executor and capability runtime | **done** |
+| Seventeen Lua game adapters | **done** |
+| Adapter-registry integration test | **done** |
+| Python adapters for the new actions | **done** |
+| Medical triage policy | **done** |
+| `openai_compatible` and `teamon` plan providers | **done** |
+| Live-test runner and evidence structure | **wip** |
+| Windows release candidate and CI | **wip** |
+| Handoff documentation | **done** |
+| S01–S20 live scenarios | **live** |
+| `v1.0.0` tag and release | **live** |
+
+### Handoff documents
+
+Written for the machine that has the game, because that is the only place the
+remaining work can happen:
+
+- [`LOCAL_GAME_HANDOFF.md`](LOCAL_GAME_HANDOFF.md) — what exists, what was
+  verified, what was not, exact paths, and what not to rewrite.
+- [`LOCAL_DEBUG_MAP.md`](LOCAL_DEBUG_MAP.md) — symptom → module → log → action.
+- [`GAME_API_VERIFICATION.md`](GAME_API_VERIFICATION.md) — every engine symbol
+  the mod assumes, all of them `requires_live`.
+- [`LOCAL_AGENT_PROMPT.md`](LOCAL_AGENT_PROMPT.md) — the prompt itself.
 
 ## Deviations from the blueprint
 
