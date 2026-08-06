@@ -24,7 +24,7 @@ pz-mod/42/media/lua/
   client/PZAgent/    engine-coupled
 schemas/             JSON Schema — the wire source of truth
 tests/               unit · contract · integration · lua · fixtures · game-smoke
-scripts/             the check gate and its three project-specific checkers
+scripts/             the check gate and its four project-specific checkers
 docs/blueprint/      the original specification — READ ONLY
 ```
 
@@ -39,7 +39,7 @@ reason.
 
 ---
 
-## The three project-specific gates
+## The four project-specific gates
 
 Ordinary linting catches ordinary mistakes. These catch the ones this project
 cares about.
@@ -79,6 +79,14 @@ arrives looking like a crash.
 Asserts each document in `schemas/` still compiles as Draft 2020-12. A broken
 `$ref` does not raise at validation time — it silently makes the validator
 accept everything, which is worse than failing.
+
+### `scripts/generate_playbook.py --check`
+
+Regenerates the per-scenario half of `docs/LIVE_TEST_PLAYBOOK.md` from
+`pz_agent_cli.livetest.scenarios` and fails when the file on disk differs. The
+playbook said it was generated from that module and had no generator and no
+check, so a scenario edited without regenerating shipped an operator a stale
+procedure. Run it without `--check` to rewrite the file.
 
 ---
 

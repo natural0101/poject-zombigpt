@@ -383,9 +383,12 @@ end
 
 SleepAdapter = toolkit().declare({
   name = "survival.sleep",
-  -- No probe declares a sleep capability, and §12.4 does not list one. The
-  -- symbols in `requires` plus the guarded entry point are the whole gate.
-  capability = nil,
+  -- The probe caps this at `experimental` rather than `available_unverified`,
+  -- and the reason is not caution for its own sake: once the character is
+  -- asleep there is no timed action to interrupt and no queue entry to cancel,
+  -- so a panic stop cannot reach them. Naming the capability is what puts that
+  -- ceiling into the document a person reads when the action is refused.
+  capability = toolkit().CAPABILITY.SURVIVAL_SLEEP,
   requires = REQUIRES,
   timeout_ms = Sleep.TIMEOUT_MS,
   poll_interval_ms = Sleep.POLL_MS,

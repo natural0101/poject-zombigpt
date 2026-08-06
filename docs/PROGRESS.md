@@ -24,7 +24,7 @@ with them. See [the playable-agent section](#the-playable-agent-branch) below,
 and [`LOCAL_GAME_HANDOFF.md`](LOCAL_GAME_HANDOFF.md) for what still needs a
 machine with the game on it.
 
-**Ten defects that branch found are worth reading before any further work**,
+**Eleven defects that branch found are worth reading before any further work**,
 because they are one family and the family is not closed. Every subsystem was
 written, tested and green; what nothing tested was whether the subsystems were
 *connected*.
@@ -40,6 +40,7 @@ written, tested and green; what nothing tested was whether the subsystems were
 | 7 | The memory store was complete and connected to nothing | `reserves_item` always answered False, so §7.9 rested on tag rules alone, and no home point could exist |
 | 8 | `pz_agent_voice` was imported by nothing and had no entry point | Russian voice control was complete, tested, and impossible to start |
 | 9 | The mod could drink from a sink; the sidecar had no argument for it, and the path it did have ran under the wrong capability | Two faults in one place: a working mod feature unreachable from Python, *and* `drink_world_source` — which §12.4 caps at `experimental` — reachable through `drink_carried`, which a scan verifies |
+| 11 | Five Lua adapters declared no capability, with comments saying no probe existed for them | Probes exist for all five. The action gate was never open — the mod enforces by required symbols, the sidecar by the ledger — but the mod's capability document named six capabilities where the system knows twelve, so five were absent from the report a person consults when something is refused |
 | 10 | **Multiplayer was documented as refused twice and refused nowhere** | `safety.allow_multiplayer` sat in `_advisories`, whose contract is "Never errors", carrying the sentence "multiplayer is refused at the handshake regardless of this setting". No such refusal existed in `packages/` or `pz-mod/`. The setting was the bypass it claimed not to be |
 
 Every one was found by a test that crosses a seam rather than covering a unit,
@@ -52,7 +53,8 @@ and each of those tests now exists: `tests/lua/test_adapter_registry.lua`,
 `tests/contract/test_backup_attribution.py`,
 `tests/contract/test_sidecar_memory_wiring.py`,
 `tests/contract/test_voice_wiring.py` and
-`tests/contract/test_multiplayer_refusal.py`.
+`tests/contract/test_multiplayer_refusal.py` and
+`tests/contract/test_capability_declaration_agreement.py`.
 
 Number ten is the one to read first, because it is not a wiring defect at all —
 it is a documented safety guarantee that was never implemented. It is closed by

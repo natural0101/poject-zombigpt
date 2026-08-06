@@ -345,9 +345,7 @@ end
 
 RestAdapter = toolkit().declare({
   name = "survival.rest",
-  -- No probe declares a rest capability. The `requires` list plus the sitting
-  -- classes checked in prepare are what gate this action.
-  capability = nil,
+  capability = toolkit().CAPABILITY.SURVIVAL_REST,
   requires = REQUIRES,
   timeout_ms = Rest.TIMEOUT_MS,
   poll_interval_ms = Rest.POLL_MS,

@@ -355,8 +355,11 @@ do
   ok(PZ.Protocol.isKnownAction(Unequip.name), "including unequip's")
   -- No probe declares an equip capability, and declaring one anyway would gate
   -- the action on a token the sidecar never sets.
-  isNil(Equip.capability, "equip claims no capability, because no probe reports one")
-  isNil(Unequip.capability, "and neither does unequip")
+  -- Both used to claim none, with a comment beside them saying no probe
+  -- existed. Probes exist for both, so the mod published no capability for
+  -- either and its capability document named six where the system knows twelve.
+  equal(Equip.capability, "equipment_equip", "equip names the probe that gates it")
+  equal(Unequip.capability, "equipment_unequip", "and so does unequip")
 end
 
 Harness.group("the declaration is what the dispatcher builds the args from")
