@@ -4,12 +4,12 @@ Prepared to the gate in [`docs/RELEASE.md`](docs/RELEASE.md), whose "The final
 report" section lists nine things this document must state. They are §1 to §9
 below, in that order.
 
-**Base commit:** `dev` at `ce7d99c` (see below — it is refreshed each time this file is)
+**Base commit:** `dev` at `319a87a` (see below — it is refreshed each time this file is)
 **Versions:** product 0.1.0 · protocol 1.1 · schema 1.0 · mod 0.1.0 · supported build 42.20
 
 A report cannot name the commit that contains it — the hash does not exist until
 the commit is made. The hash above is this report's parent. Check
-`git log ce7d99c..HEAD` before trusting any number here against a newer tree.
+`git log 319a87a..HEAD` before trusting any number here against a newer tree.
 
 **Note the version.** The release candidate is named `v1.0.0-rc1`, and every
 version constant in the tree says `0.1.0`. No `1.0.0` exists in `version.py`,
@@ -19,7 +19,7 @@ filename is a target, not a state.
 Every figure below was produced by running something at this commit. The
 previous revision of this document was written against `main` at `6a57f74`, 36
 commits back, and had drifted badly: it claimed 2338 Python tests (there are
-3481), 1269 Lua assertions (2864), 202 mypy files (260), 7 schemas (6), 30
+3488), 1269 Lua assertions (2864), 202 mypy files (261), 7 schemas (6), 30
 luacheck files (62), nine registered adapters (19) and an installer that placed
 17 files (30). None of that was dishonest when written. All of it was wrong by
 the time anyone read it, which is why this revision states its base commit at
@@ -167,12 +167,12 @@ Two symbols deserve naming individually, because their failure modes are quiet:
 ```
 ruff format        ok    316 files already formatted
 ruff lint          ok    All checks passed!
-mypy               ok    no issues found in 260 source files
+mypy               ok    no issues found in 261 source files
 forbidden patterns ok    no stub bodies, no TODO markers, no eval/exec/loadstring, no secrets
 version sync       ok    product=0.1.0 protocol=1.1 schema=1.0 mod=0.1.0
 schema validity    ok    6 schema(s) valid
 playbook in sync   ok    docs/LIVE_TEST_PLAYBOOK.md matches its 20 scenarios
-pytest             ok    3481 passed, 2 skipped
+pytest             ok    3488 passed, 2 skipped
 luacheck           ok    0 warnings / 0 errors in 62 files
 lua tests          ok    2864 assertions across 26 suites, 0 failed
 ```
@@ -324,8 +324,8 @@ Full walkthrough: [`docs/QUICKSTART.md`](docs/QUICKSTART.md).
 
 ## 7. The commit hash
 
-`ce7d99c` on `dev`. See the header for why this is the parent rather than the
-containing commit; `git log ce7d99c..HEAD --oneline` shows anything this
+`319a87a` on `dev`. See the header for why this is the parent rather than the
+containing commit; `git log 319a87a..HEAD --oneline` shows anything this
 document does not cover.
 
 ---
@@ -334,9 +334,9 @@ document does not cover.
 
 ```
 dist/pz-agent-windows-v1.0.0-rc1.zip
-  sha256   40692914b76bd9040fb13ba5f4ad4602df3fae0888e456665cdfc2c131750e3b
-  size     234 026 bytes
-  entries  62 (61 files plus BUILD-MANIFEST.json)
+  sha256   9db872fde5d05463ef08c52f61e4c8222466e3ea992b9ad3762bddcae2f489a7
+  size     258 528 bytes
+  entries  66 (65 files plus BUILD-MANIFEST.json)
 ```
 
 **It is marked INCOMPLETE and it is not a release candidate by this project's
@@ -347,9 +347,9 @@ own gate.** `BUILD-MANIFEST.json` records `complete: false`, `build_rc.py` exits
 [FAIL] archive.complete: the archive declares 2 missing file(s): bin/pz-agent.exe, bin/pz-agent-mcp.exe
 [FAIL] archive.bin:      missing from bin/: pz-agent.exe, pz-agent-mcp.exe
 [ok  ] archive.bat:      all 11 wrappers are at the root
-[ok  ] archive.digests:  61 file(s) match the digests recorded for them
+[ok  ] archive.digests:  65 file(s) match the digests recorded for them
 [ok  ] archive.claims:   the archive claims no live-test evidence
-[ok  ] tests:            3481 of 3483 passed, 2 skipped
+[ok  ] tests:            3488 of 3490 passed, 2 skipped
 ```
 
 Both executables need PyInstaller on Windows. `.github/workflows/windows.yml`
@@ -440,7 +440,7 @@ Project Zomboid Build 42.20 on Windows, and on nothing else.
 It does not say the architecture is ready and only needs testing. It does not
 say a user can take it from here.
 
-It says: twenty-eight tasks are implemented and covered by 3481 Python tests and
+It says: twenty-eight tasks are implemented and covered by 3488 Python tests and
 2864 Lua assertions; ten wiring defects were found by seam tests and closed, one
 of them a safety gate that had been documented for weeks and never written; two
 tasks are blocked on a game that does not exist in this environment; and §9 is

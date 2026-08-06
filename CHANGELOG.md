@@ -50,6 +50,18 @@ drift out of sync with `pz_agent_core.version`.
   postcondition accepts only thirst — a refill raises the vessel's volume and
   the drink lowers it again, so the vessel witnesses nothing in either
   direction. Published as `pz_action_drink_source`.
+- **The release archive carries the documents it tells you to read.** Fixing
+  the "grep lists every guess" claim pointed five documents at
+  `docs/GAME_API_VERIFICATION.md`, and `DOC_NAMES` did not ship it — so two
+  shipped documents instructed an operator with no checkout to open a file that
+  was not there. `docs/LOCAL_AGENT_PROMPT.md` was absent for the same reason,
+  and it in turn told the agent to read `docs/PROGRESS.md`, also absent, as
+  `docs/LIMITATIONS.md` did for `docs/RELEASE.md`. All four ship now.
+  `tests/contract/test_release_docs_are_self_contained.py` follows every
+  `docs/*.md` reference out of every shipped document and fails on a dangling
+  one; contributor-only documents are exempt as a pinned literal set, so a new
+  dangle fails rather than being waved through. One defect's fix created
+  another within the hour, and only opening the archive showed it.
 - **The blueprint's command names are accounted for.** `docs/blueprint/` is the
   requirement baseline and read-only, and it asks for two commands this build
   does not have under those names: `setup` (§14.2) and `support-bundle`

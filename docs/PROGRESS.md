@@ -10,7 +10,7 @@ physically requires a running game.
 
 Last updated: 28 of 30 tasks closed; T029 and T030 are blocked on a live game,
 not deferred. 3471 Python tests and 2864 Lua assertions across 26 suites,
-mypy strict over 260 files, `scripts/check.sh` green — measured under Python
+mypy strict over 261 files, `scripts/check.sh` green — measured under Python
 3.11.15, which is the only interpreter with the suite installed here. CI
 declares a 3.11/3.12 matrix; that is configuration, not a result observed in
 this container.
@@ -24,7 +24,7 @@ with them. See [the playable-agent section](#the-playable-agent-branch) below,
 and [`LOCAL_GAME_HANDOFF.md`](LOCAL_GAME_HANDOFF.md) for what still needs a
 machine with the game on it.
 
-**Twelve defects that branch found are worth reading before any further work**,
+**Thirteen defects that branch found are worth reading before any further work**,
 because they are one family and the family is not closed. Every subsystem was
 written, tested and green; what nothing tested was whether the subsystems were
 *connected*.
@@ -40,7 +40,7 @@ written, tested and green; what nothing tested was whether the subsystems were
 | 7 | The memory store was complete and connected to nothing | `reserves_item` always answered False, so §7.9 rested on tag rules alone, and no home point could exist |
 | 8 | `pz_agent_voice` was imported by nothing and had no entry point | Russian voice control was complete, tested, and impossible to start |
 | 9 | The mod could drink from a sink; the sidecar had no argument for it, and the path it did have ran under the wrong capability | Two faults in one place: a working mod feature unreachable from Python, *and* `drink_world_source` — which §12.4 caps at `experimental` — reachable through `drink_carried`, which a scan verifies |
-| 12 | Five documents told the local agent that one grep enumerated every unconfirmed engine symbol | It returns six lines against 52 `requires_live` rows — about an eighth. The sentence was in `LOCAL_AGENT_PROMPT.md`, the file the agent starts from, so it would have checked six places and believed the surface covered |
+| 13 | The release archive omitted the two documents its own shipped documents told the operator to open | `GAME_API_VERIFICATION.md` and `LOCAL_AGENT_PROMPT.md` were not in `DOC_NAMES`. Introduced by fixing defect 12: the correction pointed five documents at a file the archive did not carry. Found only by opening the ZIP | It returns six lines against 52 `requires_live` rows — about an eighth. The sentence was in `LOCAL_AGENT_PROMPT.md`, the file the agent starts from, so it would have checked six places and believed the surface covered |
 | 11 | Five Lua adapters declared no capability, with comments saying no probe existed for them | Probes exist for all five. The action gate was never open — the mod enforces by required symbols, the sidecar by the ledger — but the mod's capability document named six capabilities where the system knows twelve, so five were absent from the report a person consults when something is refused |
 | 10 | **Multiplayer was documented as refused twice and refused nowhere** | `safety.allow_multiplayer` sat in `_advisories`, whose contract is "Never errors", carrying the sentence "multiplayer is refused at the handshake regardless of this setting". No such refusal existed in `packages/` or `pz-mod/`. The setting was the bypass it claimed not to be |
 
