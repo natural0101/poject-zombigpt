@@ -12,6 +12,14 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Added
 
+- Game-smoke harness (`pz-agent smoke`). A scenario that did not run is
+  reported as not run — never as passing, never omitted — and a dry run cannot
+  produce a pass, because it touched no game.
+- `FINAL_IMPLEMENTATION_REPORT.md`, naming exactly what still requires a person
+  with Project Zomboid installed.
+
+### Added
+
 - Repository foundation: package layout, `pyproject.toml`, ruff/mypy/pytest
   configuration, `.luacheckrc`, editor and git attributes.
 - `pz_agent_core.version` as the single source of truth for the five versions,
