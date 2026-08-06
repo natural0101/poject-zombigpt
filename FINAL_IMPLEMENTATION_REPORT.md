@@ -114,6 +114,23 @@ lua tests           ok        1269 assertions across 12 suites
 The one skip is a test that needs the `mcp` SDK, which is an optional
 dependency and is deliberately not installed here.
 
+### The CI matrix was verified rather than assumed
+
+CI has never run — this repository has no push history to GitHub Actions yet —
+so its configuration was an untested claim. Both matrix entries were therefore
+reproduced locally in clean environments built the way the workflow builds
+them (`uv pip install -e ".[dev]"`, not the source paths the local gate uses):
+
+| Environment | Result |
+| --- | --- |
+| Python 3.11 editable install | every CI step passes; 2338 tests |
+| Python 3.12 editable install | every CI step passes; 2338 tests; mypy strict over 202 files |
+
+That matters because the local gate runs against `pythonpath` entries pointing
+at `packages/*/src`, so a packaging mistake — a module missing from the wheel's
+package list, an import that only resolves from the checkout — would not show
+up there. It does not exist: the editable install resolves everything.
+
 ### What the suite actually covers
 
 The tests worth naming are the ones asserting a refusal rather than a feature:
