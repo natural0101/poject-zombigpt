@@ -323,10 +323,7 @@ end
 
 Bandage = toolkit().declare({
   name = "medical.bandage",
-  -- No probe in pz_agent_core.capabilities declares a bandage capability yet, so
-  -- there is nothing honest to point at: the `requires` list above is what gates
-  -- this action, and it names the symbols rather than claiming a probe ran.
-  capability = nil,
+  capability = toolkit().CAPABILITY.MEDICAL_BANDAGE,
   requires = REQUIRES,
   timeout_ms = Medical.TIMEOUT_MS,
   poll_interval_ms = Medical.POLL_MS,

@@ -50,6 +50,22 @@ drift out of sync with `pz_agent_core.version`.
   postcondition accepts only thirst — a refill raises the vessel's volume and
   the drink lowers it again, so the vessel witnesses nothing in either
   direction. Published as `pz_action_drink_source`.
+- **The mod names the capability that gates each action.** Five adapters —
+  `equipment.equip`, `equipment.unequip`, `medical.bandage`, `survival.rest`
+  and `survival.sleep` — declared `capability = nil`, each with a comment
+  asserting that no probe existed for it. Probes exist for all five.
+  `Toolkit.CAPABILITY` held six of the twelve names while its own comment
+  claimed to spell them "exactly as `pz_agent_core.capabilities.probes` spells
+  them", and the omission is what the five comments had read as absence. No
+  command was ever ungated — the mod enforces by required symbols and the
+  sidecar by the ledger — but the mod's published capability document named six
+  capabilities where the system knows twelve, so five were missing from the
+  report a person reads to find out why something was refused.
+  `survival_sleep` is the one that matters most: its `experimental` ceiling
+  exists because a sleeping character cannot be reached by a panic stop, and
+  that ceiling was reaching nobody. `tests/contract/test_capability_declaration_agreement.py`
+  compares both sides of the wire and was mutation-checked against a missing
+  name and a wrong one.
 - **Multiplayer is actually refused now.** It was documented as "refused in
   configuration and again at the session handshake", and neither refusal
   existed: a grep for "multiplayer" across `packages/` and `pz-mod/` found the

@@ -56,6 +56,12 @@ Toolkit.DEFAULT_STALL_MS = 6000
 --- Capability keys, spelled exactly as pz_agent_core.capabilities.probes spells
 --- them. The sidecar gates its write tools on these strings, so a typo here
 --- would open an ungated path rather than fail loudly.
+--- Every probe in that module, not a subset. This table held six of the twelve
+--- for a while and five adapters read the omission as "no probe exists" -- their
+--- comments said so -- so those actions published no capability at all and the
+--- mod's capability document named six where the system knows twelve.
+--- `autonomous_attack` is the one deliberate absence: no adapter implements it,
+--- because §12.4 makes it permanently unsupported.
 Toolkit.CAPABILITY = {
   MOVE_TO_SQUARE = "move_to_square",
   INVENTORY_TRANSFER = "inventory_transfer",
@@ -63,6 +69,11 @@ Toolkit.CAPABILITY = {
   DRINK_CARRIED = "drink_carried",
   READ_LITERATURE = "read_literature",
   DRINK_WORLD_SOURCE = "drink_world_source",
+  EQUIPMENT_EQUIP = "equipment_equip",
+  EQUIPMENT_UNEQUIP = "equipment_unequip",
+  MEDICAL_BANDAGE = "medical_bandage",
+  SURVIVAL_REST = "survival_rest",
+  SURVIVAL_SLEEP = "survival_sleep",
 }
 
 --- Health scale the game reports body parts on.

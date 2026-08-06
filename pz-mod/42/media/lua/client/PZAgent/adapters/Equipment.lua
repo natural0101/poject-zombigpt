@@ -250,9 +250,7 @@ end
 
 Equip = toolkit().declare({
   name = "equipment.equip",
-  -- No probe declares an equip capability, so there is nothing honest to point
-  -- at: `requires` plus the per-branch checks are what gate this action.
-  capability = nil,
+  capability = toolkit().CAPABILITY.EQUIPMENT_EQUIP,
   requires = REQUIRES,
   timeout_ms = Equipment.TIMEOUT_MS,
   poll_interval_ms = Equipment.POLL_MS,
@@ -455,7 +453,7 @@ end
 
 Unequip = toolkit().declare({
   name = "equipment.unequip",
-  capability = nil,
+  capability = toolkit().CAPABILITY.EQUIPMENT_UNEQUIP,
   requires = REQUIRES,
   timeout_ms = Equipment.TIMEOUT_MS,
   poll_interval_ms = Equipment.POLL_MS,
