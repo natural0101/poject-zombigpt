@@ -136,7 +136,7 @@ class TestActionVocabulary:
             ActionName.SESSION_ARM,
             ActionName.PLAN_CANCEL,
             ActionName.WORLD_INSPECT,
-            ActionName.INVENTORY_EQUIP,
+            ActionName.EQUIPMENT_EQUIP,
         ],
     )
     def test_a_known_action_a_plan_may_not_name_is_refused_as_such(

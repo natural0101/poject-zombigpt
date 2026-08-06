@@ -23,21 +23,36 @@ class ActionName(StrEnum):
     ACTION_WAIT = "action.wait"
     MOVEMENT_MOVE_TO = "movement.move_to"
     MOVEMENT_MOVE_NEAR = "movement.move_near"
+    WORLD_INSPECT = "world.inspect"
+    CONTAINER_INSPECT = "container.inspect"
+    CONTAINER_OPEN_NEARBY = "container.open_nearby"
+    INVENTORY_SEARCH = "inventory.search"
     INVENTORY_TRANSFER = "inventory.transfer"
     INVENTORY_ENSURE_MAIN = "inventory.ensure_main"
-    INVENTORY_EQUIP = "inventory.equip"
-    INVENTORY_UNEQUIP = "inventory.unequip"
     CONSUME_EAT = "consume.eat"
     CONSUME_DRINK = "consume.drink"
     LITERATURE_READ = "literature.read"
-    WORLD_INSPECT = "world.inspect"
+    EQUIPMENT_EQUIP = "equipment.equip"
+    EQUIPMENT_UNEQUIP = "equipment.unequip"
+    MEDICAL_BANDAGE = "medical.bandage"
+    SURVIVAL_REST = "survival.rest"
+    SURVIVAL_SLEEP = "survival.sleep"
     PLAN_CANCEL = "plan.cancel"
 
 
 #: Actions that only read state. They are permitted in OBSERVE mode and do not
 #: require the session to be armed.
+#:
+#: ``container.open_nearby`` is deliberately *not* here. Its name reads like a
+#: query, but opening a container is a timed action the character performs in
+#: the world, and an unarmed session must not move the character.
 READ_ONLY_ACTIONS: frozenset[ActionName] = frozenset(
-    {ActionName.WORLD_INSPECT, ActionName.ACTION_WAIT}
+    {
+        ActionName.WORLD_INSPECT,
+        ActionName.CONTAINER_INSPECT,
+        ActionName.INVENTORY_SEARCH,
+        ActionName.ACTION_WAIT,
+    }
 )
 
 #: Actions that bypass the arming check entirely — stopping must always work.

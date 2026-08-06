@@ -11,7 +11,7 @@ success into a refusal to claim anything.
 Three refusals are structural rather than advisory:
 
 * an equipped item is never moved implicitly — the caller is handed the
-  ``inventory.unequip`` prerequisite instead (§5.12);
+  ``equipment.unequip`` prerequisite instead (§5.12);
 * a container is never put inside itself, however deep the nesting;
 * a world container out of arm's reach yields a walk-to-it prerequisite rather
   than a transfer that would fail at the far end (§4.6).
@@ -95,7 +95,7 @@ DEFAULT_ENSURE_MAIN_TIMEOUT_MS: Final = 15_000
 def unequip_prerequisite(item: ItemView) -> Prerequisite:
     """The preparation an equipped item needs before it can be moved."""
     return Prerequisite(
-        action=ActionName.INVENTORY_UNEQUIP,
+        action=ActionName.EQUIPMENT_UNEQUIP,
         args={"item_ref": item.ref},
         detail=f"{item.display_name} is equipped and must be put away first",
     )

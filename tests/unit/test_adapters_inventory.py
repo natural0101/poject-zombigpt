@@ -204,7 +204,7 @@ def test_an_equipped_item_is_refused_and_names_the_unequip_it_needs() -> None:
 
     assert caught.value.reason_code is ReasonCode.POLICY_DENIED
     prerequisites = caught.value.evidence["prerequisites"]
-    assert prerequisites[0]["action"] == ActionName.INVENTORY_UNEQUIP.value
+    assert prerequisites[0]["action"] == ActionName.EQUIPMENT_UNEQUIP.value
     assert prerequisites[0]["args"]["item_ref"] == equipped.ref
 
 

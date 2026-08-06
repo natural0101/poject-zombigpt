@@ -11,7 +11,7 @@ local equal, ok, isNil = Harness.equal, Harness.ok, Harness.isNil
 
 Harness.group("versions match the Python source of truth")
 do
-  equal(Protocol.PROTOCOL_VERSION, "1.0", "protocol version")
+  equal(Protocol.PROTOCOL_VERSION, "1.1", "protocol version")
   equal(Protocol.SCHEMA_VERSION, "1.0", "schema version")
   equal(Protocol.MOD_VERSION, "0.1.0", "mod version")
   equal(Protocol.TARGET_BUILD, "42.20", "target build")
@@ -37,7 +37,7 @@ end
 
 Harness.group("the action whitelist is closed")
 do
-  equal(#Protocol.ACTION_NAMES, 15, "the whitelist holds every ActionName")
+  equal(#Protocol.ACTION_NAMES, 21, "the whitelist holds every ActionName")
   for index = 1, #Protocol.ACTION_NAMES do
     ok(Protocol.isKnownAction(Protocol.ACTION_NAMES[index]), Protocol.ACTION_NAMES[index] .. " is known")
   end

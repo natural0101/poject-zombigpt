@@ -27,6 +27,8 @@ import pytest
 from pz_agent_core.ipc import layout
 from pz_agent_core.ipc.journal import HEADER_TYPE, ROTATED_TYPE
 from pz_agent_core.protocol.enums import (
+    ALWAYS_ALLOWED_ACTIONS,
+    READ_ONLY_ACTIONS,
     ActionName,
     ActionOwnership,
     ActionStatus,
@@ -123,11 +125,11 @@ def test_action_whitelist_is_complete_and_ordered(protocol_lua: str) -> None:
 def test_action_classes_match(protocol_lua: str) -> None:
     body = protocol_lua[protocol_lua.index("Protocol.READ_ONLY_ACTIONS") :]
     read_only = set(re.findall(r'"([^"]*)"', body[: body.index("\n\n")]))
-    assert read_only == {"world.inspect", "action.wait"}
+    assert read_only == {a.value for a in READ_ONLY_ACTIONS}
 
     always = protocol_lua[protocol_lua.index("Protocol.ALWAYS_ALLOWED_ACTIONS") :]
     always_allowed = set(re.findall(r'"([^"]*)"', always[: always.index("\n\n")]))
-    assert always_allowed == {"safety.stop", "session.disarm", "plan.cancel"}
+    assert always_allowed == {a.value for a in ALWAYS_ALLOWED_ACTIONS}
 
 
 def test_reason_codes_match(protocol_lua: str) -> None:
