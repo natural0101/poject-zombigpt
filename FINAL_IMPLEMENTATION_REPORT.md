@@ -302,10 +302,20 @@ still yielding at minute 30, and the save loading cleanly afterwards.
 
 **One wiring item that a live environment settles:**
 `BackupManager.restore` requires `game_running` as a keyword with no default and
-no override. `supervisor.py` supplies it from a process probe that reports "may
-be running" when it cannot tell. That conservative answer needs confirming
-against a real Project Zomboid process — a wrong answer here is the one that
-corrupts a save.
+no override, and `saves.py` now supplies it from
+`supervisor.probe_game_running`, which reports "may be running" when it cannot
+tell. That conservative answer still needs confirming against a real Project
+Zomboid process name — a wrong answer here is the one that corrupts a save.
+
+> **Correction.** An earlier revision of this report stated that the probe was
+> already wired. It was not: `saves.py` passed `game_running=False`
+> unconditionally, so `pz-agent restore-save` would have overwritten a save
+> with the game running — exactly the failure the keyword exists to prevent.
+> The probe and its three-valued result had been written and documented but
+> never called. An adversarial audit found it, and the regression test
+> (`test_restore_is_refused_when_a_game_process_is_running_without_a_heartbeat`)
+> fails against the previous code. The claim above is true as of the commit
+> named at the top of this report; it was false when first published.
 
 ---
 
