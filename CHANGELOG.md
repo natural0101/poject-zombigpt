@@ -67,7 +67,39 @@ drift out of sync with `pz_agent_core.version`.
 - Cross-language contract tests asserting the Lua and Python halves agree on
   versions, the action whitelist, reason codes, enums and IPC filenames.
 
+- Typed planner, critic and executor. A plan structurally cannot carry code:
+  `StepArgs` is a closed Protocol over a fixed parser table, so there is no
+  field a Lua snippet, a shell string or a path could occupy. `NullProvider`
+  plans deterministically from the policy modules, making `provider = "none"`
+  a tested configuration rather than a claim.
+- Sidecar attach/observe/act loop behind `start`, `stop`, `arm` and `disarm`.
+  It attaches in OBSERVE, runs the reflex guard before anything else whether or
+  not a planner is configured, and never re-arms itself after a restart.
+- Windows installer and uninstaller that record a manifest of what they wrote
+  and remove exactly that, so a file the user placed in the mod directory
+  survives an uninstall.
+- Doctor CLI, diagnostics with redaction applied as records are written, MCP
+  boundary, permissions and autonomy engines, bounded save-scoped memory, and
+  the voice companion.
+- Lua observation producer, with a cross-language contract test that runs the
+  builder under lua5.4, validates its output against the schema, parses it with
+  the Python dataclasses and re-parses every reference.
+
 ### Fixed
+
+- Every zombie in a horde shared one reference: the observer read `getOnlineID`
+  first, which answers `-1` outside multiplayer, and `-1` was a legal reference
+  segment. Threat assessment counts distinct references, so a horde read as one
+  zombie.
+- The inventory walk was unbounded on the game thread — nested bags multiplied
+  to thousands of engine calls to produce a document that keeps 64 containers.
+- Mutual exclusion did not hold: `O_EXCL` makes the lock file's *creation*
+  exclusive, not the claim, so two sidecars could both report `acquired`.
+- Backups were returned as complete without reading back what landed on disk,
+  and restore hashed every file it copied and discarded the result.
+- The support-bundle verifier reported the forbidden literal it found — in a
+  report printed to a terminal and emitted as JSON, which would have been the
+  leak it was reporting.
 
 - `scripts/check.sh` ran luacheck but never executed the Lua tests, so failing
   assertions would not have been caught locally. It now runs them over the same
