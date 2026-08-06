@@ -50,6 +50,25 @@ drift out of sync with `pz_agent_core.version`.
   postcondition accepts only thirst — a refill raises the vessel's volume and
   the drink lowers it again, so the vessel witnesses nothing in either
   direction. Published as `pz_action_drink_source`.
+- **Multiplayer is actually refused now.** It was documented as "refused in
+  configuration and again at the session handshake", and neither refusal
+  existed: a grep for "multiplayer" across `packages/` and `pz-mod/` found the
+  warning's own text and two unrelated comments. `safety.allow_multiplayer`
+  lived in `_advisories`, whose contract is "Never errors", carrying the
+  sentence "multiplayer is refused at the handshake regardless of this setting"
+  — so the flag loaded, the agent ran, and the only thing between it and a
+  server was a line of advice describing a gate nobody had written. Now:
+  the config key is a hard error; `observation.game.multiplayer` carries three
+  states; and `ActionEngine._multiplayer_abort` refuses every mutating command
+  unless the mod positively reported single player, with an **absent reading
+  refused exactly as `true` is**. Stopping, disarming, cancelling and the three
+  read-only actions stay exempt, because an agent that cannot be stopped in the
+  one session it should not be running in is worse than no gate. Both halves
+  mutation-checked. `isClient`/`isServer` are unconfirmed against Build 42.20
+  like every other engine symbol, and are now the first row in
+  `docs/GAME_API_VERIFICATION.md` for a reason: if they cannot be read, the
+  agent refuses everything, which is correct and looks exactly like being
+  broken.
 - **`pz-agent smoke` is in `COMMANDS`.** It always had a parser, a dispatch
   branch and a working subsystem; it was missing from the tuple that declares
   what this build wires, so the CLI accepted a command its own list denied

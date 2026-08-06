@@ -218,16 +218,50 @@ def test_every_error_carries_remediation() -> None:
 
 
 def test_settings_that_validate_but_deserve_a_word_are_warnings(tmp_path: Path) -> None:
-    validation = load_config(
-        _write(
-            tmp_path,
-            "[safety]\nallow_multiplayer = true\n[session]\nrequire_backup = false\n",
-        )
-    )
+    validation = load_config(_write(tmp_path, "[session]\nrequire_backup = false\n"))
 
     assert validation.ok
     paths = {problem.path for problem in validation.warnings}
-    assert paths == {"safety.allow_multiplayer", "session.require_backup"}
+    assert paths == {"session.require_backup"}
+
+
+def test_allow_multiplayer_is_refused_rather_than_warned_about(tmp_path: Path) -> None:
+    """It was a warning, and the warning was false.
+
+    ``_advisories`` promises never to error, and it carried the sentence
+    "multiplayer is refused at the handshake regardless of this setting" — while
+    no multiplayer check existed anywhere in the sidecar or the mod. So the
+    setting loaded, the agent ran, and the only thing standing between it and a
+    server was a line of advice describing a gate nobody had written.
+    """
+    validation = load_config(_write(tmp_path, "[safety]\nallow_multiplayer = true\n"))
+
+    assert not validation.ok
+    assert validation.config is None, "a refused configuration must not be returned"
+    refusals = [
+        problem for problem in validation.errors if problem.path == "safety.allow_multiplayer"
+    ]
+    assert len(refusals) == 1
+    assert refusals[0].remediation
+    # And it is not merely relocated: nothing warns about it any more, because a
+    # warning next to an error reads like an alternative to it.
+    assert not any(problem.path == "safety.allow_multiplayer" for problem in validation.warnings)
+
+
+def test_the_multiplayer_refusal_has_no_override(tmp_path: Path) -> None:
+    """A gate with a switch beside it is not a gate.
+
+    Written as a search rather than a spot-check: any *other* key that turned
+    the refusal off would satisfy a test that only set ``allow_multiplayer``.
+    """
+    suspicious = sorted(
+        f"{table}.{key}"
+        for table, keys in SCHEMA.items()
+        for key in keys
+        if key != "allow_multiplayer"
+        and any(word in key for word in ("multiplayer", "unsafe", "override", "bypass", "force"))
+    )
+    assert suspicious == [], f"these look like ways around the refusal: {suspicious}"
 
 
 def test_an_expected_build_outside_the_supported_set_warns(tmp_path: Path) -> None:

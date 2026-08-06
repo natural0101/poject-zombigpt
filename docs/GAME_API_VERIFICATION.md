@@ -92,6 +92,32 @@ cancels only actions carrying this session's ownership tag; if the queue cannot
 be read, the honest answer is `CAPABILITY_UNAVAILABLE`, and the mod must not
 report "nothing to cancel". Verify this one before trusting any stop path.
 
+## The multiplayer reading — check this before anything else
+
+| Symbol | Assumed signature | Used by | Status | Actual |
+|---|---|---|---|---|
+| `isClient` | `() -> boolean` | `Observe.multiplayer`, the no-multiplayer gate | `requires_live` | |
+| `isServer` | `() -> boolean` | `Observe.multiplayer`, the no-multiplayer gate | `requires_live` | |
+
+These two are first because they are the only engine symbols whose failure mode
+is **the agent doing nothing at all**, rather than one action failing.
+
+The blueprint forbids multiplayer, and `ActionEngine._multiplayer_abort` enforces
+it by refusing every mutating command unless the mod positively reported single
+player. `Observe.multiplayer` returns `true`, `false`, or `nil` when neither
+accessor could be read — and `nil` is refused exactly as `true` is, because an
+absent reading is not a negative reading.
+
+So if these two names are wrong on Build 42.20, a perfectly ordinary
+single-player session refuses every command with `POLICY_DENIED` and the message
+"the mod did not report whether this session is multiplayer". That is the
+conservative failure and it is the right one, but it is indistinguishable at a
+glance from the agent being broken. **Confirm these first, in S02, before
+concluding anything else is wrong.**
+
+Neither has ever been exercised against a real multiplayer session either. The
+gate is written and tested against fakes; nobody has watched it refuse a server.
+
 ## World and squares
 
 | Symbol | Assumed signature | Used by | Status | Actual |

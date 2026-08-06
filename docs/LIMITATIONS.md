@@ -10,10 +10,29 @@ a running game — see [`PROGRESS.md`](PROGRESS.md).
 
 ## Scope
 
-**Single player only.** Multiplayer is refused in configuration and again at the
-session handshake. Automating a character on someone else's server is the
+**Single player only.** Automating a character on someone else's server is the
 operator's decision, not this agent's, and the refusal has no workaround
-setting.
+setting. Two gates enforce that:
+
+- `safety.allow_multiplayer = true` is a **configuration error**. The file does
+  not load. It used to be a warning whose text claimed the session handshake
+  would refuse multiplayer anyway — and no such refusal existed anywhere, so
+  the setting was exactly the bypass it said it was not.
+- Every mutating command is refused by the action engine unless the mod
+  positively reported the session as single player. `observation.game.multiplayer`
+  has three states and **an absent reading is refused exactly as `true` is**,
+  because silence is not permission — the same rule that stops a missing
+  `is_bleeding` from meaning "not bleeding".
+
+Stopping, disarming, cancelling and the three read-only actions are deliberately
+exempt: an agent that cannot be stopped in the one session it should not be
+running in is worse than one that never had the gate.
+
+**This has never been exercised against a real multiplayer session.** The mod
+reads `isClient` and `isServer`, both unconfirmed against Build 42.20 like every
+other engine symbol. If neither can be read, the agent refuses to act at all
+rather than assuming single player — a conservative failure, but a failure, and
+`docs/GAME_API_VERIFICATION.md` lists it among what a live run must settle.
 
 **One character.** The protocol is session-scoped to a single active character.
 Split-screen and multiple simultaneous characters are out of scope.

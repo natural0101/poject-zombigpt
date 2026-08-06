@@ -39,6 +39,10 @@ def make_game(**overrides: Any) -> GameState:
         "paused": False,
         "speed": 1.0,
         "world_time": "1993-07-09T14:20:00",
+        # Single player, positively reported. The arm gate refuses on True and
+        # equally on None, so a fixture that left this out would make every test
+        # touching `arm` exercise the refusal instead of the thing it is about.
+        "multiplayer": False,
     }
     base.update(overrides)
     return GameState(**base)

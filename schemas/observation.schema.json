@@ -62,6 +62,10 @@
         },
         "world_time": {
           "type": "string"
+        },
+        "multiplayer": {
+          "type": "boolean",
+          "description": "True in a multiplayer session, false in single player. Omitted when the mod could not read it, which is not the same as false: the sidecar refuses to arm on an omission exactly as it refuses on true."
         }
       }
     },

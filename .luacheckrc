@@ -14,6 +14,9 @@ read_globals = {
   "getPlayer", "getSpecificPlayer", "getNumActivePlayers",
   "getGameTime", "getWorld", "getCell", "getSquare",
   "getCore", "getTimestampMs", "getTimestamp",
+  -- The multiplayer reading. Vanilla globals rather than methods, and the only
+  -- two the no-multiplayer gate rests on.
+  "isClient", "isServer",
   "getFileWriter", "getFileReader", "getModFileReader", "getModFileWriter",
   "getSoundManager", "getTextManager",
   "ISBaseTimedAction", "ISTimedActionQueue", "ISInventoryTransferAction",
