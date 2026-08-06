@@ -2,9 +2,14 @@
 
 Prepared to the gate in [`docs/RELEASE.md`](docs/RELEASE.md).
 
-**Commit:** `7a2379384ebb5cebc3b06431e58b034f2f7452a2`
-**Branch:** `dev`, merged to `main`
+**Release commit:** `main` at `6a57f748f0e7875e9dca6678aab9ab44d12d3677`
 **Versions:** product 0.1.0 · protocol 1.0 · schema 1.0 · mod 0.1.0 · target build 42.20
+
+A report cannot name the commit that contains it — the hash does not exist
+until after the commit is made. The hash above is the merge on `main` that this
+report describes; the commit adding the report is its child, and anything after
+that point is a later change this document does not cover. Check with
+`git log 6a57f74..main` before trusting it against a newer tree.
 
 ---
 
