@@ -14,6 +14,7 @@ import pytest
 from pz_agent_core.actions import PreconditionFailed
 from pz_agent_core.capabilities.probes import (
     DRINK_CARRIED,
+    DRINK_WORLD_SOURCE,
     EAT_PERCENTAGE,
     EQUIPMENT_EQUIP,
     EQUIPMENT_UNEQUIP,
@@ -70,6 +71,7 @@ ALL_CAPABILITIES = (
     INVENTORY_TRANSFER,
     EAT_PERCENTAGE,
     DRINK_CARRIED,
+    DRINK_WORLD_SOURCE,
     READ_LITERATURE,
     EQUIPMENT_EQUIP,
     EQUIPMENT_UNEQUIP,
@@ -976,6 +978,10 @@ def every_payload(router: ToolRouter) -> Iterator[tuple[str, Any]]:
         ("pz_action_ensure_main", {"item_ref": BOOK_REF, "idempotency_key": "em1"}),
         ("pz_action_eat", {"item_ref": BEAN_REF, "idempotency_key": "e1"}),
         ("pz_action_drink", {"item_ref": BEAN_REF, "idempotency_key": "d1"}),
+        (
+            "pz_action_drink_source",
+            {"item_ref": BEAN_REF, "source_ref": SQUARE_REF, "idempotency_key": "ds1"},
+        ),
         ("pz_action_read", {"item_ref": BOOK_REF, "idempotency_key": "r1"}),
         ("pz_action_equip", {"item_ref": BEAN_REF, "idempotency_key": "eq1"}),
         ("pz_action_unequip", {"hand": "primary", "idempotency_key": "uq1"}),

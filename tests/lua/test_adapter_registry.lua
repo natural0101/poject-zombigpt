@@ -54,6 +54,7 @@ local GAME_ACTIONS = {
   "inventory.ensure_main",
   "consume.eat",
   "consume.drink",
+  "consume.drink_source",
   "literature.read",
   "equipment.equip",
   "equipment.unequip",

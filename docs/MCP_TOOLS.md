@@ -106,6 +106,7 @@ checked against anything this side sees.
 | `pz_action_ensure_main` | P1/P3 | `item_ref` | The item is in player-main |
 | `pz_action_eat` | P2 | `item_ref`, `fraction?` | Hunger decreased, or item uses decremented |
 | `pz_action_drink` | P2 | `item_ref`, `fraction?` | Thirst decreased, or container volume decreased |
+| `pz_action_drink_source` | P2 | `item_ref`, `source_ref`, `fraction?` | Thirst decreased. The vessel's volume is **not** accepted here: the fill raises it and the drink lowers it again |
 | `pz_action_read` | P2 | `item_ref`, `pages?` | Reading started and progress observed |
 | `pz_action_equip` | P2 | `item_ref`, `hand?` | The requested slot holds the item |
 | `pz_action_unequip` | P2 | exactly one of `item_ref`, `hand`, `slot` | No slot holds it **and** it is still on the character |

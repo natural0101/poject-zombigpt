@@ -28,6 +28,7 @@ change proves this happened?*
 ``inventory.ensure_main``      the item is in player-main
 ``consume.eat``                hunger fell, or the portions did
 ``consume.drink``              thirst fell, or the volume did
+``consume.drink_source``       thirst fell after filling a vessel at a source
 ``literature.read``            the page counter advanced
 ``equipment.equip``            the requested slot holds the item
 ``equipment.unequip``          no slot holds it and it is still carried
@@ -51,7 +52,7 @@ from .common import (
     ItemIdentity,
     Prerequisite,
 )
-from .consume import DrinkAdapter, EatAdapter, ensure_main_prerequisite
+from .consume import DrinkAdapter, DrinkSourceAdapter, EatAdapter, ensure_main_prerequisite
 from .container import ContainerInspectAdapter, ContainerOpenNearbyAdapter
 from .equipment import EquipAdapter, UnequipAdapter
 from .inventory import EnsureMainAdapter, SearchAdapter, TransferAdapter, unequip_prerequisite
@@ -69,6 +70,7 @@ __all__ = [
     "ContainerInspectAdapter",
     "ContainerOpenNearbyAdapter",
     "DrinkAdapter",
+    "DrinkSourceAdapter",
     "EatAdapter",
     "EnsureMainAdapter",
     "EquipAdapter",
@@ -109,6 +111,7 @@ def register_game_adapters(registry: AdapterRegistry) -> AdapterRegistry:
     registry.register(EnsureMainAdapter())
     registry.register(EatAdapter())
     registry.register(DrinkAdapter())
+    registry.register(DrinkSourceAdapter())
     registry.register(ReadAdapter())
     registry.register(EquipAdapter())
     registry.register(UnequipAdapter())

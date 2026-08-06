@@ -179,6 +179,8 @@ OVER_THE_LINE: Final[tuple[tuple[str, dict[str, Any]], ...]] = (
     ("pz_action_sleep", {"hours": MAX_SLEEP_HOURS + 1}),
     ("pz_action_sleep", {"max_wait_ms": MAX_SLEEP_WAIT_MS + 1}),
     ("pz_action_sleep", {"hours": MIN_SLEEP_HOURS - 1}),
+    ("pz_action_drink_source", {"fraction": 1.5}),
+    ("pz_action_drink_source", {"source_ref": "container:not-a-square"}),
 )
 
 

@@ -68,7 +68,7 @@ fails on the first unusual file.
 | `eat_percentage` | Partial eating; without it, whole units only | probed |
 | `drink_carried` | `consume.drink` from a carried container | probed |
 | `read_literature` | `literature.read` | probed |
-| `drink_world_source` | Drinking from a world water source | `experimental` |
+| `drink_world_source` | `consume.drink_source` — filling a vessel at a sink, well or rain collector and drinking from it | `experimental` |
 | `autonomous_attack` | — | **`unsupported`** (`NO_VERIFIED_API`) |
 
 `autonomous_attack` is permanently unsupported. It is listed so the report is

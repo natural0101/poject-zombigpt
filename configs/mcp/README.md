@@ -78,7 +78,7 @@ one.
 
 ## What the server publishes
 
-Thirty tools, in seven groups. The names are stable and the schemas are served
+Thirty-one tools, in seven groups. The names are stable and the schemas are served
 with them:
 
 - **session** — `pz_session_status`, `pz_session_arm`, `pz_session_disarm`
@@ -92,7 +92,8 @@ with them:
   performs.
 - **action** — `pz_action_move_to`, `pz_action_move_near`,
   `pz_action_open_container`, `pz_action_transfer`, `pz_action_ensure_main`,
-  `pz_action_eat`, `pz_action_drink`, `pz_action_read`, `pz_action_equip`,
+  `pz_action_eat`, `pz_action_drink`, `pz_action_drink_source`,
+  `pz_action_read`, `pz_action_equip`,
   `pz_action_unequip`, `pz_action_bandage`, `pz_action_rest`,
   `pz_action_sleep`, `pz_action_wait`, `pz_action_cancel`
 - **plan** — `pz_plan_execute`, `pz_plan_status`

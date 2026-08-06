@@ -12,6 +12,7 @@ from pz_agent_core.actions.adapters import register_game_adapters
 from pz_agent_core.actions.adapters.movement import MAX_ARRIVAL_RADIUS, MAX_MOVE_DISTANCE_SQUARES
 from pz_agent_core.capabilities.probes import (
     DRINK_CARRIED,
+    DRINK_WORLD_SOURCE,
     EAT_PERCENTAGE,
     EQUIPMENT_EQUIP,
     EQUIPMENT_UNEQUIP,
@@ -74,6 +75,7 @@ DOCUMENTED_TOOLS = {
     "pz_action_ensure_main",
     "pz_action_eat",
     "pz_action_drink",
+    "pz_action_drink_source",
     "pz_action_read",
     "pz_action_equip",
     "pz_action_unequip",
@@ -105,6 +107,7 @@ ALL_CAPABILITIES = (
     INVENTORY_TRANSFER,
     EAT_PERCENTAGE,
     DRINK_CARRIED,
+    DRINK_WORLD_SOURCE,
     READ_LITERATURE,
     EQUIPMENT_EQUIP,
     EQUIPMENT_UNEQUIP,
@@ -285,6 +288,7 @@ FULL_ACTION_PAYLOADS: dict[str, dict[str, Any]] = {
     "pz_action_ensure_main": {"item_ref": ITEM},
     "pz_action_eat": {"item_ref": ITEM, "fraction": 0.5},
     "pz_action_drink": {"item_ref": ITEM, "fraction": 0.5},
+    "pz_action_drink_source": {"item_ref": ITEM, "fraction": 0.5, "source_ref": SQUARE},
     "pz_action_read": {"item_ref": ITEM, "pages": 3},
     "pz_action_equip": {"item_ref": ITEM, "hand": "primary"},
     # All three namings at once, which the adapter refuses as a *domain* error —

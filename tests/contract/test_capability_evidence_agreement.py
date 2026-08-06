@@ -85,6 +85,7 @@ from tests.fixtures.adapter_worlds import (
     a_command,
     a_square,
     a_world,
+    a_world_object,
     an_item,
     bag_container,
     main_container,
@@ -179,6 +180,31 @@ def _drink_carried() -> Exercise:
     )
 
 
+def _drink_world_source() -> Exercise:
+    """The sink case, which was an excuse in this file until the adapter arrived.
+
+    ``source_ref`` is the key that makes this probe's confirmation mean
+    something: without it an ordinary sip from a bottle would verify a
+    capability §12.4 calls unproven. So the adapter has to carry it into the
+    evidence, and this exercise is what proves it does.
+    """
+    containers = [main_container(), bag_container()]
+    sink = a_world_object(square_ref(1204, 3400), kind="sink", semantics=["water_source"])
+    return Exercise(
+        capability=DRINK_WORLD_SOURCE,
+        command=a_command(
+            ActionName.CONSUME_DRINK_SOURCE,
+            {"item_ref": BOTTLE.ref, "fraction": 1.0, "source_ref": sink.ref},
+        ),
+        before=a_world(
+            items=[BOTTLE], containers=containers, objects=[sink], stats={"thirst": 0.6}
+        ),
+        after=a_world(
+            seq=2, items=[BOTTLE], containers=containers, objects=[sink], stats={"thirst": 0.1}
+        ),
+    )
+
+
 def _read_literature() -> Exercise:
     containers = [main_container(), bag_container()]
     return Exercise(
@@ -254,6 +280,7 @@ EXERCISES: Final[tuple[Exercise, ...]] = (
     _inventory_transfer(),
     _eat_percentage(),
     _drink_carried(),
+    _drink_world_source(),
     _read_literature(),
     _equipment_equip(),
     _equipment_unequip(),
@@ -268,12 +295,6 @@ NOT_EXERCISED: Final[dict[str, str]] = {
     AUTONOMOUS_ATTACK: (
         "its ceiling is 'unsupported' by design (§12.4), so no ack can confirm it; "
         "the refusal itself is asserted below"
-    ),
-    DRINK_WORLD_SOURCE: (
-        "no adapter drinks from a world source. §4.9 puts the sink, the well and the "
-        "rain collector behind this probe and behind an adapter that does not exist "
-        "yet; consume.drink is the carried-container adapter and refuses 'source_ref' "
-        "outright. The absence is asserted below so it cannot outlive the adapter"
     ),
 }
 
@@ -383,13 +404,17 @@ def test_every_probe_is_either_exercised_here_or_named_as_out_of_reach() -> None
 
 
 def test_the_list_of_probes_this_file_cannot_reach_does_not_grow_quietly() -> None:
-    """Two, and the reason for each is asserted by a test of its own.
+    """One, and the reason for it is asserted by a test of its own.
 
     Pinned as a literal set rather than derived, so that moving a probe out of
     the exercised table and into the excuses has to be done here, in the open,
     by someone who then has to write the test that keeps the excuse honest.
+
+    It was two. ``drink_world_source`` sat here because §4.9's adapter had not
+    been written; it is exercised above now, and the test that guarded the
+    excuse has become the test below that the two drink actions stay separate.
     """
-    assert set(NOT_EXERCISED) == {AUTONOMOUS_ATTACK, DRINK_WORLD_SOURCE}
+    assert set(NOT_EXERCISED) == {AUTONOMOUS_ATTACK}
     assert all(reason.strip() for reason in NOT_EXERCISED.values())
 
 
@@ -412,70 +437,55 @@ def test_autonomous_attack_is_refused_by_its_ceiling_rather_than_left_untested(
     assert not confirmed.has_runtime_evidence
 
 
-def test_nothing_registered_can_drink_from_a_world_source_yet() -> None:
-    """The excuse for ``drink_world_source``, asserted rather than asserted-to.
+def test_the_two_drink_actions_do_not_share_a_capability() -> None:
+    """The gate for ``drink_world_source``, asserted rather than assumed.
 
-    ``source_ref`` is not a key the probe got wrong. It is the only thing that
-    distinguishes drinking from a sink from drinking from a bottle, and a
-    confirmation without it would let an ordinary sip verify a capability §12.4
-    calls unproven. What is missing is the adapter, and the day one arrives this
-    test fails and forces the capability into the exercised table above.
+    §12.4 caps this probe at ``experimental``, which means upgradeable but not
+    usable — and the engine reads ``required_capability`` from the adapter that
+    owns the action. While the world source was an optional ``refill_from``
+    argument on ``consume.drink``, the whole path ran under ``drink_carried``,
+    which a static scan verifies: an unproven capability reachable through a
+    proven one. Splitting the action is what closes that, so a merge back into
+    one action has to fail here.
     """
     registry = _registry()
+
+    carried = registry.get(ActionName.CONSUME_DRINK)
+    from_source = registry.get(ActionName.CONSUME_DRINK_SOURCE)
+    assert carried.required_capability == DRINK_CARRIED
+    assert from_source.required_capability == DRINK_WORLD_SOURCE
+
     claimed = [
         action
         for action in registry.names()
         if registry.get(action).required_capability == DRINK_WORLD_SOURCE
     ]
-    assert claimed == [], (
-        f"{sorted(a.value for a in claimed)} now claims drink_world_source; exercise it "
-        "here instead of excusing it"
+    assert claimed == [ActionName.CONSUME_DRINK_SOURCE], (
+        f"{sorted(a.value for a in claimed)} claim drink_world_source; exactly one action "
+        "may, or the capability stops meaning what the probe checks"
     )
 
-    probe = probe_for(DRINK_WORLD_SOURCE)
-    adapter = registry.get(probe.confirmation.action)
-    assert adapter.required_capability == DRINK_CARRIED
-
-    # By execution, not by reading: the adapter behind this probe's action
-    # refuses the argument the probe's evidence would have to come from.
+    # By execution, not by reading: the carried-container adapter refuses the
+    # argument that would put it on the world-source path.
     world = a_world(items=[BOTTLE], containers=[main_container(), bag_container()])
     command = a_command(
         ActionName.CONSUME_DRINK,
-        {"item_ref": BOTTLE.ref, "source_ref": f"object:{DEFAULT_SESSION}:sink-1:0"},
+        {"item_ref": BOTTLE.ref, "source_ref": square_ref(1204, 3400)},
     )
     with pytest.raises(PreconditionFailed) as caught:
-        adapter.validate(command, world)
+        carried.validate(command, world)
     assert caught.value.reason_code is ReasonCode.INVALID_ARGUMENT
 
-    evidence = _observe(_drink_carried())
-    assert "source_ref" not in evidence.observed
 
+def test_the_world_source_adapter_will_not_verify_without_the_source_it_names() -> None:
+    """Thirst falling is necessary; naming where the water came from is too.
 
-# ---------------------------------------------------------------------------
-# which ActionResult a probe run is entitled to
-# ---------------------------------------------------------------------------
-
-
-def test_the_probe_reads_the_mods_flat_ack_and_not_the_sidecars_own_envelope() -> None:
-    """Two documents, both an ``ActionResult``, and only one of them fits.
-
-    The mod's ack carries the observed values at the top level of ``evidence``;
-    the sidecar's own result wraps the identical bag under ``observed``, beside
-    the adapter's ``kind`` and the observation sequence, because the MCP
-    boundary quarantines the read values and keeps the structural labels. Both
-    shapes are correct for their own reader, and ``confirm`` only accepts the
-    first. Whoever wires the probe run has to hand it the ack — this pins which
-    one that is, in a place a wrong wiring cannot pass.
+    A postcondition that dropped ``source_ref`` would let the probe confirm on
+    an ordinary sip, which is the one substitution this capability exists to
+    prevent.
     """
-    exercise = _eat_percentage()
-    probe = probe_for(exercise.capability)
+    exercise = _drink_world_source()
     evidence = _observe(exercise)
 
-    ack = probe_ack(probe.confirmation.action, dict(evidence.observed))
-    sidecar_result = probe_ack(probe.confirmation.action, evidence.to_payload())
-
-    assert probe.confirmation.missing_keys(ack) == ()
-    # Every declared key, not merely some of them: the wrapper hides the whole
-    # bag, so a probe handed the wrong document fails completely and silently.
-    assert probe.confirmation.missing_keys(sidecar_result) == probe.confirmation.evidence_keys
-    assert sidecar_result.evidence["observed"] == ack.evidence
+    assert "source_ref" in evidence.observed
+    assert evidence.observed["source_ref"] == exercise.command.args["source_ref"]

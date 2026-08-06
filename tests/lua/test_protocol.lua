@@ -37,7 +37,7 @@ end
 
 Harness.group("the action whitelist is closed")
 do
-  equal(#Protocol.ACTION_NAMES, 21, "the whitelist holds every ActionName")
+  equal(#Protocol.ACTION_NAMES, 22, "the whitelist holds every ActionName")
   for index = 1, #Protocol.ACTION_NAMES do
     ok(Protocol.isKnownAction(Protocol.ACTION_NAMES[index]), Protocol.ACTION_NAMES[index] .. " is known")
   end

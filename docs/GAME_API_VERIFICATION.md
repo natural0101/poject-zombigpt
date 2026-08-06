@@ -56,7 +56,7 @@ session's ownership tag before `ISTimedActionQueue.add` sees it.
 | `ISInventoryTransferAction` | `:new(character, item, source, destination)` | `adapters/Inventory.lua` | `inventory_transfer` | `requires_live` | |
 | `ISEatFoodAction` | `:new(character, item, percentage)` | `adapters/Consumption.lua` | `eat_percentage` | `requires_live` | |
 | `ISDrinkFromBottle` | `:new(character, item, percentage)` | `adapters/Consumption.lua` | `drink_carried` | `requires_live` | |
-| `ISTakeWaterAction` | `:new(character, item, amount, waterObject)` | `adapters/Consumption.lua`, refilling from a world source | `drink_world_source` | `requires_live` | |
+| `ISTakeWaterAction` | **the mod calls `:new(character, waterObject, amount, item)`** | `adapters/Consumption.lua`, the `consume.drink_source` adapter | `drink_world_source` | `requires_live` | **Check this first.** Three places in this repository stated three different argument orders; the column now records the call the mod actually makes, and nothing here can confirm it. A build that orders them differently fills the wrong thing rather than erroring, which is why the capability is capped at `experimental` and why the postcondition refuses to accept the vessel's own volume as proof |
 | `ISReadABook` | `:new(character, item, pageCount)` | `adapters/Literature.lua` | `read_literature` | `requires_live` | |
 | `ISApplyBandage` | `:new(character, patient, item, bodyPart)` | `adapters/Medical.lua` | `medical_bandage` | `requires_live` | |
 | `ISEquipWeaponAction` | `:new(character, item, time, primaryHand, twoHands)` | `adapters/Equipment.lua` | `equipment_equip` | `requires_live` | |
@@ -117,7 +117,7 @@ that worked. That failure mode is why they are listed separately.
 |---|---|---|---|---|
 | `IsoPlayer.getStats` | `() -> Stats` | the object the four below hang on | `requires_live` | |
 | `Stats.getHunger` | `() -> number, 0..1` | postcondition for `consume.eat` | `requires_live` | |
-| `Stats.getThirst` | `() -> number, 0..1` | postcondition for `consume.drink` | `requires_live` | |
+| `Stats.getThirst` | `() -> number, 0..1` | postcondition for `consume.drink` and the *only* postcondition for `consume.drink_source` | `requires_live` | |
 | `Stats.getFatigue` | `() -> number, 0..1` | postcondition for `survival.sleep` | `requires_live` | |
 | `Stats.getEndurance` | `() -> number, 0..1` | postcondition for `survival.rest` | `requires_live` | |
 | `IsoPlayer.getBodyDamage` | `() -> BodyDamage` | the wound and bandage state | `requires_live` | |

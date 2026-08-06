@@ -42,6 +42,7 @@ Protocol.ACTION_NAMES = {
   "inventory.ensure_main",
   "consume.eat",
   "consume.drink",
+  "consume.drink_source",
   "literature.read",
   "equipment.equip",
   "equipment.unequip",

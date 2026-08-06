@@ -45,6 +45,7 @@ from tests.fixtures.adapter_worlds import (
     bag_container,
     crate_container,
     main_container,
+    square_ref,
 )
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[2]
@@ -108,10 +109,13 @@ def _cases() -> list[tuple[ActionName, Command, Observation]]:
     # A container reference, because that is what the mod mints for a nearby
     # thing that holds one — it never mints an `object:` reference at all.
     crate_object = a_world_object(CRATE_REF)
+    # A sink is not a container, so the mod mints a square reference for it and
+    # marks it with the semantic ``consume.drink_source`` gates on.
+    sink = a_world_object(square_ref(1204, 3400), kind="sink", semantics=["water_source"])
     world = a_world(
         items=[apple, water, book, bandage, shirt, stashed],
         containers=[main_container(), bag_container(), crate_container()],
-        objects=[crate_object],
+        objects=[crate_object, sink],
     )
 
     return [
@@ -136,6 +140,14 @@ def _cases() -> list[tuple[ActionName, Command, Observation]]:
         (
             ActionName.CONSUME_DRINK,
             a_command(ActionName.CONSUME_DRINK, {"item_ref": water.ref, "fraction": 1.0}),
+            world,
+        ),
+        (
+            ActionName.CONSUME_DRINK_SOURCE,
+            a_command(
+                ActionName.CONSUME_DRINK_SOURCE,
+                {"item_ref": water.ref, "fraction": 1.0, "source_ref": sink.ref},
+            ),
             world,
         ),
         (

@@ -215,6 +215,7 @@ class ToolRouter:
             "pz_action_ensure_main": self._submit,
             "pz_action_eat": self._submit,
             "pz_action_drink": self._submit,
+            "pz_action_drink_source": self._submit,
             "pz_action_read": self._submit,
             "pz_action_equip": self._submit,
             "pz_action_unequip": self._submit,

@@ -797,13 +797,21 @@ _ArgParser = Callable[[Mapping[str, Any], str], StepArgs]
 
 #: The actions a plan may name, each with the one argument type it takes.
 #:
-#: Three groups of :class:`~pz_agent_core.protocol.ActionName` are deliberately
-#: absent. ``session.arm``/``session.disarm``/``safety.stop``/``plan.cancel`` are
-#: the levers by which a human or the reflex guard takes control, and a plan that
+#: Most of :class:`~pz_agent_core.protocol.ActionName` is deliberately absent,
+#: for two different reasons.
+#:
+#: ``session.arm``/``session.disarm``/``safety.stop``/``plan.cancel`` are the
+#: levers by which a human or the reflex guard takes control, and a plan that
 #: could schedule its own disarm — or its own cancel — would be a plan that can
-#: reach around the thing meant to stop it. ``inventory.equip``,
-#: ``inventory.unequip`` and ``world.inspect`` have no adapter in this build, so
-#: planning one would be planning an action nothing can execute or verify.
+#: reach around the thing meant to stop it. Those must never be plannable.
+#:
+#: The rest — the readings, ``equipment.*``, ``medical.bandage``,
+#: ``survival.*``, ``container.open_nearby`` and ``consume.drink_source`` — have
+#: adapters and are reachable over MCP; what they do not have is a typed
+#: argument class in this module. The mapping below *is* the schema a
+#: model-authored plan is parsed against, so an action reaches it by being given
+#: one, not by being named here. Adding one is ordinary work; leaving the entry
+#: out is what keeps an untyped payload from being planned.
 _ARG_PARSERS: Final[Mapping[ActionName, _ArgParser]] = MappingProxyType(
     {
         ActionName.ACTION_WAIT: WaitArgs.from_payload,

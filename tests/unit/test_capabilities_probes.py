@@ -363,7 +363,7 @@ def test_the_experimental_water_source_can_still_be_confirmed_by_a_live_ack(
         probe,
         static,
         probe_ack(
-            ActionName.CONSUME_DRINK,
+            ActionName.CONSUME_DRINK_SOURCE,
             {"thirst_before": 0.7, "thirst_after": 0.1, "source_ref": "sink:1"},
         ),
         build=BUILD,

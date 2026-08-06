@@ -15,10 +15,16 @@ round to no visible change in the stat while the item's own counter moves; and
 an item eaten to nothing simply vanishes, which §4.8 says explicitly is not a
 failure. Any one of the three is proof; none of them is assumed.
 
-Drinking from a sink, a well or a rain collector is *not* here. §4.9 makes it a
-separate adapter behind the ``drink_world_source`` probe, which §12.4 lists as
-unconfirmed — so this adapter refuses to grow an argument it cannot honour, and
-``consume.drink`` means "drink from a carried container" and nothing else.
+Drinking from a sink, a well or a rain collector is a *third* adapter,
+:class:`DrinkSourceAdapter`, behind the ``drink_world_source`` probe. §4.9 asks
+for the split and §12.4 explains why it has to be structural: that probe is
+capped at ``experimental`` on a clean scan, and while the world source was an
+optional argument on ``consume.drink`` the whole path ran under
+``drink_carried`` — an unproven capability reachable through a verified one.
+One action, one capability, checked by the engine before an adapter is entered.
+
+So ``consume.drink`` means "drink from a carried container" and nothing else,
+and it refuses an argument naming a world source rather than honouring it.
 """
 
 from __future__ import annotations
@@ -26,7 +32,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import ClassVar, Final
 
-from ...capabilities import DRINK_CARRIED, EAT_PERCENTAGE
+from ...capabilities import DRINK_CARRIED, DRINK_WORLD_SOURCE, EAT_PERCENTAGE
 from ...policy.drink import DrinkView
 from ...policy.food import FoodView
 from ...protocol import (
@@ -48,11 +54,13 @@ from .common import (
     check_args,
     find_by_identity,
     identity_of,
+    nearby_object,
     player_main,
     read_number,
     read_ref,
     refused,
     require_inventory,
+    require_nearby,
     resolve_item,
 )
 
@@ -62,6 +70,7 @@ __all__ = [
     "DEFAULT_EAT_TIMEOUT_MS",
     "MIN_CONSUME_FRACTION",
     "DrinkAdapter",
+    "DrinkSourceAdapter",
     "EatAdapter",
     "ensure_main_prerequisite",
     "require_in_main",
@@ -364,4 +373,144 @@ class DrinkAdapter:
             drink=True,
             stat="thirst",
             amount_key="volume",
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class _SourceSpec:
+    """A vessel to fill, how much of it to drink, and where the water is."""
+
+    item_ref: str
+    fraction: float
+    source_ref: str
+
+    @classmethod
+    def parse(cls, command: Command) -> _SourceSpec:
+        check_args(
+            command,
+            allowed=("item_ref", "fraction", "source_ref"),
+            required=("item_ref", "source_ref"),
+        )
+        return cls(
+            item_ref=read_ref(command, "item_ref", kind=RefKind.ITEM),
+            fraction=read_number(
+                command, "fraction", default=1.0, minimum=MIN_CONSUME_FRACTION, maximum=1.0
+            ),
+            source_ref=read_ref(command, "source_ref", kind=RefKind.SQUARE),
+        )
+
+    def as_args(self) -> JsonDict:
+        return {
+            "item_ref": self.item_ref,
+            "fraction": self.fraction,
+            "source_ref": self.source_ref,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class DrinkSourceAdapter:
+    """``consume.drink_source``: fill a vessel at a world source, then drink.
+
+    Two things make this a different action rather than an argument on
+    :class:`DrinkAdapter`, and both are load-bearing.
+
+    The first is the capability. ``drink_world_source`` is capped at
+    ``experimental`` by its probe, so it is upgradeable but not usable until a
+    live ack confirms it — and the engine reads ``required_capability`` from the
+    adapter before validating anything. Folded into ``consume.drink`` the same
+    work would have run under ``drink_carried``, which a static scan verifies.
+
+    The second is the postcondition. A refill raises the vessel's contents and
+    the drink lowers them again, so the item counter that carries
+    ``consume.drink`` when a sip is too small to move the stat is not a witness
+    here in either direction. Thirst is the only honest reading, and if this
+    build does not report thirst the action cannot succeed at all — which is
+    the correct outcome, not a gap.
+    """
+
+    timeout_ms: int = DEFAULT_DRINK_TIMEOUT_MS
+    poll_interval_ms: int = DEFAULT_CONSUME_POLL_MS
+
+    name: ClassVar[ActionName] = ActionName.CONSUME_DRINK_SOURCE
+    risk: ClassVar[RiskClass] = RiskClass.P2
+    required_capability: ClassVar[str | None] = DRINK_WORLD_SOURCE
+
+    #: What the mod puts on a nearby object that reported a positive water
+    #: amount (``PZAgent.Observe.objectFields``). Naming a square that does not
+    #: carry it is refused here rather than in the mod, so the refusal costs no
+    #: round trip.
+    WATER_SEMANTIC: ClassVar[str] = "water_source"
+
+    def validate(self, command: Command, observation: Observation) -> None:
+        spec = _SourceSpec.parse(command)
+        inventory = require_inventory(observation)
+        item = resolve_item(inventory, spec.item_ref)
+        view = DrinkView.from_item(item)
+        if view is None:
+            raise PreconditionFailed(
+                f"{item.display_name} holds no fluid, so there is nothing to fill",
+                reason_code=ReasonCode.INVALID_ARGUMENT,
+                evidence={"item_ref": item.ref, "category": item.category},
+            )
+        if view.destroyed:
+            raise PreconditionFailed(
+                f"{item.display_name} is destroyed",
+                reason_code=ReasonCode.PRECONDITION_FAILED,
+                evidence={"item_ref": item.ref, "destroyed": view.destroyed},
+            )
+        # Deliberately *not* the emptiness check ``consume.drink`` makes: an
+        # empty bottle is the normal reason to walk to a sink.
+        if view.tainted or view.poisonous:
+            raise PreconditionFailed(
+                f"{item.display_name} already holds something unsafe to drink",
+                reason_code=ReasonCode.NO_SAFE_DRINK,
+                evidence={
+                    "item_ref": item.ref,
+                    "tainted": view.tainted,
+                    "poisonous": view.poisonous,
+                },
+            )
+        require_in_main(inventory, item)
+
+        nearby = require_nearby(observation)
+        source = nearby_object(nearby, spec.source_ref)
+        if source is None:
+            raise PreconditionFailed(
+                "the observation does not report anything at that square",
+                reason_code=ReasonCode.INVALID_REF,
+                evidence={"source_ref": spec.source_ref, "observation_seq": observation.seq},
+            )
+        if self.WATER_SEMANTIC not in source.semantics:
+            raise PreconditionFailed(
+                f"nothing at {spec.source_ref} reports water",
+                reason_code=ReasonCode.NO_SAFE_DRINK,
+                evidence={
+                    "source_ref": spec.source_ref,
+                    "kind": source.kind,
+                    "semantics": list(source.semantics),
+                },
+            )
+
+    def build_args(self, command: Command, observation: Observation) -> JsonDict:
+        return _SourceSpec.parse(command).as_args()
+
+    def verify(self, command: Command, before: Observation, after: Observation) -> Evidence | None:
+        spec = _SourceSpec.parse(command)
+        start = before.player.thirst
+        end = after.player.thirst
+        if end >= start:
+            return None
+        return Evidence(
+            kind="thirst_decreased",
+            observation_seq=after.seq,
+            observed={
+                "item_ref": spec.item_ref,
+                "fraction": spec.fraction,
+                # Carried because the probe's confirmation requires it: without
+                # it, an ordinary sip from a bottle would verify a capability
+                # §12.4 calls unproven.
+                "source_ref": spec.source_ref,
+                "thirst_before": start,
+                "thirst_after": end,
+            },
         )

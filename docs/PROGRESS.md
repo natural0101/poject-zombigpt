@@ -36,6 +36,7 @@ written, tested and green; what nothing tested was whether the subsystems were
 | 6 | Nothing mapped a backup to the save id the mod reports | Autonomy asked instead of acting; closed by recording the id at backup time |
 | 7 | The memory store was complete and connected to nothing | `reserves_item` always answered False, so §7.9 rested on tag rules alone, and no home point could exist |
 | 8 | `pz_agent_voice` was imported by nothing and had no entry point | Russian voice control was complete, tested, and impossible to start |
+| 9 | The mod could drink from a sink; the sidecar had no argument for it, and the path it did have ran under the wrong capability | Two faults in one place: a working mod feature unreachable from Python, *and* `drink_world_source` — which §12.4 caps at `experimental` — reachable through `drink_carried`, which a scan verifies |
 
 Every one was found by a test that crosses a seam rather than covering a unit,
 and each of those tests now exists: `tests/lua/test_adapter_registry.lua`,
@@ -47,6 +48,14 @@ and each of those tests now exists: `tests/lua/test_adapter_registry.lua`,
 `tests/contract/test_backup_attribution.py`,
 `tests/contract/test_sidecar_memory_wiring.py` and
 `tests/contract/test_voice_wiring.py`.
+
+Number nine was closed by splitting the action: `consume.drink_source` is its
+own action with its own adapter on both sides, so the capability is checked by
+the engine before the adapter is entered rather than inside it. The tests that
+hold it are `test_the_two_drink_actions_do_not_share_a_capability` and
+`test_the_world_source_adapter_will_not_verify_without_the_source_it_names`, and
+`drink_world_source` moved out of that file's excuse list into its exercised
+table — where every other probe has always had to be.
 
 Each was mutation-checked rather than trusted: the wiring was removed and the
 failures counted. A seam test that would not have failed is not evidence that
@@ -348,8 +357,9 @@ must not be merged before the live evidence exists.
 
 ### The protocol grew
 
-Fifteen action names became twenty-one, seventeen of them game actions. Six were
-missing outright — `container.inspect`, `container.open_nearby`,
+Fifteen action names became twenty-two, and the mod's adapter files own
+seventeen of them (the other five are the control plane the runtime serves
+itself). Six were missing outright — `container.inspect`, `container.open_nearby`,
 `inventory.search`, `medical.bandage`, `survival.rest`, `survival.sleep` — and
 two were renamed rather than aliased: `inventory.equip`/`inventory.unequip` are
 `equipment.equip`/`equipment.unequip`, because the dispatcher's whitelist decides
@@ -393,15 +403,16 @@ Four defects, each caught by executing the code rather than reviewing it:
 
 | Block | Status |
 | --- | --- |
-| Protocol extension to 21 actions | **done** |
+| Protocol extension to 22 actions | **done** |
 | Lua command executor and capability runtime | **done** |
 | Seventeen Lua game adapters | **done** |
 | Adapter-registry integration test | **done** |
 | Python adapters for the new actions | **done** |
 | Medical triage policy | **done** |
 | `openai_compatible` and `teamon` plan providers | **done** |
-| Live-test runner and evidence structure | **wip** |
-| Windows release candidate and CI | **wip** |
+| Live-test runner and evidence structure | **done** — its own commands were run before handover |
+| Windows release candidate and CI | **done** — RC built; the two `.exe` files need a Windows PyInstaller run |
+| `consume.drink_source`, and the capability gate under it | **done** |
 | Handoff documentation | **done** |
 | S01–S20 live scenarios | **live** |
 | `v1.0.0` tag and release | **live** |

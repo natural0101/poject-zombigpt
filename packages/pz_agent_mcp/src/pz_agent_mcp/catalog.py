@@ -93,6 +93,7 @@ from pz_agent_core.actions.engine import DEFAULT_LEASE_MS
 from pz_agent_core.capabilities.model import CapabilityReport
 from pz_agent_core.capabilities.probes import (
     DRINK_CARRIED,
+    DRINK_WORLD_SOURCE,
     EAT_PERCENTAGE,
     EQUIPMENT_EQUIP,
     EQUIPMENT_UNEQUIP,
@@ -841,6 +842,42 @@ TOOLS: Final[tuple[ToolSpec, ...]] = (
         ),
         example={
             "item_ref": _EXAMPLE_ITEM,
+            "idempotency_key": "goal-1:step-2:attempt-1",
+        },
+    ),
+    ToolSpec(
+        name="pz_action_drink_source",
+        kind=ToolKind.WRITE,
+        risk=RiskClass.P2,
+        summary=(
+            "Fill a carried vessel at a sink, well or rain collector and drink from "
+            "it. Verified by thirst falling; the vessel's own volume proves nothing "
+            "here, because the fill raises it and the drink lowers it again."
+        ),
+        required_capability=DRINK_WORLD_SOURCE,
+        action=ActionName.CONSUME_DRINK_SOURCE,
+        long_running=True,
+        input_schema=_mutating(
+            {
+                "item_ref": _ref_schema(RefKind.ITEM, "The vessel to fill and drink from."),
+                "fraction": {
+                    "type": "number",
+                    "description": "How much of it to consume once filled.",
+                    "minimum": MIN_CONSUME_FRACTION,
+                    "maximum": 1.0,
+                    "default": 1.0,
+                },
+                "source_ref": _ref_schema(
+                    RefKind.SQUARE,
+                    "The square the water source stands on. It must be reported in "
+                    "the observation with the 'water_source' semantic.",
+                ),
+            },
+            required=("item_ref", "source_ref"),
+        ),
+        example={
+            "item_ref": _EXAMPLE_ITEM,
+            "source_ref": _EXAMPLE_SQUARE,
             "idempotency_key": "goal-1:step-2:attempt-1",
         },
     ),
