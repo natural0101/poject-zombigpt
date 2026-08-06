@@ -308,6 +308,37 @@ class TestRecovery:
         assert report.outcome is PlanOutcome.COMPLETED
         assert report.detail == "all 1 step(s) of the plan are done."
 
+    def test_a_completed_run_does_not_name_the_rule_that_carried_it_past_a_failure(self) -> None:
+        """``skip`` is not the only way a completed run leaves a failed step behind.
+
+        ``replan_once`` records the failure and then runs a *different* plan, so
+        a sentence that blamed ``on_failure: skip`` would be describing recovery
+        that did not happen. The line says a step failed; the step reports say
+        which one and why.
+        """
+        first = eat_plan(eat_step("s1", on_failure=FailureMode.REPLAN_ONCE))
+        replacement = eat_plan(
+            eat_step(
+                "s1",
+                args=ConsumeArgs(item_ref=item_ref("beans"), fraction=0.5),
+                success=SuccessCriterion(kind=SuccessKind.ITEM_CONSUMED),
+            )
+        )
+        harness = Harness(
+            plan=first,
+            proposals=(
+                PlanProposal.proposed(first, "eat it all"),
+                PlanProposal.proposed(replacement, "eat half"),
+            ),
+        ).world(hungry_observation(inventory=inventory()))
+
+        report = harness.run(goal=goal())
+
+        assert report.outcome is PlanOutcome.COMPLETED
+        assert [step.state for step in report.steps] == [StepState.FAILED, StepState.SKIPPED]
+        assert "are done" not in report.detail
+        assert "skip" not in report.detail
+
     def test_a_replan_that_proposes_the_step_that_just_failed_is_refused(self) -> None:
         # The scripted provider repeats its last plan, which is exactly the loop
         # §7.8 exists to catch: the critic recognises the signature and the run

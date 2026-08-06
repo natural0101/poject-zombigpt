@@ -11,6 +11,7 @@ local PZ = Harness.loadModules()
 Support.loadModules(Harness.root)
 
 local Model = PZ.ObserveModel
+local Protocol = PZ.Protocol
 local Json = PZ.Json
 local Refs = PZ.Refs
 
@@ -607,5 +608,61 @@ do
   equal(bogus.safety.mode, "OFF", "a mode outside the protocol falls back to OFF")
   equal(bogus.safety.danger_level, "none", "and an unknown danger level to none")
 end
+
+-- ---------------------------------------------------------------------------
+-- the danger floor
+--
+-- Until this existed, `safety.danger_level` was set by nothing and read by
+-- three consumers, so all three were told the situation was calm during a
+-- horde. These assertions are about the floor never reading *down*: overstating
+-- danger costs a refused action, understating it costs the character.
+-- ---------------------------------------------------------------------------
+
+Harness.group("the danger floor is derived, not defaulted")
+do
+  local here = { x = 100, y = 200, z = 0 }
+  local function floorOf(zombies)
+    return Model.dangerFloor({ zombies = zombies }, here)
+  end
+
+  equal(floorOf({}), Protocol.DANGER.NONE, "an empty street is not dangerous")
+  equal(floorOf({ { distance = 5 } }), Protocol.DANGER.LOW, "one at a distance is low")
+  equal(
+    floorOf({ { distance = 5 }, { distance = 5 }, { distance = 5 } }),
+    Protocol.DANGER.MEDIUM,
+    "a crowd at a distance is medium"
+  )
+  equal(
+    floorOf({ { distance = 1 } }),
+    Protocol.DANGER.HIGH,
+    "one within arm's reach is high even when it has not noticed you"
+  )
+  equal(
+    floorOf({ { distance = 6, chasing = true } }),
+    Protocol.DANGER.HIGH,
+    "a distant zombie that is chasing outranks a closer one that is not"
+  )
+
+  -- The distinction the Python assessment also makes: another floor is a
+  -- reason to be wary, not to abort.
+  equal(
+    floorOf({ { distance = 1, chasing = true, position = { x = 100, y = 200, z = 1 } } }),
+    Protocol.DANGER.LOW,
+    "a zombie chasing on the storey above is present but not closing"
+  )
+
+  equal(Model.dangerFloor(nil, here), Protocol.DANGER.NONE, "no nearby table is not danger")
+  equal(
+    Model.dangerFloor({ zombies = "not a list" }, here),
+    Protocol.DANGER.NONE,
+    "a malformed nearby table is not danger"
+  )
+  equal(
+    Model.dangerFloor({ zombies = { { distance = 1 } } }, nil),
+    Protocol.DANGER.HIGH,
+    "an unknown player floor treats every zombie as being on it"
+  )
+end
+
 
 Harness.finish("observe_model")

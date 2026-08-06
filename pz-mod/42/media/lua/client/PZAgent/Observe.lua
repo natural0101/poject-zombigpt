@@ -796,6 +796,17 @@ function Observe.context(agent, player, sessionId, seq, nowMs)
   if roots == nil and rootsError ~= nil then
     agent.safety.last_error = rootsError
   end
+  local nearby = Observe.nearbyFields(player, playerFields.position)
+  -- The safety snapshot is taken *after* this, because until it was set here
+  -- `danger_level` was written by nothing and read by three consumers: the
+  -- mod's own gate in Safety.mayStart, the action engine's threat threshold,
+  -- and the compact view the planner sees. All three were told the situation
+  -- was calm during a horde. The floor is deliberately coarser than
+  -- `pz_agent_core.safety.threat`, which stays authoritative for policy.
+  PZAgent.Safety.setDanger(
+    agent.safety,
+    PZAgent.ObserveModel.dangerFloor(nearby, playerFields.position)
+  )
   return {
     session_id = sessionId,
     seq = seq,
@@ -806,7 +817,7 @@ function Observe.context(agent, player, sessionId, seq, nowMs)
     game = gameFields,
     player = playerFields,
     inventory = roots,
-    nearby = Observe.nearbyFields(player, playerFields.position),
+    nearby = nearby,
     action = agent.queue_description,
     safety = PZAgent.Safety.snapshot(agent.safety, nowMs),
   }

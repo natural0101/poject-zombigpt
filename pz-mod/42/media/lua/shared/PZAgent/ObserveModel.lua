@@ -1206,4 +1206,68 @@ function ObserveModel.build(context)
   return document
 end
 
+--- Distances at which the mod's own danger floor changes rung.
+---
+--- Deliberately coarse. This is not the agent's threat policy — that lives in
+--- `pz_agent_core.safety.threat`, is richer, and is what the reflex guard and
+--- the planner use. This is the *floor* the mod applies to its own gate and its
+--- HUD, computed from what it already observed, so that
+--- `observation.safety.danger_level` carries a fact rather than a placeholder.
+---
+--- It errs upward. A mod that overstates danger refuses work the sidecar would
+--- have allowed, which is a nuisance; one that understates it starts work
+--- during a horde, which is the failure this rung exists to prevent.
+ObserveModel.DANGER_CLOSE = 2
+ObserveModel.DANGER_CROWD = 3
+
+--- Derive a conservative danger floor from an already-built `nearby` table.
+---
+--- Pure: it reads the same fields the observation carries, so a change to the
+--- reported shape cannot leave this reading something that is no longer there.
+--- Zombies on another floor are counted as present but never as closing —
+--- a horde one storey up is a reason to be wary, not to abort.
+function ObserveModel.dangerFloor(nearby, playerPosition)
+  local levels = protocol().DANGER
+  if type(nearby) ~= "table" or type(nearby.zombies) ~= "table" then
+    return levels.NONE
+  end
+
+  local playerFloor = nil
+  if type(playerPosition) == "table" then
+    playerFloor = playerPosition.z
+  end
+
+  local seen, chasing, close, crowd = 0, 0, 0, 0
+  for index = 1, #nearby.zombies do
+    local zombie = nearby.zombies[index]
+    if type(zombie) == "table" then
+      seen = seen + 1
+      local sameFloor = playerFloor == nil
+        or type(zombie.position) ~= "table"
+        or zombie.position.z == playerFloor
+      local distance = tonumber(zombie.distance)
+      if sameFloor and zombie.chasing == true then
+        chasing = chasing + 1
+      end
+      if sameFloor and distance ~= nil and distance <= ObserveModel.DANGER_CLOSE then
+        close = close + 1
+      end
+      if distance ~= nil then
+        crowd = crowd + 1
+      end
+    end
+  end
+
+  if seen == 0 then
+    return levels.NONE
+  end
+  if chasing > 0 or close > 0 then
+    return levels.HIGH
+  end
+  if crowd >= ObserveModel.DANGER_CROWD then
+    return levels.MEDIUM
+  end
+  return levels.LOW
+end
+
 return ObserveModel

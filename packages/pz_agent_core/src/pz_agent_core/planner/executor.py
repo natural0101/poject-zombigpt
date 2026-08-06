@@ -117,7 +117,8 @@ class PlanOutcome(StrEnum):
     """How a run ended."""
 
     #: Every step was accounted for: reached a terminal success, was skipped as
-    #: already satisfied, or failed and was carried past by ``on_failure: skip``.
+    #: already satisfied, or failed and was carried past by its ``on_failure``
+    #: rule — ``skip`` moves on, ``replan_once`` moves on into a different plan.
     #: The last of those is not a success, and :attr:`PlanReport.detail` says so.
     COMPLETED = "completed"
     #: The plan or its replacement was refused before anything ran.
@@ -596,17 +597,22 @@ class _RunState:
     def completion_detail(self, planned: int) -> str:
         """How the run ended, without describing a failed step as a finished one.
 
-        ``on_failure: skip`` carries the *run* past a step; it does not carry
-        the step to its postcondition. The run is still ``completed`` — every
-        step was accounted for — but the sentence a user is shown may not round
-        that up to "done", which would report a state nobody observed.
+        A run reaches this sentence once no step is left to try, which is not
+        the same as every step having reached its postcondition: ``on_failure:
+        skip`` carries the run past a failure, and ``replan_once`` carries it
+        past one into a different plan. Both leave a ``failed`` step report
+        behind, and the run is still ``completed`` — every step was accounted
+        for — but the sentence a user is shown may not round that up to "done",
+        which would report a state nobody observed. The mechanism that carried
+        the run past each one is deliberately not named here: the step reports
+        say which steps failed and why, and this line would have to guess.
         """
         failed = sum(1 for report in self.steps if report.state is StepState.FAILED)
         if not failed:
             return f"all {planned} step(s) of the plan are done."
         return (
-            f"the plan ran to its last step, but {failed} of them failed and were skipped "
-            "by their own on_failure rule rather than reaching what they were for."
+            f"the run reached the end of the plan, but {failed} step(s) failed along the way "
+            "and never reached what they were for."
         )
 
     def note(self, attempt: _Attempt) -> None:
