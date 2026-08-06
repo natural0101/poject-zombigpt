@@ -727,10 +727,11 @@ class SidecarLoop:
     def arm(self, mode: SessionMode = SessionMode.ASSISTED) -> ArmOutcome:
         """Grant authority to act. The only thing in this module that sets ``armed``.
 
-        Refused while the panic sentinel is present, while the game is silent,
-        and while the session manager still requires a re-arm it has not been
-        given — the last of which is cleared *here*, by this explicit call, and
-        nowhere else.
+        Refused while the panic sentinel is present and while the game is silent:
+        arming against a world nothing is reporting on grants authority over
+        nothing. The re-arm requirement §3.12 raises after a save change or a
+        game restart is cleared *here*, by this explicit call, and nowhere else —
+        which is the whole reason it exists as a flag rather than as a timeout.
         """
         attached = self._require_attached()
         if mode not in ARMABLE_MODES:

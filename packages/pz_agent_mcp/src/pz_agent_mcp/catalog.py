@@ -22,6 +22,20 @@ Three properties of the set are decided here rather than in the handlers:
   receive the arguments, imported rather than restated, so a schema cannot
   advertise a radius the adapter refuses.
 
+``risk`` is the *base* tier of the action a tool submits — the one its adapter
+declares — and never a worst case invented here. Several adapters assess a
+higher tier per call: ``movement.move_to`` is ``P3`` when the destination
+changes floor or leaves the safe radius, and ``inventory.transfer`` is ``P3``
+when the source is a world container. Neither is visible from the tool name, so
+neither can be published; what the descriptor states is the floor a caller needs
+before the permission engine has seen the arguments. Publishing the escalated
+tier instead would tell a caller holding a ``P2`` grant that a step across the
+room is out of reach, and the engine would then allow it.
+
+Every tool also carries one ``example``, validated against its own schema at
+import. An example that a tool's schema rejects is caught here rather than by
+the first client that pastes it.
+
 Deliberately absent, and each absence is a rule: no tool selects *which* item to
 eat, drink or read (that is deterministic policy in
 :mod:`pz_agent_core.policy`); no tool carries Lua, Python, shell, keystrokes or
@@ -34,7 +48,7 @@ offer what policy forbids.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Final
 
@@ -58,6 +72,8 @@ from pz_agent_core.capabilities.probes import (
 )
 from pz_agent_core.protocol import ActionName, JsonDict, RefKind, RiskClass
 from pz_agent_core.protocol.messages import MAX_LEASE_MS, MIN_LEASE_MS
+
+from .validation import validate_arguments
 
 __all__ = [
     "DEFAULT_MEMORY_RESULTS",
@@ -196,12 +212,22 @@ class ToolSpec:
     required_capability: str | None = None
     action: ActionName | None = None
     long_running: bool = False
+    example: JsonDict = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.long_running and self.action is None:
             raise ValueError(f"{self.name}: a long-running tool must name the action it submits")
         if self.kind is ToolKind.READ and self.action is not None:
             raise ValueError(f"{self.name}: a read tool must not submit an action")
+        try:
+            validate_arguments(self.input_schema, self.example)
+        except Exception as rejected:
+            # Reported as a construction error rather than relayed: a refused
+            # example is this module's bug, and a ToolFailure escaping an import
+            # would read like a caller's argument was rejected.
+            raise ValueError(f"{self.name}: the example its own schema rejects: {rejected}") from (
+                rejected
+            )
 
     @property
     def requires_armed(self) -> bool:
@@ -260,6 +286,10 @@ TOOLS: Final[tuple[ToolSpec, ...]] = (
             },
             "required": ["mode"],
         },
+        # ASSISTED rather than AUTONOMOUS: an example is the shape a client
+        # copies first, and the first arming should be the one that acts only
+        # when asked.
+        example={"mode": "ASSISTED"},
     ),
     ToolSpec(
         name="pz_session_disarm",
@@ -408,6 +438,10 @@ TOOLS: Final[tuple[ToolSpec, ...]] = (
             },
             required=("target",),
         ),
+        example={
+            "target": {"x": 1200, "y": 3400, "z": 0},
+            "idempotency_key": "goal-1:step-1:attempt-1",
+        },
     ),
     ToolSpec(
         name="pz_action_transfer",
@@ -432,6 +466,13 @@ TOOLS: Final[tuple[ToolSpec, ...]] = (
             },
             required=("item_ref", "destination_container_ref"),
         ),
+        example={
+            "item_ref": "item:00000000-0000-4000-8000-000000000001:worn:Back:99001:4210:0",
+            "destination_container_ref": (
+                "container:00000000-0000-4000-8000-000000000001:player-main"
+            ),
+            "idempotency_key": "goal-1:step-1:attempt-1",
+        },
     ),
     ToolSpec(
         name="pz_action_eat",
@@ -458,6 +499,10 @@ TOOLS: Final[tuple[ToolSpec, ...]] = (
             },
             required=("item_ref",),
         ),
+        example={
+            "item_ref": "item:00000000-0000-4000-8000-000000000001:worn:Back:99001:4210:0",
+            "idempotency_key": "goal-1:step-2:attempt-1",
+        },
     ),
     ToolSpec(
         name="pz_action_drink",
@@ -483,6 +528,10 @@ TOOLS: Final[tuple[ToolSpec, ...]] = (
             },
             required=("item_ref",),
         ),
+        example={
+            "item_ref": "item:00000000-0000-4000-8000-000000000001:worn:Back:99001:4210:0",
+            "idempotency_key": "goal-1:step-2:attempt-1",
+        },
     ),
     ToolSpec(
         name="pz_action_read",
@@ -505,6 +554,10 @@ TOOLS: Final[tuple[ToolSpec, ...]] = (
             },
             required=("item_ref",),
         ),
+        example={
+            "item_ref": "item:00000000-0000-4000-8000-000000000001:worn:Back:99001:4210:0",
+            "idempotency_key": "goal-1:step-1:attempt-1",
+        },
     ),
     ToolSpec(
         name="pz_action_wait",
@@ -527,6 +580,7 @@ TOOLS: Final[tuple[ToolSpec, ...]] = (
             },
             required=("game_seconds",),
         ),
+        example={"game_seconds": 30, "idempotency_key": "goal-1:step-3:attempt-1"},
     ),
     ToolSpec(
         name="pz_action_cancel",
@@ -552,6 +606,7 @@ TOOLS: Final[tuple[ToolSpec, ...]] = (
             },
             required=(),
         ),
+        example={"idempotency_key": "goal-1:cancel:attempt-1"},
     ),
     # --- plans ------------------------------------------------------------
     ToolSpec(
@@ -602,6 +657,7 @@ TOOLS: Final[tuple[ToolSpec, ...]] = (
             required=("goal",),
             lease=False,
         ),
+        example={"goal": "eat something safe", "idempotency_key": "goal-1:attempt-1"},
     ),
     ToolSpec(
         name="pz_plan_status",

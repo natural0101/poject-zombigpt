@@ -8,8 +8,9 @@ handover point between work sessions: read it first, update it last.
 green · `wip` in progress · `todo` not started · `live` blocked on a step that
 physically requires a running game.
 
-Last updated: phases 0-8 complete. 1938 Python tests, 1007 Lua assertions,
-`scripts/check.sh` green (exit code checked before every commit).
+Last updated: 28 of 30 tasks closed; T029 and T030 are blocked on a live game,
+not deferred. 2338 Python tests, 1269 Lua assertions, `scripts/check.sh` green.
+See FINAL_IMPLEMENTATION_REPORT.md.
 
 ## Status
 
@@ -37,14 +38,14 @@ Last updated: phases 0-8 complete. 1938 Python tests, 1007 Lua assertions,
 | T020 | Implement deterministic reflex guard | 6 | T009, T013, T014 | **done** |
 | T021 | Implement MCP server | 5 | T011, T014 | **done** |
 | T022 | Implement permission and autonomy policy | 6 | T017–T020 | **done** |
-| T023 | Implement typed planner and critic | 7 | T021, T022 | todo |
+| T023 | Implement typed planner and critic | 7 | T021, T022 | **done** |
 | T024 | Implement memory store | 7 | T012, T013, T023 | **done** |
 | T025 | Implement TeamON voice adapter interface | 8 | T021, T023 | **done** |
-| T026 | Implement installer and launcher | 9 | T004, T006, T007, T010 | todo |
+| T026 | Implement installer and launcher | 9 | T004, T006, T007, T010 | **done** |
 | T027 | Implement diagnostics and support bundle | 9 | T004, T008, T014 | **done** |
-| T028 | Build live game smoke harness | 9 | T015–T019 | wip |
-| T029 | Run endurance and recovery tests | 9 | T020, T022, T028 | todo |
-| T030 | Produce release artifact and final report | 9 | T021, T025–T027, T029 | todo |
+| T028 | Build live game smoke harness | 9 | T015–T019 | **done** |
+| T029 | Run endurance and recovery tests | 9 | T020, T022, T028 | **live** |
+| T030 | Produce release artifact and final report | 9 | T021, T025–T027, T029 | **live** |
 
 ## Completed in detail
 
@@ -174,11 +175,8 @@ side exists hides the gap rather than closing it.
 
 | Task | Built | Missing |
 | --- | --- | --- |
-| T023 planner and critic | The typed-plan boundary it plugs into: MCP tools, the permission engine, the action lifecycle | The planner and critic themselves, and the `provider = "none"` deterministic fallback |
-| T026 installer and launcher | `pz-agent install-mod` / `uninstall-mod`, which copy the bridge and remove exactly what they added | The Windows self-contained package, launcher and uninstaller under `installer/` |
-| T028 game-smoke harness | Sixteen scenario definitions with their evidence requirements | The runner that drives them and writes evidence files |
-| T029 endurance | The scenario definition (`S99_endurance.yaml`) and every bound it asserts | The run itself, which needs a live game |
-| T030 release | The gate and its rules in `docs/RELEASE.md` | The artefact, the checksums and the final report |
+| T029 endurance | `S99_endurance.yaml` and every bound it asserts | The run itself, which needs a live game |
+| T030 release | The artefact, its checksums and `FINAL_IMPLEMENTATION_REPORT.md` | The smoke and endurance evidence T029 would produce |
 
 Seven action adapters are registered — `movement.move_to`, `movement.move_near`,
 `inventory.transfer`, `inventory.ensure_main`, `consume.eat`, `consume.drink`,

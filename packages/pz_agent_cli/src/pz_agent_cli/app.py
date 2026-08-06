@@ -46,8 +46,9 @@ from .modinstall import (
 from .output import Printer
 from .runtime import DEFAULT_LIMITS, LoopLimits, SidecarLoop
 from .saves import run_backup_save, run_restore_save
-from .status import run_status
-from .supervisor import SidecarSupervisor, SupervisorState
+from .smoke import default_scenario_dir, run_smoke
+from .status import game_liveness, run_status
+from .supervisor import GameRunningProbe, SidecarSupervisor, SupervisorState, probe_game_running
 from .support import DEFAULT_LOG_LINES, DEFAULT_REPLAY_LIMIT, run_logs, run_replay
 
 PROGRAM: Final = "pz-agent"
@@ -201,7 +202,44 @@ def build_parser() -> argparse.ArgumentParser:
     validate = subparsers.add_parser("validate-config", help="validate config.toml before start")
     validate.add_argument("--json", action="store_true")
 
+    _add_smoke_parser(subparsers)
+
     return parser
+
+
+def _add_smoke_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """The ``smoke`` subcommand, split out to keep ``build_parser`` readable."""
+    smoke = subparsers.add_parser(
+        "smoke",
+        help="validate the game-smoke scenarios and report what a live run would ask of you",
+    )
+    smoke.add_argument(
+        "--scenario-dir",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="scenario directory (default: tests/game-smoke in a source checkout)",
+    )
+    smoke.add_argument(
+        "--evidence-dir",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="write one evidence file per scenario here, including the unrun ones",
+    )
+    smoke.add_argument(
+        "--scenario",
+        action="append",
+        default=None,
+        metavar="ID",
+        help="run only this scenario; repeatable. Everything else is still reported as not run",
+    )
+    # A live run drives a session this process does not own, so --dry-run is
+    # the only mode that does anything here. It is not the default: asking for
+    # a live run and being told plainly why it cannot happen is better than
+    # silently downgrading to a validation pass the caller did not request.
+    smoke.add_argument("--dry-run", action="store_true", help="validate without touching a game")
+    smoke.add_argument("--json", action="store_true")
 
 
 def run_validate_config(ctx: CliContext, *, as_json: bool) -> int:
@@ -436,6 +474,7 @@ def run_start(ctx: CliContext, *, foreground: bool, ticks: int | None, as_json: 
     if foreground:
         return _start_foreground(ctx, workspace, ticks=ticks, as_json=as_json, printer=printer)
     outcome = supervisor.start(_sidecar_argv(workspace))
+    game = probe_game(ctx, workspace)
     if as_json:
         printer.json(
             {
@@ -443,7 +482,8 @@ def run_start(ctx: CliContext, *, foreground: bool, ticks: int | None, as_json: 
                 "detail": workspace.redactor.text(outcome.detail),
                 "mode": SessionMode.OBSERVE.value,
                 "record": None if outcome.record is None else outcome.record.to_dict(),
-                "mcp": _mcp_snippet(workspace),
+                "game": game.to_dict(),
+                "mcp": _mcp_snippet(workspace, redacted=True),
             }
         )
         return EXIT_OK if outcome.started else EXIT_FAILURE
@@ -452,11 +492,21 @@ def run_start(ctx: CliContext, *, foreground: bool, ticks: int | None, as_json: 
         return EXIT_FAILURE
     printer.line(outcome.detail)
     printer.field("mode", "OBSERVE — it will not act until you run 'pz-agent arm'")
+    printer.field("game", game.detail)
     printer.field("logs", workspace.redact(supervisor.spawn_log))
     printer.line("")
     printer.line("MCP stdio server, for a client that speaks it:")
-    printer.lines(f"  {line}" for line in _mcp_snippet(workspace))
+    printer.lines(f"  {line}" for line in _mcp_snippet(workspace, redacted=False))
     return EXIT_OK
+
+
+def probe_game(ctx: CliContext, workspace: Workspace) -> GameRunningProbe:
+    """Whether Project Zomboid is open, from the heartbeat first and the process table second.
+
+    The same three-valued answer ``restore-save`` needs, reported here because
+    ``start`` is where a user finds out the sidecar has nothing to attach to yet.
+    """
+    return probe_game_running(heartbeat=game_liveness(ctx, workspace))
 
 
 def _start_foreground(
@@ -498,13 +548,20 @@ def _start_foreground(
     return EXIT_OK
 
 
-def _mcp_snippet(workspace: Workspace) -> tuple[str, ...]:
-    """The stdio server configuration §14.3 asks ``start`` to print."""
+def _mcp_snippet(workspace: Workspace, *, redacted: bool) -> tuple[str, ...]:
+    """The stdio server configuration §14.3 asks ``start`` to print.
+
+    Printed with real paths so it can be pasted into a client's configuration,
+    and redacted in the ``--json`` form, which is the one that ends up in a bug
+    report — an interpreter path carries the account name.
+    """
+    interpreter = workspace.redactor.text(sys.executable) if redacted else sys.executable
+    state_dir = workspace.redact(workspace.state_dir) if redacted else str(workspace.state_dir)
     return (
         '"pz-agent": {',
-        f'  "command": "{sys.executable}",',
+        f'  "command": "{interpreter}",',
         '  "args": ["-m", "pz_agent_mcp"],',
-        f'  "env": {{"PZ_AGENT_STATE_DIR": "{workspace.redact(workspace.state_dir)}"}}',
+        f'  "env": {{"PZ_AGENT_STATE_DIR": "{state_dir}"}}',
         "}",
     )
 
@@ -620,6 +677,16 @@ def dispatch(ctx: CliContext, args: argparse.Namespace) -> int:
         return run_replay(ctx, trace=args.trace, as_json=args.json, limit=args.limit)
     if command == "validate-config":
         return run_validate_config(ctx, as_json=args.json)
+    if command == "smoke":
+        return run_smoke(
+            scenario_dir=args.scenario_dir or default_scenario_dir(),
+            evidence_dir=args.evidence_dir,
+            only=args.scenario,
+            dry_run=args.dry_run,
+            timestamp_ms=ctx.clock_ms(),
+            emit=Printer(ctx.stdout, ctx.stderr).line,
+            as_json=args.json,
+        )
     # Unreachable through the parser: every choice it accepts is handled above,
     # and an unknown one is rejected before dispatch.
     raise AssertionError(f"unrouted command: {command!r}")
