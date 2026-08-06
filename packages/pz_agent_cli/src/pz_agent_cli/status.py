@@ -6,6 +6,11 @@ that distinguishes "the mod is not loaded" from "no save is open" from "the
 sidecar died". It never infers a state it did not read — an absent heartbeat is
 reported as absent, not as "the game is closed", because a game sitting on the
 main menu writes no heartbeat either.
+
+The capability line follows the same rule and is read from the record the
+sidecar wrote, never re-derived: this command must not scan a Lua tree to answer
+a question about what already happened, and a second scan here could disagree
+with the one the running sidecar is actually gated on.
 """
 
 from __future__ import annotations
@@ -24,6 +29,7 @@ from pz_agent_core.session.lock import LockError, LockInfo
 from .context import EXIT_FAILURE, EXIT_OK, CliContext, Workspace, resolve_workspace
 from .doctor import environment_facts
 from .output import Printer
+from .runtime import CAPABILITY_FILE_NAME, CapabilityRecord, read_capability_record
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,6 +69,9 @@ class StatusReport:
     lock: LockInfo | None = None
     panic_stop: bool = False
     environment: JsonDict | None = None
+    #: What the last sidecar resolved about the game's API, or None when none
+    #: has ever recorded it here. Absent and unresolved are different answers.
+    capabilities: CapabilityRecord | None = None
 
     @property
     def attached(self) -> bool:
@@ -83,6 +92,7 @@ class StatusReport:
             "session_problem": self.session_problem,
             "lock": None if self.lock is None else self.lock.to_dict(),
             "environment": self.environment or {},
+            "capabilities": None if self.capabilities is None else self.capabilities.to_dict(),
         }
 
 
@@ -106,11 +116,16 @@ def game_liveness(ctx: CliContext, workspace: Workspace) -> PeerLiveness | None:
 def collect_status(ctx: CliContext, workspace: Workspace) -> StatusReport:
     """Read the exchange directory once and report what was there."""
     root = workspace.ipc_root
+    # Read in both branches: the capability record lives in the state directory,
+    # so a machine whose exchange directory has never existed can still show
+    # that a sidecar tried and could not resolve anything.
+    capabilities = read_capability_record(workspace.state_dir / CAPABILITY_FILE_NAME)
     if root is None or not root.is_dir():
         return StatusReport(
             ipc_root=workspace.redact(root),
             exists=False,
             environment=environment_facts(workspace),
+            capabilities=capabilities,
         )
     layout = IpcLayout(root)
     monitor = HeartbeatMonitor(layout, clock=ctx.clock_ms)
@@ -126,6 +141,7 @@ def collect_status(ctx: CliContext, workspace: Workspace) -> StatusReport:
         lock=lock,
         panic_stop=layout.panic_stop.is_file(),
         environment=environment_facts(workspace),
+        capabilities=capabilities,
     )
 
 
@@ -167,6 +183,7 @@ def render_status(report: StatusReport, printer: Printer) -> None:
     printer.field("exchange directory", report.ipc_root or "(none)")
     if not report.exists:
         printer.field("state", "no exchange directory; nothing has ever connected")
+        _render_capabilities(report.capabilities, printer)
         printer.line()
         printer.line("Run pz-agent doctor — it distinguishes a missing Zomboid directory")
         printer.line("from a mod that has never been installed.")
@@ -197,7 +214,35 @@ def render_status(report: StatusReport, printer: Printer) -> None:
         printer.field("sidecar lock", f"held by pid {report.lock.pid}")
     if report.panic_stop:
         printer.field("panic stop", "a panic-stop sentinel is present")
+    _render_capabilities(report.capabilities, printer)
     printer.field("attached", "yes" if report.attached else "no")
+
+
+def _render_capabilities(record: CapabilityRecord | None, printer: Printer) -> None:
+    """The capability line, which never reads an absence as a verdict.
+
+    Three distinct states, printed as three distinct sentences: nothing has ever
+    resolved them here, a sidecar tried and could not, or a sidecar did and this
+    is what it found. Collapsing the middle one into the first would tell a user
+    whose game files are unreadable that they simply have not started yet, and
+    collapsing it into the third would show them an empty capability list with no
+    hint that the list is empty because nothing was looked at.
+    """
+    if record is None:
+        printer.field("capabilities", "no sidecar has resolved them in this state directory")
+        return
+    if not record.resolved:
+        printer.field("capabilities", f"NOT RESOLVED — {record.detail}")
+        printer.line("    every capability-gated action is refused until this is fixed")
+        return
+    printer.field(
+        "capabilities",
+        f"{len(record.usable)} usable, {len(record.verified)} verified by a live run",
+    )
+    if record.verified:
+        printer.field("verified", ", ".join(record.verified))
+    for note in record.notes:
+        printer.field("capability note", note)
 
 
 def run_status(ctx: CliContext, *, as_json: bool) -> int:

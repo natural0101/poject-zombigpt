@@ -35,7 +35,7 @@ from pz_agent_core.version import PRODUCT_VERSION
 
 from .config import ConfigValidation, load_config
 from .context import EXIT_FAILURE, EXIT_OK, EXIT_USAGE, CliContext, Workspace, resolve_workspace
-from .doctor import run_checks
+from .doctor import check_capabilities, run_checks
 from .livetest import add_live_test_parser, run_live_test
 from .modinstall import (
     ForeignFileError,
@@ -45,7 +45,13 @@ from .modinstall import (
     uninstall_mod,
 )
 from .output import Printer
-from .runtime import DEFAULT_LIMITS, LoopLimits, SidecarLoop
+from .runtime import (
+    CAPABILITY_FILE_NAME,
+    DEFAULT_LIMITS,
+    CapabilityLedger,
+    LoopLimits,
+    SidecarLoop,
+)
 from .saves import run_backup_save, run_restore_save
 from .smoke import default_scenario_dir, run_smoke
 from .status import game_liveness, run_status
@@ -413,17 +419,59 @@ def build_supervisor(ctx: CliContext, workspace: Workspace) -> SidecarSupervisor
     return SidecarSupervisor(workspace.state_dir, clock=ctx.clock_ms)
 
 
+def build_capabilities(workspace: Workspace) -> CapabilityLedger:
+    """Resolve this machine's capability surface for a sidecar session.
+
+    ``doctor``'s check is reused rather than re-implemented: it already scans the
+    installed Lua read-only, resolves every declared probe against it and writes
+    the report, and a second scanner here would be a second opinion about the
+    same install that nothing compares.
+
+    A scan that cannot run — no installation found, ``media/lua`` unreadable —
+    produces a ledger with no report, which answers False to every capability.
+    That is the only honest direction: allowing everything because the scan
+    failed is precisely the assumption
+    :func:`~pz_agent_core.actions.engine.deny_capability` exists to prevent. The
+    reason is carried on the ledger and published to the state directory, so
+    ``pz-agent status`` says capabilities were not resolved *and why* rather than
+    the sidecar refusing every command with no explanation anywhere.
+    """
+    check, report, notes = check_capabilities(workspace)
+    redact = workspace.redactor.text
+    if report is None:
+        detail = redact(f"the capability scan could not run: {check.detail}. {check.remediation}")
+    else:
+        detail = redact(f"{check.code}: {check.detail}")
+    install = workspace.install_dir
+    return CapabilityLedger(
+        record_path=workspace.state_dir / CAPABILITY_FILE_NAME,
+        report=report,
+        detail=detail,
+        report_path=workspace.capability_report_path,
+        protected_roots=(install,) if install is not None else (),
+        notes=tuple(redact(note) for note in notes),
+    )
+
+
 def build_loop(ctx: CliContext, workspace: Workspace, *, limits: LoopLimits) -> SidecarLoop:
     """Assemble the loop from the parts that already exist.
 
     The registry is built here rather than shared, because registration is
     single-assignment: a module-level singleton reused by two sessions would
     raise on the second one.
+
+    The capability ledger is built here for the opposite reason: it is the one
+    thing the loop cannot default to safely. Every game adapter names a
+    ``required_capability``, and the engine's fail-closed default refuses all of
+    them, so a sidecar assembled without a ledger attaches, arms and then
+    declines every action a user asks for.
     """
     ipc_root = workspace.ipc_root
     if ipc_root is None:
         raise InstallError("no Zomboid directory was found, so there is no exchange directory")
     registry = register_game_adapters(register_builtins(AdapterRegistry()))
+    capabilities = build_capabilities(workspace)
+    capabilities.publish()
     return SidecarLoop(
         layout=IpcLayout(ipc_root),
         state_dir=workspace.state_dir,
@@ -431,6 +479,7 @@ def build_loop(ctx: CliContext, workspace: Workspace, *, limits: LoopLimits) -> 
         clock=ctx.clock_ms,
         limits=limits,
         pid_file=build_supervisor(ctx, workspace).pid_file,
+        capabilities=capabilities,
     )
 
 

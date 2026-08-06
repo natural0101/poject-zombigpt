@@ -45,11 +45,11 @@ from __future__ import annotations
 
 import time
 from collections import deque
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path
-from typing import Final, Protocol, TypeAlias
+from typing import Any, Final, Protocol, TypeAlias
 
 from pz_agent_core.actions.adapter import AdapterRegistry
 from pz_agent_core.actions.engine import (
@@ -60,6 +60,17 @@ from pz_agent_core.actions.engine import (
     Dispatch,
     deny_capability,
 )
+from pz_agent_core.capabilities import (
+    MAX_NOTES,
+    Capability,
+    CapabilityError,
+    CapabilityReport,
+    ReportIOError,
+    ScanError,
+    confirm,
+    probe_for,
+    save_report,
+)
 from pz_agent_core.ipc.clocks import Clock, system_clock_ms
 from pz_agent_core.ipc.journal import JournalReader
 from pz_agent_core.ipc.layout import IpcLayout
@@ -69,7 +80,10 @@ from pz_agent_core.observation.store import DEFAULT_WINDOW, ObservationStore
 from pz_agent_core.protocol import (
     ActionName,
     ActionResult,
+    ActionStatus,
+    CapabilityState,
     Command,
+    JsonDict,
     Observation,
     ProtocolError,
     ReasonCode,
@@ -92,6 +106,12 @@ from .supervisor import (
     ControlKind,
     ControlRequest,
     PidFile,
+    # The state directory's whole-document read and write. Borrowed rather than
+    # repeated: the supervisor's files and this module's capability record share
+    # one directory, and two independent scratch-and-replace implementations in
+    # one directory is how one of them starts reading the other's temp file.
+    _read_json,
+    _write_json,
 )
 
 #: Wall time between ticks. Half the mod's 4 Hz observation cadence, so a tick
@@ -421,6 +441,290 @@ class JournalObservationSource:
 
 
 # ---------------------------------------------------------------------------
+# the capability ledger
+# ---------------------------------------------------------------------------
+
+#: Where the sidecar writes what it resolved about the game's API, under the
+#: state directory beside the pid and control files. Deliberately not in the
+#: exchange directory: uninstalling the mod must not erase the record of what
+#: the last session could and could not do.
+CAPABILITY_FILE_NAME: Final = "sidecar.capabilities.json"
+
+
+@dataclass(frozen=True, slots=True)
+class CapabilityRecord:
+    """What one sidecar established about the game's API, as ``status`` reads it.
+
+    ``resolved`` is the field nothing else may be inferred from. A session with
+    no usable capabilities because the scan found none and a session with no
+    usable capabilities because the scan never ran produce the same empty list
+    and opposite facts, and only the second one is something to go and fix. A
+    sidecar that quietly allowed everything after a failed scan would be the
+    assumption :func:`~pz_agent_core.actions.engine.deny_capability` exists to
+    prevent; a sidecar that quietly refused everything without saying so would
+    be the same silence pointed the other way.
+    """
+
+    resolved: bool
+    detail: str
+    build: str = ""
+    revision: int = 0
+    usable: tuple[str, ...] = ()
+    verified: tuple[str, ...] = ()
+    refused: Mapping[str, str] = field(default_factory=dict)
+    notes: tuple[str, ...] = ()
+
+    @classmethod
+    def unresolved(cls, detail: str, *, notes: Sequence[str] = ()) -> CapabilityRecord:
+        """The record for a session that established nothing. *detail* says why."""
+        if not detail:
+            raise LoopError("an unresolved capability record must say why it is unresolved")
+        return cls(resolved=False, detail=detail, notes=tuple(notes)[:MAX_NOTES])
+
+    @classmethod
+    def from_report(
+        cls,
+        report: CapabilityReport,
+        detail: str,
+        *,
+        notes: Sequence[str] = (),
+    ) -> CapabilityRecord:
+        """Summarise *report* for the status readout.
+
+        ``verified`` is listed separately from ``usable`` even though every
+        verified capability is usable: they are different claims. Usable means
+        the symbols are on this install; verified means an action actually ran
+        and its postcondition was observed in this session.
+        """
+        verified = tuple(
+            sorted(c.name for c in report.capabilities if c.state is CapabilityState.VERIFIED)
+        )
+        return cls(
+            resolved=True,
+            detail=detail,
+            build=report.build,
+            revision=report.revision,
+            usable=report.usable_names(),
+            verified=verified,
+            refused=dict(report.unusable_reasons()),
+            notes=tuple(notes)[:MAX_NOTES],
+        )
+
+    def to_dict(self) -> JsonDict:
+        return {
+            "resolved": self.resolved,
+            "detail": self.detail,
+            "build": self.build,
+            "revision": self.revision,
+            "usable": list(self.usable),
+            "verified": list(self.verified),
+            "refused": dict(self.refused),
+            "notes": list(self.notes),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> CapabilityRecord:
+        """Parse a record this process did not necessarily write.
+
+        Raises:
+            LoopError: for anything malformed. A half-understood record would be
+                read as "resolved" by whichever field happened to survive, and
+                that is the direction that lies.
+        """
+        resolved = payload.get("resolved")
+        detail = payload.get("detail")
+        if not isinstance(resolved, bool):
+            raise LoopError("a capability record must say whether capabilities were resolved")
+        if not isinstance(detail, str):
+            raise LoopError("a capability record must carry a detail string")
+        revision = payload.get("revision", 0)
+        if isinstance(revision, bool) or not isinstance(revision, int):
+            raise LoopError("a capability record's revision must be an integer")
+        refused = payload.get("refused", {})
+        if not isinstance(refused, Mapping):
+            raise LoopError("a capability record's refusals must be an object")
+        return cls(
+            resolved=resolved,
+            detail=detail,
+            build=_as_text(payload.get("build", ""), "build"),
+            revision=revision,
+            usable=_as_names(payload.get("usable", []), "usable"),
+            verified=_as_names(payload.get("verified", []), "verified"),
+            refused={
+                _as_text(name, "refused key"): _as_text(reason, "refused reason")
+                for name, reason in refused.items()
+            },
+            notes=_as_names(payload.get("notes", []), "notes")[:MAX_NOTES],
+        )
+
+
+def _as_text(value: object, field_name: str) -> str:
+    if not isinstance(value, str):
+        raise LoopError(f"a capability record's {field_name} must be a string")
+    return value
+
+
+def _as_names(value: object, field_name: str) -> tuple[str, ...]:
+    if isinstance(value, (str, bytes)) or not isinstance(value, Sequence):
+        raise LoopError(f"a capability record's {field_name} must be an array")
+    return tuple(_as_text(item, field_name) for item in value)
+
+
+def read_capability_record(path: Path) -> CapabilityRecord | None:
+    """The record at *path*, or None when there is nothing usable to read.
+
+    None means "no sidecar has resolved capabilities in this state directory",
+    which is a different statement from "capabilities were not resolved" and is
+    reported as such: nothing has run yet, so nothing has been established.
+    """
+    payload = _read_json(path)
+    if payload is None:
+        return None
+    try:
+        return CapabilityRecord.from_dict(payload)
+    except LoopError:
+        return None
+
+
+def _mod_shaped_ack(result: ActionResult) -> ActionResult | None:
+    """The engine's own result, re-stated at the level a probe reads.
+
+    :meth:`~pz_agent_core.actions.engine.ActionEngine._success` attaches
+    ``Evidence.to_payload()``, so a sidecar ``ActionResult`` carries the observed
+    values one level down under ``observed``, beside the adapter's ``kind`` and
+    the observation sequence. :meth:`RuntimeConfirmation.missing_keys` is a
+    top-level exact match, so handing it that document reports *every* declared
+    key missing, for every probe, and silently — the capability would simply
+    never verify. ``tests/contract/test_capability_evidence_agreement.py`` pins
+    both shapes; this returns the one that fits.
+    """
+    observed = result.evidence.get("observed")
+    if not isinstance(observed, dict) or not observed:
+        return None
+    return replace(result, evidence=dict(observed))
+
+
+@dataclass
+class CapabilityLedger:
+    """The single answer to "may this capability be used", and the files it keeps.
+
+    Two documents, because they answer different questions. The *report* at
+    :attr:`report_path` is the evidence ledger ``doctor`` generates and this
+    class updates as probes confirm — it survives restarts and carries the scan
+    findings each claim rests on. The *record* at :attr:`record_path` is this
+    session's summary of it, written where ``status`` can read it without
+    re-scanning a Lua tree.
+
+    ``report is None`` is the fail-closed state: the scan could not run, so
+    :meth:`usable` answers False to everything and :attr:`detail` says why. That
+    is the whole reason this class exists rather than a bare ``report.usable``
+    bound method — a scan that fails has no report to bind to, and the obvious
+    fallback of allowing everything is the assumption the capability system was
+    built to refuse.
+    """
+
+    record_path: Path
+    report: CapabilityReport | None = None
+    detail: str = ""
+    report_path: Path | None = None
+    #: Directories this project only ever reads. The game install goes here, so
+    #: a confirmation can never write the report inside it.
+    protected_roots: tuple[Path, ...] = ()
+    notes: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.detail:
+            raise LoopError("a capability ledger must say how it reached its report, or why not")
+
+    @property
+    def resolved(self) -> bool:
+        return self.report is not None
+
+    def usable(self, name: str) -> bool:
+        """The :data:`~pz_agent_core.actions.engine.CapabilityCheck` for this session."""
+        report = self.report
+        return report is not None and report.usable(name)
+
+    def record(self) -> CapabilityRecord:
+        report = self.report
+        if report is None:
+            return CapabilityRecord.unresolved(self.detail, notes=self.notes)
+        return CapabilityRecord.from_report(report, self.detail, notes=self.notes)
+
+    def publish(self) -> CapabilityRecord:
+        """Write the record where ``status`` reads it. Returns what was written.
+
+        A record that cannot be written is noted and not raised: the sidecar
+        losing its status file is not a reason to stop driving the game, and the
+        note travels with the next attempt.
+        """
+        record = self.record()
+        try:
+            _write_json(self.record_path, record.to_dict())
+        except OSError as exc:
+            self._note(f"the capability record could not be written ({exc.strerror or exc})")
+        return record
+
+    def confirm_capability(
+        self, capability: str, action: ActionName, result: ActionResult
+    ) -> Capability | None:
+        """Fold one action's outcome into *capability*'s claim.
+
+        Returns the capability as it now stands, or None when this result says
+        nothing about it. The distinction matters more than it looks: several
+        adapters share one capability, and only the action a probe names as its
+        own confirmation carries proof about it. ``movement.move_near`` and
+        ``container.open`` both require ``move_to_square``, whose probe confirms
+        on ``movement.move_to`` — handing their acks to
+        :func:`~pz_agent_core.capabilities.probes.confirm` would be handing it an
+        ack for the wrong action, which it rightly refuses, and the refusal
+        *demotes*. A successful sidestep would then destroy a verification a
+        real walk had earned a tick earlier.
+        """
+        report = self.report
+        if report is None or result.status is not ActionStatus.SUCCEEDED:
+            return None
+        try:
+            probe = probe_for(capability)
+        except CapabilityError as exc:
+            # An adapter naming a capability no probe declares. Nothing can ever
+            # confirm it, and the mismatch is a defect worth seeing in status.
+            self._note(str(exc))
+            return None
+        if probe.confirmation.action is not action:
+            return None
+        static = report.get(capability)
+        if static is None:
+            self._note(f"{capability}: the report holds no entry for this probe to confirm")
+            return None
+        ack = _mod_shaped_ack(result)
+        if ack is None:
+            self._note(f"{capability}: the result carried no observed values to confirm it with")
+            return None
+        confirmed = confirm(probe, static, ack, build=report.build)
+        self.report = report.with_capabilities([confirmed])
+        self._persist_report()
+        self.publish()
+        return confirmed
+
+    def _persist_report(self) -> None:
+        path = self.report_path
+        report = self.report
+        if path is None or report is None:
+            return
+        try:
+            save_report(path, report, protected_roots=self.protected_roots)
+        except (ReportIOError, ScanError) as exc:
+            # ``ScanError`` covers ``WriteRefused``: the report path resolving
+            # inside the game directory is a wiring defect, and it is reported
+            # rather than allowed to end the session.
+            self._note(f"the capability report could not be written ({exc})")
+
+    def _note(self, note: str) -> None:
+        self.notes = (*self.notes, note)[-MAX_NOTES:]
+
+
+# ---------------------------------------------------------------------------
 # outcomes
 # ---------------------------------------------------------------------------
 
@@ -523,6 +827,7 @@ class SidecarLoop:
     guard: ReflexGuard = field(default_factory=ReflexGuard)
     planner: Planner | None = None
     capability_check: CapabilityCheck = deny_capability
+    capabilities: CapabilityLedger | None = None
     sessions: SessionManager | None = None
     monitor: HeartbeatMonitor | None = None
     lock: SidecarLock | None = None
@@ -537,6 +842,13 @@ class SidecarLoop:
     _events: deque[SafetyEvent] = field(init=False)
 
     def __post_init__(self) -> None:
+        if self.capabilities is not None:
+            if self.capability_check is not deny_capability:
+                # Two answers to "may this run" is the defect this wiring exists
+                # to close, so the loop refuses to hold both rather than picking
+                # one and leaving the other looking connected.
+                raise LoopError("pass either a capability ledger or a capability_check, not both")
+            self.capability_check = self.capabilities.usable
         self._budget = ActionBudget(
             self.limits.max_actions_per_window, self.limits.action_window_ms
         )
@@ -994,7 +1306,30 @@ class SidecarLoop:
         if request is None:
             return ()
         self._budget.spend(now_ms)
-        return (attached.engine.execute(request),)
+        result = attached.engine.execute(request)
+        self._confirm(request.action, result)
+        return (result,)
+
+    def _confirm(self, action: ActionName, result: ActionResult) -> Capability | None:
+        """Offer one outcome to the ledger as evidence about a capability.
+
+        The static check said the symbols are on disk, which is a reason to try;
+        this is the other half — a live run is the only thing in the project that
+        may raise a capability to ``verified``, and without this call
+        :func:`~pz_agent_core.capabilities.probes.confirm` is never reached
+        outside a test and nothing ever leaves ``available_unverified``.
+
+        Nothing is offered for a result that is not a success: the engine only
+        constructs one after an adapter observed the postcondition, so an
+        earlier exit is a claim about a world nobody looked at.
+        """
+        ledger = self.capabilities
+        if ledger is None or result.status is not ActionStatus.SUCCEEDED:
+            return None
+        capability = self.registry.get(action).required_capability
+        if capability is None:
+            return None
+        return ledger.confirm_capability(capability, action, result)
 
     def _publish_heartbeat(self) -> None:
         attached = self._attached
