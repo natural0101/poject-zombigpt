@@ -10,7 +10,10 @@ main menu writes no heartbeat either.
 The capability line follows the same rule and is read from the record the
 sidecar wrote, never re-derived: this command must not scan a Lua tree to answer
 a question about what already happened, and a second scan here could disagree
-with the one the running sidecar is actually gated on.
+with the one the running sidecar is actually gated on. The planner line is read
+the same way and for the same reason — the record says which provider a running
+loop is on and whether it fell back to the deterministic path, and re-resolving
+the provider here could answer differently from the sidecar that is running.
 """
 
 from __future__ import annotations
@@ -26,6 +29,7 @@ from pz_agent_core.session.handshake import SessionDescriptor, SessionError
 from pz_agent_core.session.heartbeat import Heartbeat, HeartbeatMonitor, Peer, PeerLiveness
 from pz_agent_core.session.lock import LockError, LockInfo
 
+from .autonomy import PLANNER_FILE_NAME, PlannerRecord, read_planner_record
 from .context import EXIT_FAILURE, EXIT_OK, CliContext, Workspace, resolve_workspace
 from .doctor import environment_facts
 from .output import Printer
@@ -72,6 +76,9 @@ class StatusReport:
     #: What the last sidecar resolved about the game's API, or None when none
     #: has ever recorded it here. Absent and unresolved are different answers.
     capabilities: CapabilityRecord | None = None
+    #: Which planner the last sidecar assembled, or None when none has ever
+    #: recorded one here. The same three-way distinction applies.
+    planner: PlannerRecord | None = None
 
     @property
     def attached(self) -> bool:
@@ -93,6 +100,7 @@ class StatusReport:
             "lock": None if self.lock is None else self.lock.to_dict(),
             "environment": self.environment or {},
             "capabilities": None if self.capabilities is None else self.capabilities.to_dict(),
+            "planner": None if self.planner is None else self.planner.to_dict(),
         }
 
 
@@ -120,12 +128,14 @@ def collect_status(ctx: CliContext, workspace: Workspace) -> StatusReport:
     # so a machine whose exchange directory has never existed can still show
     # that a sidecar tried and could not resolve anything.
     capabilities = read_capability_record(workspace.state_dir / CAPABILITY_FILE_NAME)
+    planner = read_planner_record(workspace.state_dir / PLANNER_FILE_NAME)
     if root is None or not root.is_dir():
         return StatusReport(
             ipc_root=workspace.redact(root),
             exists=False,
             environment=environment_facts(workspace),
             capabilities=capabilities,
+            planner=planner,
         )
     layout = IpcLayout(root)
     monitor = HeartbeatMonitor(layout, clock=ctx.clock_ms)
@@ -142,6 +152,7 @@ def collect_status(ctx: CliContext, workspace: Workspace) -> StatusReport:
         panic_stop=layout.panic_stop.is_file(),
         environment=environment_facts(workspace),
         capabilities=capabilities,
+        planner=planner,
     )
 
 
@@ -184,6 +195,7 @@ def render_status(report: StatusReport, printer: Printer) -> None:
     if not report.exists:
         printer.field("state", "no exchange directory; nothing has ever connected")
         _render_capabilities(report.capabilities, printer)
+        _render_planner(report.planner, printer)
         printer.line()
         printer.line("Run pz-agent doctor — it distinguishes a missing Zomboid directory")
         printer.line("from a mod that has never been installed.")
@@ -215,6 +227,7 @@ def render_status(report: StatusReport, printer: Printer) -> None:
     if report.panic_stop:
         printer.field("panic stop", "a panic-stop sentinel is present")
     _render_capabilities(report.capabilities, printer)
+    _render_planner(report.planner, printer)
     printer.field("attached", "yes" if report.attached else "no")
 
 
@@ -243,6 +256,32 @@ def _render_capabilities(record: CapabilityRecord | None, printer: Printer) -> N
         printer.field("verified", ", ".join(record.verified))
     for note in record.notes:
         printer.field("capability note", note)
+
+
+def _render_planner(record: PlannerRecord | None, printer: Printer) -> None:
+    """The planner line, which distinguishes "not wired" from "nothing to plan".
+
+    A sidecar with no planner is not a quiet one: it is one that will never
+    propose anything however it is armed, and that has to be legible here rather
+    than only as an agent that does nothing. A provider that was configured and
+    could not be built is the same class of fact pointed the other way — the
+    deterministic path is answering, and the user has to be able to see that it
+    is not the model they set up.
+    """
+    if record is None:
+        printer.field("planner", "no sidecar has assembled one in this state directory")
+        return
+    if not record.wired:
+        printer.field("planner", f"NOT WIRED — {record.detail}")
+        printer.line("    the sidecar proposes nothing on its own, in any mode")
+        return
+    if record.fell_back:
+        printer.field("planner", f"{record.active} — FELL BACK from {record.configured}")
+        printer.field("fallback reason", record.fallback_reason)
+    else:
+        printer.field("planner", f"{record.active} — {record.detail}")
+    for note in record.notes:
+        printer.field("planner note", note)
 
 
 def run_status(ctx: CliContext, *, as_json: bool) -> int:

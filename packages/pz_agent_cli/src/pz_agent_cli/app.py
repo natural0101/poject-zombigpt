@@ -23,6 +23,7 @@ import argparse
 import os
 import sys
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Final
 
@@ -33,7 +34,15 @@ from pz_agent_core.ipc.layout import IpcLayout
 from pz_agent_core.protocol import SessionMode
 from pz_agent_core.version import PRODUCT_VERSION
 
-from .config import ConfigValidation, load_config
+from .autonomy import (
+    BACKUP_NOT_ATTRIBUTABLE,
+    PLANNER_FILE_NAME,
+    AutonomyPlanner,
+    PlannerRecord,
+    build_planner,
+    publish_planner_record,
+)
+from .config import AgentConfig, ConfigValidation, default_config, load_config
 from .context import EXIT_FAILURE, EXIT_OK, EXIT_USAGE, CliContext, Workspace, resolve_workspace
 from .doctor import check_capabilities, run_checks
 from .livetest import add_live_test_parser, run_live_test
@@ -465,6 +474,13 @@ def build_loop(ctx: CliContext, workspace: Workspace, *, limits: LoopLimits) -> 
     ``required_capability``, and the engine's fail-closed default refuses all of
     them, so a sidecar assembled without a ledger attaches, arms and then
     declines every action a user asks for.
+
+    The planner is the same shape of defect one layer up. ``SidecarLoop._act``
+    returns immediately when there is none, so a sidecar assembled without one
+    observes, guards, and never proposes anything — ``arm --mode autonomous``
+    grants an authority nothing exercises. It is assembled here and its record
+    is written from the loop that was actually built, so ``status`` reports what
+    is running rather than what this function meant to build.
     """
     ipc_root = workspace.ipc_root
     if ipc_root is None:
@@ -472,7 +488,8 @@ def build_loop(ctx: CliContext, workspace: Workspace, *, limits: LoopLimits) -> 
     registry = register_game_adapters(register_builtins(AdapterRegistry()))
     capabilities = build_capabilities(workspace)
     capabilities.publish()
-    return SidecarLoop(
+    planner, record = _build_planner(ctx, workspace, registry=registry, capabilities=capabilities)
+    loop = SidecarLoop(
         layout=IpcLayout(ipc_root),
         state_dir=workspace.state_dir,
         registry=registry,
@@ -480,6 +497,47 @@ def build_loop(ctx: CliContext, workspace: Workspace, *, limits: LoopLimits) -> 
         limits=limits,
         pid_file=build_supervisor(ctx, workspace).pid_file,
         capabilities=capabilities,
+        planner=planner,
+    )
+    publish_planner_record(
+        workspace.state_dir / PLANNER_FILE_NAME,
+        # Read off the loop, not off the intent above: this is the field that
+        # would have caught the planner never reaching the constructor.
+        replace(record, wired=loop.planner is not None),
+    )
+    return loop
+
+
+def _build_planner(
+    ctx: CliContext,
+    workspace: Workspace,
+    *,
+    registry: AdapterRegistry,
+    capabilities: CapabilityLedger,
+) -> tuple[AutonomyPlanner, PlannerRecord]:
+    """The planner for this workspace, and what to tell ``status`` about it.
+
+    The configuration is read again rather than passed in, because ``build_loop``
+    is reached from a detached sidecar as well as from ``run_start``. A document
+    that does not validate does not stop the assembly: the loop still has to come
+    up so the user can be told what is wrong, and the documented defaults —
+    ``provider = "none"``, the deterministic path — are what runs meanwhile.
+    """
+    validation = load_config(workspace.config_path)
+    config: AgentConfig = validation.config or default_config()
+    notes = [BACKUP_NOT_ATTRIBUTABLE]
+    if validation.config is None:
+        notes.append(
+            f"the configuration did not validate ({len(validation.errors)} problem(s)), so the "
+            "documented defaults are in force; run 'pz-agent validate-config' to see them"
+        )
+    return build_planner(
+        registry=registry,
+        capabilities=capabilities,
+        config=config,
+        env=ctx.env,
+        clock=ctx.clock_ms,
+        notes=tuple(workspace.redactor.text(note) for note in notes),
     )
 
 
