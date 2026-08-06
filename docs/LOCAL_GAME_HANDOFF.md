@@ -158,9 +158,15 @@ Everything below ran and passed in the remote environment:
   the changelog;
 - a forbidden-pattern scan: no stub bodies, no TODO markers, no `eval`/`exec`/
   `shell=True`/`loadstring`, and a secret scan over every tracked text file;
-- the installer's full round trip against a synthetic Zomboid directory,
-  including a user file planted inside the mod directory, which uninstall left
-  alone while removing exactly the files install wrote;
+- the installer's full round trip against a synthetic Zomboid directory, re-run
+  against the mod as it stands now rather than as it stood when the claim was
+  first made — the mod has since grown from sixteen files to thirty. `install-mod`
+  wrote 30 files, `uninstall-mod` removed exactly those 30, and two planted user
+  files survived: one at the mod's root and one **nested inside the mod's own
+  Lua tree** at `media/lua/client/PZAgent/`, which is the case a
+  remove-the-directory implementation gets wrong. The save was untouched, and
+  the exchange directory the mod itself writes was reported as left in place
+  rather than silently deleted;
 - the Lua↔Python reference agreement, directly, for a world container reference
   carrying five colons — the case a naive left-to-right split resolves to a
   *different object* without erroring.
