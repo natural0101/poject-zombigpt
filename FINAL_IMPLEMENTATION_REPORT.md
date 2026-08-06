@@ -237,8 +237,29 @@ dist/pz_agent-0.1.0.tar.gz
 
 Verified by installing the wheel into a clean environment: `pz-agent --version`,
 `--help`, `doctor` and `smoke` all behave correctly, including the two
-honest-failure paths above. The Windows launcher, installer and uninstaller are
-in `installer/`; the unsigned-binary warning is expected and documented.
+honest-failure paths above.
+
+### The installer was run, not just tested
+
+`installer/pz_agent_installer.py` has unit tests, but the round trip had never
+been executed. It was, against a synthetic Zomboid directory:
+
+- **install** placed 17 files — 14 Lua modules, `mod.info`, the launcher and
+  `config.toml` — plus a manifest of exactly what it wrote;
+- a user file (`MY_NOTES.txt`) was then planted *inside the mod directory* and a
+  save alongside it;
+- **uninstall** removed 16 files, kept `config.toml` and said so by name, and
+  left both the planted file and the save untouched.
+
+That is the claim in `docs/QUICKSTART.md` demonstrated rather than asserted: an
+uninstaller that removed the mod directory wholesale would have deleted the
+user's file, and only the manifest makes the difference. Two empty directories
+are left behind (`mods/` and `mods/pz_agent_bridge/`), which is the correct
+conservative choice — removing a directory the installer did not create is how
+an uninstaller deletes something it should not.
+
+The Windows launcher, installer and uninstaller are in `installer/`; the
+unsigned-binary warning is expected and documented.
 
 ---
 
