@@ -25,6 +25,7 @@ from typing import Final
 __all__ = [
     "MAX_TEXT_CHARS",
     "MAX_TRANSCRIPT_CHARS",
+    "IntentRefusal",
     "OutputKind",
     "VoiceGoal",
     "VoiceInput",
@@ -81,6 +82,28 @@ class VoiceGoal(StrEnum):
     DRINK = "drink"
     READ = "read"
     RESUME = "resume"
+
+
+class IntentRefusal(StrEnum):
+    """Why a transcript did not become a goal kind.
+
+    A member of this enum is the *only* thing
+    :func:`~.intent.resolve_goal` may report when it declines, and that is the
+    whole point: the alternative to a named refusal is either silence or a kind
+    the matcher invented to have something to return. Both are worse than
+    telling the user which part of what they said could not be used.
+
+    Every member has a sentence in :data:`~.phrases.REFUSAL_SPEECH` or a builder
+    that composes one from a name this process minted; :func:`~.phrases.
+    intent_refusal` refuses to exist without one, checked at import.
+    """
+
+    NOT_A_GOAL = "not_a_goal"
+    AMBIGUOUS_GOAL = "ambiguous_goal"
+    SKILL_NOT_NAMED = "skill_not_named"
+    PARAMETER_OUT_OF_RANGE = "parameter_out_of_range"
+    PARAMETER_NOT_ACCEPTED = "parameter_not_accepted"
+    CAPABILITY_UNAVAILABLE = "capability_unavailable"
 
 
 class OutputKind(StrEnum):

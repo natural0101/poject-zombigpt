@@ -1,221 +1,524 @@
 # MCP tools and resources
 
+**This document is generated from `pz-agent-mcp --describe` and is checked
+against it.** Every name, kind, risk class, arming requirement, argument and
+bound below was read out of that command's JSON on this build. If you are
+writing a client, run it yourself — it needs no game, no sidecar and no MCP SDK:
+
+```powershell
+.venv\Scripts\pz-agent-mcp --describe
+```
+
 The MCP server is a **thin adapter**. It translates tool calls into core
 commands and serialises domain errors back out. It does not re-implement policy,
 does not decide what is safe, and does not hold state that core does not already
 hold. A boundary that duplicates the engine's rules is a boundary that will
 eventually disagree with it.
 
-> **Status:** this document specifies the boundary. See
-> [`PROGRESS.md`](PROGRESS.md) for which tools are implemented and wired.
+Transport: stdio. The server registers itself as `pz-agent`.
 
-Transport: stdio.
+| Field of `--describe` | Value on this build |
+| --- | --- |
+| `server` | `pz-agent` |
+| `product_version` | `0.1.0` |
+| `protocol_version` | `1.1` |
+| `capability_gated` | `true` |
+| tools | 31 |
+| resources | 7 |
+
+`--describe` reports the **whole** catalogue. A running server publishes a
+subset of it: a tool whose capability is not usable on the install is withheld.
+See *Capability gating* below.
 
 ---
 
 ## Semantics that apply to every tool
 
+**Every input schema is closed.** `additionalProperties` is `false` on all 31
+tools, so an argument this document does not list is rejected rather than
+ignored.
+
+**The advertised bound is the enforced bound.** `catalog.py` imports its numbers
+from the adapters that will receive the arguments and validates each tool's own
+example against its own schema at import time, so a value this surface accepts
+is one the adapter accepts.
+
 **Typed structured content.** Every tool returns a structured result, not prose.
 Errors carry a stable `reason_code` from the protocol's closed set — the same
-codes the action engine and the mod use, so a failure means the same thing
-wherever you read it.
+codes the action engine and the mod use.
 
-**Write tools require an armed session.** Except the ones that cannot: `stop` is
-always available, in every mode, armed or not.
+**`kind` decides arming, not the name.** `requires_armed` is `true` for exactly
+the `write` tools and for nothing else:
 
-**Read tools work in `OBSERVE`.** Observation never requires arming.
+| Kind | Count | Arming | What it is |
+| --- | --- | --- | --- |
+| `read` | 8 | not required | Answered from state the sidecar already holds |
+| `query` | 3 | not required | Submits one of the protocol's `READ_ONLY_ACTIONS`; comes back with an action id, but the character neither moves nor touches anything |
+| `write` | 16 | **required** | Changes the world; refused with `NOT_ARMED` on a disarmed session |
+| `control` | 4 | not required | Arm, disarm, cancel, stop — how a disarmed or panicking session is driven |
 
-**Query tools work in `OBSERVE` too.** `pz_action_inspect_world`,
-`pz_action_inspect_container` and `pz_action_search_inventory` submit a command
-and change nothing — they are the protocol's `READ_ONLY_ACTIONS` — so they run
-on a disarmed session and come back with an action id like any other action.
-`pz_action_open_container` is *not* one of them, whatever its name suggests: it
-walks the character across a room, and an unarmed session must not move the
-character.
+`pz_action_open_container` is a `write` tool, whatever its name suggests: it
+walks the character across a room. `ToolSpec.__post_init__` refuses to construct
+a `query` tool whose action is not in `READ_ONLY_ACTIONS`, so that classification
+cannot be talked around.
 
-**Long-running tools return an action id.** Movement, eating and reading take
-game-seconds. The tool returns immediately with an id; you poll it with the same
-idempotency key, which replays the call and refreshes it to the action's current
-state. It does not block the transport and it does not report success early.
+One thing worth knowing before you read the table: `action.wait` **is** in the
+protocol's `READ_ONLY_ACTIONS`, and `pz_action_wait` is nevertheless published
+as `write` with `requires_armed: true`. That is what the build does; this
+document does not soften it. Waiting on a disarmed session is refused.
 
-**Idempotency.** Calling a write tool twice with the same idempotency key does
-not perform the action twice — the original terminal result is replayed.
+**`risk` is the base tier, not a worst case.** It is the tier the adapter
+declares. Several adapters assess higher per call — `movement.move_to` becomes
+`P3` when the destination changes floor or leaves the safe radius,
+`inventory.transfer` becomes `P3` when the source is a world container — and
+neither is visible from the tool name, so neither is published.
 
-**Capability gating.** A tool whose capability is `unsupported` or
-`experimental` is not published as ready. It appears in the capability report
-with its reason, rather than being offered and then failing.
+**Long-running tools return an action id.** `long_running` is `true` for 19
+tools. The call returns immediately with an `action_id`; you poll it by calling
+again with the same `idempotency_key`, which replays the call and refreshes it
+to the action's current state. It does not block the transport and it does not
+report success early.
 
-**No internal primitives.** Nothing is exposed that would let a caller route
-around the policy layer. If a tool would let you do by composition what policy
-forbids directly, it is not published.
+**Idempotency.** Every `write`, `query` and `control` tool that submits a command
+takes a required `idempotency_key` (1–120 characters); twenty tools do. Calling twice with the
+same key does not perform the action twice — the original result is replayed
+with `replayed: true`.
+
+**`timeout_ms`** is that one command's lease: integer, 100–300000 ms, default
+15000. Nineteen tools take it — every one that submits a single command. `pz_plan_execute` does
+not, because a plan is bounded by `limits.max_real_seconds` instead, and
+publishing an argument no handler reads would be a lie shaped like an option.
+
+**No free text.** `pz_plan_execute`'s `goal` (1–200 characters) is the only
+field in the whole surface a caller may write in their own words, and it comes
+back quarantined. Every other string argument is a ref matching a fixed pattern,
+an enum member, or a lower-case token matching
+`^[a-z][a-z0-9_.\-]{0,63}$`.
 
 ---
 
-## Tools
+## The published surface
 
-### Session
+| Tool | Kind | Risk | Armed | Long-running | Capability gate |
+| --- | --- | --- | --- | --- | --- |
+| `pz_session_status` | read | P0 | no | no | — |
+| `pz_session_arm` | control | P0 | no | no | — |
+| `pz_session_disarm` | control | P0 | no | no | — |
+| `pz_observe_snapshot` | read | P0 | no | no | — |
+| `pz_observe_inventory` | read | P0 | no | no | — |
+| `pz_observe_nearby` | read | P0 | no | no | — |
+| `pz_action_inspect_world` | query | P0 | no | yes | — |
+| `pz_action_inspect_container` | query | P0 | no | yes | — |
+| `pz_action_search_inventory` | query | P0 | no | yes | — |
+| `pz_action_move_to` | write | P3 | yes | yes | `move_to_square` |
+| `pz_action_move_near` | write | P3 | yes | yes | `move_to_square` |
+| `pz_action_open_container` | write | P3 | yes | yes | `move_to_square` |
+| `pz_action_transfer` | write | P1 | yes | yes | `inventory_transfer` |
+| `pz_action_ensure_main` | write | P1 | yes | yes | `inventory_transfer` |
+| `pz_action_eat` | write | P2 | yes | yes | `eat_percentage` |
+| `pz_action_drink` | write | P2 | yes | yes | `drink_carried` |
+| `pz_action_drink_source` | write | P2 | yes | yes | `drink_world_source` |
+| `pz_action_read` | write | P2 | yes | yes | `read_literature` |
+| `pz_action_equip` | write | P2 | yes | yes | `equipment_equip` |
+| `pz_action_unequip` | write | P2 | yes | yes | `equipment_unequip` |
+| `pz_action_bandage` | write | P2 | yes | yes | `medical_bandage` |
+| `pz_action_rest` | write | P2 | yes | yes | `survival_rest` |
+| `pz_action_sleep` | write | P4 | yes | yes | `survival_sleep` |
+| `pz_action_wait` | write | P0 | yes | yes | — |
+| `pz_action_cancel` | control | P1 | no | yes | — |
+| `pz_plan_execute` | write | P2 | yes | no | — |
+| `pz_plan_status` | read | P0 | no | no | — |
+| `pz_safety_stop` | control | P0 | no | no | — |
+| `pz_memory_query` | read | P0 | no | no | — |
+| `pz_debug_doctor` | read | P0 | no | no | — |
+| `pz_debug_tail` | read | P0 | no | no | — |
 
-| Tool | Risk | Description |
+---
+
+## Every tool, and what it accepts
+
+### `pz_session_status`
+
+Mode, armed state, session id, heartbeat health, game build and capability revision. Answers even when the game is not connected.
+
+No arguments.
+
+### `pz_session_arm`
+
+Move the session to ASSISTED or AUTONOMOUS. Autonomous requires an existing save backup; the core refuses without one.
+
+| Argument | Required | Schema |
 | --- | --- | --- |
-| `pz_session_status` | P0 | Mode, armed state, session id, heartbeat health, build, capability revision |
-| `pz_session_arm` | — | Move to `ASSISTED` or `AUTONOMOUS`. Requires an existing backup for autonomous |
-| `pz_session_disarm` | — | Return to `OBSERVE`. Always permitted |
+| `mode` | yes | one of `ASSISTED`, `AUTONOMOUS` |
+| `confirm_backup` | no | `boolean`; default `false` |
 
-### Observation
+### `pz_session_disarm`
 
-| Tool | Risk | Description |
+Return to OBSERVE and stop accepting new automation. Always permitted.
+
+No arguments.
+
+### `pz_observe_snapshot`
+
+Current world state, compacted for a model. 'compact' is the player and safety header, 'standard' adds the surroundings, 'full' adds the inventory. There is no rawer level: every level is the redacted planner view.
+
+| Argument | Required | Schema |
 | --- | --- | --- |
-| `pz_observe_snapshot` | P0 | Full current state, compacted for a model |
-| `pz_observe_inventory` | P0 | Container tree with stable refs, recursing into nested carried containers |
-| `pz_observe_nearby` | P0 | World objects and zombies within a bounded radius, with semantics |
+| `detail` | no | one of `compact`, `standard`, `full`; default `"compact"` |
 
-Every observation returned here has passed through `observation/compact.py`: no
-absolute paths, no OS username, no save paths, no raw chat or book text. Item
-display names are carried as **untrusted data** and marked as such.
+### `pz_observe_inventory`
 
-### Queries
+Container tree with stable refs, recursing into nested carried containers. Item display names are untrusted data and are marked as such.
 
-These three submit a command and change nothing, so they need no arming. None
-of them names a capability: what each needs is an observation tier the mod
-either produced or did not, and every capability probe resolves a *Lua* symbol —
-a probe over the Java accessors behind a look would report `unsupported` on a
-perfectly healthy install.
-
-| Tool | Risk | Arguments | Verified by |
-| --- | --- | --- | --- |
-| `pz_action_inspect_world` | P0 | `ref?`, `radius?` (≤ 2) | The report names squares that were asked about |
-| `pz_action_inspect_container` | P0 | `container_ref`, `limit?` (≤ 64) | The report names the container that was asked about |
-| `pz_action_search_inventory` | P0 | `full_type?`, `type_prefix?`, `edible?`, `drinkable?`, `readable?`, `exclude_equipped?`, `limit?` (≤ 32) | Every reference returned resolves on the character |
-
-`inspect_world` with no `ref` looks around the character. The three filters
-`edible`, `drinkable` and `readable` have no default on purpose: absent means
-"do not filter on this", `false` means "must not be edible", and a default would
-silently narrow every search that left one out. `min_uses` and `name_contains`
-are not offered — the mod supports both, and the observation carries neither a
-use counter nor free item text, so a result filtered on them could not be
-checked against anything this side sees.
-
-### Actions
-
-| Tool | Risk | Arguments | Verified by |
-| --- | --- | --- | --- |
-| `pz_action_move_to` | P2/P3 | `target`, `radius?`, `max_distance?`, `allow_doors?`, `allow_stairs?` | Character position within the target radius, correct floor |
-| `pz_action_move_near` | P3 | `object_ref`, `radius?`, `max_distance?` | The object is within reach, on its floor, *re-observed* after the walk |
-| `pz_action_open_container` | P3 | `container_ref`, `radius?` | The container is reported, accessible, and within the reach asked for |
-| `pz_action_transfer` | P1/P3 | `item_ref`, `destination_container_ref`, `source_container_ref?` | Item ref resolves inside the destination container |
-| `pz_action_ensure_main` | P1/P3 | `item_ref` | The item is in player-main |
-| `pz_action_eat` | P2 | `item_ref`, `fraction?` | Hunger decreased, or item uses decremented |
-| `pz_action_drink` | P2 | `item_ref`, `fraction?` | Thirst decreased, or container volume decreased |
-| `pz_action_drink_source` | P2 | `item_ref`, `source_ref`, `fraction?` | Thirst decreased. The vessel's volume is **not** accepted here: the fill raises it and the drink lowers it again |
-| `pz_action_read` | P2 | `item_ref`, `pages?` | Reading started and progress observed |
-| `pz_action_equip` | P2 | `item_ref`, `hand?` | The requested slot holds the item |
-| `pz_action_unequip` | P2 | exactly one of `item_ref`, `hand`, `slot` | No slot holds it **and** it is still on the character |
-| `pz_action_bandage` | P2 | `body_part`, `item_ref` | The dressed part is no longer reported bleeding |
-| `pz_action_rest` | P2 | `target_endurance?`, `seat_ref?`, `allow_ground?`, `max_wait_ms?` | Endurance reached the target, or the posture was taken |
-| `pz_action_sleep` | P4 | `bed_ref?`, `hours?`, `allow_vehicle_seat?`, `max_wait_ms?` | Fatigue fell **and** the world clock advanced |
-| `pz_action_wait` | P0 | `game_seconds` | Observed elapsed game time |
-| `pz_action_cancel` | — | `command_id?` | Mod-owned entry no longer in the action queue |
-
-The "verified by" column is not documentation of intent — it is the
-postcondition the action engine actually checks. If it does not hold, the result
-is `POSTCONDITION_FAILED`, even when the mod acked success.
-
-Every bound in the arguments column is stated in the published schema, not only
-in the adapter, so a value this surface accepts is one the adapter accepts.
-
-Note what is absent: eating takes an item ref *and optionally a fraction*, but
-there is no tool to choose *which* item. That decision belongs to
-`policy/food.py`, which is deterministic and testable. A model that picks the
-sandwich is a model that will eventually pick the rotten one. The same rule puts
-`body_part` and the dressing in `pz_action_bandage`'s arguments rather than
-leaving the tool to triage: `policy/medical.py` decides both.
-
-Also absent: `allow_windows`. The movement adapter refuses it with
-`POLICY_DENIED`, so publishing it would advertise something policy forbids. And
-`pz_action_ensure_main` does not publish a destination — the only container the
-adapter accepts is the main inventory, and any other one is `inventory.transfer`
-under a different name.
-
-`pz_action_unequip` names its target exactly one way. An item reference resolves
-for anything in a container, but a worn garment lives in no container of its own
-and a held weapon may be reported in neither, so `hand` and `slot` name those
-directly. Two namings at once are refused rather than reconciled: they can
-disagree, and there is no defensible rule for which wins.
-
-**`pz_action_sleep` is the most consequential tool on this surface**, and it is
-`P4` for a reason that is not severity-by-adjective: once the character is
-asleep the mod cannot wake them. Sleep runs through the bed's context menu, so
-there is no timed action to interrupt and no queue entry to cancel — a panic
-stop cannot reach it. It is refused outright while the reflex guard reports any
-danger at all, a stricter bar than the engine's own threat threshold, and it is
-never taken on the agent's own initiative. Its capability probe resolves to
-`experimental` on a clean scan, so on most installs the tool is withheld with
-that reason rather than offered.
-
-`max_wait_ms` on `pz_action_rest` and `pz_action_sleep` is how long the *mod*
-may hold the action, and it is a different clock from `timeout_ms`, which is the
-sidecar's lease on the command and is bounded by the protocol's `MAX_LEASE_MS`.
-A rest may legitimately ask the mod to wait longer than one lease covers.
-
-### Plans
-
-| Tool | Risk | Description |
+| Argument | Required | Schema |
 | --- | --- | --- |
-| `pz_plan_execute` | varies | Submit a typed plan. Validated against the plan schema before anything runs |
-| `pz_plan_status` | P0 | Current step, results so far, why the plan stopped |
+| `scope` | no | one of `all`, `on_person`, `player_main`, `carried`, `worn`, `world`; default `"all"` |
+| `include_nested` | no | `boolean`; default `true` |
+| `category` | no | `string`; maxLength 64; pattern `^[a-z][a-z0-9_.\-]{0,63}$` |
 
-A plan is a list of typed steps. It has no field for Lua, Python, shell,
-keystrokes or file paths — a plan containing one fails validation, because
-there is nowhere to put it.
+### `pz_observe_nearby`
 
-Neither plan tool ever puts `succeeded` in the envelope `status`: that word is
-reserved for a result carrying the observed postcondition under `data.evidence`,
-and a plan record has none to carry — its steps' evidence was observed by the
-action engine and stops at the port. A plan that finished answers `"ok"`, and
-`data.status` with `data.terminal` say what it finished as.
+World objects and zombies within a bounded radius, with their semantics.
 
-### Safety
-
-| Tool | Risk | Description |
+| Argument | Required | Schema |
 | --- | --- | --- |
-| `pz_safety_stop` | — | **Always available.** Bypasses the queue, clears mod-owned entries only, disarms |
+| `radius` | no | `number`; maximum 30.0; exclusive minimum 0; default `10.0` |
+| `types` | no | array, maxItems 8; items `string`; maxLength 64; pattern `^[a-z][a-z0-9_.\-]{0,63}$` |
 
-`pz_safety_stop` works when the session is unarmed, when the planner is absent,
-and when the queue is backed up. That is the whole point of it.
+### `pz_action_inspect_world`
 
-### Memory and diagnostics
+Describe the block of squares around a centre, with what the mod makes of each one. Omit 'ref' to look around the character. Nothing moves: an inspect that walked round a corner to see better would be a mutating command wearing a read-only command's permissions.
 
-| Tool | Risk | Description |
+| Argument | Required | Schema |
 | --- | --- | --- |
-| `pz_memory_query` | P0 | Known containers, home point, safe zones, failed paths, user reservations |
-| `pz_debug_doctor` | P0 | Full environment report with stable check codes |
-| `pz_debug_tail` | P0 | Recent structured log records, redacted |
+| `ref` | no | `string`; maxLength 220; pattern `^square:[A-Za-z0-9:_.\-]{1,200}$` |
+| `radius` | no | `integer`; minimum 0; maximum 2; default `1` |
+| `idempotency_key` | yes | `string`; minLength 1; maxLength 120 |
+| `timeout_ms` | no | `integer`; minimum 100; maximum 300000; default `15000` |
+
+### `pz_action_inspect_container`
+
+List what one container holds, with the real total beside the bounded listing. Reads the engine's own item list; no UI is driven and nothing is opened, so the character does not move.
+
+| Argument | Required | Schema |
+| --- | --- | --- |
+| `container_ref` | yes | `string`; maxLength 220; pattern `^container:[A-Za-z0-9:_.\-]{1,200}$` |
+| `limit` | no | `integer`; minimum 1; maximum 64; default `64` |
+| `idempotency_key` | yes | `string`; minLength 1; maxLength 120 |
+| `timeout_ms` | no | `integer`; minimum 100; maximum 300000; default `15000` |
+
+### `pz_action_search_inventory`
+
+List what the character is carrying that matches a filter. Every reference returned resolves inside the character's own containers, so a result is something the next step can act on without walking anywhere. It reports what matches; it never picks one.
+
+| Argument | Required | Schema |
+| --- | --- | --- |
+| `full_type` | no | `string`; maxLength 128; pattern `^[A-Za-z0-9._\-]{1,128}$` |
+| `type_prefix` | no | `string`; maxLength 128; pattern `^[A-Za-z0-9._\-]{1,128}$` |
+| `edible` | no | `boolean` |
+| `drinkable` | no | `boolean` |
+| `readable` | no | `boolean` |
+| `exclude_equipped` | no | `boolean`; default `false` |
+| `limit` | no | `integer`; minimum 1; maximum 32; default `32` |
+| `idempotency_key` | yes | `string`; minLength 1; maxLength 120 |
+| `timeout_ms` | no | `integer`; minimum 100; maximum 300000; default `15000` |
+
+### `pz_action_move_to`
+
+Walk to a square. Verified by the character's observed position being within the radius on the correct floor.
+
+| Argument | Required | Schema |
+| --- | --- | --- |
+| `target` | yes | object with integer `x`, `y`, `z`, all three required, no other keys |
+| `radius` | no | `number`; maximum 3.0; exclusive minimum 0; default `0.75` |
+| `max_distance` | no | `integer`; minimum 1; maximum 30; default `20` |
+| `allow_doors` | no | `boolean`; default `true` |
+| `allow_stairs` | no | `boolean`; default `true` |
+| `idempotency_key` | yes | `string`; minLength 1; maxLength 120 |
+| `timeout_ms` | no | `integer`; minimum 100; maximum 300000; default `15000` |
+
+### `pz_action_move_near`
+
+Walk to within interaction range of something in the world. Verified against the object's *re-observed* position, not the one it had when the call was made: an object that is no longer in view cannot be proven to be within arm's reach.
+
+| Argument | Required | Schema |
+| --- | --- | --- |
+| `object_ref` | yes | `string`; maxLength 220; pattern `^(?:container\|square\|item):[A-Za-z0-9:_.\-]{1,200}$` |
+| `radius` | no | `number`; minimum 0.1; maximum 3.0; default `1.5` |
+| `max_distance` | no | `integer`; minimum 1; maximum 30; default `20` |
+| `idempotency_key` | yes | `string`; minLength 1; maxLength 120 |
+| `timeout_ms` | no | `integer`; minimum 100; maximum 300000; default `15000` |
+
+### `pz_action_open_container`
+
+Get within reach of a world container, so its contents can be taken. Its name reads like a query and it is not one: this walks the character across a room, so it needs an armed session like any other move. A door in the way is not opened — that is a different object and a different action.
+
+| Argument | Required | Schema |
+| --- | --- | --- |
+| `container_ref` | yes | `string`; maxLength 220; pattern `^container:[A-Za-z0-9:_.\-]{1,200}$` |
+| `radius` | no | `number`; minimum 0.1; maximum 3.0; default `1.6` |
+| `idempotency_key` | yes | `string`; minLength 1; maxLength 120 |
+| `timeout_ms` | no | `integer`; minimum 100; maximum 300000; default `15000` |
+
+### `pz_action_transfer`
+
+Move one item into a container. Verified by the item resolving inside the destination and nowhere else.
+
+| Argument | Required | Schema |
+| --- | --- | --- |
+| `item_ref` | yes | `string`; maxLength 220; pattern `^item:[A-Za-z0-9:_.\-]{1,200}$` |
+| `destination_container_ref` | yes | `string`; maxLength 220; pattern `^container:[A-Za-z0-9:_.\-]{1,200}$` |
+| `source_container_ref` | no | `string`; maxLength 220; pattern `^container:[A-Za-z0-9:_.\-]{1,200}$` |
+| `idempotency_key` | yes | `string`; minLength 1; maxLength 120 |
+| `timeout_ms` | no | `integer`; minimum 100; maximum 300000; default `15000` |
+
+### `pz_action_ensure_main`
+
+Bring one item into the main inventory. This is the preparation step eating, drinking, reading, equipping and bandaging all require, and it is its own action with its own evidence rather than something those adapters do on the side.
+
+| Argument | Required | Schema |
+| --- | --- | --- |
+| `item_ref` | yes | `string`; maxLength 220; pattern `^item:[A-Za-z0-9:_.\-]{1,200}$` |
+| `idempotency_key` | yes | `string`; minLength 1; maxLength 120 |
+| `timeout_ms` | no | `integer`; minimum 100; maximum 300000; default `15000` |
+
+### `pz_action_eat`
+
+Eat a named item. Verified by hunger falling or the item's uses decrementing. Which item is safe to eat is decided by core policy, not here: there is no tool that chooses one.
+
+| Argument | Required | Schema |
+| --- | --- | --- |
+| `item_ref` | yes | `string`; maxLength 220; pattern `^item:[A-Za-z0-9:_.\-]{1,200}$` |
+| `fraction` | no | `number`; minimum 0.05; maximum 1.0; default `1.0` |
+| `idempotency_key` | yes | `string`; minLength 1; maxLength 120 |
+| `timeout_ms` | no | `integer`; minimum 100; maximum 300000; default `15000` |
+
+### `pz_action_drink`
+
+Drink from a named carried item. Verified by thirst falling or the container's volume decreasing.
+
+| Argument | Required | Schema |
+| --- | --- | --- |
+| `item_ref` | yes | `string`; maxLength 220; pattern `^item:[A-Za-z0-9:_.\-]{1,200}$` |
+| `fraction` | no | `number`; minimum 0.05; maximum 1.0; default `1.0` |
+| `idempotency_key` | yes | `string`; minLength 1; maxLength 120 |
+| `timeout_ms` | no | `integer`; minimum 100; maximum 300000; default `15000` |
+
+### `pz_action_drink_source`
+
+Fill a carried vessel at a sink, well or rain collector and drink from it. Verified by thirst falling; the vessel's own volume proves nothing here, because the fill raises it and the drink lowers it again.
+
+| Argument | Required | Schema |
+| --- | --- | --- |
+| `item_ref` | yes | `string`; maxLength 220; pattern `^item:[A-Za-z0-9:_.\-]{1,200}$` |
+| `fraction` | no | `number`; minimum 0.05; maximum 1.0; default `1.0` |
+| `source_ref` | yes | `string`; maxLength 220; pattern `^square:[A-Za-z0-9:_.\-]{1,200}$` |
+| `idempotency_key` | yes | `string`; minLength 1; maxLength 120 |
+| `timeout_ms` | no | `integer`; minimum 100; maximum 300000; default `15000` |
+
+### `pz_action_read`
+
+Read a named book. Verified by the observed page counter advancing.
+
+| Argument | Required | Schema |
+| --- | --- | --- |
+| `item_ref` | yes | `string`; maxLength 220; pattern `^item:[A-Za-z0-9:_.\-]{1,200}$` |
+| `pages` | no | `integer`; minimum 1; maximum 200; default `20` |
+| `idempotency_key` | yes | `string`; minLength 1; maxLength 120 |
+| `timeout_ms` | no | `integer`; minimum 100; maximum 300000; default `15000` |
+
+### `pz_action_equip`
+
+Put one item in a hand or on the body. Omit 'hand' for anything the character wears: the item's own body location is what decides between a hand and a slot, and naming a hand for a garment would refuse every garment. Verified by the requested slot holding it.
+
+| Argument | Required | Schema |
+| --- | --- | --- |
+| `item_ref` | yes | `string`; maxLength 220; pattern `^item:[A-Za-z0-9:_.\-]{1,200}$` |
+| `hand` | no | one of `both`, `primary`, `secondary` |
+| `idempotency_key` | yes | `string`; minLength 1; maxLength 120 |
+| `timeout_ms` | no | `integer`; minimum 100; maximum 300000; default `15000` |
+
+### `pz_action_unequip`
+
+Take one item off and keep it. Name it exactly one way — by item, by hand or by slot — because the three can disagree and there is no defensible rule for which would win. Verified by no slot holding it *and* it still being on the character: an item that left the hand and the inventory was dropped, not unequipped.
+
+| Argument | Required | Schema |
+| --- | --- | --- |
+| `item_ref` | no | `string`; maxLength 220; pattern `^item:[A-Za-z0-9:_.\-]{1,200}$` |
+| `hand` | no | one of `primary`, `secondary` |
+| `slot` | no | `string`; maxLength 64; pattern `^[A-Za-z0-9._\-]{1,64}$` |
+| `idempotency_key` | yes | `string`; minLength 1; maxLength 120 |
+| `timeout_ms` | no | `integer`; minimum 100; maximum 300000; default `15000` |
+
+### `pz_action_bandage`
+
+Dress one bleeding wound with one carried dressing. Verified by the named body part no longer being reported as bleeding — never by the dressing leaving the inventory, which is equally true of one that was dropped. A part that is not bleeding is refused rather than attempted: the observation carries no dressing state to check against. Which part and which dressing are core policy's decision.
+
+| Argument | Required | Schema |
+| --- | --- | --- |
+| `body_part` | yes | one of `Foot_L`, `Foot_R`, `ForeArm_L`, `ForeArm_R`, `Groin`, `Hand_L`, `Hand_R`, `Head`, `LowerLeg_L`, `LowerLeg_R`, `Neck`, `Torso_Lower`, `Torso_Upper`, `UpperArm_L`, `UpperArm_R`, `UpperLeg_L`, `UpperLeg_R` |
+| `item_ref` | yes | `string`; maxLength 220; pattern `^item:[A-Za-z0-9:_.\-]{1,200}$` |
+| `idempotency_key` | yes | `string`; minLength 1; maxLength 120 |
+| `timeout_ms` | no | `integer`; minimum 100; maximum 300000; default `15000` |
+
+### `pz_action_rest`
+
+Recover endurance up to a target. Verified by the endurance reading rising to it — or, on a build that reports no endurance, by the character being observed sitting, but only if sitting is what was asked for. A standing rest with no readable stat has nothing to show for itself and times out.
+
+| Argument | Required | Schema |
+| --- | --- | --- |
+| `target_endurance` | no | `number`; minimum 0.05; maximum 1.0; default `0.9` |
+| `seat_ref` | no | `string`; maxLength 220; pattern `^square:[A-Za-z0-9:_.\-]{1,200}$` |
+| `allow_ground` | no | `boolean`; default `false` |
+| `max_wait_ms` | no | `integer`; minimum 1000; maximum 900000; default `300000` |
+| `idempotency_key` | yes | `string`; minLength 1; maxLength 120 |
+| `timeout_ms` | no | `integer`; minimum 100; maximum 300000; default `15000` |
+
+### `pz_action_sleep`
+
+Sleep a night off in a named bed. The most consequential action in this build, and the reason it is P4: once the character is asleep the mod cannot wake them — sleep runs through the bed's context menu, so there is no timed action to interrupt and no queue entry to cancel, and a panic stop cannot reach it. It is refused outright while the guard reports any danger at all, and it is never taken on the agent's own initiative. Its capability is 'experimental' on a clean scan, so on most installs this tool is withheld rather than offered. Verified by fatigue falling *and* the world clock advancing; fatigue alone is a quiet afternoon.
+
+| Argument | Required | Schema |
+| --- | --- | --- |
+| `bed_ref` | no | `string`; maxLength 220; pattern `^square:[A-Za-z0-9:_.\-]{1,200}$` |
+| `hours` | no | `integer`; minimum 1; maximum 16; default `8` |
+| `allow_vehicle_seat` | no | `boolean`; default `false` |
+| `max_wait_ms` | no | `integer`; minimum 1000; maximum 1800000; default `600000` |
+| `idempotency_key` | yes | `string`; minLength 1; maxLength 120 |
+| `timeout_ms` | no | `integer`; minimum 100; maximum 300000; default `15000` |
+
+### `pz_action_wait`
+
+Hold still until the world clock has advanced. Verified against observed game time, never the sidecar's wall clock.
+
+| Argument | Required | Schema |
+| --- | --- | --- |
+| `game_seconds` | yes | `number`; maximum 3600.0; exclusive minimum 0 |
+| `idempotency_key` | yes | `string`; minLength 1; maxLength 120 |
+| `timeout_ms` | no | `integer`; minimum 100; maximum 300000; default `15000` |
+
+### `pz_action_cancel`
+
+Cancel a mod-owned action. Verified by no mod-owned entry remaining in the queue; an action the player queued is never touched.
+
+| Argument | Required | Schema |
+| --- | --- | --- |
+| `command_id` | no | `string`; maxLength 36; pattern `^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$` |
+| `idempotency_key` | yes | `string`; minLength 1; maxLength 120 |
+| `timeout_ms` | no | `integer`; minimum 100; maximum 300000; default `15000` |
+
+### `pz_plan_execute`
+
+Submit a goal for the typed planner. The plan is validated before anything runs. There is no field for raw steps, code or file paths.
+
+| Argument | Required | Schema |
+| --- | --- | --- |
+| `goal` | yes | `string`; minLength 1; maxLength 200 |
+| `mode` | no | one of `ASSISTED`, `AUTONOMOUS`; default `"ASSISTED"` |
+| `limits` | no | object; `max_steps` integer 1–8 default 8, `max_real_seconds` integer 1–600 default 120, no other keys |
+| `idempotency_key` | yes | `string`; minLength 1; maxLength 120 |
+
+### `pz_plan_status`
+
+Current step, the results so far, and why the plan stopped.
+
+No arguments.
+
+### `pz_safety_stop`
+
+Always available. Clears mod-owned queue entries only, disarms, and works while unarmed, while the planner is absent and while the queue is backed up. Takes no arguments so nothing can make it fail.
+
+No arguments.
+
+### `pz_memory_query`
+
+Known containers, home point, safe zones, failed paths and user reservations. Read-only; returns no secrets and no paths.
+
+| Argument | Required | Schema |
+| --- | --- | --- |
+| `kinds` | no | array, maxItems 8; items `string`; maxLength 64; pattern `^[a-z][a-z0-9_.\-]{0,63}$` |
+| `limit` | no | `integer`; minimum 1; maximum 50; default `20` |
+
+### `pz_debug_doctor`
+
+Full environment report with stable check codes and remediation.
+
+No arguments.
+
+### `pz_debug_tail`
+
+Recent structured log records, redacted and bounded.
+
+| Argument | Required | Schema |
+| --- | --- | --- |
+| `limit` | no | `integer`; minimum 1; maximum 100; default `20` |
+| `level` | no | one of `debug`, `info`, `warning`, `error` |
+| `component` | no | `string`; maxLength 64; pattern `^[a-z][a-z0-9_.\-]{0,63}$` |
+| `action_id` | no | `string`; maxLength 36; pattern `^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$` |
+
+---
+
+## Capability gating
+
+Fourteen of the 31 tools name a capability. `published_tools()` offers a tool
+only when `CapabilityReport.usable()` is true for its capability, which means
+`verified` or `available_unverified`; `experimental`, `unsupported` and
+`disabled_by_policy` are all unusable. `withheld_tools()` returns the withheld
+names with their reasons, and `pz://capabilities` carries them, so a missing
+tool is an answer rather than an error.
+
+| Capability | Tools it gates |
+| --- | --- |
+| `move_to_square` | `pz_action_move_to`, `pz_action_move_near`, `pz_action_open_container` |
+| `inventory_transfer` | `pz_action_transfer`, `pz_action_ensure_main` |
+| `eat_percentage` | `pz_action_eat` |
+| `drink_carried` | `pz_action_drink` |
+| `drink_world_source` | `pz_action_drink_source` |
+| `read_literature` | `pz_action_read` |
+| `equipment_equip` | `pz_action_equip` |
+| `equipment_unequip` | `pz_action_unequip` |
+| `medical_bandage` | `pz_action_bandage` |
+| `survival_rest` | `pz_action_rest` |
+| `survival_sleep` | `pz_action_sleep` |
+
+The other seventeen tools name no capability at all. For the three query tools
+that is deliberate and documented in `capabilities/probes.py`: everything
+`world.inspect`, `container.inspect` and `inventory.search` read is reached
+through Java accessors that never appear in the game's Lua, so a probe over
+those names would report `unsupported` on a healthy install. They gate on the
+observation tier they need instead. It also means they are the three actions
+whose availability rests on no runtime evidence.
+
+`survival_sleep` and `drink_world_source` resolve to `experimental` on a clean
+static scan, so on most installs `pz_action_sleep` and `pz_action_drink_source`
+are **withheld**, with the reason, rather than offered.
 
 ---
 
 ## Resources
 
-| URI | Content |
-| --- | --- |
-| `pz://session/current` | Session id, mode, armed state, protocol version |
-| `pz://observation/latest` | Most recent compacted snapshot |
-| `pz://inventory/current` | Container tree with stable refs |
-| `pz://capabilities` | Probe results and their evidence |
-| `pz://plan/current` | Active plan and step results |
-| `pz://safety/status` | Danger level, takeover state, heartbeat health |
-| `pz://diagnostics/recent` | Recent diagnostics, redacted |
+Seven, all `application/json`, all with `subscribable: false`.
+
+| URI | `name` | Content |
+| --- | --- | --- |
+| `pz://session/current` | `session` | Session id, mode, armed state and protocol version. |
+| `pz://observation/latest` | `observation` | Most recent compacted snapshot. |
+| `pz://inventory/current` | `inventory` | Container tree with stable refs. |
+| `pz://capabilities` | `capabilities` | Probe results and the evidence behind them. |
+| `pz://plan/current` | `plan` | Active plan and its step results. |
+| `pz://safety/status` | `safety` | Danger level, takeover state and heartbeat health. |
+| `pz://diagnostics/recent` | `diagnostics` | Recent diagnostics, redacted. |
 
 Resources are read-only views over state core already holds. Each read carries
-the observation `seq` it was built from, which a client uses as an ETag.
+the observation `seq` it was built from, which a client uses as an ETag: a
+resource that has not moved reports the same `seq`.
 
-**Subscriptions are not delivered yet.** The design calls for them — a client
-watching `pz://safety/status` rather than polling it, because a safety change is
-exactly the thing you do not want to learn about on the next poll interval — but
-the server registers no `subscribe_resource` handler and nothing in core
-publishes resource-change events. Every resource descriptor therefore reports
-`subscribable: false`. A client that could subscribe and was never notified
+**Subscriptions are not delivered.** `subscribable` is `false` on all seven
+because the server registers no subscribe handler and nothing in core publishes
+resource-change events. A client that could subscribe and was never notified
 would read the silence as "nothing has changed", which is the worst possible
-failure for the safety view. Until the event source exists, poll.
+failure for the safety view. Poll `pz://safety/status` often; its own descriptor
+says so.
 
 ---
 
@@ -238,11 +541,18 @@ failure for the safety view. Until the event source exists, poll.
 `status` is an `ActionStatus` value for the long-running tools and `"ok"` for
 the ones that answer immediately. `action_id` is present exactly when the call
 put work in flight. `replayed` is true when an idempotency key was reused and
-the answer is the original call's, not a second action.
+the answer is the original call's, not a second action. `message` is clipped to
+300 characters and `warnings` to 8 entries.
 
 `status: "succeeded"` cannot be constructed without the observed postcondition
 under `data.evidence` — the same rule as `ActionResult.succeeded()`, enforced
 again where a client reads it.
+
+Neither plan tool ever puts `succeeded` in the envelope `status`: that word is
+reserved for a result carrying observed evidence, and a plan record has none to
+carry — its steps' evidence was observed by the action engine and stops at the
+port. A plan that finished answers `"ok"`, and `data.status` with
+`data.terminal` say what it finished as.
 
 ## Error shape
 
@@ -258,29 +568,25 @@ again where a client reads it.
 }
 ```
 
-`reason_code` is from the protocol's closed set and is stable across releases —
-renaming one is a protocol major bump. `retryable` reflects
-`RETRYABLE_CODES`, so a client does not have to maintain its own table of which
-failures are worth another attempt.
-
-Every mutating tool takes `idempotency_key` (required). Every one that submits a
-single command also takes `timeout_ms` (optional, that command's lease);
-`pz_plan_execute` does not, because a plan is bounded by
-`limits.max_real_seconds` rather than by a lease, and publishing an argument no
-handler reads would be the same lie as publishing a bound nothing enforces.
-
-No mutating tool takes a free-text field: `pz_plan_execute`'s `goal` is the only
-string a caller may write in their own words, and it comes back quarantined.
-
-A replay carries `replayed: true` and the status of the call it is replaying —
-refreshed from the action if one is still in flight, and otherwise the status the
-first call answered with. It is never downgraded to a bare `"ok"`.
+`reason_code` is from the protocol's closed set (see
+[`PROTOCOL.md`](PROTOCOL.md)) and is stable across releases — renaming one is a
+protocol major bump. `retryable` reflects `RETRYABLE_CODES`, so a client does not
+have to maintain its own table of which failures are worth another attempt.
+`diagnostics` is capped at 10 entries.
 
 ## What a caller cannot do
 
 - Execute code. There is no field for it anywhere in the surface.
 - Name a file. Every IPC filename is a hardcoded constant on both sides.
-- Act while disarmed. Except `stop` and `disarm`, which are always available.
-- Use an unverified capability without opting into `EXPERIMENTAL_INPUT`.
-- Bypass policy by composing primitives. Primitives that would allow it are not
-  published.
+- Act while disarmed, except through the four `control` tools.
+- Choose *what* to eat, drink or read. No tool takes a "pick something" form;
+  selection is deterministic policy in `pz_agent_core.policy`.
+- Pass `allow_windows`. It is not published, because the movement adapter
+  refuses it with `POLICY_DENIED`.
+- Name a destination for `pz_action_ensure_main`. The only container the adapter
+  accepts is the main inventory; any other one is `pz_action_transfer` under a
+  different name.
+- Use a tool whose capability is not usable. It is not listed and not callable.
+
+See [`SAFETY.md`](SAFETY.md) for where each of those is enforced, and
+[`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) for what to do about a refusal.

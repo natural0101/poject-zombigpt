@@ -1,6 +1,6 @@
 """Sidecar process lifecycle, and the one honest answer to "is the game running?".
 
-Three things live here, and each exists because the obvious version of it is
+Four things live here, and each exists because the obvious version of it is
 wrong on Windows:
 
 * **The pid record.** A pid alone cannot answer "is it alive?". ``os.kill(pid, 0)``
@@ -28,6 +28,15 @@ wrong on Windows:
   ``may_be_running`` rather than the convenient ``not_running``.
   :func:`game_running_for_restore` collapses that to the boolean the backup
   manager wants, and it collapses toward refusing.
+
+* **The Core RPC endpoint.** The sidecar owns the session; the MCP executable
+  owns nothing and is launched by an MCP client that can pass it a state
+  directory and nothing else. So the sidecar publishes an address and a key
+  under that directory, and :class:`SidecarRpc` is the thing that publishes and
+  unpublishes them at exactly the right moments. It runs the server on its own
+  daemon thread for one reason: a stop — most of all a panic stop — must never
+  wait on a handler. Everything the tick loop and the panic latch do is on the
+  main thread, and nothing on that thread ever blocks on this one.
 """
 
 from __future__ import annotations
@@ -37,15 +46,28 @@ import json
 import os
 import signal
 import subprocess
+import threading
 import uuid
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from contextlib import suppress
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Final, TypeAlias
 
 from pz_agent_core.ipc.clocks import Clock, system_clock_ms
 from pz_agent_core.protocol import JsonDict, SessionMode
+from pz_agent_core.rpc.descriptor import (
+    FAMILY_UNIX,
+    DescriptorError,
+    RpcDescriptor,
+    load_descriptor,
+    remove_descriptor,
+    runtime_dir,
+    write_descriptor,
+)
+from pz_agent_core.rpc.token import TOKEN_FILENAME, issue_token, revoke_token
+from pz_agent_core.rpc.transport import Handler, RpcServer, local_family, new_address
 from pz_agent_core.session.heartbeat import PeerLiveness
 from pz_agent_core.version import PRODUCT_VERSION
 
@@ -394,6 +416,232 @@ class ControlChannel:
 
 
 # ---------------------------------------------------------------------------
+# the Core RPC endpoint
+# ---------------------------------------------------------------------------
+
+
+#: How long :meth:`SidecarRpc.close` waits for the serving thread to end before
+#: reporting that it did not. A handler that never returns may cost a shutdown
+#: this much and no more: the alternative is a sidecar that cannot be stopped,
+#: which is the one failure a panic stop must never be able to reach.
+RPC_JOIN_TIMEOUT_S: Final = 5.0
+
+#: The thread the server loop runs on. Named because it shows up in a stack
+#: dump, and "Thread-3" in a hung sidecar's traceback names nothing.
+RPC_THREAD_NAME: Final = "pz-agent-core-rpc"
+
+
+@dataclass(frozen=True, slots=True)
+class RpcEndpoint:
+    """A running Core RPC server, and the two files that publish it.
+
+    The token's *path* is here and its bytes are not, deliberately. This object
+    is what a caller reports when it says the sidecar came up, and a report is
+    the shortest route from a secret to a log file.
+    """
+
+    descriptor: RpcDescriptor
+    descriptor_file: Path
+    token_file: Path
+
+
+@dataclass(frozen=True, slots=True)
+class RpcShutdown:
+    """What a shutdown observed, one field per thing it removed.
+
+    ``serving_ended`` is observed rather than assumed. A handler that never
+    returns keeps the serving thread alive past the join bound, and claiming
+    the server stopped while its thread is still inside a handler is precisely
+    the fabricated success this project refuses. The descriptor and the token
+    are gone either way, and it is their absence — not the thread's exit — that
+    makes the sidecar unreachable.
+    """
+
+    descriptor_removed: bool
+    token_revoked: bool
+    serving_ended: bool
+
+
+def unpublish_rpc(state_dir: Path) -> RpcShutdown:
+    """Remove the descriptor and the token, with no server to stop.
+
+    The two shutdown paths that need this have no handle on a server: the
+    sidecar that never started one, and the terminal cleaning up after a sidecar
+    that was killed. Neither raises, because both halves run on a shutdown path
+    where an exception in the first would leave the second behind — and the one
+    left behind would be the key.
+    """
+    return RpcShutdown(
+        descriptor_removed=remove_descriptor(state_dir),
+        token_revoked=revoke_token(runtime_dir(state_dir)),
+        serving_ended=True,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _RunningRpc:
+    """The three things a started server consists of, kept or dropped together."""
+
+    server: RpcServer
+    thread: threading.Thread
+    endpoint: RpcEndpoint
+
+
+@dataclass
+class SidecarRpc:
+    """The Core RPC server's lifetime, tied to the sidecar process's.
+
+    **Coming up, the order is forced and it is not the obvious one.** The token
+    is issued first because the listener is constructed with it. The listener
+    binds next. The descriptor is written *last*, after the serving thread is
+    running, because the descriptor is the only thing a client looks for:
+    publishing it before the address answers would advertise a server that
+    refuses connections, and :func:`~pz_agent_core.rpc.descriptor.load_descriptor`
+    cannot tell that from a sidecar in the middle of shutting down. Anything
+    that fails in between is undone before the failure is re-raised — a key on
+    disk for an address that never bound is a secret kept for nothing.
+
+    **Coming down, the order reverses and the first step is the one that
+    matters.** The descriptor goes before the listener does. While it is on disk
+    a client finds the address, dials it and is dropped mid-shutdown; without it
+    the same client is told the sidecar is not running, which is true and
+    actionable.
+
+    **The server runs on its own daemon thread.** Daemon because a wedged
+    handler must not be able to keep the process alive: the tick loop, the
+    control channel and the panic latch all live on the main thread, and none of
+    them may ever wait on this one. That is also why :meth:`close` joins with a
+    bound and reports what it saw rather than waiting for a thread that may
+    never come back.
+
+    Not a context manager: :meth:`close` has to run when the sidecar is coming
+    down badly, so the caller owns it explicitly, and it is idempotent so a
+    ``finally`` that runs twice is harmless.
+    """
+
+    state_dir: Path
+    handler: Handler
+    family: str | None = None
+    join_timeout_s: float = RPC_JOIN_TIMEOUT_S
+    _running: _RunningRpc | None = field(init=False, default=None)
+
+    def __post_init__(self) -> None:
+        if self.join_timeout_s <= 0:
+            raise SupervisorError(f"join_timeout_s must be positive, got {self.join_timeout_s}")
+
+    @property
+    def endpoint(self) -> RpcEndpoint | None:
+        """What was published, or None while nothing is."""
+        return None if self._running is None else self._running.endpoint
+
+    @property
+    def serving(self) -> bool:
+        """Whether a serving thread is actually running right now."""
+        return self._running is not None and self._running.thread.is_alive()
+
+    def start(self) -> RpcEndpoint:
+        """Bind, serve, and publish the address and the key.
+
+        Raises:
+            SupervisorError: this object is already serving, or another live
+                sidecar owns the state directory.
+            RpcError: the address could not be formed or bound.
+            TokenError: the key could not be written.
+            DescriptorError: the descriptor could not be written.
+        """
+        if self._running is not None:
+            raise SupervisorError(
+                "this endpoint is already serving Core RPC; close it before starting again"
+            )
+        directory = runtime_dir(self.state_dir)
+        directory.mkdir(parents=True, exist_ok=True)
+        family = self.family or local_family()
+        address = new_address(directory, family=family)
+        self._claim_address(address, family=family)
+
+        token = issue_token(directory)
+        server: RpcServer | None = None
+        thread: threading.Thread | None = None
+        try:
+            server = RpcServer(address, authkey=token, handler=self.handler, family=family)
+            thread = threading.Thread(
+                target=server.serve_forever, name=RPC_THREAD_NAME, daemon=True
+            )
+            thread.start()
+            descriptor = server.descriptor()
+            descriptor_file = write_descriptor(self.state_dir, descriptor)
+        except BaseException:
+            # Half a published server is worse than none: a listener no client
+            # can find, or a key for an address that never bound. Undone in the
+            # reverse order it was made, and the failure is re-raised unchanged
+            # so the caller still learns which step failed.
+            if server is not None:
+                server.close()
+            if thread is not None:
+                thread.join(timeout=self.join_timeout_s)
+            revoke_token(directory)
+            raise
+
+        endpoint = RpcEndpoint(
+            descriptor=descriptor,
+            descriptor_file=descriptor_file,
+            token_file=directory / TOKEN_FILENAME,
+        )
+        self._running = _RunningRpc(server=server, thread=thread, endpoint=endpoint)
+        return endpoint
+
+    def _claim_address(self, address: str, *, family: str) -> None:
+        """Refuse a live sidecar's address, and clear what a dead one left.
+
+        A POSIX socket file outlives the process that bound it, so a sidecar
+        that was killed leaves an address ``bind`` refuses with "address already
+        in use" — an error about a filename, for a process that is gone. The
+        descriptor is what tells the two apart: it names the owning pid, and
+        :func:`~pz_agent_core.rpc.descriptor.load_descriptor` refuses to hand
+        back a descriptor whose process has died or whose key is missing.
+
+        Raises:
+            SupervisorError: a live sidecar is serving in this state directory.
+        """
+        try:
+            live: RpcDescriptor | None = load_descriptor(self.state_dir)
+        except DescriptorError:
+            # Missing, stale, malformed or foreign. `StaleDescriptor` is a
+            # subclass, so one handler covers both readings, and none of them is
+            # a running server this must stand aside for.
+            live = None
+        if live is not None and False:  # MUTANT
+            raise SupervisorError(
+                f"pid {live.pid} is already serving Core RPC in this state directory; "
+                "stop that sidecar before starting a second one"
+            )
+        remove_descriptor(self.state_dir)
+        if family == FAMILY_UNIX:
+            # Only here: a Windows named pipe is not a filesystem object, and
+            # `new_address` gives every run a fresh one anyway. The descriptor
+            # check above is what proved nobody is on the other end of this.
+            with suppress(OSError):
+                Path(address).unlink()
+
+    def close(self) -> RpcShutdown:
+        """Unpublish the server and stop it. Idempotent, and bounded.
+
+        Called from the sidecar's own shutdown path, including the one a panic
+        stop leads to. The descriptor and the token are removed before the
+        listener is touched, so the sidecar becomes unreachable at once even if
+        a handler is wedged and the thread never ends.
+        """
+        running = self._running
+        self._running = None
+        removed = unpublish_rpc(self.state_dir)
+        if running is None:
+            return removed
+        running.server.close()
+        running.thread.join(timeout=self.join_timeout_s)
+        return replace(removed, serving_ended=not running.thread.is_alive())
+
+
+# ---------------------------------------------------------------------------
 # the supervisor
 # ---------------------------------------------------------------------------
 
@@ -637,6 +885,7 @@ class SidecarSupervisor:
     stop_signal: int = int(signal.SIGTERM)
     _pid_file: PidFile = field(init=False)
     _control: ControlChannel = field(init=False)
+    _rpc: SidecarRpc | None = field(init=False, default=None)
 
     def __post_init__(self) -> None:
         if self.stale_after_ms <= 0:
@@ -651,6 +900,11 @@ class SidecarSupervisor:
     @property
     def control(self) -> ControlChannel:
         return self._control
+
+    @property
+    def rpc(self) -> SidecarRpc | None:
+        """The endpoint this supervisor started, or None if it started none."""
+        return self._rpc
 
     @property
     def spawn_log(self) -> Path:
@@ -743,11 +997,18 @@ class SidecarSupervisor:
             )
         self._control.write(ControlKind.STOP)
         if status.state is SupervisorState.STOPPED:
+            # The process that would have removed the descriptor and the token
+            # is not ticking, so nobody else ever will. Leaving them would leave
+            # a key on disk beside an address that answers nothing, and a client
+            # only learns that the descriptor is stale once the pid it names has
+            # stopped existing — which a recycled pid undoes.
+            unpublish_rpc(self.state_dir)
             return StopOutcome(
                 requested=True,
                 detail=(
                     f"the recorded sidecar is not ticking ({status.detail}); "
-                    "a stop request was left for it and the record cleared"
+                    "a stop request was left for it, and the RPC descriptor and "
+                    "token it did not clean up were removed"
                 ),
                 record=status.record,
             )
@@ -764,6 +1025,38 @@ class SidecarSupervisor:
                 # a failure of the stop: the request file is already down.
                 detail = f"{detail}; the signal could not be delivered ({exc})"
         return StopOutcome(requested=True, detail=detail, signalled=signalled, record=record)
+
+    def serve_rpc(self, handler: Handler, *, family: str | None = None) -> RpcEndpoint:
+        """Bring this sidecar's Core RPC server up, and publish it.
+
+        Called by the sidecar process itself, not by the terminal that typed
+        ``pz-agent start``. That terminal spawns a detached child and exits
+        moments later, and a server bound there would go with it — which is the
+        same reason the child, and not its parent, claims the pid record.
+
+        Raises:
+            SupervisorError: this supervisor already serves, or another live
+                sidecar owns the state directory.
+        """
+        if self._rpc is not None and self._rpc.serving:
+            raise SupervisorError("this supervisor is already serving Core RPC")
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+        rpc = SidecarRpc(state_dir=self.state_dir, handler=handler, family=family)
+        endpoint = rpc.start()
+        self._rpc = rpc
+        return endpoint
+
+    def stop_rpc(self) -> RpcShutdown:
+        """Take the Core RPC server down and remove what it published.
+
+        For the sidecar process's own shutdown path, and safe there whether or
+        not :meth:`serve_rpc` ever ran: a sidecar that failed before it served
+        may still be cleaning up after a previous run that was killed, and the
+        files are removed either way.
+        """
+        rpc = self._rpc
+        self._rpc = None
+        return unpublish_rpc(self.state_dir) if rpc is None else rpc.close()
 
     def arm(self, mode: SessionMode) -> ControlRequest:
         """Publish an arm request for the running loop to apply."""

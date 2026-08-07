@@ -4,11 +4,21 @@ TeamON's SDK is not installed here and its surface has not been verified, so
 this module does what the capability rules require everywhere else in the
 project: it states exactly what it needs, in a protocol it owns, and refuses to
 pretend it knows the vendor's function names. :class:`TeamONVoiceAdapter` is
-complete and fully exercised against that protocol; binding the protocol to the
-real SDK is three methods of glue that whoever has the SDK writes, and
-:func:`require_teamon_sdk` is the one place the vendor import happens.
+complete and fully exercised against that protocol, and
+:func:`require_teamon_sdk` is the one place a vendor import would happen.
 
-**What an integrator must provide** — a :class:`TeamONClient` with:
+**One implementation ships**, and it is a process rather than an import:
+:class:`~pz_agent_voice.bridge.client.TeamONBridgeClient` launches a bridge
+program, speaks the JSONL protocol in :mod:`pz_agent_voice.bridge.protocol` to
+it over stdin and stdout, and supervises it — bounded reads, bounded waits,
+counted restarts, a stop that never waits for the bridge to agree. The vendor
+SDK lives on the far side of that pipe, where a crash costs a restart instead of
+the sidecar. That module deliberately imports *this* one and not the other way
+round: this file must keep importing and type-checking on a machine that has
+neither the SDK nor a bridge.
+
+**What an integrator provides instead**, if they would rather link the SDK
+in-process than run a bridge — a :class:`TeamONClient` with:
 
 ``transcripts()``
     Awaited once, returning an async iterator of :class:`TeamONTranscript` —

@@ -19,6 +19,15 @@ invariant rather than just fields:
 * :class:`MemoryRecord` carries numbers and references in ``data`` and puts
   everything a human would read into ``label``, which is quarantined on the way
   out. A memory store cannot smuggle game text through a numeric field.
+
+:class:`GoalPort` is the exception to "the record types are the boundary's own
+vocabulary": it speaks :mod:`pz_agent_core.goals` directly. Restating
+:class:`~pz_agent_core.goals.GoalRequest` here would mean restating the closed
+kind set, the per-kind parameter table and the three budget bounds — and a
+second copy of a closed set is a set that eventually admits something the first
+one refuses, which is the whole property this channel exists to have. What is
+added here is only the two shapes a *port* answers with, because a queue method
+returning ``bool`` is not enough to tell a client what happened.
 """
 
 from __future__ import annotations
@@ -29,6 +38,7 @@ from typing import Protocol
 
 from pz_agent_core.actions import ActionRequest
 from pz_agent_core.capabilities.model import CapabilityReport
+from pz_agent_core.goals import GoalAdmission, GoalRecord, GoalRequest
 from pz_agent_core.protocol import (
     ActionName,
     ActionResult,
@@ -47,6 +57,9 @@ __all__ = [
     "CoreServices",
     "DiagnosticsPort",
     "DoctorCheck",
+    "GoalCancellation",
+    "GoalChannelStatus",
+    "GoalPort",
     "LogRecord",
     "MemoryPort",
     "MemoryRecord",
@@ -179,6 +192,53 @@ class PlanRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class GoalChannelStatus:
+    """The goal channel as it stands, plus the one goal the caller asked about.
+
+    ``named`` is ``None`` for two different situations that a client must not
+    have collapsed for it: no id was asked about, and an id was asked about that
+    this channel has never minted or has already forgotten. The router knows
+    which it is — it knows whether it passed an id — and turns the second into a
+    refusal rather than into an answer that reads as "that goal is not running".
+
+    ``pending`` is ordered oldest first, the way
+    :attr:`~pz_agent_core.goals.GoalQueue.pending` orders it: by admission
+    sequence and never by timestamp, because Windows' wall clock advances in
+    ~15.6 ms granules and two goals submitted in one granule carry the same one.
+    """
+
+    active: GoalRecord | None = None
+    pending: tuple[GoalRecord, ...] = ()
+    named: GoalRecord | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class GoalCancellation:
+    """What a cancel request did to the goal it named.
+
+    ``requested`` is not "cancelled": the channel observes a cancellation on its
+    next tick, so an accepted request can be reported against a goal that is
+    still running, and a client that read ``requested`` as "it has stopped"
+    would be making the early claim :class:`ActionRecord` refuses to make about
+    a postcondition. ``False`` means there was nothing to cancel — the goal had
+    already reached a terminal state — which is a different thing again from the
+    request being rejected.
+
+    ``goal`` is ``None`` only for an id the channel does not know, and then
+    nothing can have been requested.
+    """
+
+    goal: GoalRecord | None = None
+    requested: bool = False
+
+    def __post_init__(self) -> None:
+        if self.requested and self.goal is None:
+            raise ValueError(
+                "a cancellation that was accepted must name the goal it was accepted for"
+            )
+
+
+@dataclass(frozen=True, slots=True)
 class MemoryRecord:
     """One remembered fact.
 
@@ -278,6 +338,24 @@ class PlanPort(Protocol):
     def current(self) -> PlanRecord | None: ...
 
 
+class GoalPort(Protocol):
+    """The typed goal channel: submission, progress and the cancel lever.
+
+    :meth:`submit` admits a goal to the backlog and returns as soon as it has an
+    id, exactly as :meth:`ActionPort.submit` does — the goal is *not* served
+    inside the call. Activation is the sidecar's own loop, so what a caller gets
+    back is ``pending``, and that is the honest word rather than a placeholder.
+
+    :meth:`cancel` asks; it does not promise. See :class:`GoalCancellation`.
+    """
+
+    def submit(self, request: GoalRequest) -> GoalAdmission: ...
+
+    def status(self, goal_id: str | None = None) -> GoalChannelStatus: ...
+
+    def cancel(self, goal_id: str) -> GoalCancellation: ...
+
+
 class MemoryPort(Protocol):
     """Read-only semantic memory."""
 
@@ -301,7 +379,19 @@ class DiagnosticsPort(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class CoreServices:
-    """Every port the router needs, in one injectable bundle."""
+    """Every port the router needs, in one injectable bundle.
+
+    ``goals`` is the one optional member, and the default is not a convenience.
+    The MCP executable reads the core over the Local Core RPC link
+    (``docs/CORE_RPC.md``), and that link carries no ``goal.*`` method yet — the
+    channel itself exists in :mod:`pz_agent_core.goals` and the tools that
+    publish it are declared, but the leg between the two processes is a separate
+    piece of work. A bundle assembled without it says so by leaving this
+    ``None``, and :class:`~pz_agent_mcp.router.ToolRouter` answers the three
+    goal tools with ``CAPABILITY_UNAVAILABLE`` naming exactly that. The
+    alternative — a default port that accepted goals and dropped them — is the
+    fabricated success this project does not ship.
+    """
 
     session: SessionPort
     observations: ObservationPort
@@ -310,6 +400,7 @@ class CoreServices:
     plans: PlanPort
     memory: MemoryPort
     diagnostics: DiagnosticsPort
+    goals: GoalPort | None = None
 
 
 def evidence_payload(result: ActionResult) -> JsonDict:

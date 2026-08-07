@@ -19,24 +19,37 @@ from __future__ import annotations
 # ruff: noqa: RUF001
 from typing import Final
 
+from pz_agent_core.capabilities import DRINK_CARRIED, EAT_PERCENTAGE, READ_LITERATURE
+from pz_agent_core.goals import NUMERIC_RANGES, PARAM_NAMES, GoalKind
 from pz_agent_core.protocol import DangerLevel, ReasonCode
 
-from .messages import VoiceGoal
+# Imported for the totality check at the bottom of this module rather than for
+# anything spoken. The direction is the safe one — :mod:`.intent` does not import
+# this module — and it buys the guarantee that a capability the matcher can
+# refuse on always has a sentence, checked at import instead of at the
+# loudspeaker.
+from .intent import ALL_VOICE_CAPABILITIES
+from .messages import IntentRefusal, VoiceGoal
 
 __all__ = [
+    "CAPABILITY_NOUNS",
     "CLARIFY_REPEAT",
     "DANGER_PHRASES",
     "GOAL_ACCEPTED",
     "GOAL_NOUNS",
+    "KIND_ACCEPTED",
     "NOT_ARMED",
     "NOT_CONNECTED",
     "NOT_UNDERSTOOD",
+    "PARAM_NOUNS",
     "PLAN_DONE",
     "PLAN_REFUSED",
+    "REFUSAL_SPEECH",
     "STOP_ACK",
     "STOP_FAILED",
     "TAKEOVER",
     "clarify_between",
+    "intent_refusal",
     "refusal",
     "status_line",
 ]
@@ -115,6 +128,133 @@ def refusal(reason: ReasonCode | None) -> str:
 def clarify_between(first: VoiceGoal, second: VoiceGoal) -> str:
     """Ask which of two goals was meant, naming both from the closed table."""
     return f"Уточни: {GOAL_NOUNS[first]} или {GOAL_NOUNS[second]}?"
+
+
+#: What the companion says when a transcript became a goal on the typed channel.
+#: One sentence per kind, so the confirmation is a fact about what was submitted
+#: rather than a repetition of what was heard.
+KIND_ACCEPTED: Final[dict[GoalKind, str]] = {
+    GoalKind.SATISFY_HUNGER: "Ищу, что съесть.",
+    GoalKind.SATISFY_THIRST: "Ищу, что выпить.",
+    GoalKind.READ_FOR_BOREDOM: "Ищу, что почитать.",
+    GoalKind.TRAIN_SKILL: "Ищу книгу по навыку.",
+    GoalKind.LEARN_RECIPE: "Ищу книгу с рецептами.",
+}
+
+#: How to say each goal parameter, in the nominative singular so one sentence
+#: template works for all of them. The names on the left are the core's, so a
+#: parameter that is renamed there stops this module importing.
+PARAM_NOUNS: Final[dict[str, str]] = {
+    "skill": "навык",
+    "target_level": "уровень",
+    "satisfy_to": "насыщение",
+    "pages": "число страниц",
+}
+
+#: The unit a range is *spoken* in, and the factor that gets it there. The core
+#: holds ``satisfy_to`` as a fraction; nobody says "до нуля целых восьми", so the
+#: sentence says eighty per cent and the arithmetic lives here.
+_RANGE_SPOKEN_AS: Final[dict[str, tuple[float, str]]] = {
+    "target_level": (1.0, ""),
+    "satisfy_to": (100.0, " процентов"),
+    "pages": (1.0, ""),
+}
+
+#: How to say each capability this package can refuse on. The keys are the names
+#: :mod:`pz_agent_core.capabilities.probes` publishes and the report on disk
+#: carries, which is what makes "названа причина" mean the same thing in the
+#: spoken refusal and in the support bundle.
+CAPABILITY_NOUNS: Final[dict[str, str]] = {
+    EAT_PERCENTAGE: "приём пищи",
+    DRINK_CARRIED: "питьё",
+    READ_LITERATURE: "чтение",
+}
+
+#: The refusals whose whole sentence is a constant. The other three name
+#: something — a parameter, a capability — and are built by
+#: :func:`intent_refusal` from the closed tables above.
+REFUSAL_SPEECH: Final[dict[IntentRefusal, str]] = {
+    IntentRefusal.NOT_A_GOAL: (
+        "Такой команды не знаю. Скажи: поешь, попей, почитай или прокачай навык."
+    ),
+    IntentRefusal.AMBIGUOUS_GOAL: "Услышал два задания сразу. Скажи одно.",
+    IntentRefusal.SKILL_NOT_NAMED: (
+        "Не понял, какой навык. Назови один навык, например плотницкое дело."
+    ),
+}
+
+#: Refusals that cannot be spoken without being told what to name.
+_NAMED_REFUSALS: Final[frozenset[IntentRefusal]] = frozenset(
+    {
+        IntentRefusal.PARAMETER_OUT_OF_RANGE,
+        IntentRefusal.PARAMETER_NOT_ACCEPTED,
+        IntentRefusal.CAPABILITY_UNAVAILABLE,
+    }
+)
+
+
+def _spoken_number(value: float) -> str:
+    """A range bound as a person says it: no trailing zero, no exponent."""
+    return f"{value:g}"
+
+
+def intent_refusal(
+    refusal_code: IntentRefusal, *, parameter: str = "", capability: str = ""
+) -> str:
+    """One sentence naming why a transcript was refused, and what to do instead.
+
+    *parameter* and *capability* are names this process minted — a member of
+    :data:`~pz_agent_core.goals.PARAM_NAMES`, a capability from the probe table —
+    and they are looked up rather than interpolated. An unknown name raises:
+    the only way one can get here is a table in this package having drifted, and
+    reading an unrecognised token out of a loudspeaker would be the transcript
+    leak the whole module is arranged to prevent.
+    """
+    if refusal_code is IntentRefusal.PARAMETER_OUT_OF_RANGE:
+        bounds = NUMERIC_RANGES[_known_parameter(parameter, ranged=True)]
+        factor, unit = _RANGE_SPOKEN_AS[parameter]
+        low = _spoken_number(bounds.minimum * factor)
+        high = _spoken_number(bounds.maximum * factor)
+        noun = PARAM_NOUNS[parameter].capitalize()
+        return f"{noun} — от {low} до {high}{unit}. Назови число в этих пределах."
+    if refusal_code is IntentRefusal.PARAMETER_NOT_ACCEPTED:
+        noun = PARAM_NOUNS[_known_parameter(parameter, ranged=False)]
+        return f"Здесь {noun} не задаётся. Повтори без этого."
+    if refusal_code is IntentRefusal.CAPABILITY_UNAVAILABLE:
+        if capability not in CAPABILITY_NOUNS:
+            raise ValueError("a refusal may only name a capability this package knows")
+        return f"Не умею в этой сборке игры: {CAPABILITY_NOUNS[capability]}. Сделай это вручную."
+    return REFUSAL_SPEECH[refusal_code]
+
+
+def _known_parameter(name: str, *, ranged: bool) -> str:
+    """Return *name* once it is confirmed to be a parameter this package names."""
+    table = NUMERIC_RANGES if ranged else PARAM_NOUNS
+    if name not in table:
+        raise ValueError("a refusal may only name a declared goal parameter")
+    return name
+
+
+def _check_speech_tables() -> None:
+    """Refuse to import a table that cannot say something it may be asked to."""
+    missing_kinds = set(GoalKind) - set(KIND_ACCEPTED)
+    if missing_kinds:
+        raise RuntimeError(f"nothing to say for goal kind(s) {sorted(missing_kinds)}")
+    if set(PARAM_NOUNS) != set(PARAM_NAMES):
+        raise RuntimeError("PARAM_NOUNS has drifted from the core's parameter names")
+    if set(_RANGE_SPOKEN_AS) != set(NUMERIC_RANGES):
+        raise RuntimeError("_RANGE_SPOKEN_AS has drifted from NUMERIC_RANGES")
+    if set(CAPABILITY_NOUNS) != ALL_VOICE_CAPABILITIES:
+        raise RuntimeError("a capability the matcher can refuse on has no spoken form")
+    unspeakable = set(IntentRefusal) - set(REFUSAL_SPEECH) - _NAMED_REFUSALS
+    if unspeakable:
+        raise RuntimeError(f"no sentence for refusal(s) {sorted(unspeakable)}")
+    overlap = set(REFUSAL_SPEECH) & _NAMED_REFUSALS
+    if overlap:
+        raise RuntimeError(f"refusal(s) {sorted(overlap)} have two spoken forms")
+
+
+_check_speech_tables()
 
 
 def status_line(*, armed: bool, connected: bool, danger: DangerLevel) -> str:

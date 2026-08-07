@@ -1,4 +1,4 @@
-"""The seven ports, implemented against a core that is in the other process.
+"""The seven ports and the goal channel, against a core in the other process.
 
 :class:`~pz_agent_mcp.ports.CoreServices` is what the router reads through, and
 until this module existed nothing in the tree could produce one: an MCP client
@@ -72,6 +72,22 @@ reported as (a) tells them the core refused when nothing was ever asked; and
 either reported as (c) sends them looking for a version mismatch that is not
 there.
 
+The goal channel is an eighth thing, not an eighth port
+------------------------------------------------------
+
+:class:`~pz_agent_mcp.ports.CoreServices` declares seven ports and the typed goal
+channel of :mod:`pz_agent_core.goals` is not one of them, so
+:attr:`RemoteCoreServices.goals` is an attribute this subclass adds rather than a
+field of the bundle. It is a :class:`~pz_agent_mcp.remote.server.GoalPort` like
+any other implementation of that protocol, reached over the same link and
+failing in the same three ways.
+
+Its ``cancel`` deserves a note. It answers a *boolean*, and the boolean is not
+"did it work": it is "was there an open goal to cancel". ``False`` means the goal
+had already reached a terminal state, which is an answer a user needs — "it
+already stopped" and "it will stop" call for different words — and it is never
+how a failure to reach the core is reported. That still raises.
+
 ``observations.latest()`` deserves its own sentence, because it is the one port
 whose success value is ``None``: before the first observation arrives there is
 nothing to report. A dropped link must therefore *raise* rather than answer
@@ -90,6 +106,7 @@ from typing import Any, Final, TypeVar
 
 from pz_agent_core.actions import ActionRequest
 from pz_agent_core.capabilities.model import CapabilityReport
+from pz_agent_core.goals import GoalAdmission, GoalRecord, GoalRequest
 from pz_agent_core.protocol import JsonDict, Observation, SessionMode
 from pz_agent_core.rpc.descriptor import DescriptorError, load_descriptor, runtime_dir
 from pz_agent_core.rpc.token import TokenError, read_token
@@ -123,6 +140,13 @@ from pz_agent_mcp.remote.codec.diagnostics import (
     decode_log_records,
     encode_tail_query,
 )
+from pz_agent_mcp.remote.codec.goals import (
+    decode_goal_admission,
+    decode_goal_cancellation,
+    decode_goal_status,
+    encode_goal_id,
+    encode_goal_request,
+)
 from pz_agent_mcp.remote.codec.memory import (
     MemoryQuery,
     decode_memory_records,
@@ -148,6 +172,7 @@ __all__ = [
     "RemoteCoreError",
     "RemoteCoreServices",
     "RemoteDiagnosticsPort",
+    "RemoteGoalPort",
     "RemoteMemoryPort",
     "RemoteObservationPort",
     "RemotePlanPort",
@@ -457,6 +482,57 @@ class RemotePlanPort:
 
 
 @dataclass(frozen=True, slots=True)
+class RemoteGoalPort:
+    """:class:`~pz_agent_mcp.remote.server.GoalPort` over the link."""
+
+    link: CoreLink
+
+    def submit(self, request: GoalRequest) -> GoalAdmission:
+        """Offer *request* to the channel and return the admission it answered.
+
+        One call, and it is over when the answer arrives. This does not wait for
+        the goal to be activated, let alone served: the transport is one
+        exchange per connection, and a submit that waited for a goal would hold
+        the link for as long as the goal's whole wall-clock budget — the exact
+        window in which ``pz_session_stop`` has to get through.
+
+        A refusal from the channel — the cap reached, the session disarmed, an
+        idempotency key reused for different parameters — arrives *inside* the
+        admission rather than as :class:`CoreRefused`. That is deliberate: those
+        are decisions the channel made and each of them carries the sentence a
+        user needs, whereas :class:`CoreRefused` is what a port raising looks
+        like. Collapsing the two would leave a caller unable to tell "your goal
+        was not admitted, and here is what to do" from "the core would not
+        answer at all".
+        """
+        return self.link.read(
+            Method.GOAL_SUBMIT, decode_goal_admission, encode_goal_request(request)
+        )
+
+    def status(self, goal_id: str) -> GoalRecord | None:
+        """The record for *goal_id*, or ``None`` if the channel has none.
+
+        ``None`` means the channel answered and had nothing under that id — a
+        goal it never minted, or one that finished long enough ago to have left
+        the bounded history. The codec spells that as an absent key, distinct
+        from an empty object, which would be a decode failure. A link that is
+        down raises.
+        """
+        return self.link.read(Method.GOAL_STATUS, decode_goal_status, encode_goal_id(goal_id))
+
+    def cancel(self, goal_id: str) -> bool:
+        """Ask the channel to end *goal_id*; ``True`` if there was one to end.
+
+        ``False`` is an answer, not a failure: the goal had already reached a
+        terminal state. Every way of failing to reach the channel raises, so a
+        dead link is never reported as "there was nothing to cancel" — which,
+        told about a goal that is still running, would be the opposite of the
+        truth.
+        """
+        return self.link.read(Method.GOAL_CANCEL, decode_goal_cancellation, encode_goal_id(goal_id))
+
+
+@dataclass(frozen=True, slots=True)
 class RemoteMemoryPort:
     """:class:`~pz_agent_mcp.ports.MemoryPort` over the link."""
 
@@ -533,7 +609,17 @@ class RemoteCoreServices(CoreServices):
     :class:`CoreServices` to the type checker as well as at runtime: the router
     takes the bundle, and a remote implementation that only duck-typed would be
     accepted by mypy in some call sites and not others.
+
+    :attr:`goals` is carried alongside those seven rather than among them,
+    because the bundle declares seven ports and the typed goal channel is not
+    one of them. Everything else about it is the same: one link, the same three
+    failure kinds, the same codec.
     """
+
+    #: The typed goal channel over the same link. Annotated rather than
+    #: assigned at class level: it is per-instance state, and the instance is
+    #: what holds the link.
+    goals: RemoteGoalPort
 
     def __init__(self, link: CoreLink) -> None:
         super().__init__(
@@ -545,6 +631,12 @@ class RemoteCoreServices(CoreServices):
             memory=RemoteMemoryPort(link),
             diagnostics=RemoteDiagnosticsPort(link),
         )
+        # `CoreServices` is a frozen dataclass, so plain assignment raises
+        # `FrozenInstanceError`; `object.__setattr__` is the same door the
+        # dataclass's own generated `__init__` uses to fill its fields, and it
+        # is used here for exactly that — filling an attribute once, during
+        # construction, on an object that is immutable from then on.
+        object.__setattr__(self, "goals", RemoteGoalPort(link))
 
     @classmethod
     def from_state_dir(

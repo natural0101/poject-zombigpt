@@ -41,6 +41,18 @@ Every tool also carries one ``example``, validated against its own schema at
 import. An example that a tool's schema rejects is caught here rather than by
 the first client that pastes it.
 
+The three ``pz_goal_*`` tools publish :mod:`pz_agent_core.goals`, and they are
+the one part of this surface with no free-text field at all: a goal is a member
+of a closed enum plus range-checked numbers, so ``pz_goal_submit`` is what a
+caller reaches for when the *words* must not travel. ``pz_plan_execute`` still
+carries a sentence, and that sentence is what a voice loop is forbidden to
+forward (§7.11); the goal channel is the same intent expressed as tokens. Their
+schemas therefore pin :class:`~pz_agent_core.goals.GoalKind` and
+:class:`~pz_agent_core.goals.TrainableSkill` as ``enum``\\ s rather than as
+patterns — an invented kind has to be *refused*, and a pattern that merely
+looked plausible would let one through to a channel whose whole promise is that
+it cannot carry one.
+
 Deliberately absent, and each absence is a rule: no tool selects *which* item to
 eat, drink or read (that is deterministic policy in
 :mod:`pz_agent_core.policy`); no tool carries Lua, Python, shell, keystrokes or
@@ -104,6 +116,12 @@ from pz_agent_core.capabilities.probes import (
     SURVIVAL_REST,
     SURVIVAL_SLEEP,
 )
+from pz_agent_core.goals import (
+    MAX_IDEMPOTENCY_KEY_LEN,
+    NUMERIC_RANGES,
+    GoalKind,
+    TrainableSkill,
+)
 from pz_agent_core.protocol import READ_ONLY_ACTIONS, ActionName, JsonDict, RefKind, RiskClass
 from pz_agent_core.protocol.messages import MAX_LEASE_MS, MIN_LEASE_MS
 
@@ -166,6 +184,12 @@ _EXAMPLE_MAIN: Final = f"container:{EXAMPLE_SESSION_ID}:player-main"
 _EXAMPLE_CRATE: Final = f"container:{EXAMPLE_SESSION_ID}:world:1200:3400:0:0:0"
 _EXAMPLE_SQUARE: Final = f"square:{EXAMPLE_SESSION_ID}:1200:3400:0"
 
+#: A goal id the way :func:`~pz_agent_core.goals.mint_goal_id` spells one. Not
+#: derived from :data:`EXAMPLE_SESSION_ID`: a goal id is minted by the channel
+#: and is not session-scoped, and an example that reused the session's id would
+#: teach a client the two are interchangeable.
+_EXAMPLE_GOAL_ID: Final = "00000000-0000-4000-8000-0000000000a1"
+
 #: Filter tokens (categories, components, memory kinds) are identifiers, not
 #: prose. A sentence in one of those positions is a red flag, so the pattern is
 #: strict rather than merely length-bounded.
@@ -187,6 +211,15 @@ _SLOT_PATTERN: Final = rf"^[A-Za-z0-9._\-]{{1,{MAX_SLOT_NAME_LEN}}}$"
 _UNEQUIP_HANDS: Final[tuple[str, ...]] = tuple(sorted(HANDS - {"both"}))
 
 _REF_PATTERN: Final = r"^{head}:[A-Za-z0-9:_.\-]{{1,200}}$"
+
+#: An identifier this process minted and handed to the caller: a command id, a
+#: goal id. Named once because it is the same grammar in every position — three
+#: copies of it would be three chances for one of them to lose a group and start
+#: admitting free text into a field that is meant to be echoed back.
+_UUID_PATTERN: Final = (
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+_UUID_CHARS: Final = 36
 
 
 def _ref_schema(kind: RefKind | tuple[RefKind, ...], description: str) -> JsonDict:
@@ -258,6 +291,55 @@ def _mutating(
         "type": "object",
         "additionalProperties": False,
         "properties": {**properties, **envelope},
+        "required": [*required, "idempotency_key"],
+    }
+
+
+#: The goal channel checks a caller's key against its own shape and its own
+#: length — :data:`~pz_agent_core.goals.MAX_IDEMPOTENCY_KEY_LEN`, half of what
+#: :data:`_IDEMPOTENCY_KEY` allows — and refuses rather than sanitises, because
+#: folding two distinct keys into one would silently merge two goals. So the
+#: goal tools do not reuse the command envelope's key: a key this schema waved
+#: through would be one the channel refuses *after* the call was made, which is
+#: exactly the drift the bounds in this module are imported to prevent. The
+#: alphabet is restated because the channel states it as a compiled private
+#: pattern rather than as a constant; ``tests/unit/test_mcp_catalog_goals.py``
+#: holds the two together by feeding one's rejects to the other.
+_GOAL_KEY_PATTERN: Final = rf"^[A-Za-z0-9][A-Za-z0-9_.:\-]{{0,{MAX_IDEMPOTENCY_KEY_LEN - 1}}}$"
+
+_GOAL_KEY: Final[JsonDict] = {
+    "type": "string",
+    "description": (
+        "Caller-chosen key. Submitting again with the same key returns the goal "
+        "that key created instead of starting a second one."
+    ),
+    "minLength": 1,
+    "maxLength": MAX_IDEMPOTENCY_KEY_LEN,
+    "pattern": _GOAL_KEY_PATTERN,
+}
+
+_GOAL_ID: Final[JsonDict] = {
+    "type": "string",
+    "description": "A goal id the channel minted and handed back on submission.",
+    "pattern": _UUID_PATTERN,
+    "maxLength": _UUID_CHARS,
+}
+
+
+def _goal_channel(properties: Mapping[str, JsonDict], *, required: Iterable[str] = ()) -> JsonDict:
+    """An input schema for a tool that speaks to the goal channel.
+
+    Not :func:`_mutating`, for two reasons that are both about advertising
+    something the receiver would refuse. The key is the channel's own — see
+    :data:`_GOAL_KEY`. And there is no ``timeout_ms``: a goal is bounded by its
+    :class:`~pz_agent_core.goals.GoalBudget`, which is wall clock *and* step
+    count *and* a pending time to live, none of which is a command lease.
+    Publishing a lease here would offer an argument no handler reads.
+    """
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {**properties, "idempotency_key": _GOAL_KEY},
         "required": [*required, "idempotency_key"],
     }
 
@@ -1131,11 +1213,8 @@ TOOLS: Final[tuple[ToolSpec, ...]] = (
                 "command_id": {
                     "type": "string",
                     "description": "The action to cancel; omit to clear every mod-owned entry.",
-                    "pattern": (
-                        r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}"
-                        r"-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
-                    ),
-                    "maxLength": 36,
+                    "pattern": _UUID_PATTERN,
+                    "maxLength": _UUID_CHARS,
                 }
             },
             required=(),
@@ -1199,6 +1278,102 @@ TOOLS: Final[tuple[ToolSpec, ...]] = (
         risk=RiskClass.P0,
         summary="Current step, the results so far, and why the plan stopped.",
         input_schema=_NO_ARGUMENTS,
+    ),
+    # --- goals ------------------------------------------------------------
+    # The typed goal channel, published as three tools. What separates them
+    # from `pz_plan_execute` is that nothing here is a sentence: a kind is a
+    # member of a closed enum and every parameter is a number with a declared
+    # range, so a caller that must not forward words — a voice loop, §7.11 —
+    # has somewhere to put the intent instead of nowhere.
+    ToolSpec(
+        name="pz_goal_submit",
+        kind=ToolKind.WRITE,
+        risk=RiskClass.P2,
+        summary=(
+            "Ask the typed goal channel for one of the things it carries. The "
+            "kind set is closed and there is no free-text field at all: an "
+            "invented kind is refused, never approximated. The channel admits "
+            "the goal to a bounded backlog and answers with its id and state — "
+            "'pending' is the honest word for a goal nothing has started yet, "
+            "and every goal carries a wall-clock, step and time-to-live budget "
+            "so that it reaches a terminal state whether or not it is served. "
+            "Which sandwich satisfies a hunger goal is never decided here."
+        ),
+        input_schema=_goal_channel(
+            {
+                "kind": {
+                    "type": "string",
+                    "description": "What to ask for.",
+                    "enum": sorted(kind.value for kind in GoalKind),
+                },
+                "skill": {
+                    "type": "string",
+                    "description": "Which skill a 'train_skill' goal is for.",
+                    "enum": sorted(skill.value for skill in TrainableSkill),
+                },
+                # No defaults on the three numbers, deliberately: which of them
+                # a kind accepts is declared per kind in
+                # `pz_agent_core.goals.GOAL_SPECS`, and a default here would
+                # attach a parameter to a kind that refuses it — turning an
+                # omission into an INVALID_ARGUMENT the caller never asked for.
+                "target_level": {
+                    "type": "integer",
+                    "description": "Skill level a 'train_skill' goal reads towards.",
+                    "minimum": NUMERIC_RANGES["target_level"].minimum,
+                    "maximum": NUMERIC_RANGES["target_level"].maximum,
+                },
+                "satisfy_to": {
+                    "type": "number",
+                    "description": "How far to satisfy hunger or thirst; the stat runs 0..1.",
+                    "minimum": NUMERIC_RANGES["satisfy_to"].minimum,
+                    "maximum": NUMERIC_RANGES["satisfy_to"].maximum,
+                },
+                "pages": {
+                    "type": "integer",
+                    "description": "How many pages a reading goal may read.",
+                    "minimum": NUMERIC_RANGES["pages"].minimum,
+                    "maximum": NUMERIC_RANGES["pages"].maximum,
+                },
+            },
+            required=("kind",),
+        ),
+        example={"kind": "satisfy_hunger", "idempotency_key": "goal-1:attempt-1"},
+    ),
+    ToolSpec(
+        name="pz_goal_status",
+        kind=ToolKind.READ,
+        risk=RiskClass.P0,
+        summary=(
+            "The goal channel: which goal is active, what is waiting behind it, "
+            "and — when 'goal_id' names one — that goal's state, budget and how "
+            "much of it is left. An id the channel has finished and forgotten is "
+            "refused rather than answered as 'no such goal', because the two are "
+            "not the same fact."
+        ),
+        input_schema={
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {"goal_id": _GOAL_ID},
+            "required": [],
+        },
+    ),
+    ToolSpec(
+        name="pz_goal_cancel",
+        kind=ToolKind.CONTROL,
+        risk=RiskClass.P1,
+        summary=(
+            "Ask for one goal to end. Control, not write: a goal is cancelled "
+            "*because* something has gone wrong, and gating that on an armed "
+            "session would make the channel unstoppable by the lever meant to "
+            "stop it. The channel applies a cancellation on its next tick, so "
+            "the answer reports the request and the goal's state as it stands "
+            "and does not claim the goal is already over."
+        ),
+        input_schema=_goal_channel(
+            {"goal_id": {**_GOAL_ID, "description": "The goal to end."}},
+            required=("goal_id",),
+        ),
+        example={"goal_id": _EXAMPLE_GOAL_ID, "idempotency_key": "goal-1:cancel:attempt-1"},
     ),
     # --- safety -----------------------------------------------------------
     ToolSpec(
@@ -1279,11 +1454,8 @@ TOOLS: Final[tuple[ToolSpec, ...]] = (
                 "action_id": {
                     "type": "string",
                     "description": "Restrict to one action.",
-                    "pattern": (
-                        r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}"
-                        r"-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
-                    ),
-                    "maxLength": 36,
+                    "pattern": _UUID_PATTERN,
+                    "maxLength": _UUID_CHARS,
                 },
             },
             "required": [],
