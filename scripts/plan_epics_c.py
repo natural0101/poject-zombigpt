@@ -562,7 +562,7 @@ _E07_PROTOCOL = [
         8,
         "the server answers initialize with its capabilities",
         f".venv/bin/pytest {C}/test_mcp_subprocess_e2e.py -q",
-        f"{C}/test_mcp_subprocess_e2e.py",
+        f"{C}/test_mcp_subprocess_e2e.py::TestTheProtocol::test_initialize_answers_with_the_server_capabilities",
         f"{MCP}/server.py",
     ),
     (
@@ -570,7 +570,7 @@ _E07_PROTOCOL = [
         8,
         "the list matches the capability-filtered catalogue",
         f".venv/bin/pytest {C}/test_mcp_subprocess_e2e.py -q",
-        f"{C}/test_mcp_subprocess_e2e.py",
+        f"{C}/test_mcp_subprocess_e2e.py::TestTheProtocol::test_tools_list_matches_the_published_set",
         f"{MCP}/server.py",
     ),
     (
@@ -578,7 +578,7 @@ _E07_PROTOCOL = [
         8,
         "an unusable tool is neither listed nor callable, and calling it says why",
         f".venv/bin/pytest {C}/test_mcp_subprocess_e2e.py -q",
-        f"{C}/test_mcp_subprocess_e2e.py",
+        f"{C}/test_mcp_subprocess_e2e.py::TestTheProtocol::test_an_unusable_tool_is_neither_listed_nor_callable",
         f"{MCP}/router.py",
     ),
     (
@@ -586,7 +586,7 @@ _E07_PROTOCOL = [
         8,
         "the call travels MCP -> RPC -> core and the answer comes back",
         f".venv/bin/pytest {C}/test_mcp_subprocess_e2e.py -q",
-        f"{C}/test_mcp_subprocess_e2e.py",
+        f"{C}/test_mcp_subprocess_e2e.py::TestTheProtocol::test_a_tool_call_reaches_the_core_and_the_answer_returns",
         f"{MCP}/server.py",
     ),
     (
@@ -594,7 +594,7 @@ _E07_PROTOCOL = [
         8,
         "the observation is the core's, compacted, not synthesised at the boundary",
         f".venv/bin/pytest {C}/test_mcp_subprocess_e2e.py -q",
-        f"{C}/test_mcp_subprocess_e2e.py",
+        f"{C}/test_mcp_subprocess_e2e.py::TestTheProtocol::test_a_read_only_call_answers_with_the_cores_observation",
         f"{MCP}/router.py",
     ),
     (
@@ -602,7 +602,7 @@ _E07_PROTOCOL = [
         8,
         "the refusal carries NOT_ARMED from the core",
         f".venv/bin/pytest {C}/test_mcp_subprocess_e2e.py -q",
-        f"{C}/test_mcp_subprocess_e2e.py",
+        f"{C}/test_mcp_subprocess_e2e.py::TestTheProtocol::test_a_mutating_call_is_refused_while_disarmed",
         f"{MCP}/router.py",
     ),
     (
@@ -610,7 +610,7 @@ _E07_PROTOCOL = [
         8,
         "the second call does not act; it replays",
         f".venv/bin/pytest {C}/test_mcp_subprocess_e2e.py -q",
-        f"{C}/test_mcp_subprocess_e2e.py",
+        f"{C}/test_mcp_subprocess_e2e.py::TestTheProtocol::test_a_replayed_key_answers_with_the_original_result",
         f"{MCP}/router.py",
     ),
     (
@@ -618,7 +618,7 @@ _E07_PROTOCOL = [
         8,
         "a tool answer saying succeeded carries evidence from the core",
         f".venv/bin/pytest {C}/test_mcp_subprocess_e2e.py -q",
-        f"{C}/test_mcp_subprocess_e2e.py",
+        f"{C}/test_mcp_subprocess_e2e.py::TestTheProtocol::test_no_answer_says_succeeded_without_the_cores_evidence",
         f"{MCP}/router.py",
     ),
     (
@@ -626,7 +626,7 @@ _E07_PROTOCOL = [
         7,
         "the list matches the catalogue",
         f".venv/bin/pytest {C}/test_mcp_subprocess_e2e.py -q",
-        f"{C}/test_mcp_subprocess_e2e.py",
+        f"{C}/test_mcp_subprocess_e2e.py::TestTheProtocol::test_resources_list_matches_the_published_set",
         f"{MCP}/server.py",
     ),
     (
@@ -634,7 +634,7 @@ _E07_PROTOCOL = [
         8,
         "the content comes from the core over RPC",
         f".venv/bin/pytest {C}/test_mcp_subprocess_e2e.py -q",
-        f"{C}/test_mcp_subprocess_e2e.py",
+        f"{C}/test_mcp_subprocess_e2e.py::TestTheProtocol::test_a_resource_read_answers_from_the_core",
         f"{MCP}/server.py",
     ),
     (
@@ -642,7 +642,7 @@ _E07_PROTOCOL = [
         8,
         "no unmarked game string reaches a client",
         f".venv/bin/pytest {C}/test_mcp_subprocess_e2e.py -q",
-        f"{C}/test_mcp_subprocess_e2e.py",
+        f"{C}/test_mcp_subprocess_e2e.py::TestTheProtocol::test_no_game_authored_text_reaches_a_client_unmarked",
         f"{MCP}/scrub.py",
     ),
     (
@@ -650,7 +650,7 @@ _E07_PROTOCOL = [
         8,
         "the raw id never leaves the boundary",
         f".venv/bin/pytest {C}/test_mcp_subprocess_e2e.py -q",
-        f"{C}/test_mcp_subprocess_e2e.py",
+        f"{C}/test_mcp_subprocess_e2e.py::TestTheProtocol::test_the_raw_save_id_never_leaves_the_boundary",
         f"{MCP}/router.py",
     ),
     (
@@ -658,7 +658,7 @@ _E07_PROTOCOL = [
         7,
         "the catalogue and the live tools/list agree on names and schemas",
         f".venv/bin/pytest {C}/test_mcp_subprocess_e2e.py -q",
-        f"{C}/test_mcp_subprocess_e2e.py",
+        f"{C}/test_mcp_subprocess_e2e.py::TestTheProtocol::test_describe_agrees_with_a_running_servers_tools_list",
         f"{MCP}/catalog.py",
     ),
     (
@@ -666,7 +666,7 @@ _E07_PROTOCOL = [
         8,
         "the E2E suite fails if the transport is broken even when --describe succeeds",
         f".venv/bin/pytest {C}/test_mcp_subprocess_e2e.py -q",
-        f"{C}/test_mcp_subprocess_e2e.py",
+        f"{C}/test_mcp_subprocess_e2e.py::TestTheProtocol::test_describe_succeeding_does_not_imply_a_working_transport",
         f"{C}/test_mcp_subprocess_e2e.py",
     ),
 ]

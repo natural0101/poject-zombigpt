@@ -3646,8 +3646,8 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_mcp_entry.py -q
       regression_test: tests/unit/test_mcp_entry.py
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/__main__.py
-      status: NOT_STARTED
-      commit: null
+      status: PASS
+      commit: 7014428cd94dc7f7f9c202f5dcaa688859096356
       ci_url: null
       reason: ''
     - id: E07-M01-T002
@@ -3662,8 +3662,8 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_mcp_entry.py -q
       regression_test: tests/unit/test_mcp_entry.py
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/__main__.py
-      status: NOT_STARTED
-      commit: null
+      status: PASS
+      commit: 7014428cd94dc7f7f9c202f5dcaa688859096356
       ci_url: null
       reason: ''
     - id: E07-M01-T003
@@ -3678,8 +3678,8 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_mcp_entry.py -q
       regression_test: tests/unit/test_mcp_entry.py
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/__main__.py
-      status: NOT_STARTED
-      commit: null
+      status: PASS
+      commit: 7014428cd94dc7f7f9c202f5dcaa688859096356
       ci_url: null
       reason: ''
     - id: E07-M01-T004
@@ -3694,8 +3694,8 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_mcp_entry.py -q
       regression_test: tests/unit/test_mcp_entry.py
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/__main__.py
-      status: NOT_STARTED
-      commit: null
+      status: PASS
+      commit: 7014428cd94dc7f7f9c202f5dcaa688859096356
       ci_url: null
       reason: ''
     - id: E07-M01-T005
@@ -3710,8 +3710,8 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_mcp_entry.py -q
       regression_test: tests/unit/test_mcp_entry.py
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/__main__.py
-      status: NOT_STARTED
-      commit: null
+      status: PASS
+      commit: 7014428cd94dc7f7f9c202f5dcaa688859096356
       ci_url: null
       reason: ''
     - id: E07-M01-T006
@@ -3726,8 +3726,8 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_mcp_entry.py -q
       regression_test: tests/unit/test_mcp_entry.py
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/__main__.py
-      status: NOT_STARTED
-      commit: null
+      status: PASS
+      commit: 7014428cd94dc7f7f9c202f5dcaa688859096356
       ci_url: null
       reason: ''
     - id: E07-M01-T007
@@ -3742,8 +3742,8 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_mcp_entry.py -q
       regression_test: tests/unit/test_mcp_entry.py
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/__main__.py
-      status: NOT_STARTED
-      commit: null
+      status: PASS
+      commit: 7014428cd94dc7f7f9c202f5dcaa688859096356
       ci_url: null
       reason: ''
     - id: E07-M01-T008
@@ -3758,11 +3758,10 @@ epics:
       verify_command: .venv/bin/pytest tests/contract/test_mcp_snippet_is_json.py -q
       regression_test: tests/contract/test_mcp_snippet_is_json.py
       evidence: packages/pz_agent_cli/src/pz_agent_cli/app.py
-      status: IN_PROGRESS
+      status: PASS
       commit: 367124b6f517a3b78d4ace50bb26ab72d17bfc2b
       ci_url: null
-      reason: covered by tests/contract/test_mcp_snippet_is_json.py and it passes, but E07-M01-T007 is
-        not done
+      reason: ''
     checks:
     - id: E07-M01-C01
       statement: No invocation of pz-agent-mcp refuses by construction any more.
@@ -3783,8 +3782,8 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_mcp_entry.py -q
       regression_test: tests/unit/test_mcp_entry.py
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/__main__.py
-      status: NOT_STARTED
-      commit: null
+      status: PASS
+      commit: 7014428cd94dc7f7f9c202f5dcaa688859096356
       ci_url: null
       reason: ''
     - id: E07-M02-T002
@@ -3799,8 +3798,8 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_mcp_entry.py -q
       regression_test: tests/unit/test_mcp_entry.py
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/__main__.py
-      status: NOT_STARTED
-      commit: null
+      status: PASS
+      commit: 7014428cd94dc7f7f9c202f5dcaa688859096356
       ci_url: null
       reason: ''
     - id: E07-M02-T003
@@ -3815,8 +3814,8 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_mcp_entry.py -q
       regression_test: tests/unit/test_mcp_entry.py
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/__main__.py
-      status: NOT_STARTED
-      commit: null
+      status: PASS
+      commit: 7014428cd94dc7f7f9c202f5dcaa688859096356
       ci_url: null
       reason: ''
     - id: E07-M02-T004
@@ -3831,8 +3830,8 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_mcp_entry.py -q
       regression_test: tests/unit/test_mcp_entry.py
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/__main__.py
-      status: NOT_STARTED
-      commit: null
+      status: PASS
+      commit: 7014428cd94dc7f7f9c202f5dcaa688859096356
       ci_url: null
       reason: ''
     - id: E07-M02-T005
@@ -3847,8 +3846,8 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_mcp_entry.py -q
       regression_test: tests/unit/test_mcp_entry.py
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/__main__.py
-      status: NOT_STARTED
-      commit: null
+      status: PASS
+      commit: 7014428cd94dc7f7f9c202f5dcaa688859096356
       ci_url: null
       reason: ''
     - id: E07-M02-T006
@@ -3863,8 +3862,8 @@ epics:
       verify_command: .venv/bin/pytest tests/contract/test_mcp_subprocess_e2e.py -q
       regression_test: tests/contract/test_mcp_subprocess_e2e.py
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/__main__.py
-      status: NOT_STARTED
-      commit: null
+      status: PASS
+      commit: 7014428cd94dc7f7f9c202f5dcaa688859096356
       ci_url: null
       reason: ''
     checks:
@@ -3887,8 +3886,8 @@ epics:
       verify_command: .venv/bin/pytest tests/contract/test_mcp_subprocess_e2e.py -q
       regression_test: tests/contract/test_mcp_subprocess_e2e.py
       evidence: tests/contract/test_mcp_subprocess_e2e.py
-      status: NOT_STARTED
-      commit: null
+      status: PASS
+      commit: 066d9ea869fee8d312661ac620b1272a1ded850d
       ci_url: null
       reason: ''
     - id: E07-M03-T002
@@ -3903,8 +3902,8 @@ epics:
       verify_command: .venv/bin/pytest tests/contract/test_mcp_subprocess_e2e.py -q
       regression_test: tests/contract/test_mcp_subprocess_e2e.py
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/__main__.py
-      status: NOT_STARTED
-      commit: null
+      status: PASS
+      commit: 7014428cd94dc7f7f9c202f5dcaa688859096356
       ci_url: null
       reason: ''
     - id: E07-M03-T003
@@ -3919,8 +3918,8 @@ epics:
       verify_command: .venv/bin/pytest tests/contract/test_mcp_subprocess_e2e.py -q
       regression_test: tests/contract/test_mcp_subprocess_e2e.py
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/__main__.py
-      status: NOT_STARTED
-      commit: null
+      status: PASS
+      commit: 7014428cd94dc7f7f9c202f5dcaa688859096356
       ci_url: null
       reason: ''
     - id: E07-M03-T004
@@ -3935,8 +3934,8 @@ epics:
       verify_command: .venv/bin/pytest tests/contract/test_mcp_subprocess_e2e.py -q
       regression_test: tests/contract/test_mcp_subprocess_e2e.py
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/__main__.py
-      status: NOT_STARTED
-      commit: null
+      status: PASS
+      commit: 7014428cd94dc7f7f9c202f5dcaa688859096356
       ci_url: null
       reason: ''
     - id: E07-M03-T005
@@ -3951,8 +3950,8 @@ epics:
       verify_command: .venv/bin/pytest tests/contract/test_mcp_subprocess_e2e.py -q
       regression_test: tests/contract/test_mcp_subprocess_e2e.py
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/__main__.py
-      status: NOT_STARTED
-      commit: null
+      status: PASS
+      commit: 7014428cd94dc7f7f9c202f5dcaa688859096356
       ci_url: null
       reason: ''
     - id: E07-M03-T006
@@ -3967,8 +3966,8 @@ epics:
       verify_command: .venv/bin/pytest tests/contract/test_mcp_subprocess_e2e.py -q
       regression_test: tests/contract/test_mcp_subprocess_e2e.py
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/server.py
-      status: NOT_STARTED
-      commit: null
+      status: PASS
+      commit: 066d9ea869fee8d312661ac620b1272a1ded850d
       ci_url: null
       reason: ''
     - id: E07-M03-T007
@@ -3983,8 +3982,8 @@ epics:
       verify_command: read the windows workflow run
       regression_test: tests/contract/test_mcp_subprocess_e2e.py
       evidence: docs/control/evidence/step-30-40/windows-suite.txt
-      status: NOT_STARTED
-      commit: null
+      status: PASS
+      commit: 98d218ec0b62a82bb1c894af67def3cde7e0e19c
       ci_url: null
       reason: ''
     checks:
@@ -4005,12 +4004,13 @@ epics:
       depends_on: []
       pass_criterion: the server answers initialize with its capabilities
       verify_command: .venv/bin/pytest tests/contract/test_mcp_subprocess_e2e.py -q
-      regression_test: tests/contract/test_mcp_subprocess_e2e.py
+      regression_test: tests/contract/test_mcp_subprocess_e2e.py::TestTheProtocol::test_initialize_answers_with_the_server_capabilities
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/server.py
       status: NOT_STARTED
       commit: null
       ci_url: null
-      reason: ''
+      reason: named the E2E file rather than a behaviour, so any passing test in it confirmed this claim;
+        the node id it needs does not exist yet
     - id: E07-M04-T002
       subsystem: mcp
       action: Answer tools/list with the published set
@@ -4021,12 +4021,13 @@ epics:
       - E07-M04-T001
       pass_criterion: the list matches the capability-filtered catalogue
       verify_command: .venv/bin/pytest tests/contract/test_mcp_subprocess_e2e.py -q
-      regression_test: tests/contract/test_mcp_subprocess_e2e.py
+      regression_test: tests/contract/test_mcp_subprocess_e2e.py::TestTheProtocol::test_tools_list_matches_the_published_set
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/server.py
       status: NOT_STARTED
       commit: null
       ci_url: null
-      reason: ''
+      reason: named the E2E file rather than a behaviour, so any passing test in it confirmed this claim;
+        the node id it needs does not exist yet
     - id: E07-M04-T003
       subsystem: mcp
       action: Withhold a tool whose capability is not usable
@@ -4037,12 +4038,13 @@ epics:
       - E07-M04-T002
       pass_criterion: an unusable tool is neither listed nor callable, and calling it says why
       verify_command: .venv/bin/pytest tests/contract/test_mcp_subprocess_e2e.py -q
-      regression_test: tests/contract/test_mcp_subprocess_e2e.py
+      regression_test: tests/contract/test_mcp_subprocess_e2e.py::TestTheProtocol::test_an_unusable_tool_is_neither_listed_nor_callable
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/router.py
       status: NOT_STARTED
       commit: null
       ci_url: null
-      reason: ''
+      reason: named the E2E file rather than a behaviour, so any passing test in it confirmed this claim;
+        the node id it needs does not exist yet
     - id: E07-M04-T004
       subsystem: mcp
       action: Answer a real tools/call that reaches the core
@@ -4053,12 +4055,13 @@ epics:
       - E07-M04-T003
       pass_criterion: the call travels MCP -> RPC -> core and the answer comes back
       verify_command: .venv/bin/pytest tests/contract/test_mcp_subprocess_e2e.py -q
-      regression_test: tests/contract/test_mcp_subprocess_e2e.py
+      regression_test: tests/contract/test_mcp_subprocess_e2e.py::TestTheProtocol::test_a_tool_call_reaches_the_core_and_the_answer_returns
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/server.py
       status: NOT_STARTED
       commit: null
       ci_url: null
-      reason: ''
+      reason: named the E2E file rather than a behaviour, so any passing test in it confirmed this claim;
+        the node id it needs does not exist yet
     - id: E07-M04-T005
       subsystem: mcp
       action: Answer a read-only tool call with the core's observation
@@ -4069,12 +4072,13 @@ epics:
       - E07-M04-T004
       pass_criterion: the observation is the core's, compacted, not synthesised at the boundary
       verify_command: .venv/bin/pytest tests/contract/test_mcp_subprocess_e2e.py -q
-      regression_test: tests/contract/test_mcp_subprocess_e2e.py
+      regression_test: tests/contract/test_mcp_subprocess_e2e.py::TestTheProtocol::test_a_read_only_call_answers_with_the_cores_observation
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/router.py
       status: NOT_STARTED
       commit: null
       ci_url: null
-      reason: ''
+      reason: named the E2E file rather than a behaviour, so any passing test in it confirmed this claim;
+        the node id it needs does not exist yet
     - id: E07-M04-T006
       subsystem: mcp
       action: Refuse a mutating tool call while the session is disarmed
@@ -4085,12 +4089,13 @@ epics:
       - E07-M04-T005
       pass_criterion: the refusal carries NOT_ARMED from the core
       verify_command: .venv/bin/pytest tests/contract/test_mcp_subprocess_e2e.py -q
-      regression_test: tests/contract/test_mcp_subprocess_e2e.py
+      regression_test: tests/contract/test_mcp_subprocess_e2e.py::TestTheProtocol::test_a_mutating_call_is_refused_while_disarmed
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/router.py
       status: NOT_STARTED
       commit: null
       ci_url: null
-      reason: ''
+      reason: named the E2E file rather than a behaviour, so any passing test in it confirmed this claim;
+        the node id it needs does not exist yet
     - id: E07-M04-T007
       subsystem: mcp
       action: Answer a replayed idempotency key with the original result
@@ -4101,12 +4106,13 @@ epics:
       - E07-M04-T006
       pass_criterion: the second call does not act; it replays
       verify_command: .venv/bin/pytest tests/contract/test_mcp_subprocess_e2e.py -q
-      regression_test: tests/contract/test_mcp_subprocess_e2e.py
+      regression_test: tests/contract/test_mcp_subprocess_e2e.py::TestTheProtocol::test_a_replayed_key_answers_with_the_original_result
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/router.py
       status: NOT_STARTED
       commit: null
       ci_url: null
-      reason: ''
+      reason: named the E2E file rather than a behaviour, so any passing test in it confirmed this claim;
+        the node id it needs does not exist yet
     - id: E07-M04-T008
       subsystem: mcp
       action: Never report succeeded without the core's observed postcondition
@@ -4117,12 +4123,13 @@ epics:
       - E07-M04-T007
       pass_criterion: a tool answer saying succeeded carries evidence from the core
       verify_command: .venv/bin/pytest tests/contract/test_mcp_subprocess_e2e.py -q
-      regression_test: tests/contract/test_mcp_subprocess_e2e.py
+      regression_test: tests/contract/test_mcp_subprocess_e2e.py::TestTheProtocol::test_no_answer_says_succeeded_without_the_cores_evidence
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/router.py
       status: NOT_STARTED
       commit: null
       ci_url: null
-      reason: ''
+      reason: named the E2E file rather than a behaviour, so any passing test in it confirmed this claim;
+        the node id it needs does not exist yet
     - id: E07-M04-T009
       subsystem: mcp
       action: Answer resources/list with the published resources
@@ -4133,12 +4140,13 @@ epics:
       - E07-M04-T008
       pass_criterion: the list matches the catalogue
       verify_command: .venv/bin/pytest tests/contract/test_mcp_subprocess_e2e.py -q
-      regression_test: tests/contract/test_mcp_subprocess_e2e.py
+      regression_test: tests/contract/test_mcp_subprocess_e2e.py::TestTheProtocol::test_resources_list_matches_the_published_set
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/server.py
       status: NOT_STARTED
       commit: null
       ci_url: null
-      reason: ''
+      reason: named the E2E file rather than a behaviour, so any passing test in it confirmed this claim;
+        the node id it needs does not exist yet
     - id: E07-M04-T010
       subsystem: mcp
       action: Answer a real resources/read from the core
@@ -4149,12 +4157,13 @@ epics:
       - E07-M04-T009
       pass_criterion: the content comes from the core over RPC
       verify_command: .venv/bin/pytest tests/contract/test_mcp_subprocess_e2e.py -q
-      regression_test: tests/contract/test_mcp_subprocess_e2e.py
+      regression_test: tests/contract/test_mcp_subprocess_e2e.py::TestTheProtocol::test_a_resource_read_answers_from_the_core
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/server.py
       status: NOT_STARTED
       commit: null
       ci_url: null
-      reason: ''
+      reason: named the E2E file rather than a behaviour, so any passing test in it confirmed this claim;
+        the node id it needs does not exist yet
     - id: E07-M04-T011
       subsystem: mcp
       action: Quarantine game-authored text in every answer
@@ -4165,12 +4174,13 @@ epics:
       - E07-M04-T010
       pass_criterion: no unmarked game string reaches a client
       verify_command: .venv/bin/pytest tests/contract/test_mcp_subprocess_e2e.py -q
-      regression_test: tests/contract/test_mcp_subprocess_e2e.py
+      regression_test: tests/contract/test_mcp_subprocess_e2e.py::TestTheProtocol::test_no_game_authored_text_reaches_a_client_unmarked
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/scrub.py
       status: NOT_STARTED
       commit: null
       ci_url: null
-      reason: ''
+      reason: named the E2E file rather than a behaviour, so any passing test in it confirmed this claim;
+        the node id it needs does not exist yet
     - id: E07-M04-T012
       subsystem: mcp
       action: Publish save_scope rather than the raw save id
@@ -4181,12 +4191,13 @@ epics:
       - E07-M04-T011
       pass_criterion: the raw id never leaves the boundary
       verify_command: .venv/bin/pytest tests/contract/test_mcp_subprocess_e2e.py -q
-      regression_test: tests/contract/test_mcp_subprocess_e2e.py
+      regression_test: tests/contract/test_mcp_subprocess_e2e.py::TestTheProtocol::test_the_raw_save_id_never_leaves_the_boundary
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/router.py
       status: NOT_STARTED
       commit: null
       ci_url: null
-      reason: ''
+      reason: named the E2E file rather than a behaviour, so any passing test in it confirmed this claim;
+        the node id it needs does not exist yet
     - id: E07-M04-T013
       subsystem: mcp
       action: Keep --describe agreeing with what a running server publishes
@@ -4197,12 +4208,13 @@ epics:
       - E07-M04-T012
       pass_criterion: the catalogue and the live tools/list agree on names and schemas
       verify_command: .venv/bin/pytest tests/contract/test_mcp_subprocess_e2e.py -q
-      regression_test: tests/contract/test_mcp_subprocess_e2e.py
+      regression_test: tests/contract/test_mcp_subprocess_e2e.py::TestTheProtocol::test_describe_agrees_with_a_running_servers_tools_list
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/catalog.py
       status: NOT_STARTED
       commit: null
       ci_url: null
-      reason: ''
+      reason: named the E2E file rather than a behaviour, so any passing test in it confirmed this claim;
+        the node id it needs does not exist yet
     - id: E07-M04-T014
       subsystem: mcp
       action: Prove --describe alone is not treated as evidence of a working server
@@ -4213,12 +4225,13 @@ epics:
       - E07-M04-T013
       pass_criterion: the E2E suite fails if the transport is broken even when --describe succeeds
       verify_command: .venv/bin/pytest tests/contract/test_mcp_subprocess_e2e.py -q
-      regression_test: tests/contract/test_mcp_subprocess_e2e.py
+      regression_test: tests/contract/test_mcp_subprocess_e2e.py::TestTheProtocol::test_describe_succeeding_does_not_imply_a_working_transport
       evidence: tests/contract/test_mcp_subprocess_e2e.py
       status: NOT_STARTED
       commit: null
       ci_url: null
-      reason: ''
+      reason: named the E2E file rather than a behaviour, so any passing test in it confirmed this claim;
+        the node id it needs does not exist yet
     checks:
     - id: E07-M04-C01
       statement: A tool call travels client -> MCP -> RPC -> core and back, and a reported success carries
@@ -4567,10 +4580,11 @@ epics:
       verify_command: .venv/bin/pytest tests/contract/test_mcp_subprocess_e2e.py -q
       regression_test: tests/contract/test_mcp_subprocess_e2e.py
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/catalog.py
-      status: NOT_STARTED
-      commit: null
+      status: IN_PROGRESS
+      commit: 697e55121437c217457730f9d329e35ae67798a0
       ci_url: null
-      reason: ''
+      reason: covered by tests/contract/test_mcp_subprocess_e2e.py and it passes, but E08-M03-T005 is
+        not done
     - id: E08-M03-T007
       subsystem: goals
       action: Publish pz_goal_status
@@ -4583,10 +4597,11 @@ epics:
       verify_command: .venv/bin/pytest tests/contract/test_mcp_subprocess_e2e.py -q
       regression_test: tests/contract/test_mcp_subprocess_e2e.py
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/catalog.py
-      status: NOT_STARTED
-      commit: null
+      status: IN_PROGRESS
+      commit: 697e55121437c217457730f9d329e35ae67798a0
       ci_url: null
-      reason: ''
+      reason: covered by tests/contract/test_mcp_subprocess_e2e.py and it passes, but E08-M03-T006 is
+        not done
     - id: E08-M03-T008
       subsystem: goals
       action: Publish pz_goal_cancel
@@ -4599,10 +4614,11 @@ epics:
       verify_command: .venv/bin/pytest tests/contract/test_mcp_subprocess_e2e.py -q
       regression_test: tests/contract/test_mcp_subprocess_e2e.py
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/catalog.py
-      status: NOT_STARTED
-      commit: null
+      status: IN_PROGRESS
+      commit: 697e55121437c217457730f9d329e35ae67798a0
       ci_url: null
-      reason: ''
+      reason: covered by tests/contract/test_mcp_subprocess_e2e.py and it passes, but E08-M03-T007 is
+        not done
     - id: E08-M03-T009
       subsystem: goals
       action: Gate the goal tools on arming like any other mutating tool
@@ -4615,10 +4631,11 @@ epics:
       verify_command: .venv/bin/pytest tests/contract/test_mcp_subprocess_e2e.py -q
       regression_test: tests/contract/test_mcp_subprocess_e2e.py
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/router.py
-      status: NOT_STARTED
-      commit: null
+      status: IN_PROGRESS
+      commit: 697e55121437c217457730f9d329e35ae67798a0
       ci_url: null
-      reason: ''
+      reason: covered by tests/contract/test_mcp_subprocess_e2e.py and it passes, but E08-M03-T008 is
+        not done
     - id: E08-M03-T010
       subsystem: goals
       action: Submit a goal end to end from an MCP client
@@ -4631,10 +4648,11 @@ epics:
       verify_command: .venv/bin/pytest tests/contract/test_mcp_subprocess_e2e.py -q
       regression_test: tests/contract/test_mcp_subprocess_e2e.py
       evidence: tests/contract/test_mcp_subprocess_e2e.py
-      status: NOT_STARTED
-      commit: null
+      status: IN_PROGRESS
+      commit: 066d9ea869fee8d312661ac620b1272a1ded850d
       ci_url: null
-      reason: ''
+      reason: covered by tests/contract/test_mcp_subprocess_e2e.py and it passes, but E08-M03-T009 is
+        not done
     - id: E08-M03-T011
       subsystem: goals
       action: Prove a submitted goal reaches the planner
@@ -5792,10 +5810,11 @@ epics:
       verify_command: read the windows workflow run
       regression_test: tests/contract/test_mcp_subprocess_e2e.py
       evidence: docs/control/evidence/step-30-40/windows-suite.txt
-      status: NOT_STARTED
-      commit: null
+      status: IN_PROGRESS
+      commit: 98d218ec0b62a82bb1c894af67def3cde7e0e19c
       ci_url: null
-      reason: ''
+      reason: covered by tests/contract/test_mcp_subprocess_e2e.py and it passes, but E11-M02-T004 is
+        not done
     - id: E11-M02-T006
       subsystem: packaging
       action: Prove neither executable needs a Python installation

@@ -3,27 +3,33 @@
 Three ready configurations for the stdio server, plus the one thing you need to
 know before you paste any of them in.
 
-## What happens when a client launches this today
+## What happens when a client launches this
 
-`pz-agent-mcp` refuses, at one of two gates, and **which one tells you what to
-do next**. The exit codes are distinct on purpose.
+`pz-agent-mcp` connects to a running sidecar over the Local Core RPC link
+(`docs/CORE_RPC.md`). When it cannot, **which refusal you get tells you what to
+do next**, so every one has its own exit code.
 
-**Exit 3 — the MCP SDK is not installed.** The stdio server needs an optional
-extra: `pip install pz-agent[mcp]`. This gate fires first, so it is what you
-meet on a plain install. The remedy is a single command, which is why it has a
-code of its own rather than sharing one with a refusal you cannot fix.
+| Code | Meaning | What to do |
+| --- | --- | --- |
+| 0 | Served, or answered a question about the surface. | — |
+| 1 | No core services, and none could be reached. | Start the sidecar: `pz-agent start`. |
+| 2 | The invocation was malformed. | Read `--help`. Passing both `--state-dir` and `--zomboid-dir` lands here: they are two ways of naming one directory, and honouring one silently would connect you to a sidecar you did not ask for. |
+| 3 | The MCP SDK is not installed. | `pip install pz-agent[mcp]`. |
+| 4 | The descriptor names a process that is gone. | The sidecar stopped without cleaning up. `pz-agent start`. |
+| 5 | The sidecar speaks a different protocol major. | Two installs are present; both halves ship together, so this means one is stale. Reinstall. |
+| 6 | The descriptor is unreadable or not ours. | Have it rewritten: stop and start the sidecar. Restarting a running one will not fix it. |
+| 7 | The sidecar answered, and the answer could not be read. | A version skew or a corrupted link. `pz-agent doctor`. |
+| 8 | No state directory could be determined. | Name one with `--state-dir`, or the Zomboid user directory with `--zomboid-dir`. |
 
-**Exit 1 — no core services are attached to this process.** With the SDK
-present, this is the honest behaviour rather than a bug in these files: the MCP
-boundary reads through the ports the **sidecar** owns while it holds the
-exchange directory's lock, and this build has no channel that hands those ports
-to a second process. An embedder passes them in with `main(services=...)`.
+Codes 3 and 8 fire before anything is dialled, so they are what you meet on a
+machine that has never run the sidecar. Codes 4 to 7 mean the link was tried.
 
-(An earlier revision of this paragraph described only the second gate and said
-you would see status 1. On a machine without the extra you see status 3, and
-the message is about a missing package rather than a missing sidecar. A client
-author diagnosing the wrong thing is what a first-contact document is for
-preventing.)
+(An earlier revision of this section described only two gates and said you would
+see status 1. On a machine without the extra you see 3, and the message is about
+a missing package rather than a missing sidecar. A client author diagnosing the
+wrong thing is what a first-contact document exists to prevent —
+`tests/contract/test_mcp_exit_codes_documented.py` pins every code above against
+the constant it names, so this table cannot fall behind the executable again.)
 
 So today these configurations do two useful things: they are the exact shape a
 client needs, and they let you confirm the executable is where the client
