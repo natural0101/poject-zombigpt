@@ -1,10 +1,10 @@
 {
   "blockers": [],
   "branch": "fix/windows-mcp-voice-runtime",
-  "current_step": 20,
+  "current_step": 30,
   "github_release": null,
-  "head_commit": "f8c161cbcb37589400dd880cc608ad812e0214d5",
-  "last_passed_step": 19,
+  "head_commit": "935437ef88eb257a590b2bda930cce85de88632c",
+  "last_passed_step": 29,
   "linux_ci": {
     "status": "IN_PROGRESS",
     "url": "https://github.com/natural0101/poject-zombigpt/actions?query=branch%3Afix%2Fwindows-mcp-voice-runtime"
@@ -15,15 +15,15 @@
     "not_run": 20,
     "passed": 0
   },
-  "next_step": 20,
-  "overall_percent": 19,
+  "next_step": 30,
+  "overall_percent": 29,
   "rc_artifact": {
     "sha256": null,
     "status": "NOT_BUILT",
     "url": null
   },
   "release_percent": 0,
-  "remote_percent": 19,
+  "remote_percent": 29,
   "repository": "https://github.com/natural0101/poject-zombigpt",
   "steps": [
     {
@@ -399,153 +399,198 @@
       "title": "Cross-platform canonical JSON tests"
     },
     {
-      "commit": null,
+      "commit": "935437ef88eb257a590b2bda930cce85de88632c",
       "depends_on": [
         19
       ],
-      "evidence": [],
-      "finished_at": null,
+      "evidence": [
+        "packages/pz_agent_core/src/pz_agent_core/platform/paths.py",
+        "docs/control/evidence/step-20-29/portable-and-launcher.txt"
+      ],
+      "finished_at": "2026-08-07T08:40:00Z",
       "id": 20,
-      "notes": "",
+      "notes": "portable_relative_path + portable_posix, with PathNotUnderRoot.",
       "owner": "remote",
-      "started_at": null,
-      "status": "IN_PROGRESS",
-      "tests": [],
+      "started_at": "2026-08-07T08:40:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/unit/test_installer_windows.py"
+      ],
       "title": "`portable_relative_path()`"
     },
     {
-      "commit": null,
+      "commit": "935437ef88eb257a590b2bda930cce85de88632c",
       "depends_on": [
         20
       ],
-      "evidence": [],
-      "finished_at": null,
+      "evidence": [
+        "tests/unit/test_installer_windows.py",
+        "docs/control/evidence/step-20-29/portable-and-launcher.txt"
+      ],
+      "finished_at": "2026-08-07T08:40:00Z",
       "id": 21,
-      "notes": "",
+      "notes": "_tree compares portable names; the installer already stored POSIX and split_relative rejects backslashes.",
       "owner": "remote",
-      "started_at": null,
-      "status": "NOT_STARTED",
-      "tests": [],
+      "started_at": "2026-08-07T08:40:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/unit/test_installer_windows.py::test_the_round_trip_leaves_no_residue_but_the_config"
+      ],
       "title": "Manifest paths on the POSIX separator"
     },
     {
-      "commit": null,
+      "commit": "935437ef88eb257a590b2bda930cce85de88632c",
       "depends_on": [
         21
       ],
-      "evidence": [],
-      "finished_at": null,
+      "evidence": [
+        "tests/contract/test_documented_commands_parse.py"
+      ],
+      "finished_at": "2026-08-07T08:40:00Z",
       "id": 22,
-      "notes": "",
+      "notes": "Document roots keyed by portable path, so docs/QUICKSTART.md matches on Windows.",
       "owner": "remote",
-      "started_at": null,
-      "status": "NOT_STARTED",
-      "tests": [],
+      "started_at": "2026-08-07T08:40:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/contract/test_documented_commands_parse.py::test_the_documents_are_being_read_at_all"
+      ],
       "title": "Document path checks corrected for Windows"
     },
     {
-      "commit": null,
+      "commit": "935437ef88eb257a590b2bda930cce85de88632c",
       "depends_on": [
         22
       ],
-      "evidence": [],
-      "finished_at": null,
+      "evidence": [
+        "packages/pz_agent_core/src/pz_agent_core/diagnostics/redaction.py",
+        "tests/contract/test_windows_path_shapes.py"
+      ],
+      "finished_at": "2026-08-07T08:40:00Z",
       "id": 23,
-      "notes": "",
+      "notes": "<ZOMBOID>/logs on every platform; tail normalised, three separator spellings matched.",
       "owner": "remote",
-      "started_at": null,
-      "status": "NOT_STARTED",
-      "tests": [],
+      "started_at": "2026-08-07T08:40:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/contract/test_windows_path_shapes.py::test_the_placeholder_never_carries_a_backslash"
+      ],
       "title": "Redactor emits stable separators"
     },
     {
-      "commit": null,
+      "commit": "935437ef88eb257a590b2bda930cce85de88632c",
       "depends_on": [
         23
       ],
-      "evidence": [],
-      "finished_at": null,
+      "evidence": [
+        "tests/contract/test_windows_path_shapes.py"
+      ],
+      "finished_at": "2026-08-07T08:40:00Z",
       "id": 24,
-      "notes": "",
+      "notes": "Longest literal first; user_dir reported for a path inside the Zomboid directory.",
       "owner": "remote",
-      "started_at": null,
-      "status": "NOT_STARTED",
-      "tests": [],
+      "started_at": "2026-08-07T08:40:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/contract/test_windows_path_shapes.py::test_the_zomboid_directory_wins_over_the_profile_that_contains_it"
+      ],
       "title": "Redactor rule order: specific path before general"
     },
     {
-      "commit": null,
+      "commit": "935437ef88eb257a590b2bda930cce85de88632c",
       "depends_on": [
         24
       ],
-      "evidence": [],
-      "finished_at": null,
+      "evidence": [
+        "tests/unit/test_capabilities_scanner.py"
+      ],
+      "finished_at": "2026-08-07T08:40:00Z",
       "id": 25,
-      "notes": "",
+      "notes": "os.geteuid gone; PermissionError injected instead of chmod.",
       "owner": "remote",
-      "started_at": null,
-      "status": "NOT_STARTED",
-      "tests": [],
+      "started_at": "2026-08-07T08:40:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/unit/test_capabilities_scanner.py::test_an_unreadable_file_is_reported_and_does_not_stop_the_scan"
+      ],
       "title": "Remove `os.geteuid()` from Windows-executable test paths"
     },
     {
-      "commit": null,
+      "commit": "935437ef88eb257a590b2bda930cce85de88632c",
       "depends_on": [
         25
       ],
-      "evidence": [],
-      "finished_at": null,
+      "evidence": [
+        "tests/unit/test_cli_supervisor.py"
+      ],
+      "finished_at": "2026-08-07T08:40:00Z",
       "id": 26,
-      "notes": "",
+      "notes": "signal.SIGKILL gone from every test path.",
       "owner": "remote",
-      "started_at": null,
-      "status": "NOT_STARTED",
-      "tests": [],
+      "started_at": "2026-08-07T08:40:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/unit/test_cli_supervisor.py::TestTheChildIsConfirmedAlive::test_a_child_that_keeps_running_is_reported_as_started"
+      ],
       "title": "Remove `signal.SIGKILL` from Windows-executable test paths"
     },
     {
-      "commit": null,
+      "commit": "935437ef88eb257a590b2bda930cce85de88632c",
       "depends_on": [
         26
       ],
-      "evidence": [],
-      "finished_at": null,
+      "evidence": [
+        "packages/pz_agent_cli/src/pz_agent_cli/supervisor.py",
+        "docs/control/evidence/step-20-29/suites.txt"
+      ],
+      "finished_at": "2026-08-07T08:40:00Z",
       "id": 27,
-      "notes": "",
+      "notes": "SpawnedProcess handle: pid, poll, terminate, wait, stop. Supervisor still publishes a pid.",
       "owner": "remote",
-      "started_at": null,
-      "status": "NOT_STARTED",
-      "tests": [],
+      "started_at": "2026-08-07T08:40:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/unit/test_cli_supervisor.py"
+      ],
       "title": "Process tests hold a `subprocess.Popen` handle"
     },
     {
-      "commit": null,
+      "commit": "935437ef88eb257a590b2bda930cce85de88632c",
       "depends_on": [
         27
       ],
-      "evidence": [],
-      "finished_at": null,
+      "evidence": [
+        "tests/unit/test_installer_windows.py"
+      ],
+      "finished_at": "2026-08-07T08:40:00Z",
       "id": 28,
-      "notes": "",
+      "notes": "Bytes in, bytes compared, size from stat().st_size.",
       "owner": "remote",
-      "started_at": null,
-      "status": "NOT_STARTED",
-      "tests": [],
+      "started_at": "2026-08-07T08:40:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/unit/test_installer_windows.py::test_an_existing_config_is_left_exactly_as_the_user_wrote_it"
+      ],
       "title": "Existing config preserved byte for byte"
     },
     {
-      "commit": null,
+      "commit": "935437ef88eb257a590b2bda930cce85de88632c",
       "depends_on": [
         28
       ],
-      "evidence": [],
-      "finished_at": null,
+      "evidence": [
+        "installer/pz_agent_installer.py",
+        "docs/control/evidence/step-20-29/portable-and-launcher.txt"
+      ],
+      "finished_at": "2026-08-07T08:40:00Z",
       "id": 29,
-      "notes": "",
+      "notes": "chcp 65001 before any non-ASCII byte; every expansion quoted.",
       "owner": "remote",
-      "started_at": null,
-      "status": "NOT_STARTED",
-      "tests": [],
+      "started_at": "2026-08-07T08:40:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/unit/test_installer_windows.py::test_the_launcher_sets_a_utf8_codepage_before_any_non_ascii_path"
+      ],
       "title": "Windows installer and launcher path handling"
     },
     {
@@ -559,7 +604,7 @@
       "notes": "",
       "owner": "remote",
       "started_at": null,
-      "status": "NOT_STARTED",
+      "status": "IN_PROGRESS",
       "tests": [],
       "title": "Zero Windows failures in this block"
     },

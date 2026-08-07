@@ -26,6 +26,7 @@ from __future__ import annotations
 
 from pathlib import PureWindowsPath
 from typing import Final
+from urllib.parse import quote
 
 import pytest
 
@@ -123,3 +124,43 @@ def test_a_path_that_is_not_under_a_known_directory_is_left_recognisable() -> No
     rendered = redactor.text(r"C:\Windows\Temp\pz-agent.log")
 
     assert "pz-agent.log" in rendered
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        # `quote` leaves `/` alone but escapes `\`, so a Windows path that has
+        # been through a URL, a crash-reporter field or a browser log arrives
+        # with %5C where a POSIX one would still read `/`. The prefix matched
+        # and the tail did not, so the placeholder came out welded to the rest
+        # of the path: `<ZOMBOID>%5Clogs`.
+        (f"{quote(str(ZOMBOID), safe=':/')}%5Clogs", f"{USER_DIR_PLACEHOLDER}/logs"),
+        (f"{quote(str(ZOMBOID), safe=':/')}%5clogs", f"{USER_DIR_PLACEHOLDER}/logs"),
+        (
+            f"{quote(str(ZOMBOID), safe=':/')}%5CLua%5Cpz_agent",
+            f"{USER_DIR_PLACEHOLDER}/Lua/pz_agent",
+        ),
+        (f"{quote(str(ZOMBOID), safe=':/')}%2Flogs", f"{USER_DIR_PLACEHOLDER}/logs"),
+    ],
+)
+def test_a_percent_encoded_separator_is_normalised_like_any_other(
+    windows_redactor: Redactor, raw: str, expected: str
+) -> None:
+    """The fourth spelling of a separator, and the only one POSIX never shows.
+
+    On Linux `quote("/home/Иван/Zomboid/x")` keeps its slashes, so the tail
+    matched by accident and this hole stayed invisible until the Windows suite
+    ran. Building the path with `PureWindowsPath` makes the same defect visible
+    here.
+    """
+    assert windows_redactor.text(raw) == expected
+
+
+def test_a_percent_encoded_separator_leaves_no_backslash_behind(
+    windows_redactor: Redactor,
+) -> None:
+    """`%5C` decoded later is still a separator, so it may not survive either."""
+    rendered = windows_redactor.text(f"{quote(str(ZOMBOID), safe=':/')}%5Clogs%5Cconsole.txt")
+
+    assert "%5C" not in rendered and "%5c" not in rendered, rendered
+    assert "\\" not in rendered, rendered

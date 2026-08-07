@@ -20,6 +20,7 @@ from pz_agent_cli.livetest.evidence import (
     SchemaUnavailableError,
     TamperError,
     canonical_json,
+    canonical_json_bytes,
     collect_files,
     digest_entry,
     read_document,
@@ -54,15 +55,20 @@ class TestCanonicalBytes:
         """Without this, every tamper check would be a coin flip on whitespace."""
         document = {"scenario": SCENARIO, "values": [1, 2, 3], "nested": {"x": None}}
         path = tmp_path / "doc.json"
-        path.write_text(canonical_json(document), encoding="utf-8")
+        path.write_bytes(canonical_json_bytes(document))
 
-        digest, _ = sha256_file(path)
+        digest, size = sha256_file(path)
 
-        assert digest == sha256_text(canonical_json(json.loads(path.read_text())))
+        # `read_bytes`, not `read_text`: text mode would decode through the
+        # locale encoding and translate newlines, so the round trip would be
+        # testing the platform rather than the canonical form.
+        raw = path.read_bytes()
+        assert digest == sha256_text(canonical_json(json.loads(raw.decode("utf-8"))))
+        assert size == len(raw)
 
     def test_non_ascii_survives_the_round_trip(self, tmp_path: Path) -> None:
         path = tmp_path / "doc.json"
-        path.write_text(canonical_json({"user": "Пользователь"}), encoding="utf-8")
+        path.write_bytes(canonical_json_bytes({"user": "Пользователь"}))
 
         assert json.loads(path.read_text(encoding="utf-8"))["user"] == "Пользователь"
 
@@ -156,7 +162,7 @@ class TestReadingBack:
     def test_a_modified_document_is_reported_as_tampering(self, tmp_path: Path) -> None:
         path = tmp_path / "result.json"
         digest = write_document(path, {"status": "FAIL"}, schema=None)
-        path.write_text(canonical_json({"status": "PASS"}), encoding="utf-8")
+        path.write_bytes(canonical_json_bytes({"status": "PASS"}))
 
         with pytest.raises(TamperError, match="modified after it was written"):
             read_document(path, expected_sha256=digest.sha256)

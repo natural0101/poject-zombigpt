@@ -157,11 +157,21 @@ def _literal_variants(literal: str) -> set[str]:
     return {variant for variant in variants if variant}
 
 
-#: What may follow a redacted directory and still be part of the same path. One
-#: or more separator-led segments, in any of the three spellings a record can
-#: carry them in: ``/`` from a POSIX path, ``\`` from a native Windows one, and
-#: ``\\`` from a Windows path that has been through :func:`json.dumps`.
-_PATH_TAIL: Final = r"(?P<tail>(?:(?:\\\\|[\\/])[^\s\"'<>|*?]+)*)"
+#: A separator, in any of the four spellings a record can carry one in: ``/``
+#: from a POSIX path, ``\`` from a native Windows one, ``\\`` from a Windows
+#: path that has been through :func:`json.dumps`, and ``%5C``/``%2F`` from one
+#: that has been through :func:`urllib.parse.quote` — a URL, a crash-reporter
+#: field, a log line copied out of a browser. The percent forms only matter on
+#: Windows, where the separator is a character ``quote`` escapes; on POSIX the
+#: ``/`` survives quoting untouched, which is why their absence went unnoticed
+#: until the Windows suite ran.
+_SEPARATOR: Final = r"\\\\|%5[Cc]|%2[Ff]|[\\/]"
+
+#: What may follow a redacted directory and still be part of the same path: one
+#: or more separator-led segments.
+_PATH_TAIL: Final = rf"(?P<tail>(?:(?:{_SEPARATOR})[^\s\"'<>|*?]+)*)"
+
+_ENCODED_SEPARATOR: Final = re.compile(r"%(?:5[Cc]|2[Ff])")
 
 
 def _posix_tail(tail: str) -> str:
@@ -171,9 +181,10 @@ def _posix_tail(tail: str) -> str:
     file. Emitting ``<ZOMBOID>\\logs`` on Windows and ``<ZOMBOID>/logs``
     elsewhere defeats that for no gain: the separator after the placeholder
     carries no information about the machine, and leaving it native means every
-    document, test and comparison has to know which platform wrote it.
+    document, test and comparison has to know which platform wrote it. The
+    percent-encoded forms normalise the same way and for the same reason.
     """
-    return tail.replace("\\\\", "/").replace("\\", "/")
+    return _ENCODED_SEPARATOR.sub("/", tail.replace("\\\\", "/").replace("\\", "/"))
 
 
 def _literal_rule(
