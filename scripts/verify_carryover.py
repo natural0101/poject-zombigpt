@@ -27,8 +27,10 @@ import argparse
 import json
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any, Final
+from xml.etree import ElementTree
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -46,27 +48,78 @@ _CACHE: dict[str, tuple[bool, str]] = {}
 
 
 def _run(test: str) -> tuple[bool, str]:
-    """Run one pytest target. Returns (passed, first line of failure).
+    """Run one pytest target. Returns (passed, why not).
 
     Cached by target: many tasks name the same file, and running it once per
     task would turn a two-minute confirmation into an hour of the same work.
+
+    **A green exit is not enough.** pytest exits 0 when every test in a target
+    skipped, and this whole script exists to stop a claim resting on something
+    that did not happen. A target whose tests all skip — an optional dependency
+    absent, a platform guard, a fixture that quietly bailed — proves nothing at
+    all, and marking it ``PASS`` would be exactly the substitution the plan
+    forbids: a test that did not run standing in for a behaviour that was never
+    observed. So a passing count is required, not merely a zero exit.
     """
     if test in _CACHE:
         return _CACHE[test]
-    result = subprocess.run(
-        [str(REPO_ROOT / ".venv" / "bin" / "pytest"), test, "-q", "--no-header", "-x"],
-        capture_output=True,
-        text=True,
-        cwd=REPO_ROOT,
-        timeout=900,
-        check=False,
-    )
-    if result.returncode == 0:
-        _CACHE[test] = (True, "")
-    else:
+    with tempfile.TemporaryDirectory() as scratch:
+        report = Path(scratch) / "report.xml"
+        result = subprocess.run(
+            [
+                str(REPO_ROOT / ".venv" / "bin" / "pytest"),
+                test,
+                "-x",
+                f"--junitxml={report}",
+            ],
+            capture_output=True,
+            text=True,
+            cwd=REPO_ROOT,
+            timeout=900,
+            check=False,
+        )
+        counts = _counts(report)
+
+    if result.returncode != 0:
         tail = [ln for ln in result.stdout.splitlines() if ln.startswith(("FAILED", "ERROR"))]
         _CACHE[test] = (False, tail[0] if tail else f"exit {result.returncode}")
+    elif counts is None:
+        _CACHE[test] = (False, "pytest produced no report, so nothing can be said about it")
+    elif counts["ran"] <= 0:
+        _CACHE[test] = (
+            False,
+            f"the run was green but {counts['collected']} test(s) were collected and "
+            f"{counts['skipped']} skipped, so nothing was observed",
+        )
+    else:
+        _CACHE[test] = (True, "")
     return _CACHE[test]
+
+
+def _counts(report: Path) -> dict[str, int] | None:
+    """Read the counts out of a JUnit report.
+
+    Parsed from XML rather than from pytest's summary line, which this project
+    does not print: ``addopts`` already carries ``-q``, so passing another made
+    it ``-qq`` and suppressed the summary entirely. The first version of this
+    check read that missing line and declared twelve genuinely-passing targets
+    unobserved — a measurement bug that would have *lowered* the reported
+    figure, which is the direction that hides less but is no more true.
+    """
+    try:
+        root = ElementTree.parse(report).getroot()
+    except (OSError, ElementTree.ParseError):
+        return None
+    suites = [root] if root.tag == "testsuite" else list(root)
+    collected = sum(int(s.get("tests", 0)) for s in suites)
+    skipped = sum(int(s.get("skipped", 0)) for s in suites)
+    failed = sum(int(s.get("failures", 0)) + int(s.get("errors", 0)) for s in suites)
+    return {
+        "collected": collected,
+        "skipped": skipped,
+        "failed": failed,
+        "ran": collected - skipped - failed,
+    }
 
 
 def _commit_exists(sha: str) -> bool:
