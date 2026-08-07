@@ -12,6 +12,37 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Added
 
+- **Local Core RPC: the channel that was missing between the two processes.**
+  `pz-agent-mcp` is launched as a subprocess by an MCP client, so it never
+  shares a process with the sidecar that owns the session, the observation store
+  and the action engine. Until now it said so and refused to serve — the message
+  `NO_SERVICES_MESSAGE` stated in its own words that this build had no channel
+  handing the core to a second process. `pz_agent_core.rpc` is that channel: a
+  Windows named pipe or a Unix socket, never a TCP address, authenticated per
+  run by a 32-byte token in its own mode-0600 file, with a descriptor at
+  `<state-dir>/runtime/core-rpc.json` that a client checks before using — format,
+  protocol major, the recorded process still alive, and the token still beside
+  it. A stale descriptor is refused rather than dialled: a pid can be reused,
+  and then a client reads a *different* process's silence as the core's state.
+  Documented in `docs/CORE_RPC.md` and pinned by two JSON schemas.
+- **JSON on that link, never pickle.** `multiprocessing.connection` puts `send`
+  and `recv`, which pickle, one letter from `send_bytes` and `recv_bytes`, which
+  do not — and a pickle stream is arbitrary code execution in the process that
+  reads it. Only the byte calls are used. The suite feeds a pickle whose
+  `__reduce__` would raise on load, and poisons `Connection.recv`/`send` for the
+  duration of a real call, so reaching for the convenient one fails in CI rather
+  than in a user's process.
+- **A weighted plan of record.** `docs/control/MASTER_PLAN.yaml`: 480 tasks in 15
+  epics, five levels (EPIC → MILESTONE → TASK → CHECK → EVIDENCE), progress
+  derived on every read as the summed weight of passing tasks over the summed
+  weight of all of them. It replaces a model that counted steps, which said a
+  paragraph of documentation and a live Project Zomboid scenario were the same
+  size. Weight bands are validated, not advisory. Seven metrics are reported
+  separately because a single figure hides a subsystem at zero — MCP and voice
+  operability are both at 0.0% while Windows compatibility is at 89.3%.
+
+### Fixed
+
 - **`safety.disabled_capabilities`: switch a capability off by name.** The
   state `disabled_by_policy` existed, the mod guarded on it, `PermissionEngine`
   refused on it with a message written for a user — *"X is switched off by
@@ -30,6 +61,35 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **A path that mixed separators matched no redaction rule.** Spellings of a
+  literal were enumerated whole — all-`/`, all-`\`, all-doubled,
+  all-percent-encoded — so `C:\Users\Иван/Zomboid`, which is what
+  `f"{path}/name"` produces, matched none of them and fell through to the
+  shorter `home_dir` literal. Not a leak; the path was still struck out, but
+  under `<USER_HOME>` instead of `<ZOMBOID>`, so the same file produced a
+  different line on each platform — which is the one guarantee a placeholder
+  exists to provide. Mixtures are exponential in the number of separators, so
+  each position is matched independently now.
+- **`portable_relative_path` was untestable, and that hid a defect.** It coerced
+  both arguments with `PurePath`, which builds the *running* platform's flavour,
+  so on Linux a `PureWindowsPath` was normalised before `as_posix()` ever ran and
+  removing the call changed nothing any Linux test could see. It also made
+  `portable_posix` return `C:\/Users/...`. The flavour is preserved now.
+- **The credential tests asserted the placeholder appeared, never that the secret
+  had left.** Those are different claims: shortening the value pattern to a
+  single character inserts `<REDACTED>` in front of an intact key and satisfies
+  every containment check in the file, while `findings()` returns nothing and
+  `verify_bundle` calls the archive safe to share.
+- **`ActionEngine`'s pre-flight manual-takeover guard had no failing mutation.**
+  Deleting it left the whole suite green while the engine dispatched a command
+  into a character the player had taken control of and then cancelled it — which
+  is not the same as never sending it.
+- **`pz-agent-mcp.exe` could not be built.** PyInstaller's `collect_submodules`
+  discovers modules by importing them, and `mcp.cli` calls `sys.exit` at import
+  time without its optional `typer` extra. `SystemExit` is not an `Exception`, so
+  `on_error` could not skip it and the build died packaging a program that never
+  runs a command line of the SDK's at all. `packaging/windows/specutil.py` reads
+  the package directory instead.
 - **The documented-command guard now covers `pz-agent-mcp` too.** It has its own
   parser — `--version` and `--describe` and nothing else — so a document naming
   a flag for it fails exactly the way `logs --redact` did, and the guard written
