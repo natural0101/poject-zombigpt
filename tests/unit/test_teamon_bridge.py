@@ -42,6 +42,7 @@ from __future__ import annotations
 # mistyped ASCII; taking its suggestion would leave the tests asserting against
 # strings this build never says.
 # ruff: noqa: RUF001
+import io
 import queue
 import subprocess
 import threading
@@ -53,6 +54,9 @@ import pytest
 from pz_agent_voice.adapters.teamon import TeamONClient
 from pz_agent_voice.messages import MAX_TEXT_CHARS, MAX_TRANSCRIPT_CHARS, VoiceGoal
 from pz_agent_voice.teamon import (
+    # Private: the slice a caller's wait is spent in is an argument to
+    # `queue.get`, and an argument is not visible from a return value.
+    _LIVENESS_POLL_SECONDS,
     BRIDGE_PROTOCOL_VERSION,
     BRIDGE_UNAVAILABLE_PHRASE,
     CREATE_NO_WINDOW,
@@ -1177,3 +1181,296 @@ async def test_the_transcript_stream_ends_on_a_protocol_error_rather_than_raisin
     # stops listening *and* takes the caller's loop with it.
     with pytest.raises(StopAsyncIteration):
         await anext(stream)
+
+
+# ---------------------------------------------------------------------------
+# a child that died is not a child that is slow
+# ---------------------------------------------------------------------------
+#
+# The wait used to watch the pipe and nothing else, so the only way it could
+# learn that the child was gone was EOF. That works wherever the operating
+# system closes the child's handles before it does anything else, and it is not
+# a promise any of them makes: a process handle is signalled only once every one
+# of the child's threads has ended, and a handle inherited by something the
+# child started outlives the child holding it. Where EOF is late the wait ran
+# out and reported `BridgeTimeout` — "it did not answer in time", about a
+# process that had already exited with a status somebody could have looked up.
+#
+# These are the two facts and the four orders they can arrive in, forced with an
+# injected process rather than with a real one. A real child cannot be made to
+# exit-without-EOF on demand — that is exactly the platform-dependent timing
+# under test — so a double is the only way to assert on it from either platform,
+# and the contract suite keeps the real-process claims it can actually make.
+
+
+class _ExitedWith:
+    """A child that has ended. Its `poll` answers; its pipe is at EOF."""
+
+    pid = 4243
+
+    def __init__(self, status: int) -> None:
+        self._status = status
+        self.stdin = None
+        self.stdout = io.BytesIO(b"")
+
+    def poll(self) -> int | None:
+        return self._status
+
+
+class _ExitedAndStillHoldingThePipe:
+    """A child that has ended without its pipe reaching EOF.
+
+    The shape a bridge takes when something it launched inherited its stdout, or
+    when the platform marks the process finished before the handles close. The
+    `read` never returns, which is what the reader thread would be doing, so the
+    only evidence of the death is `poll`.
+    """
+
+    pid = 4245
+
+    def __init__(self, status: int) -> None:
+        self._status = status
+        self.stdin = None
+        self.stdout = None
+
+    def poll(self) -> int | None:
+        return self._status
+
+
+class _StreamEndedButStillRunning:
+    """A child at EOF whose `poll` has not caught up, which is the other order.
+
+    Not hypothetical: `ExitProcess` closes the handles and the process object
+    becomes signalled only after every thread in it has gone, so a child on its
+    way out reads as running for the moment in between. A supervisor that asked
+    `poll` alone would answer "still up" about a pipe nobody is holding, skip
+    the restart, and queue the next message into the dark.
+    """
+
+    pid = 4244
+
+    def __init__(self) -> None:
+        self.stdin = None
+        self.stdout = io.BytesIO(b"")
+
+    def poll(self) -> int | None:
+        return None
+
+
+def _watching(bridge: JsonlBridge, process: object, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Put *bridge* in the one state where a caller's wait is reached."""
+    monkeypatch.setattr(bridge, "_state", BridgeState.RUNNING)
+    monkeypatch.setattr(bridge, "_process", process)
+
+
+def test_a_wait_that_meets_a_child_that_died_says_so_instead_of_timing_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The Windows failure, made reproducible: exited, and no EOF to say so.
+
+    The deadline is five seconds and the child is already gone, so a wait that
+    watched only the pipe would sit here for all five of them and then call it a
+    timeout. Both halves of the claim are asserted — that it came back early,
+    and that what it came back with is a crash rather than a silence — because
+    an implementation that returned early with a `BridgeTimeout` would satisfy
+    either one alone.
+    """
+    recorder = Recorder()
+    bridge = JsonlBridge(a_config(), listener=recorder)
+    _watching(bridge, _ExitedAndStillHoldingThePipe(3), monkeypatch)
+
+    started = time.monotonic()
+    event = bridge._take_event(time.monotonic() + 5.0)
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 2.0, "the wait sat out its deadline against a child that had exited"
+    with pytest.raises(BridgeUnavailable) as caught:
+        bridge._handle_down(event)  # type: ignore[arg-type]
+    # Not a timeout: a timeout says "wait longer", and there is nothing left to
+    # wait for. And the status is in it, because 3 is a number somebody can go
+    # and look up in the bridge program.
+    assert "exited with status 3" in str(caught.value)
+    assert recorder.reasons() == [BridgeReason.CRASHED]
+    assert "exited with status 3" in recorder.details
+    assert bridge.state is BridgeState.RUNNING, "a crash is restartable and must not be fatal"
+
+
+def test_a_child_that_is_alive_and_silent_is_still_a_timeout_and_not_a_crash(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The case the deadline exists for, which the fix above must not eat.
+
+    A bridge that is running and has not answered yet is a real and different
+    situation with a different remedy, and reporting it as a crash would restart
+    a perfectly good child in the middle of a sentence.
+    """
+    recorder = Recorder()
+    bridge = JsonlBridge(a_config(), listener=recorder)
+    _watching(bridge, _AlwaysAlive(), monkeypatch)
+
+    started = time.monotonic()
+    with pytest.raises(BridgeTimeout):
+        bridge._take_event(time.monotonic() + 0.3)
+
+    assert time.monotonic() - started < 2.0
+    assert recorder.reasons() == []
+
+
+def test_a_wait_prefers_the_reply_that_did_arrive_over_the_death_behind_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A bridge that answered and then exited answered, and that answer counts.
+
+    The outcome was written to the pipe before the child died, so it is on this
+    side already. A wait that asked the process first would throw away a reply
+    it is holding and report a crash instead — which would turn a synthesis that
+    genuinely ended into a failure the user hears about.
+    """
+    bridge = JsonlBridge(a_config())
+    _watching(bridge, _ExitedWith(3), monkeypatch)
+    bridge._admit(b'{"v":"1.0","type":"outcome","request_id":"teamon-1","status":"ended"}', 0)
+
+    event = bridge._take_event(time.monotonic() + 5.0)
+
+    assert read_outcome(event).ended is True  # type: ignore[arg-type]
+
+
+def test_a_child_whose_output_ended_is_not_alive_however_poll_answers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The other order, and the one that leaves a bridge queueing into the dark.
+
+    `poll` says the child is running and the reader has already seen its stream
+    end. `alive` is what `_ensure_running` consults to decide whether to
+    restart, so a supervisor that believed `poll` here would never restart and
+    would report `RUNNING` about a bridge that had stopped.
+    """
+    recorder = Recorder()
+    bridge = JsonlBridge(a_config(), listener=recorder)
+    process = _StreamEndedButStillRunning()
+    _watching(bridge, process, monkeypatch)
+
+    # Both readings are taken rather than asserted in place: `poll` answers the
+    # same thing on either side of the read loop, so the only thing that can
+    # have changed the second one is what the reader saw.
+    before = bridge.alive
+    bridge._read_loop(process, bridge._generation)  # type: ignore[arg-type]
+    after = bridge.alive
+
+    assert (before, after) == (True, False)
+    assert recorder.reasons() == [BridgeReason.CRASHED]
+    # The status is genuinely not known here, so the sentence names what was
+    # observed rather than inventing a code for it.
+    assert "closed its output" in recorder.details
+
+
+def test_the_reader_names_the_exit_status_when_the_system_already_has_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorder = Recorder()
+    bridge = JsonlBridge(a_config(), listener=recorder)
+    process = _ExitedWith(3)
+    _watching(bridge, process, monkeypatch)
+
+    bridge._read_loop(process, bridge._generation)  # type: ignore[arg-type]
+
+    assert recorder.reasons() == [BridgeReason.CRASHED]
+    assert "exited with status 3" in recorder.details
+
+
+def test_one_death_seen_by_both_halves_is_announced_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two watchers, one event, one report — and one `_Down`.
+
+    The wait and the reader thread reach the same death by different routes and
+    in either order. A second report would be two sentences in the log for one
+    stop; the second `_Down` behind it would sit in the reply queue until the
+    next exchange read it as *that* request failing.
+    """
+    recorder = Recorder()
+    bridge = JsonlBridge(a_config(), listener=recorder)
+    process = _ExitedWith(3)
+    _watching(bridge, process, monkeypatch)
+
+    taken = bridge._take_event(time.monotonic() + 5.0)
+    bridge._read_loop(process, bridge._generation)  # type: ignore[arg-type]
+
+    with pytest.raises(BridgeUnavailable):
+        bridge._handle_down(taken)  # type: ignore[arg-type]
+    assert recorder.reasons() == [BridgeReason.CRASHED]
+    assert bridge._events.empty(), "the second watcher queued a death the first had reported"
+
+
+def test_the_liveness_poll_is_a_bounded_slice_and_not_a_spin() -> None:
+    """Bounded, and bounded at a value a caller's deadline still dominates.
+
+    A slice this long costs ten wakeups a second, each of them spent blocked in
+    `queue.get` rather than looping, and it bounds only how late "it died" can
+    be. The literal is written out here rather than imported and compared
+    against itself: what is being pinned is that the number is small enough to
+    be a poll and large enough not to be a spin.
+    """
+    assert 0.01 <= _LIVENESS_POLL_SECONDS <= 0.25
+    assert _LIVENESS_POLL_SECONDS < MAX_TIMEOUT_SECONDS
+
+
+class _StillRunningAtEof:
+    """A child at EOF that is genuinely still running, and can be stopped.
+
+    The same shape as :class:`_StreamEndedButStillRunning`, with the stop path
+    a real :class:`subprocess.Popen` offers: `poll` keeps answering ``None``
+    until somebody ends it, which is what makes "was it ended" an observation
+    rather than an assumption.
+    """
+
+    pid = 4246
+
+    def __init__(self) -> None:
+        self.stdin = None
+        self.stdout = io.BytesIO(b"")
+        self.terminated = False
+
+    def poll(self) -> int | None:
+        return 0 if self.terminated else None
+
+    def terminate(self) -> None:
+        self.terminated = True
+
+    def wait(self, timeout: float | None = None) -> int:
+        if not self.terminated:
+            raise subprocess.TimeoutExpired(cmd="fake", timeout=0.0 if timeout is None else timeout)
+        return 0
+
+
+def test_a_relaunch_does_not_leave_the_previous_child_running(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Launching over a half-dead bridge must end it, not abandon it.
+
+    `alive` is false as soon as *either* watcher saw the end, so a child whose
+    stdout reached EOF while the process itself is still going now reads as not
+    alive — and `start` consults exactly that before relaunching. `_restart`
+    ends the old child first; `_launch` is reached directly from `start` and had
+    no such step, so the relaunch would overwrite the only handle to a process
+    that was still running and still holding the microphone.
+
+    The launch itself fails, because the configured command is not a program.
+    That is deliberate: the previous child must be ended before the new one is
+    attempted, so a launch that never gets off the ground still cannot strand
+    it.
+    """
+    bridge = JsonlBridge(a_config())
+    process = _StillRunningAtEof()
+    _watching(bridge, process, monkeypatch)
+    bridge._read_loop(process, bridge._generation)  # type: ignore[arg-type]
+
+    # The premise, asserted rather than assumed: not alive, and yet running.
+    assert bridge.alive is False
+    assert process.poll() is None, "the double stopped on its own; it proves nothing"
+
+    with pytest.raises(BridgeUnavailable):
+        bridge.start()
+
+    assert process.terminated, "the relaunch left the previous child running"
+    assert bridge._process is None

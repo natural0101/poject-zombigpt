@@ -37,6 +37,21 @@ deliberate and is not on any caller's path: it is a daemon thread parked on a
 queue, woken either by work or by the sentinel :meth:`JsonlBridge._drain` puts
 there, and a timeout on it would only make it spin.
 
+**And every wait watches the child as well as the pipe.** A deadline alone
+answers "did it reply in time"; it cannot tell a bridge that is thinking from
+one that is gone, because a dead child and a silent child both put nothing on
+the pipe. EOF usually says which — but only where the operating system closes
+the handles and marks the process finished in that order, and it does not do
+that everywhere or in the same instant. So the wait in
+:meth:`JsonlBridge._take_event` parks on the reply queue in slices and asks
+:meth:`subprocess.Popen.poll` between them, and :attr:`JsonlBridge.alive`
+believes whichever half saw the end first. There is no portable way to block on
+a pipe and a process together — ``select`` does not take a Windows process
+handle — so a bounded poll interval is the shape this takes. What it buys is
+that "the bridge crashed, it exited with status 3" is never reported as "the
+bridge did not answer in time": those have different remedies, and a supervisor
+that confuses them sends its reader after the wrong problem.
+
 **The stop path never waits for agreement.** :meth:`JsonlBridge.stop` signals,
 waits ``stop_timeout``, kills, waits ``stop_timeout`` again and gives up — at
 most twice a bound the caller set, whatever the bridge does. Nothing about the
@@ -794,6 +809,16 @@ _CHUNK_BYTES: Final = 4096
 #: notices that the bridge died or that the session was closed.
 _TRANSCRIPT_POLL_SECONDS: Final = 0.2
 
+#: How long a caller's bounded wait parks on the reply queue before looking at
+#: the child process itself. Not a timeout either, and not a busy loop: every
+#: slice is spent blocked inside ``queue.get``, so this costs ten wakeups a
+#: second and bounds only how *late* the answer "it died" can be. It exists
+#: because there is no portable call that waits on a pipe and a process at the
+#: same time — ``select`` does not take a Windows process handle — and because
+#: "it did not answer" and "it exited" are different facts that must not be
+#: reported as each other.
+_LIVENESS_POLL_SECONDS: Final = 0.1
+
 #: The child gets these and nothing else. The parent's environment holds the
 #: planner's API key, the RPC token's path and whatever else the user's shell
 #: exports; none of it is the bridge's business, and a child that inherits a
@@ -1198,6 +1223,16 @@ class JsonlBridge:
         #: a straggler cannot inject a transcript into the next session.
         self._generation = 0
         self._death = ""
+        #: The generation whose child is known to have ended, or -1. Set by
+        #: whichever half sees it first — the reader at EOF, or a caller's own
+        #: wait at :meth:`subprocess.Popen.poll` — and read by :attr:`alive`,
+        #: which must not answer "running" about a child the other half has
+        #: already watched stop. Generations start at 1, so -1 is "none yet".
+        self._ended = -1
+        #: Guards the pair above against announcing one death twice. It is held
+        #: for two statements and calls nothing, so no listener and no queue can
+        #: be reached while it is held.
+        self._ended_lock = threading.Lock()
 
     # -- state ------------------------------------------------------------
 
@@ -1212,9 +1247,25 @@ class JsonlBridge:
 
     @property
     def alive(self) -> bool:
-        """Whether a child process exists and has not exited."""
+        """Whether a child process exists and has not been seen to end.
+
+        Two observations, not one. ``Popen.poll`` answers "has the process
+        finished"; the reader thread answers "did its output stream end". They
+        are made by different threads against different objects and they do not
+        arrive in a fixed order — a process handle is signalled only once every
+        one of the child's threads has gone, so a child whose pipes are already
+        at EOF can still read as running for the moment in between. Either
+        observation is enough to know the bridge will not answer again, so this
+        reports the first of them to arrive; deriving liveness from ``poll``
+        alone would throw away what the reader already saw and go on queueing
+        messages for a pipe nobody is holding.
+        """
         process = self._process
-        return process is not None and process.poll() is None
+        if process is None:
+            return False
+        if self._ended == self._generation:
+            return False
+        return process.poll() is None
 
     @property
     def pid(self) -> int | None:
@@ -1338,6 +1389,20 @@ class JsonlBridge:
         self._drain()
         self._generation += 1
         generation = self._generation
+        # A previous child may still be here, and it may still be *running*.
+        # :attr:`alive` is false as soon as either watcher saw the end, and the
+        # reader can reach EOF while the process object has not finished — that
+        # ordering is the whole reason the property watches both. `start`
+        # consults `alive` and comes straight here, so launching over the
+        # previous child without ending it would leave a process nobody holds a
+        # handle to, still on the microphone, for as long as it liked.
+        # `_restart` and `stop` have already cleared this, so only the half-dead
+        # case reaches it. The generation was bumped first, so the old reader
+        # waking on the closed pipe is suppressed rather than reported as a
+        # second crash. Bounded by `_terminate`, like every other stop here.
+        previous, self._process = self._process, None
+        if previous is not None:
+            self._terminate(previous)
         try:
             process = subprocess.Popen(  # noqa: S603 - argv from a validated config, never a shell
                 list(self._config.command),
@@ -1431,17 +1496,86 @@ class JsonlBridge:
     def _take_event(self, deadline: float) -> _Event:
         """The next event, or :class:`BridgeTimeout` when the deadline passes.
 
-        The remaining time is recomputed on every call, so a loop that discards
-        an event it did not want — a late outcome for an abandoned request —
-        cannot extend the caller's wait past the deadline it set.
+        The wait watches two things and answers with whichever happens first: a
+        message arriving on the pipe, and the child process ending. Only the
+        first can be waited on directly — there is no portable call that blocks
+        on a queue and a process at once, and a Windows process handle is not
+        selectable — so the wait is spent in slices of
+        :data:`_LIVENESS_POLL_SECONDS` with one :meth:`subprocess.Popen.poll`
+        between them.
+
+        Watching only the pipe is what this used to do, and it made a dead
+        bridge indistinguishable from a slow one wherever EOF did not arrive
+        the instant the child exited. "It did not answer in time" and "it died"
+        are different facts with different remedies — one says raise the
+        deadline, the other says the bridge crashed and here is its exit code —
+        and reporting the first when the second is true sends the reader after
+        the wrong problem.
+
+        The remaining time is recomputed on every pass, so neither the slicing
+        nor a loop that discards an event it did not want — a late outcome for
+        an abandoned request — can extend the caller's wait past the deadline
+        it set.
         """
-        remaining = deadline - _now()
-        if remaining <= 0:
-            raise BridgeTimeout("the voice bridge did not answer within its deadline")
-        try:
-            return self._events.get(timeout=remaining)
-        except queue.Empty:
-            raise BridgeTimeout("the voice bridge did not answer within its deadline") from None
+        while True:
+            remaining = deadline - _now()
+            if remaining <= 0:
+                raise BridgeTimeout("the voice bridge did not answer within its deadline")
+            try:
+                return self._events.get(timeout=min(remaining, _LIVENESS_POLL_SECONDS))
+            except queue.Empty:
+                # Nothing on the pipe for this slice. Ask the other half.
+                down = self._exited()
+                if down is not None:
+                    return down
+
+    def _stopped_detail(self, status: int | None) -> str:
+        """The sentence one death gets, naming whichever evidence there was.
+
+        The status is an integer the operating system produced, so it is the
+        one number from outside this process that may be written down: it is
+        not a string the far end chose, and a bridge that exited 3 is a bridge
+        somebody can go and look up. Where it is not known yet — the pipe
+        closed and the process object has not been marked finished — the
+        sentence says what *was* observed rather than guessing at a code.
+        """
+        if status is None:
+            return "the voice bridge closed its output; it has stopped"
+        return f"the voice bridge stopped; it exited with status {status}"
+
+    def _note_ended(self, generation: int) -> bool:
+        """Record that the child of *generation* is gone; True the first time.
+
+        Both halves of the watch can reach the same death, in either order, and
+        one event deserves one report: a second would put two sentences in the
+        log for one stop, and the second ``_Down`` behind it would be read by
+        whatever exchange came next as *its* request failing.
+        """
+        with self._ended_lock:
+            if self._ended == generation:
+                return False
+            self._ended = generation
+            return True
+
+    def _exited(self) -> _Down | None:
+        """The child's ending, or ``None`` while it is still running.
+
+        This is the half of a caller's wait that watches the process rather
+        than the pipe, and it is why a child that dies without its pipe
+        reaching EOF is still reported as a crash rather than as a silence.
+        """
+        process = self._process
+        if process is None:
+            return None
+        status = process.poll()
+        if status is None:
+            return None
+        detail = self._stopped_detail(status)
+        if self._note_ended(self._generation):
+            self._report(
+                BridgeReport(state=self._state, reason=BridgeReason.CRASHED, detail=detail)
+            )
+        return _Down(reason=BridgeReason.CRASHED, detail=detail, fatal=False)
 
     def _handle_down(self, down: _Down) -> None:
         if down.fatal:
@@ -1590,7 +1724,16 @@ class JsonlBridge:
                 self._admit(item, generation)
         if self._generation != generation:
             return
-        detail = "the voice bridge closed its output; it has stopped"
+        # `poll` rather than `wait`: the status is usually already there, since
+        # the pipe reached EOF because the child exited, and a reader thread
+        # that waited for it would delay the report the caller is blocked on.
+        # When it is not there yet the sentence says so instead of guessing.
+        detail = self._stopped_detail(process.poll())
+        if not self._note_ended(generation):
+            # A caller's own wait reached `poll` first and has already been
+            # given this death. Saying it twice would be noise in the log and a
+            # second `_Down` for the next exchange to trip over.
+            return
         self._report(BridgeReport(state=self._state, reason=BridgeReason.CRASHED, detail=detail))
         self._offer_event(
             _Down(reason=BridgeReason.CRASHED, detail=detail, fatal=False), generation
