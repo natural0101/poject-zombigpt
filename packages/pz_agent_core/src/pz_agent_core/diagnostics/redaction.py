@@ -29,9 +29,9 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Any, Final
 from urllib.parse import quote
 
@@ -121,7 +121,10 @@ class RedactionRule:
 
     label: str
     pattern: re.Pattern[str]
-    replacement: str
+    #: A literal replacement, or a function of the match. The function form
+    #: exists for the path rules, which have to rewrite what *follows* the
+    #: directory they struck out so the separator is the same on every machine.
+    replacement: str | Callable[[re.Match[str]], str]
 
     def apply(self, text: str) -> str:
         return self.pattern.sub(self.replacement, text)
@@ -154,6 +157,25 @@ def _literal_variants(literal: str) -> set[str]:
     return {variant for variant in variants if variant}
 
 
+#: What may follow a redacted directory and still be part of the same path. One
+#: or more separator-led segments, in any of the three spellings a record can
+#: carry them in: ``/`` from a POSIX path, ``\`` from a native Windows one, and
+#: ``\\`` from a Windows path that has been through :func:`json.dumps`.
+_PATH_TAIL: Final = r"(?P<tail>(?:(?:\\\\|[\\/])[^\s\"'<>|*?]+)*)"
+
+
+def _posix_tail(tail: str) -> str:
+    """The remainder of a redacted path, in the one separator a reader expects.
+
+    A placeholder exists so two machines produce the same line for the same
+    file. Emitting ``<ZOMBOID>\\logs`` on Windows and ``<ZOMBOID>/logs``
+    elsewhere defeats that for no gain: the separator after the placeholder
+    carries no information about the machine, and leaving it native means every
+    document, test and comparison has to know which platform wrote it.
+    """
+    return tail.replace("\\\\", "/").replace("\\", "/")
+
+
 def _literal_rule(
     label: str, literal: str, placeholder: str, *, word: bool = False
 ) -> RedactionRule:
@@ -161,14 +183,21 @@ def _literal_rule(
 
     ``word=True`` guards the match with word boundaries, which is what keeps a
     short account name from being struck out of the middle of an unrelated word.
+    It also marks a rule as *not* a path: an account name has no tail to
+    normalise, and consuming one would eat the rest of the line.
     """
     variants = sorted(_literal_variants(literal), key=len, reverse=True)
     body = "|".join(re.escape(variant) for variant in variants)
-    prefix, suffix = (r"(?<!\w)", r"(?!\w)") if word else ("", "")
+    if word:
+        return RedactionRule(
+            label=label,
+            pattern=re.compile(rf"(?<!\w)(?:{body})(?!\w)", re.IGNORECASE),
+            replacement=placeholder,
+        )
     return RedactionRule(
         label=label,
-        pattern=re.compile(f"{prefix}(?:{body}){suffix}", re.IGNORECASE),
-        replacement=placeholder,
+        pattern=re.compile(f"(?:{body}){_PATH_TAIL}", re.IGNORECASE),
+        replacement=lambda match: placeholder + _posix_tail(match.group("tail")),
     )
 
 
@@ -372,9 +401,13 @@ def _label_for(placeholder: str, index: int) -> str:
 
 def build_redactor(
     *,
-    user_dir: Path | None = None,
-    home_dir: Path | None = None,
-    install_dir: Path | None = None,
+    # ``PurePath`` rather than ``Path``: nothing here touches a filesystem — a
+    # redactor is built from the *spelling* of a directory — and accepting a
+    # pure path is what lets a test on Linux build the Windows shapes that only
+    # ever failed on Windows.
+    user_dir: PurePath | None = None,
+    home_dir: PurePath | None = None,
+    install_dir: PurePath | None = None,
     usernames: Iterable[str] = (),
     extra_literals: Mapping[str, str] | None = None,
 ) -> Redactor:

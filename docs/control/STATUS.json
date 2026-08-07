@@ -1,12 +1,12 @@
 {
   "blockers": [],
   "branch": "fix/windows-mcp-voice-runtime",
-  "current_step": 1,
+  "current_step": 11,
   "github_release": null,
-  "head_commit": "873037c081800cf4f4373b9307fc1cdff3140e99",
-  "last_passed_step": 0,
+  "head_commit": "50c851ca490f458f1c0650dc5f4f2378aa2dfc56",
+  "last_passed_step": 10,
   "linux_ci": {
-    "status": "NOT_RUN",
+    "status": "GREEN_LOCAL",
     "url": null
   },
   "live_game_percent": 0,
@@ -15,163 +15,212 @@
     "not_run": 20,
     "passed": 0
   },
-  "next_step": 1,
-  "overall_percent": 0,
+  "next_step": 11,
+  "overall_percent": 10,
   "rc_artifact": {
     "sha256": null,
     "status": "NOT_BUILT",
     "url": null
   },
   "release_percent": 0,
-  "remote_percent": 0,
+  "remote_percent": 10,
   "repository": "https://github.com/natural0101/poject-zombigpt",
   "steps": [
     {
-      "commit": null,
+      "commit": "50c851ca490f458f1c0650dc5f4f2378aa2dfc56",
       "depends_on": [],
-      "evidence": [],
-      "finished_at": null,
+      "evidence": [
+        "docs/control/evidence/step-01-10/branches.txt"
+      ],
+      "finished_at": "2026-08-07T07:30:00Z",
       "id": 1,
       "notes": "",
       "owner": "remote",
-      "started_at": null,
-      "status": "NOT_STARTED",
-      "tests": [],
+      "started_at": "2026-08-07T07:30:00Z",
+      "status": "PASS",
+      "tests": [
+        "git fetch --all --prune"
+      ],
       "title": "Refresh local refs for every remote branch"
     },
     {
-      "commit": null,
+      "commit": "50c851ca490f458f1c0650dc5f4f2378aa2dfc56",
       "depends_on": [
         1
       ],
-      "evidence": [],
-      "finished_at": null,
+      "evidence": [
+        "docs/control/evidence/step-01-10/branches.txt"
+      ],
+      "finished_at": "2026-08-07T07:30:00Z",
       "id": 2,
       "notes": "",
       "owner": "remote",
-      "started_at": null,
-      "status": "NOT_STARTED",
-      "tests": [],
+      "started_at": "2026-08-07T07:30:00Z",
+      "status": "PASS",
+      "tests": [
+        "git checkout dev && git pull --ff-only"
+      ],
       "title": "Switch to the current `dev`"
     },
     {
-      "commit": null,
+      "commit": "50c851ca490f458f1c0650dc5f4f2378aa2dfc56",
       "depends_on": [
         2
       ],
-      "evidence": [],
-      "finished_at": null,
+      "evidence": [
+        "docs/control/evidence/step-01-10/branches.txt"
+      ],
+      "finished_at": "2026-08-07T07:30:00Z",
       "id": 3,
       "notes": "",
       "owner": "remote",
-      "started_at": null,
-      "status": "NOT_STARTED",
-      "tests": [],
+      "started_at": "2026-08-07T07:30:00Z",
+      "status": "PASS",
+      "tests": [
+        "git checkout -b fix/windows-mcp-voice-runtime"
+      ],
       "title": "Create `fix/windows-mcp-voice-runtime`"
     },
     {
-      "commit": null,
+      "commit": "50c851ca490f458f1c0650dc5f4f2378aa2dfc56",
       "depends_on": [
         3
       ],
-      "evidence": [],
-      "finished_at": null,
+      "evidence": [
+        "docs/control/evidence/step-01-10/linux-baseline.txt"
+      ],
+      "finished_at": "2026-08-07T07:30:00Z",
       "id": 4,
       "notes": "",
       "owner": "remote",
-      "started_at": null,
-      "status": "NOT_STARTED",
-      "tests": [],
+      "started_at": "2026-08-07T07:30:00Z",
+      "status": "PASS",
+      "tests": [
+        "git rev-parse HEAD"
+      ],
       "title": "Record the starting commit SHA"
     },
     {
-      "commit": null,
+      "commit": "50c851ca490f458f1c0650dc5f4f2378aa2dfc56",
       "depends_on": [
         4
       ],
-      "evidence": [],
-      "finished_at": null,
+      "evidence": [
+        "docs/control/evidence/step-01-10/branches.txt"
+      ],
+      "finished_at": "2026-08-07T07:30:00Z",
       "id": 5,
       "notes": "",
       "owner": "remote",
-      "started_at": null,
-      "status": "NOT_STARTED",
-      "tests": [],
+      "started_at": "2026-08-07T07:30:00Z",
+      "status": "PASS",
+      "tests": [
+        "git branch -a --format='%(refname:short) %(objectname)'"
+      ],
       "title": "Record every branch and its SHA"
     },
     {
-      "commit": null,
+      "commit": "50c851ca490f458f1c0650dc5f4f2378aa2dfc56",
       "depends_on": [
         5
       ],
-      "evidence": [],
-      "finished_at": null,
+      "evidence": [
+        "docs/control/evidence/step-01-10/windows-workflow-runs.txt"
+      ],
+      "finished_at": "2026-08-07T07:30:00Z",
       "id": 6,
       "notes": "",
       "owner": "remote",
-      "started_at": null,
-      "status": "NOT_STARTED",
-      "tests": [],
+      "started_at": "2026-08-07T07:30:00Z",
+      "status": "PASS",
+      "tests": [
+        "GitHub Actions: list_workflow_runs windows.yml"
+      ],
       "title": "Record the recent CI workflow runs"
     },
     {
-      "commit": null,
+      "commit": "50c851ca490f458f1c0650dc5f4f2378aa2dfc56",
       "depends_on": [
         6
       ],
-      "evidence": [],
-      "finished_at": null,
+      "evidence": [
+        "docs/control/evidence/step-01-10/linux-baseline.txt"
+      ],
+      "finished_at": "2026-08-07T07:30:00Z",
       "id": 7,
       "notes": "",
       "owner": "remote",
-      "started_at": null,
-      "status": "NOT_STARTED",
-      "tests": [],
+      "started_at": "2026-08-07T07:30:00Z",
+      "status": "PASS",
+      "tests": [
+        ".venv/bin/python -m pytest tests/"
+      ],
       "title": "Record the current Linux test result"
     },
     {
-      "commit": null,
+      "commit": "50c851ca490f458f1c0650dc5f4f2378aa2dfc56",
       "depends_on": [
         7
       ],
-      "evidence": [],
-      "finished_at": null,
+      "evidence": [
+        "docs/control/evidence/step-01-10/windows-failures.txt"
+      ],
+      "finished_at": "2026-08-07T07:30:00Z",
       "id": 8,
-      "notes": "",
+      "notes": "24 failed, 3633 passed, 22 skipped on Windows run 31156087690 at 873037c0. Read from Actions, not run here.",
       "owner": "remote",
-      "started_at": null,
-      "status": "NOT_STARTED",
-      "tests": [],
+      "started_at": "2026-08-07T07:30:00Z",
+      "status": "PASS",
+      "tests": [
+        "GitHub Actions: get_job_logs run 31156087690"
+      ],
       "title": "Record the current Windows failures"
     },
     {
-      "commit": null,
+      "commit": "50c851ca490f458f1c0650dc5f4f2378aa2dfc56",
       "depends_on": [
         8
       ],
-      "evidence": [],
-      "finished_at": null,
+      "evidence": [
+        "docs/control/PLAN.md",
+        "docs/control/STATUS.json",
+        "docs/control/BLOCKERS.md",
+        "docs/control/DECISIONS.md",
+        "docs/control/EVIDENCE_INDEX.md",
+        "docs/control/COMMAND_LOG.md",
+        "docs/control/CHANGE_LOG.md",
+        "docs/control/HANDOFF.md",
+        "scripts/check_progress.py",
+        "scripts/progress_report.py"
+      ],
+      "finished_at": "2026-08-07T07:30:00Z",
       "id": 9,
-      "notes": "",
+      "notes": "Each refusal of check_progress.py was verified by planting the violation.",
       "owner": "remote",
-      "started_at": null,
-      "status": "NOT_STARTED",
-      "tests": [],
+      "started_at": "2026-08-07T07:30:00Z",
+      "status": "PASS",
+      "tests": [
+        ".venv/bin/python scripts/check_progress.py"
+      ],
       "title": "Create every `docs/control/` file"
     },
     {
-      "commit": null,
+      "commit": "50c851ca490f458f1c0650dc5f4f2378aa2dfc56",
       "depends_on": [
         9
       ],
-      "evidence": [],
-      "finished_at": null,
+      "evidence": [
+        "docs/control/STATUS.json"
+      ],
+      "finished_at": "2026-08-07T07:30:00Z",
       "id": 10,
-      "notes": "",
+      "notes": "This commit.",
       "owner": "remote",
-      "started_at": null,
-      "status": "NOT_STARTED",
-      "tests": [],
+      "started_at": "2026-08-07T07:30:00Z",
+      "status": "PASS",
+      "tests": [
+        ".venv/bin/python scripts/check_progress.py"
+      ],
       "title": "First control commit"
     },
     {

@@ -41,16 +41,14 @@ LIVE_STEPS: Final = frozenset({96, 97, 98})
 #:
 #: Deliberately not every step in the Windows stages. Step 12 is "reproduce the
 #: Windows failures", and its evidence is a **red** run — requiring green there
-#: would make the honest reproduction of a failure unrecordable. Steps 14–29 are
+#: would make the honest reproduction of a failure unrecordable. Steps 14-29 are
 #: implementations whose own evidence is a cross-platform test; what they roll
 #: up into is step 30, and that is where the workflow has to be green. The
 #: distinction matters: a rule that is strict in the wrong places gets loosened
 #: wholesale the first time it blocks something legitimate.
 WINDOWS_STEPS: Final = frozenset({30, 39, 40}) | frozenset(range(91, 96))
 
-VALID_STATUSES: Final = frozenset(
-    {"NOT_STARTED", "IN_PROGRESS", "BLOCKED", "FAIL", "PASS"}
-)
+VALID_STATUSES: Final = frozenset({"NOT_STARTED", "IN_PROGRESS", "BLOCKED", "FAIL", "PASS"})
 
 TOTAL_STEPS: Final = 100
 
@@ -59,9 +57,11 @@ def _load() -> dict[str, Any]:
     try:
         document: Any = json.loads(STATUS_PATH.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        raise SystemExit(f"{STATUS_PATH}: does not exist; create it before claiming progress")
+        raise SystemExit(
+            f"{STATUS_PATH}: does not exist; create it before claiming progress"
+        ) from None
     except json.JSONDecodeError as exc:
-        raise SystemExit(f"{STATUS_PATH}: is not JSON ({exc})")
+        raise SystemExit(f"{STATUS_PATH}: is not JSON ({exc})") from exc
     if not isinstance(document, dict):
         raise SystemExit(f"{STATUS_PATH}: must be a JSON object")
     return document
@@ -89,7 +89,9 @@ def _problems(document: dict[str, Any], steps: list[dict[str, Any]]) -> list[str
     for number, step in sorted(by_id.items()):
         status = step.get("status")
         if status not in VALID_STATUSES:
-            problems.append(f"step {number}: status {status!r} is not one of {sorted(VALID_STATUSES)}")
+            problems.append(
+                f"step {number}: status {status!r} is not one of {sorted(VALID_STATUSES)}"
+            )
         if status != "PASS":
             continue
         if not step.get("evidence"):

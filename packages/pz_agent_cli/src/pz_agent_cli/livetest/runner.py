@@ -44,8 +44,9 @@ from .evidence import (
     canonical_json,
     digest_entry,
     read_document,
+    sha256_bytes,
     sha256_file,
-    sha256_text,
+    write_bytes_atomically,
     write_document,
 )
 from .scenarios import SCENARIO_IDS, Check, LiveScenario, Postcondition
@@ -635,18 +636,20 @@ def _publish_verdict(layout: EvidenceLayout, state: ScenarioState) -> Path:
         raise LiveTestError(f"{state.scenario_id}: no attempt to publish")
     source = layout.attempt_result_path(state.scenario_id, attempt.number)
     destination = layout.result_path(state.scenario_id)
+    # Bytes end to end. Reading as text and writing it back re-encodes through
+    # the platform's newline translation, so on Windows the published
+    # ``result.json`` differed from the attempt it was copied from and every
+    # later verify called it tampered. Moving the bytes cannot do that, and the
+    # digest is checked against the file rather than against a decoded copy.
     try:
-        text = source.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as exc:
+        data = source.read_bytes()
+    except OSError as exc:
         raise LiveTestError(f"{source}: cannot be read: {exc}") from exc
-    if sha256_text(text) != attempt.result_sha256:
+    if sha256_bytes(data) != attempt.result_sha256:
         raise TamperError(
             f"{source}: does not match the digest recorded for attempt {attempt.number}"
         )
-    try:
-        destination.write_text(text, encoding="utf-8")
-    except OSError as exc:
-        raise LiveTestError(f"{destination}: cannot be written: {exc}") from exc
+    write_bytes_atomically(destination, data)
     return destination
 
 

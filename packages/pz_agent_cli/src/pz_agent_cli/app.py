@@ -26,6 +26,7 @@ test drives the real command in-process and reads what a user would have seen.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from collections.abc import Sequence
@@ -38,8 +39,9 @@ from pz_agent_core.actions.adapters import register_game_adapters
 from pz_agent_core.actions.builtin import register_builtins
 from pz_agent_core.diagnostics import DiagnosticLog, LogLevel, TraceWriter
 from pz_agent_core.ipc.layout import IpcLayout
-from pz_agent_core.protocol import SessionMode
+from pz_agent_core.protocol import JsonDict, SessionMode
 from pz_agent_core.version import PRODUCT_VERSION
+from pz_agent_mcp.server import SERVER_NAME as MCP_SERVER_NAME
 
 from .autonomy import (
     PLANNER_FILE_NAME,
@@ -87,6 +89,11 @@ from .support import DEFAULT_LOG_LINES, DEFAULT_REPLAY_LIMIT, run_logs, run_repl
 from .voice import add_voice_parser, run_voice
 
 PROGRAM: Final = "pz-agent"
+
+#: The key an MCP client's configuration files the server under. Taken from the
+#: server rather than spelled again here, so the block ``start`` prints and the
+#: three files in ``configs/mcp/`` cannot come to disagree about the name.
+SERVER_KEY: Final = MCP_SERVER_NAME
 
 #: The commands this build wires. Every one of them has a subsystem behind it.
 COMMANDS: Final[tuple[str, ...]] = (
@@ -884,36 +891,50 @@ def _log_run(
     )
 
 
-def _mcp_snippet(workspace: Workspace, *, redacted: bool) -> tuple[str, ...]:
-    """The stdio server configuration §14.3 asks ``start`` to print.
+def mcp_client_entry(workspace: Workspace, *, redacted: bool) -> JsonDict:
+    """The stdio server configuration §14.3 asks ``start`` to print, as a document.
 
-    Printed with real paths so it can be pasted into a client's configuration,
-    and redacted in the ``--json`` form, which is the one that ends up in a bug
-    report — an interpreter path carries the account name.
+    A **dictionary**, serialised by :func:`json.dumps`, never assembled from
+    f-strings. The previous version pasted the interpreter path into a quoted
+    string by hand, so on Windows it produced
 
-    ``env`` is empty, and that is the whole point of it being here. This snippet
-    used to set ``PZ_AGENT_STATE_DIR``, a name that occurred exactly once in the
-    repository: in the literal that printed it. Nothing read it — not
-    ``pz_agent_mcp``, which reads no environment variable at all, not discovery,
-    which reads ``USERPROFILE``/``OneDrive``/``HOME``/``USERNAME``. Meanwhile
-    ``configs/mcp/README.md`` carries a section titled "Why ``env`` is empty"
-    saying that naming an unread variable "would look like configuration and be
-    decoration, and the first person to change it would spend an evening finding
-    out that it does nothing" — and the three shipped client configurations all
-    carry ``"env": {}``. The one configuration the product actually handed a
-    user was the one contradicting all four.
+        "command": "C:\\Users\\Иван\\...\\python.exe"
 
-    The state directory reaches the server the same way it reaches everything
-    else: discovery, or ``--state-dir``. The server's own parser takes neither a
-    path nor an environment variable, so there was never a route for this to be.
+    with single backslashes — which is not JSON. ``json.loads`` refuses it with
+    *Invalid \\escape*, and the block ``pz-agent start`` prints for a user to
+    paste into their client was unparseable on the operating system this
+    release is for. Building the document and letting the encoder escape it is
+    not a style preference; it is the only way the output is correct for paths
+    the author did not think of.
+
+    ``--state-dir`` is passed explicitly rather than left to discovery. The
+    server has to find the same workspace this sidecar is using, and a client
+    launches it as a detached process with its own environment — so the one
+    thing that reliably carries the answer is an argument. This replaces the
+    ``PZ_AGENT_STATE_DIR`` environment variable that used to be printed here and
+    that nothing read; ``env`` stays empty, as the three shipped configurations
+    and ``configs/mcp/README.md`` have always said.
     """
     interpreter = workspace.redactor.text(sys.executable) if redacted else sys.executable
-    return (
-        '"pz-agent": {',
-        f'  "command": "{interpreter}",',
-        '  "args": ["-m", "pz_agent_mcp"],',
-        '  "env": {}',
-        "}",
+    state_dir = workspace.redact(workspace.state_dir) if redacted else str(workspace.state_dir)
+    return {
+        SERVER_KEY: {
+            "command": interpreter,
+            "args": ["-m", "pz_agent_mcp", "--state-dir", state_dir],
+            "env": {},
+        }
+    }
+
+
+def _mcp_snippet(workspace: Workspace, *, redacted: bool) -> tuple[str, ...]:
+    """:func:`mcp_client_entry` rendered as the lines ``start`` prints."""
+    document = mcp_client_entry(workspace, redacted=redacted)
+    rendered = json.dumps(document, ensure_ascii=False, indent=2)
+    # The braces of the outer object are dropped: what is printed is the entry a
+    # user pastes *inside* their client's "mcpServers" object, which is how
+    # every client documents it and how configs/mcp/*.json are shaped.
+    return tuple(
+        line[2:] if line.startswith("  ") else line for line in rendered.splitlines()[1:-1]
     )
 
 
