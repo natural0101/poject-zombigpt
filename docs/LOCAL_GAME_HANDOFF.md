@@ -195,7 +195,9 @@ Everything below ran and passed in the remote environment:
   rather than trusting the verifier's own "clean" — which is how the false
   positive below was found;
 - **`live-test collect` and the MCP server.** `collect` names every file it
-  could not find and reports "copied 0, skipped 15" rather than a bare success;
+  could not find, one line each, and reports how many it copied and how many it
+  skipped rather than a bare success — on an untouched workspace that is "copied
+  0", and every skipped line is a path you can go and look at;
   `pz-agent-mcp --describe` answers with the whole published surface — 31 tools
   and 7 resources — with no game, no sidecar and no MCP SDK installed, which is
   what makes it the thing to run first when writing a client;

@@ -30,6 +30,17 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **The documented-command guard now covers `pz-agent-mcp` too.** It has its own
+  parser — `--version` and `--describe` and nothing else — so a document naming
+  a flag for it fails exactly the way `logs --redact` did, and the guard written
+  for the first executable deliberately skipped the second. `configs/mcp/README.md`
+  is a first-contact document for anyone wiring a client and prints several of
+  these; they are parsed now.
+- **A handoff document stated a count that this branch's own work changed.**
+  `docs/LOCAL_GAME_HANDOFF.md` illustrated `live-test collect` with "copied 0,
+  skipped 15"; wiring the trace made it 16. The sentence now states the
+  behaviour — every missing file named, one line each, with counts — rather than
+  a number that drifts whenever a file is added to the evidence.
 - **`pz-agent start` no longer prints an MCP configuration naming a variable
   nothing reads.** The block it prints for pasting into a client set
   `PZ_AGENT_STATE_DIR`, a name that occurred exactly once in the repository — in
