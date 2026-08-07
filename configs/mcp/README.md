@@ -20,6 +20,7 @@ do next**, so every one has its own exit code.
 | 6 | The descriptor is unreadable or not ours. | Have it rewritten: stop and start the sidecar. Restarting a running one will not fix it. |
 | 7 | The sidecar answered, and the answer could not be read. | A version skew or a corrupted link. `pz-agent doctor`. |
 | 8 | No state directory could be determined. | Name one with `--state-dir`, or the Zomboid user directory with `--zomboid-dir`. |
+| 9 | The MCP SDK is installed and is the wrong major. | The remedy is a version, not an install: `pip install "mcp>=2,<3"`. This build drives the 2.x server API. It is a separate code from 3 because `pip install pz-agent[mcp]` would not have fixed it. |
 
 Codes 3 and 8 fire before anything is dialled, so they are what you meet on a
 machine that has never run the sidecar. Codes 4 to 7 mean the link was tried.

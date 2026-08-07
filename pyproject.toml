@@ -24,7 +24,13 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-mcp = ["mcp>=1.2"]
+# Upper bound is not caution, it is a scar. "mcp>=1.2" with no ceiling let 2.0
+# resolve, and 2.0 removed the four registration methods build_server called;
+# pz-agent-mcp then died with an AttributeError before answering initialize
+# while --describe went on exiting 0 with the whole catalogue. Bounded here, and
+# checked at run time by server.require_sdk, because a constraint in a file is
+# not the same as a constraint in the environment somebody actually installed.
+mcp = ["mcp>=2,<3"]
 dev = [
   "jsonschema>=4.21",
   "mypy>=1.9",
