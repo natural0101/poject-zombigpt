@@ -329,12 +329,14 @@ epics:
       verify_command: grep -rn 'class .*Port' packages/pz_agent_mcp/src
       regression_test: ''
       evidence: docs/control/DECISIONS.md
-      status: NOT_STARTED
-      implementation_commit: null
-      verification_commit: null
-      commit: null
+      status: PASS
+      implementation_commit: 7d4a110d2019e2fbadc2ebb064985cc26c5f822a
+      verification_commit: 40d528ca2652f3c371a730e76e0f0c2c04d08c4b
+      commit: 7d4a110d2019e2fbadc2ebb064985cc26c5f822a
       ci_url: null
-      reason: ''
+      reason: 'D-013 in docs/control/DECISIONS.md: every Protocol was walked to a shipped implementation;
+        zero unimplemented today, with the history (UnroutedPlanPort, NO_SERVICES, the twin modules) as
+        the finding'
     checks:
     - id: E01-M02-C01
       statement: 'The inventory accounts for every Windows failure in the baseline run: the count of failures
@@ -1218,12 +1220,13 @@ epics:
       verify_command: read the windows workflow run
       regression_test: ''
       evidence: docs/control/evidence/step-30-40/windows-suite.txt
-      status: NOT_STARTED
-      implementation_commit: null
-      verification_commit: null
-      commit: null
-      ci_url: null
-      reason: ''
+      status: PASS
+      implementation_commit: 7d4a110d2019e2fbadc2ebb064985cc26c5f822a
+      verification_commit: 40d528ca2652f3c371a730e76e0f0c2c04d08c4b
+      commit: 7d4a110d2019e2fbadc2ebb064985cc26c5f822a
+      ci_url: https://github.com/natural0101/poject-zombigpt/actions/runs/31223693322
+      reason: the green windows-latest runs execute the full suite including the RPC transport, descriptor,
+        token and codec tests; runs 31214158408 and 31223693322 both green
     - id: E02-M05-T008
       subsystem: ci
       action: Record the failure count per run so the trend is auditable, not asserted
@@ -1236,12 +1239,13 @@ epics:
       verify_command: cat docs/control/evidence/step-30-40/windows-suite.txt
       regression_test: ''
       evidence: docs/control/evidence/step-30-40/windows-suite.txt
-      status: NOT_STARTED
-      implementation_commit: null
-      verification_commit: null
-      commit: null
-      ci_url: null
-      reason: ''
+      status: PASS
+      implementation_commit: 7d4a110d2019e2fbadc2ebb064985cc26c5f822a
+      verification_commit: 40d528ca2652f3c371a730e76e0f0c2c04d08c4b
+      commit: 7d4a110d2019e2fbadc2ebb064985cc26c5f822a
+      ci_url: https://github.com/natural0101/poject-zombigpt/actions/runs/31223693322
+      reason: the per-run failure trend (24 -> ... -> 0, with the gate-red run named as such) is recorded
+        in docs/control/evidence/step-30-40/windows-suite.txt
     checks:
     - id: E02-M05-C01
       statement: 'Zero Windows failures was reached by fixing causes, not by removing assertions: the
