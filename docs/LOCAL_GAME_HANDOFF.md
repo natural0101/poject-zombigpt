@@ -188,6 +188,13 @@ Everything below ran and passed in the remote environment:
   evidence — but "writes nothing" invited you to believe a failed prepare left
   no trace, and it leaves twenty directories. `live-test finalize` refuses and
   names every missing artefact, one line each;
+- **the whole loop you will perform, end to end, through the real commands.**
+  `backup-save` on a synthetic Zomboid directory, then `prepare --save`, then
+  `run` — and the three refusals in between: a save whose name does not say
+  "test", a test save with no backup, and an evidence directory with no schemas.
+  `run` is refused before prepare and permitted after it, which is the pair that
+  matters: a gate whose precondition can never be met is a bricked release, and
+  until this was driven nothing here could tell that apart from a gate working;
 - **that `run` and `resume` refuse until prepare has completed.** They did not.
   `prepare.json` was written by `prepare` and read by nothing, so the check
   proving you named a test save and hold a backup that reads back produced a
