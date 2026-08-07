@@ -22,6 +22,11 @@ The refusal is checked for what it must not say as carefully as for what it must
 It runs through ``%LOCALAPPDATA%`` on the shipping platform, so the path carries
 the user's account name; the message names a constant filename and two integers
 and stops there.
+
+That last claim is pinned as a whole sentence rather than as a set of substring
+tests, because substring tests cannot see the three ways it goes wrong: the two
+numbers swapping places, the remedy going missing, and a *prefix* of the file
+being quoted. ``"8192" in message`` holds for all three.
 """
 
 from __future__ import annotations
@@ -34,6 +39,7 @@ from typing import IO, Any, Final
 
 import pytest
 
+from pz_agent_core.rpc import descriptor as descriptor_module
 from pz_agent_core.rpc.descriptor import (
     DESCRIPTOR_FILENAME,
     DESCRIPTOR_FORMAT,
@@ -62,6 +68,20 @@ A_DESCRIPTOR_FILENAME: Final = "core-rpc.json"
 #: The address used wherever the address is not what is under test. Short, so
 #: that the padding below is what decides the file's size.
 AN_ADDRESS: Final = "/tmp/pz.sock"
+
+#: The whole refusal, retyped with the three varying parts left as fields.
+#:
+#: Retyped for the same reason the format string is: built from the module's own
+#: text it would agree with any rewrite of it. Pinned *whole* because the rest of
+#: this module tests the message by membership, and membership cannot see the
+#: three ways this sentence breaks — the size and the limit swapping places, the
+#: remedy being dropped, and a prefix of the file being quoted alongside them.
+A_REFUSAL: Final = (
+    "{filename}: is {size} bytes and the limit is {limit}; nothing this build writes "
+    "there is that large, so that file is not a descriptor and something else is "
+    "writing where it goes — take a copy of it before starting the sidecar, which "
+    "replaces it"
+)
 
 
 @pytest.fixture
@@ -214,6 +234,17 @@ class TestTheCapItself:
         assert DESCRIPTOR_FORMAT == A_DESCRIPTOR_FORMAT
         assert DESCRIPTOR_FILENAME == A_DESCRIPTOR_FILENAME
 
+    def test_the_cap_and_the_refusal_are_both_published(self) -> None:
+        """A refusal a caller cannot name is one they can only catch by accident.
+
+        ``OversizeDescriptor`` exists so that a caller can tell it from a stale
+        descriptor and refuse to start a sidecar over the file. A caller that
+        cannot import the name has to catch ``DescriptorError`` and go back to
+        matching on the message, which is the state this class was added to end.
+        """
+        assert "OversizeDescriptor" in descriptor_module.__all__
+        assert "MAX_DESCRIPTOR_BYTES" in descriptor_module.__all__
+
 
 class TestTheBoundary:
     def test_a_descriptor_of_exactly_the_cap_is_still_loaded(self, state: Path) -> None:
@@ -286,6 +317,53 @@ class TestTheRefusal:
         assert "8192" in message
         assert A_DESCRIPTOR_FILENAME in message
 
+    def test_the_refusal_is_that_sentence_and_nothing_else(self, state: Path) -> None:
+        """The whole string, with the two numbers in their own places.
+
+        The test above holds just as well for "is 8192 bytes and the limit is
+        20000", which is the same two substrings saying the opposite thing, and
+        it holds for a message that has quietly lost its second half. That half
+        is the entire reason this refusal is not a :class:`StaleDescriptor`:
+        ``RpcSupervisor`` clears an unusable descriptor on the way up, so
+        "restart the sidecar" destroys the file, and "take a copy first" is the
+        only instruction here that a user acts on before doing anything else.
+        Nothing else in this module fails if it disappears.
+        """
+        _write_raw(state, b"x" * 20_000)
+
+        with pytest.raises(OversizeDescriptor) as caught:
+            load_descriptor(state)
+
+        assert str(caught.value) == A_REFUSAL.format(
+            filename=A_DESCRIPTOR_FILENAME, size=20000, limit=8192
+        )
+
+    def test_the_size_it_quotes_is_never_below_what_it_read(
+        self, state: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The floor under the ``fstat``, which no other test here would notice.
+
+        The stat happens after the read, so a file truncated in between reports
+        fewer bytes than are already in hand — and "is 0 bytes and the limit is
+        8192" reads as a broken reader rather than as a fact about the file. The
+        race cannot be scheduled, so the shrink is forced.
+        """
+        _write_raw(state, b"x" * (MAX_DESCRIPTOR_BYTES + 1))
+        real_fstat = os.fstat
+
+        def shrunk(fd: int) -> os.stat_result:
+            got = tuple(real_fstat(fd))
+            return os.stat_result((*got[:6], 0, *got[7:]))
+
+        monkeypatch.setattr(os, "fstat", shrunk)
+
+        with pytest.raises(OversizeDescriptor) as caught:
+            load_descriptor(state)
+
+        assert str(caught.value) == A_REFUSAL.format(
+            filename=A_DESCRIPTOR_FILENAME, size=MAX_DESCRIPTOR_BYTES + 1, limit=8192
+        )
+
     def test_it_never_names_the_path(self, state: Path) -> None:
         """The path runs through the user's profile and carries their account.
 
@@ -344,15 +422,36 @@ class TestTheRefusal:
         assert issubclass(OversizeDescriptor, DescriptorError)
 
     def test_no_byte_of_the_file_reaches_the_message(self, state: Path) -> None:
-        """A file this size is somebody else's data, and it may be anything."""
+        """A file this size is somebody else's data, and it may be anything.
+
+        Checked over every window of the file, not just over the whole secret: a
+        refusal that quoted a *prefix* — the first forty bytes, which is what a
+        ``{raw[:40]!r}`` in the message would give — contains neither the full
+        secret nor a run of the padding, and would pass an assertion written
+        only against those two. It would still print the key.
+        """
         secret = b"an-api-key-that-happened-to-be-in-that-directory"
-        _write_raw(state, secret + b"q" * MAX_DESCRIPTOR_BYTES)
+        contents = secret + b"q" * MAX_DESCRIPTOR_BYTES
+        _write_raw(state, contents)
 
         with pytest.raises(OversizeDescriptor) as caught:
             load_descriptor(state)
 
-        assert secret.decode() not in str(caught.value)
-        assert "qqqq" not in str(caught.value)
+        message = str(caught.value)
+        assert secret.decode() not in message
+        assert "qqqq" not in message
+
+        #: Eight bytes: long enough that no window of this file is a word the
+        #: refusal legitimately contains, short enough to catch a quoted prefix.
+        window = 8
+        quoted = sorted(
+            {
+                contents[at : at + window].decode()
+                for at in range(len(contents) - window + 1)
+                if contents[at : at + window].decode() in message
+            }
+        )
+        assert not quoted, f"the refusal quotes the file: {quoted[:3]}"
 
 
 class TestTheReadIsBounded:

@@ -39,6 +39,7 @@ import hashlib
 import importlib
 import io
 import json
+import struct
 import sys
 import warnings
 import zipfile
@@ -656,6 +657,40 @@ def test_an_index_naming_the_same_member_twice_is_refused(tmp_path: Path) -> Non
     assert "twice" in str(caught.value)
 
 
+def test_an_index_that_nests_too_deeply_is_refused(tmp_path: Path) -> None:
+    """A two-kilobyte index, three orders of magnitude under the byte ceiling.
+
+    ``MAX_INDEX_BYTES`` bounds how large the index may be and nothing bounded how
+    deeply it may nest, so ``json.loads`` exhausted the interpreter's stack and
+    ``RecursionError`` — not an :class:`ArchiveError` — came out of
+    ``verify_archive``. ``--verify`` then died with a traceback and exited 1, the
+    code that elsewhere means "incomplete but internally honest", on an archive
+    handed to it precisely because somebody already suspected it.
+    """
+    nested = (
+        f'{{"format": "{build_rc.MANIFEST_FORMAT}", "files": '.encode() + b"[" * 2000 + b"]" * 2000 + b"}"
+    )
+    assert len(nested) < build_rc.MAX_INDEX_BYTES
+    archive = _lone_archive(tmp_path / "deep.zip", {build_rc.MANIFEST_NAME: nested})
+    with pytest.raises(build_rc.ArchiveError) as caught:
+        build_rc.verify_archive(archive)
+    assert "nests too deeply" in str(caught.value)
+
+
+def test_verify_on_an_index_that_nests_too_deeply_exits_failure_without_a_traceback(
+    tmp_path: Path,
+) -> None:
+    """``verify_main`` documents that it never raises. It has to hold here too."""
+    nested = (
+        f'{{"format": "{build_rc.MANIFEST_FORMAT}", "files": '.encode() + b"[" * 2000 + b"]" * 2000 + b"}"
+    )
+    archive = _lone_archive(tmp_path / "deep-cli.zip", {build_rc.MANIFEST_NAME: nested})
+    stream = io.StringIO()
+    code = build_rc.main(["--verify", str(archive)], stream=stream)
+    assert code == build_rc.EXIT_FAILURE
+    assert "REFUSED" in stream.getvalue()
+
+
 def test_a_file_that_is_not_a_zip_is_refused(tmp_path: Path) -> None:
     plain = tmp_path / "not-a-zip.zip"
     plain.write_bytes(b"this is not an archive")
@@ -673,6 +708,177 @@ def test_an_archive_that_is_not_there_is_refused_without_naming_the_path(
     assert "cannot be read" in message
     assert str(tmp_path) not in message
     assert "nothing.zip" not in message
+
+
+# ---------------------------------------------------------------------------
+# the ceilings, none of which was exercised by anything
+# ---------------------------------------------------------------------------
+#
+# Every constant below is the module's answer to a hostile archive rather than a
+# malformed one: an archive is an untrusted input to ``--verify``, which exists
+# to be pointed at a file somebody else produced. A ceiling nothing reaches is a
+# ceiling nobody has checked is reachable, and three of these are enforced from a
+# *declared* size in the central directory — a number the archive gets to choose.
+
+
+def _forge_declared_size(path: Path, member: str, size: int) -> Path:
+    """Rewrite one member's uncompressed size in the central directory.
+
+    The bytes stay as they were. This is what a hostile archive does for free:
+    ``file_size`` is a field, not a measurement, and code that believes it is
+    reasoning about a number the attacker supplied.
+    """
+    raw = bytearray(path.read_bytes())
+    needle = b"PK\x01\x02"
+    offset = -1
+    while True:
+        offset = raw.find(needle, offset + 1)
+        assert offset != -1, member
+        name_length = struct.unpack_from("<H", raw, offset + 28)[0]
+        if bytes(raw[offset + 46 : offset + 46 + name_length]) == member.encode():
+            struct.pack_into("<I", raw, offset + 24, size)
+            path.write_bytes(bytes(raw))
+            return path
+
+
+def test_a_measured_size_is_the_bytes_read_and_not_the_size_declared(tmp_path: Path) -> None:
+    """``file_size`` is the archive's claim about itself; ``size_bytes`` is not.
+
+    The central directory is edited to declare a member a thousand times its real
+    length. Verification must still report what it actually decompressed, because
+    that size is half of what ``changed`` compares against the index.
+    """
+    body = b"X" * 500
+    archive = _lone_archive(
+        tmp_path / "forged.zip",
+        {
+            build_rc.MANIFEST_NAME: _index_bytes(
+                [
+                    {
+                        "path": "docs/QUICKSTART.md",
+                        "sha256": hashlib.sha256(body).hexdigest(),
+                        "size_bytes": len(body),
+                    }
+                ]
+            ),
+            "docs/QUICKSTART.md": body,
+        },
+    )
+    _forge_declared_size(archive, "docs/QUICKSTART.md", 999_999)
+    with zipfile.ZipFile(archive) as handle:
+        assert handle.getinfo("docs/QUICKSTART.md").file_size == 999_999
+    verification = build_rc.verify_archive(archive)
+    measured = {member.path: member for member in verification.members}
+    assert measured["docs/QUICKSTART.md"].size_bytes == len(body)
+    assert measured["docs/QUICKSTART.md"].sha256 == hashlib.sha256(body).hexdigest()
+    # And because the measurement is real, the honest index still agrees with it.
+    assert verification.changed == ()
+    assert verification.index_intact
+
+
+def test_a_member_declaring_more_than_the_member_ceiling_is_refused(tmp_path: Path) -> None:
+    """Refused from the declaration, before a byte of it is decompressed."""
+    archive = _lone_archive(
+        tmp_path / "huge.zip",
+        {build_rc.MANIFEST_NAME: _index_bytes([]), "docs/QUICKSTART.md": b"small\n"},
+    )
+    _forge_declared_size(archive, "docs/QUICKSTART.md", build_rc.MAX_MEMBER_BYTES + 1)
+    with pytest.raises(build_rc.ArchiveError) as caught:
+        build_rc.verify_archive(archive)
+    assert str(build_rc.MAX_MEMBER_BYTES) in str(caught.value)
+    assert "member ceiling" in str(caught.value)
+
+
+def test_a_member_that_expands_past_the_ceiling_it_declared_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The declared size is small and the real one is not: the classic bomb.
+
+    The pre-check passes because the archive declared one byte. Only the running
+    count taken *while decompressing* notices, which is why that guard is inside
+    the read loop and not derived from ``file_size``.
+    """
+    body = b"X" * 500
+    archive = _lone_archive(
+        tmp_path / "bomb.zip",
+        {build_rc.MANIFEST_NAME: _index_bytes([]), "docs/QUICKSTART.md": body},
+    )
+    _forge_declared_size(archive, "docs/QUICKSTART.md", 1)
+    monkeypatch.setattr(build_rc, "MAX_MEMBER_BYTES", 100)
+    with pytest.raises(build_rc.ArchiveError) as caught:
+        build_rc.verify_archive(archive)
+    assert "expands past the size this build verifies" in str(caught.value)
+
+
+def test_members_that_together_pass_the_total_ceiling_are_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each member fits; the archive does not. Nothing else counts the sum."""
+    archive = _lone_archive(
+        tmp_path / "total.zip",
+        {
+            build_rc.MANIFEST_NAME: _index_bytes([]),
+            **{f"docs/{index:03d}.md": b"Y" * 400 for index in range(10)},
+        },
+    )
+    monkeypatch.setattr(build_rc, "MAX_MEMBER_BYTES", 1000)
+    monkeypatch.setattr(build_rc, "MAX_TOTAL_BYTES", 1500)
+    with pytest.raises(build_rc.ArchiveError) as caught:
+        build_rc.verify_archive(archive)
+    assert "expands past the size this build verifies" in str(caught.value)
+
+
+def test_an_archive_with_more_members_than_the_ceiling_is_refused(tmp_path: Path) -> None:
+    """The real constant, with a real archive that exceeds it by one."""
+    members = {f"docs/{index:05d}.md": b"x" for index in range(build_rc.MAX_MEMBERS + 1)}
+    archive = _lone_archive(tmp_path / "many.zip", members)
+    with pytest.raises(build_rc.ArchiveError) as caught:
+        build_rc.verify_archive(archive)
+    assert str(build_rc.MAX_MEMBERS) in str(caught.value)
+    assert "member ceiling" in str(caught.value)
+
+
+def test_an_index_larger_than_the_index_ceiling_is_refused(tmp_path: Path) -> None:
+    """Refused on length, before it is decoded or parsed."""
+    padding = "p" * (build_rc.MAX_INDEX_BYTES + 1)
+    document = json.dumps({"format": build_rc.MANIFEST_FORMAT, "files": [], "pad": padding})
+    archive = _lone_archive(tmp_path / "fatindex.zip", {build_rc.MANIFEST_NAME: document.encode()})
+    with pytest.raises(build_rc.ArchiveError) as caught:
+        build_rc.verify_archive(archive)
+    assert str(build_rc.MAX_INDEX_BYTES) in str(caught.value)
+    assert "ceiling" in str(caught.value)
+
+
+def test_an_index_listing_more_entries_than_the_ceiling_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    entries = [
+        {"path": f"docs/{index:03d}.md", "sha256": MOD_INFO_SHA, "size_bytes": 1}
+        for index in range(20)
+    ]
+    archive = _lone_archive(
+        tmp_path / "wideindex.zip", {build_rc.MANIFEST_NAME: _index_bytes(entries)}
+    )
+    monkeypatch.setattr(build_rc, "MAX_MEMBERS", 10)
+    with pytest.raises(build_rc.ArchiveError) as caught:
+        build_rc.verify_archive(archive)
+    assert "entry" in str(caught.value)
+
+
+def test_an_archive_larger_than_the_archive_ceiling_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Enforced while reading, so a file still growing cannot slip past a stat."""
+    archive = _lone_archive(
+        tmp_path / "big.zip",
+        {build_rc.MANIFEST_NAME: _index_bytes([]), "docs/QUICKSTART.md": b"z" * 4096},
+    )
+    monkeypatch.setattr(build_rc, "MAX_ARCHIVE_BYTES", 64)
+    with pytest.raises(build_rc.ArchiveError) as caught:
+        build_rc.verify_archive(archive)
+    assert "64 byte ceiling" in str(caught.value)
+    # The refusal is about the archive, and still names no path.
+    assert str(tmp_path) not in str(caught.value)
 
 
 # ---------------------------------------------------------------------------

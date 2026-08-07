@@ -796,6 +796,19 @@ def _read_index(archive: zipfile.ZipFile) -> dict[str, tuple[str, int]]:
             f"the {MANIFEST_NAME} in this archive is not valid UTF-8 JSON, so no "
             "member can be checked against it. Rebuild it with build_rc.py."
         ) from exc
+    except RecursionError as exc:
+        # MAX_INDEX_BYTES bounds how many bytes the index may be and says nothing
+        # about how deeply they may nest. Two kilobytes of "[" exhaust the
+        # interpreter's stack while staying three orders of magnitude under that
+        # ceiling, and json.loads raises rather than returning, so without this
+        # clause `--verify` dies with a traceback on exactly the archive it was
+        # pointed at because somebody already suspected it. A ceiling that only
+        # counts bytes is not a bound on the work parsing them costs.
+        raise ArchiveError(
+            f"the {MANIFEST_NAME} in this archive nests too deeply to parse. A "
+            "release index is a flat list of entries; whatever wrote this was not "
+            "build_rc.py, so discard the archive rather than rebuilding its index."
+        ) from exc
     if not isinstance(document, dict) or document.get("format") != MANIFEST_FORMAT:
         raise ArchiveError(
             f"the {MANIFEST_NAME} in this archive is not in the {MANIFEST_FORMAT} "
