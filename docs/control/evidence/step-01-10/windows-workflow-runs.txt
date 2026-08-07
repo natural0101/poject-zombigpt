@@ -1,3 +1,29 @@
+The workflows, their triggers, and the runs at the baseline
+==========================================================
+
+Two workflows. Recorded here with the events that start them, because a task
+claiming "both workflows have a route to this branch" is a claim about the
+trigger lists and not about any particular run.
+
+  .github/workflows/ci.yml        name: CI
+    push:             [main, dev, "claude/**", "fix/**"]
+    pull_request:     [main, dev]
+    workflow_dispatch
+
+  .github/workflows/windows.yml   name: windows package
+    push:             [main, dev, "feature/**", "claude/**", "fix/**"]
+    pull_request:     [main, dev]
+    workflow_dispatch
+
+The `fix/**` pattern was added during this work (commit f8c161c). Before it,
+the release-candidate branch matched neither push list, so a push to it produced
+no run in either workflow — the branch had no route to Windows evidence at all,
+and step 30's evidence could not have existed. Both lists grew; no pattern was
+removed and no check dropped.
+
+Runs at the baseline
+--------------------
+
 run_id branch status conclusion head_sha created_at
 31156087690 dev completed failure 873037c0 2026-08-07T07:01:56Z
 31155358657 claude/workflows-routines-docs-l294qp completed failure 6f73bc0c 2026-08-07T06:50:14Z

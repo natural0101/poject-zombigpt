@@ -77,7 +77,7 @@ E01 = Epic(
                         1,
                         "branches.txt lists each branch with a 40-character SHA",
                         "git branch -r --format='%(refname:short) %(objectname)'",
-                        "",
+                        "tests/unit/test_control_baseline_evidence.py::test_each_branch_line_names_a_branch_and_a_full_sha",
                         "docs/control/evidence/step-01-10/branches.txt",
                     ),
                     (
@@ -85,7 +85,7 @@ E01 = Epic(
                         1,
                         "the branch-point SHA is recorded and resolvable with git cat-file",
                         "git merge-base dev fix/windows-mcp-voice-runtime",
-                        "",
+                        "tests/unit/test_control_baseline_evidence.py::test_the_branch_point_is_recorded_and_reachable",
                         "docs/control/evidence/step-01-10/branches.txt",
                     ),
                     (
@@ -93,7 +93,7 @@ E01 = Epic(
                         1,
                         "a pytest summary line with counts, from a run at that SHA",
                         "bash scripts/check.sh",
-                        "",
+                        "tests/unit/test_control_baseline_evidence.py::test_the_linux_baseline_records_a_count_and_the_command_that_produced_it",
                         "docs/control/evidence/step-01-10/linux-baseline.txt",
                     ),
                     (
@@ -101,7 +101,7 @@ E01 = Epic(
                         2,
                         "a pytest summary line from a windows-latest run, with the run id",
                         "read the windows workflow run for the branch-point SHA",
-                        "",
+                        "tests/unit/test_control_baseline_evidence.py::test_the_windows_baseline_lists_the_failures_it_counted",
                         "docs/control/evidence/step-01-10/windows-failures.txt",
                     ),
                     (
@@ -109,7 +109,7 @@ E01 = Epic(
                         1,
                         "each workflow file is listed with its on: triggers",
                         "cat .github/workflows/*.yml",
-                        "",
+                        "tests/unit/test_control_baseline_evidence.py::test_the_workflow_evidence_names_both_workflows",
                         "docs/control/evidence/step-01-10/windows-workflow-runs.txt",
                     ),
                     (
@@ -117,7 +117,7 @@ E01 = Epic(
                         2,
                         "a push to fix/** produces a run in both workflows",
                         "read the runs list filtered to the branch",
-                        "",
+                        "tests/unit/test_control_baseline_evidence.py::test_the_workflow_evidence_names_both_workflows",
                         "docs/control/evidence/step-01-10/windows-workflow-runs.txt",
                     ),
                 ],
