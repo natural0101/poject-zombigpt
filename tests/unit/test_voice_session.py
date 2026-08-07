@@ -573,6 +573,28 @@ def test_a_terminal_plan_is_reported_exactly_once() -> None:
     assert len(session.queue) == 1
 
 
+def test_the_goal_channels_own_refusals_each_have_their_own_sentence() -> None:
+    """QUEUE_REJECTED, INVALID_ARGUMENT and PRECONDITION_FAILED are not «Не получилось.»
+
+    These three are what the goal channel reports for a submission that never
+    ran, and they are the ones a user can act on differently: wait, rephrase,
+    or try again when the world allows it. Falling back to the generic sentence
+    for all three tells the user the same nothing three times. The code itself
+    stays out of the sentence — it belongs in the log, not in a speaker.
+    """
+    channel_codes = (
+        ReasonCode.QUEUE_REJECTED,
+        ReasonCode.INVALID_ARGUMENT,
+        ReasonCode.PRECONDITION_FAILED,
+    )
+    spoken = [phrases.refusal(code) for code in channel_codes]
+
+    assert phrases.PLAN_REFUSED not in spoken
+    assert len(set(spoken)) == len(spoken), "two different causes share a sentence"
+    for code, sentence in zip(channel_codes, spoken, strict=True):
+        assert code.value not in sentence
+
+
 def test_a_failed_plan_names_the_reason_the_user_can_act_on() -> None:
     session, _, _ = make_session()
     failed = PlanRecord(

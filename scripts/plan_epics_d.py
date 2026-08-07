@@ -695,7 +695,7 @@ _E13 = [
         "the archive link check passes",
         f".venv/bin/pytest {C}/test_archive_documents_resolve.py -q",
         f"{C}/test_archive_documents_resolve.py",
-        "docs/README.md",
+        "README.md",
     ),
     (
         "Record every limitation the build actually has",

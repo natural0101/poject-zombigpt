@@ -115,6 +115,11 @@ _REFUSALS: Final[dict[ReasonCode, str]] = {
     ReasonCode.CAPABILITY_UNAVAILABLE: "Эта команда недоступна в этой сборке игры.",
     ReasonCode.SAVE_CHANGED: "Сохранение сменилось, я сбросил ссылки.",
     ReasonCode.SESSION_TERMINATED: "Сессия закрыта.",
+    # The three the goal channel reports for a submission that never ran.
+    # Each names what the user can do about it: wait, rephrase, or nothing yet.
+    ReasonCode.QUEUE_REJECTED: "Я ещё занят прошлой задачей.",
+    ReasonCode.INVALID_ARGUMENT: "Не понял значение, скажи иначе.",
+    ReasonCode.PRECONDITION_FAILED: "Сейчас это невозможно.",
 }
 
 

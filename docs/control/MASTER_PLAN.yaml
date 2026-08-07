@@ -356,12 +356,14 @@ epics:
       verify_command: ls docs/control/
       regression_test: ''
       evidence: docs/control/PLAN.md
-      status: NOT_STARTED
-      implementation_commit: null
-      verification_commit: null
-      commit: null
+      status: PASS
+      implementation_commit: 50c851ca490f458f1c0650dc5f4f2378aa2dfc56
+      verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
+      commit: 50c851ca490f458f1c0650dc5f4f2378aa2dfc56
       ci_url: null
-      reason: ''
+      reason: docs/control/ carries the plan (PLAN.md, retired; MASTER_PLAN.yaml, of record), BLOCKERS.md,
+        DECISIONS.md, EVIDENCE_INDEX.md, STATUS.json and evidence/, created at 50c851ca and maintained
+        since
     - id: E01-M03-T002
       subsystem: control
       action: Define the five-level plan model with weight bands
@@ -374,10 +376,10 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_master_plan.py -q
       regression_test: tests/unit/test_master_plan.py
       evidence: scripts/plan_model.py
-      status: NOT_STARTED
-      implementation_commit: null
-      verification_commit: null
-      commit: null
+      status: PASS
+      implementation_commit: 743115cb144951c326cf7203dc6890ff5959280c
+      verification_commit: 743115cb144951c326cf7203dc6890ff5959280c
+      commit: 743115cb144951c326cf7203dc6890ff5959280c
       ci_url: null
       reason: ''
     - id: E01-M03-T003
@@ -392,10 +394,10 @@ epics:
       verify_command: .venv/bin/python scripts/build_master_plan.py --check
       regression_test: tests/unit/test_master_plan.py
       evidence: docs/control/MASTER_PLAN.yaml
-      status: NOT_STARTED
-      implementation_commit: null
-      verification_commit: null
-      commit: null
+      status: PASS
+      implementation_commit: 743115cb144951c326cf7203dc6890ff5959280c
+      verification_commit: 743115cb144951c326cf7203dc6890ff5959280c
+      commit: 743115cb144951c326cf7203dc6890ff5959280c
       ci_url: null
       reason: ''
     - id: E01-M03-T004
@@ -411,10 +413,10 @@ epics:
       verify_command: .venv/bin/python scripts/master_report.py --json
       regression_test: tests/unit/test_master_plan.py
       evidence: scripts/master_report.py
-      status: NOT_STARTED
-      implementation_commit: null
-      verification_commit: null
-      commit: null
+      status: PASS
+      implementation_commit: 743115cb144951c326cf7203dc6890ff5959280c
+      verification_commit: 743115cb144951c326cf7203dc6890ff5959280c
+      commit: 743115cb144951c326cf7203dc6890ff5959280c
       ci_url: null
       reason: ''
     - id: E01-M03-T005
@@ -430,10 +432,10 @@ epics:
       verify_command: .venv/bin/python scripts/check_master_plan.py
       regression_test: tests/unit/test_master_plan.py
       evidence: scripts/check_master_plan.py
-      status: NOT_STARTED
-      implementation_commit: null
-      verification_commit: null
-      commit: null
+      status: PASS
+      implementation_commit: 743115cb144951c326cf7203dc6890ff5959280c
+      verification_commit: 743115cb144951c326cf7203dc6890ff5959280c
+      commit: 743115cb144951c326cf7203dc6890ff5959280c
       ci_url: null
       reason: ''
     - id: E01-M03-T006
@@ -448,10 +450,10 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_master_plan.py -q
       regression_test: tests/unit/test_master_plan.py
       evidence: tests/unit/test_master_plan.py
-      status: NOT_STARTED
-      implementation_commit: null
-      verification_commit: null
-      commit: null
+      status: PASS
+      implementation_commit: 743115cb144951c326cf7203dc6890ff5959280c
+      verification_commit: 743115cb144951c326cf7203dc6890ff5959280c
+      commit: 743115cb144951c326cf7203dc6890ff5959280c
       ci_url: null
       reason: ''
     checks:
@@ -4784,10 +4786,10 @@ epics:
       verify_command: .venv/bin/python scripts/check_schemas.py
       regression_test: tests/contract/test_goal_schema_conformance.py
       evidence: schemas/goal.schema.json
-      status: NOT_STARTED
-      implementation_commit: null
-      verification_commit: null
-      commit: null
+      status: PASS
+      implementation_commit: 743115cb144951c326cf7203dc6890ff5959280c
+      verification_commit: 743115cb144951c326cf7203dc6890ff5959280c
+      commit: 743115cb144951c326cf7203dc6890ff5959280c
       ci_url: null
       reason: ''
     - id: E08-M01-T005
@@ -4802,10 +4804,10 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_goal_channel.py -q
       regression_test: tests/unit/test_goal_channel.py
       evidence: packages/pz_agent_core/src/pz_agent_core/goals/model.py
-      status: NOT_STARTED
-      implementation_commit: 3944c0a727cde76df5d92925a9af3a969f575539
-      verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
-      commit: 3944c0a727cde76df5d92925a9af3a969f575539
+      status: PASS
+      implementation_commit: 743115cb144951c326cf7203dc6890ff5959280c
+      verification_commit: 743115cb144951c326cf7203dc6890ff5959280c
+      commit: 743115cb144951c326cf7203dc6890ff5959280c
       ci_url: null
       reason: ''
     - id: E08-M01-T006
@@ -4820,10 +4822,10 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_goal_channel.py -q
       regression_test: tests/unit/test_goal_channel.py
       evidence: packages/pz_agent_core/src/pz_agent_core/goals/model.py
-      status: NOT_STARTED
-      implementation_commit: 3944c0a727cde76df5d92925a9af3a969f575539
-      verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
-      commit: 3944c0a727cde76df5d92925a9af3a969f575539
+      status: PASS
+      implementation_commit: 743115cb144951c326cf7203dc6890ff5959280c
+      verification_commit: 743115cb144951c326cf7203dc6890ff5959280c
+      commit: 743115cb144951c326cf7203dc6890ff5959280c
       ci_url: null
       reason: ''
     checks:
@@ -6742,12 +6744,13 @@ epics:
       verify_command: read the windows workflow
       regression_test: ''
       evidence: .github/workflows/windows.yml
-      status: NOT_STARTED
-      implementation_commit: null
-      verification_commit: null
-      commit: null
-      ci_url: null
-      reason: ''
+      status: PASS
+      implementation_commit: df79d65340c481028e0781632bda158232418794
+      verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
+      commit: df79d65340c481028e0781632bda158232418794
+      ci_url: https://github.com/natural0101/poject-zombigpt/actions/runs/31214158408
+      reason: 'the RC exists only as the product of .github/workflows/windows.yml: its Tests, build, answer-check
+        and Release gate steps all precede the upload, so a red workflow produces no artefact'
     - id: E11-M04-T004
       subsystem: release
       action: Publish the RC as a workflow artefact with its digest
@@ -6760,12 +6763,13 @@ epics:
       verify_command: read the windows workflow run
       regression_test: ''
       evidence: docs/control/MASTER_PLAN.yaml
-      status: NOT_STARTED
-      implementation_commit: null
-      verification_commit: null
-      commit: null
-      ci_url: null
-      reason: ''
+      status: PASS
+      implementation_commit: df79d65340c481028e0781632bda158232418794
+      verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
+      commit: df79d65340c481028e0781632bda158232418794
+      ci_url: https://github.com/natural0101/poject-zombigpt/actions/runs/31214158408
+      reason: run 31214158408 uploaded pz-agent-windows-rc and logged its sha256 (3eb5ca63...), recorded
+        in docs/control/EVIDENCE_INDEX.md and STATUS.json
     - id: E11-M04-T005
       subsystem: release
       action: Record the RC digest in the evidence index
@@ -6778,12 +6782,12 @@ epics:
       verify_command: cat docs/control/EVIDENCE_INDEX.md
       regression_test: ''
       evidence: docs/control/EVIDENCE_INDEX.md
-      status: NOT_STARTED
-      implementation_commit: null
-      verification_commit: null
-      commit: null
+      status: PASS
+      implementation_commit: cd1d21085671780a9c68441507c1887450c12737
+      verification_commit: cd1d21085671780a9c68441507c1887450c12737
+      commit: cd1d21085671780a9c68441507c1887450c12737
       ci_url: null
-      reason: ''
+      reason: the RC digest, source commit and certifying run are recorded in docs/control/EVIDENCE_INDEX.md
     - id: E11-M04-T006
       subsystem: release
       action: Prove a PyInstaller spec with no built executable is not counted
@@ -6796,10 +6800,10 @@ epics:
       verify_command: .venv/bin/python scripts/check_master_plan.py
       regression_test: tests/unit/test_master_plan.py
       evidence: scripts/check_master_plan.py
-      status: NOT_STARTED
-      implementation_commit: null
-      verification_commit: null
-      commit: null
+      status: PASS
+      implementation_commit: 743115cb144951c326cf7203dc6890ff5959280c
+      verification_commit: 743115cb144951c326cf7203dc6890ff5959280c
+      commit: 743115cb144951c326cf7203dc6890ff5959280c
       ci_url: null
       reason: ''
     - id: E11-M04-T007
@@ -6814,10 +6818,10 @@ epics:
       verify_command: .venv/bin/python scripts/check_master_plan.py
       regression_test: tests/unit/test_master_plan.py
       evidence: scripts/check_master_plan.py
-      status: NOT_STARTED
-      implementation_commit: null
-      verification_commit: null
-      commit: null
+      status: PASS
+      implementation_commit: 743115cb144951c326cf7203dc6890ff5959280c
+      verification_commit: 743115cb144951c326cf7203dc6890ff5959280c
+      commit: 743115cb144951c326cf7203dc6890ff5959280c
       ci_url: null
       reason: ''
     checks:
@@ -7072,12 +7076,14 @@ epics:
       verify_command: grep -rn 'ReadProcessMemory\|WriteProcessMemory\|ptrace' packages installer
       regression_test: ''
       evidence: docs/SAFETY.md
-      status: NOT_STARTED
-      implementation_commit: null
-      verification_commit: null
-      commit: null
+      status: PASS
+      implementation_commit: 743115cb144951c326cf7203dc6890ff5959280c
+      verification_commit: 743115cb144951c326cf7203dc6890ff5959280c
+      commit: 743115cb144951c326cf7203dc6890ff5959280c
       ci_url: null
-      reason: ''
+      reason: 'docs/SAFETY.md, section "The game process is not touched": check_forbidden.py bans WriteProcessMemory,
+        NtWriteVirtualMemory, process_vm_writev and PTRACE_POKEDATA as identifiers in shipped code, in
+        CI on every push'
     - id: E12-M02-T006
       subsystem: safety
       action: Never inject a library into the game process
@@ -7090,12 +7096,14 @@ epics:
       verify_command: grep -rn 'CreateRemoteThread\|LoadLibrary' packages installer
       regression_test: ''
       evidence: docs/SAFETY.md
-      status: NOT_STARTED
-      implementation_commit: null
-      verification_commit: null
-      commit: null
+      status: PASS
+      implementation_commit: 743115cb144951c326cf7203dc6890ff5959280c
+      verification_commit: 743115cb144951c326cf7203dc6890ff5959280c
+      commit: 743115cb144951c326cf7203dc6890ff5959280c
       ci_url: null
-      reason: ''
+      reason: 'same section: CreateRemoteThread and VirtualAllocEx are banned as identifiers, and ctypes
+        is confined to the descriptor''s PROCESS_QUERY_LIMITED_INFORMATION liveness probe, so there is
+        no route to LoadLibrary in another process'
     - id: E12-M02-T007
       subsystem: safety
       action: Never attempt to bypass anti-cheat
@@ -7108,12 +7116,14 @@ epics:
       verify_command: read docs/SAFETY.md
       regression_test: ''
       evidence: docs/SAFETY.md
-      status: NOT_STARTED
-      implementation_commit: null
-      verification_commit: null
-      commit: null
+      status: PASS
+      implementation_commit: 743115cb144951c326cf7203dc6890ff5959280c
+      verification_commit: 743115cb144951c326cf7203dc6890ff5959280c
+      commit: 743115cb144951c326cf7203dc6890ff5959280c
       ci_url: null
-      reason: ''
+      reason: 'docs/SAFETY.md states the rule with its enforcement points: check_forbidden.py bans the
+        process-tampering primitives as identifiers and confines ctypes to the descriptor''s audited liveness
+        probe; test_check_forbidden.py fires both rules over planted snippets'
     - id: E12-M02-T008
       subsystem: safety
       action: Keep synthetic input disabled in multiplayer
@@ -7126,10 +7136,10 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_safety_input.py -q
       regression_test: tests/unit/test_safety_input.py
       evidence: packages/pz_agent_core/src/pz_agent_core/safety/input.py
-      status: NOT_STARTED
-      implementation_commit: 62d69c336aee220614560d713ca6a6e092932279
-      verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
-      commit: 62d69c336aee220614560d713ca6a6e092932279
+      status: PASS
+      implementation_commit: 743115cb144951c326cf7203dc6890ff5959280c
+      verification_commit: 743115cb144951c326cf7203dc6890ff5959280c
+      commit: 743115cb144951c326cf7203dc6890ff5959280c
       ci_url: null
       reason: ''
     checks:
@@ -7490,7 +7500,7 @@ epics:
       pass_criterion: the archive link check passes
       verify_command: .venv/bin/pytest tests/contract/test_archive_documents_resolve.py -q
       regression_test: tests/contract/test_archive_documents_resolve.py
-      evidence: docs/README.md
+      evidence: README.md
       status: NOT_STARTED
       implementation_commit: null
       verification_commit: null
@@ -7725,12 +7735,12 @@ epics:
       verify_command: read docs/control/DECISIONS.md
       regression_test: ''
       evidence: docs/control/DECISIONS.md
-      status: NOT_STARTED
-      implementation_commit: null
-      verification_commit: null
-      commit: null
+      status: PASS
+      implementation_commit: cd1d21085671780a9c68441507c1887450c12737
+      verification_commit: cd1d21085671780a9c68441507c1887450c12737
+      commit: cd1d21085671780a9c68441507c1887450c12737
       ci_url: null
-      reason: ''
+      reason: D-012 in docs/control/DECISIONS.md gathers the decisions the RC's shape rests on
     - id: E13-M01-T019
       subsystem: docs
       action: Keep the evidence index complete
@@ -7743,10 +7753,10 @@ epics:
       verify_command: .venv/bin/python scripts/check_master_plan.py
       regression_test: tests/unit/test_master_plan.py
       evidence: docs/control/EVIDENCE_INDEX.md
-      status: NOT_STARTED
-      implementation_commit: null
-      verification_commit: null
-      commit: null
+      status: PASS
+      implementation_commit: 743115cb144951c326cf7203dc6890ff5959280c
+      verification_commit: 743115cb144951c326cf7203dc6890ff5959280c
+      commit: 743115cb144951c326cf7203dc6890ff5959280c
       ci_url: null
       reason: ''
     - id: E13-M01-T020

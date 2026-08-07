@@ -139,6 +139,26 @@ Closed at `276b9d9`: both workflows completed green against that commit
 may only call a workflow GREEN for the commit it actually ran against, and the
 staleness check refuses a STATUS whose named commit has code changes after it.
 
+### R-007 — the voice intent resolver exists twice, and the tested copy is not the shipped one
+
+The R-003 shape, one layer up. Two modules map an utterance onto the goal
+channel:
+
+* `pz_agent_voice/intent.py` — what `session.py` imports and production runs
+  (`classify`, `extract_quantities`, `resolve_goal`).
+* `pz_agent_voice/intents.py` — 600+ lines whose docstring claims "the only
+  place in the voice package that names a GoalKind", imported by **nothing in
+  production**; only `test_voice_intents.py` and `test_voice_privacy.py` reach
+  it.
+
+Both implement the spoken-percent-to-fraction conversion independently
+(`_SPOKEN_AS_PERCENT` in one, `_PERCENT_DIVISOR` in the other), which is how
+the duplication was noticed. One of the two has to go, the survivor keeps the
+better properties of each (the stop-first ordering and refusal vocabulary are
+richer in `intents.py`; the wiring is `intent.py`'s), and the tests have to
+name the survivor.
+*Blocks:* closing E09-M02 honestly. Found at `743115c`; not yet resolved.
+
 ---
 
 ## LIVE BLOCKERS
