@@ -1,13 +1,13 @@
 {
   "blockers": [],
   "branch": "fix/windows-mcp-voice-runtime",
-  "current_step": 30,
+  "current_step": 51,
   "github_release": null,
-  "head_commit": "935437ef88eb257a590b2bda930cce85de88632c",
-  "last_passed_step": 29,
+  "head_commit": "fceb4162fdfafd4e63467a4010bcf6ec5405a704",
+  "last_passed_step": 50,
   "linux_ci": {
-    "status": "IN_PROGRESS",
-    "url": "https://github.com/natural0101/poject-zombigpt/actions?query=branch%3Afix%2Fwindows-mcp-voice-runtime"
+    "status": "GREEN",
+    "url": "https://github.com/natural0101/poject-zombigpt/actions/runs/31163394870"
   },
   "live_game_percent": 0,
   "live_scenarios": {
@@ -15,15 +15,15 @@
     "not_run": 20,
     "passed": 0
   },
-  "next_step": 30,
-  "overall_percent": 29,
+  "next_step": 51,
+  "overall_percent": 50,
   "rc_artifact": {
     "sha256": null,
     "status": "NOT_BUILT",
     "url": null
   },
   "release_percent": 0,
-  "remote_percent": 29,
+  "remote_percent": 50,
   "repository": "https://github.com/natural0101/poject-zombigpt",
   "steps": [
     {
@@ -594,318 +594,407 @@
       "title": "Windows installer and launcher path handling"
     },
     {
-      "commit": null,
+      "commit": "a7c16ba27c27c51a75f8c298b0aa0577823b0cf2",
       "depends_on": [
         29
       ],
-      "evidence": [],
-      "finished_at": null,
+      "evidence": [
+        "docs/control/evidence/step-30-40/windows-suite.txt",
+        "packages/pz_agent_core/src/pz_agent_core/diagnostics/redaction.py"
+      ],
+      "finished_at": "2026-08-07T09:00:00Z",
       "id": 30,
-      "notes": "",
+      "notes": "24 -> 13 -> 1 -> 0 failures. Run 31163394899: 3714 passed, 22 skipped, every stage green.",
       "owner": "remote",
-      "started_at": null,
-      "status": "IN_PROGRESS",
-      "tests": [],
+      "started_at": "2026-08-07T09:00:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/contract/test_windows_path_shapes.py",
+        "tests/unit/test_diagnostics_bundle.py"
+      ],
       "title": "Zero Windows failures in this block"
     },
     {
-      "commit": null,
+      "commit": "15296e507958501b7c2737c4676813c30d6a9d15",
       "depends_on": [
         30
       ],
-      "evidence": [],
-      "finished_at": null,
+      "evidence": [
+        "installer/pz_agent_installer.py"
+      ],
+      "finished_at": "2026-08-07T09:00:00Z",
       "id": 31,
-      "notes": "",
+      "notes": "Models cmd.exe quoting over the whole rendered file, not only the expansions it knows the name of. Mutation: unquoting one expansion fails 4 parametrisations.",
       "owner": "remote",
-      "started_at": null,
-      "status": "NOT_STARTED",
-      "tests": [],
+      "started_at": "2026-08-07T09:00:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/unit/test_installer_windows.py::test_no_path_in_the_launcher_is_left_for_cmd_to_split_on_a_space"
+      ],
       "title": "Quote every path in the BAT files"
     },
     {
-      "commit": null,
+      "commit": "15296e507958501b7c2737c4676813c30d6a9d15",
       "depends_on": [
         31
       ],
-      "evidence": [],
-      "finished_at": null,
+      "evidence": [
+        "installer/pz_agent_installer.py"
+      ],
+      "finished_at": "2026-08-07T09:00:00Z",
       "id": 32,
-      "notes": "",
+      "notes": "C:/Users/John Smith and C:/Program Files.",
       "owner": "remote",
-      "started_at": null,
-      "status": "NOT_STARTED",
-      "tests": [],
+      "started_at": "2026-08-07T09:00:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/unit/test_installer_windows.py::test_no_path_in_the_launcher_is_left_for_cmd_to_split_on_a_space[spaces]"
+      ],
       "title": "Paths with spaces"
     },
     {
-      "commit": null,
+      "commit": "15296e507958501b7c2737c4676813c30d6a9d15",
       "depends_on": [
         32
       ],
-      "evidence": [],
-      "finished_at": null,
+      "evidence": [
+        "installer/pz_agent_installer.py"
+      ],
+      "finished_at": "2026-08-07T09:00:00Z",
       "id": 33,
-      "notes": "",
+      "notes": "Cyrillic alone and Cyrillic with a space.",
       "owner": "remote",
-      "started_at": null,
-      "status": "NOT_STARTED",
-      "tests": [],
+      "started_at": "2026-08-07T09:00:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/unit/test_installer_windows.py::test_no_path_in_the_launcher_is_left_for_cmd_to_split_on_a_space[cyrillic]",
+        "tests/unit/test_installer_windows.py::test_the_launcher_sets_a_utf8_codepage_before_any_non_ascii_path"
+      ],
       "title": "Paths with Cyrillic"
     },
     {
-      "commit": null,
+      "commit": "15296e507958501b7c2737c4676813c30d6a9d15",
       "depends_on": [
         33
       ],
-      "evidence": [],
-      "finished_at": null,
+      "evidence": [
+        "installer/pz_agent_installer.py"
+      ],
+      "finished_at": "2026-08-07T09:00:00Z",
       "id": 34,
-      "notes": "",
+      "notes": "Byte-for-byte, with the manifest recording the real digest and the real file size.",
       "owner": "remote",
-      "started_at": null,
-      "status": "NOT_STARTED",
-      "tests": [],
+      "started_at": "2026-08-07T09:00:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/unit/test_installer_windows.py::test_an_existing_config_is_left_exactly_as_the_user_wrote_it"
+      ],
       "title": "An existing `config.toml` is kept"
     },
     {
-      "commit": null,
+      "commit": "15296e507958501b7c2737c4676813c30d6a9d15",
       "depends_on": [
         34
       ],
-      "evidence": [],
-      "finished_at": null,
+      "evidence": [
+        "packages/pz_agent_core/src/pz_agent_core/platform/paths.py",
+        "tests/contract/test_portable_paths.py"
+      ],
+      "finished_at": "2026-08-07T09:00:00Z",
       "id": 35,
-      "notes": "",
+      "notes": "portable_relative_path preserved the running platform's flavour, which made the separator claim untestable on Linux and produced C:\\/Users from portable_posix. Fixed; the mutation now fails four tests.",
       "owner": "remote",
-      "started_at": null,
-      "status": "NOT_STARTED",
-      "tests": [],
+      "started_at": "2026-08-07T09:00:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/unit/test_installer_windows.py::test_every_manifest_path_is_portable_rather_than_native",
+        "tests/unit/test_installer_windows.py::test_the_manifest_does_not_depend_on_where_it_was_installed",
+        "tests/contract/test_portable_paths.py::test_a_windows_path_is_recorded_with_posix_separators"
+      ],
       "title": "Installer manifest on Windows"
     },
     {
-      "commit": null,
+      "commit": "15296e507958501b7c2737c4676813c30d6a9d15",
       "depends_on": [
         35
       ],
-      "evidence": [],
-      "finished_at": null,
+      "evidence": [
+        "installer/pz_agent_installer.py"
+      ],
+      "finished_at": "2026-08-07T09:00:00Z",
       "id": 36,
       "notes": "",
       "owner": "remote",
-      "started_at": null,
-      "status": "NOT_STARTED",
-      "tests": [],
+      "started_at": "2026-08-07T09:00:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/unit/test_installer_windows.py::test_uninstall_keeps_a_mod_file_the_user_edited_and_names_it"
+      ],
       "title": "Uninstall with a user file inside the mod"
     },
     {
-      "commit": null,
+      "commit": "15296e507958501b7c2737c4676813c30d6a9d15",
       "depends_on": [
         36
       ],
-      "evidence": [],
-      "finished_at": null,
+      "evidence": [
+        "installer/pz_agent_installer.py"
+      ],
+      "finished_at": "2026-08-07T09:00:00Z",
       "id": 37,
       "notes": "",
       "owner": "remote",
-      "started_at": null,
-      "status": "NOT_STARTED",
-      "tests": [],
+      "started_at": "2026-08-07T09:00:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/unit/test_installer_windows.py::test_uninstall_leaves_saves_alone"
+      ],
       "title": "Uninstall does not remove a save"
     },
     {
-      "commit": null,
+      "commit": "15296e507958501b7c2737c4676813c30d6a9d15",
       "depends_on": [
         37
       ],
-      "evidence": [],
-      "finished_at": null,
+      "evidence": [
+        "installer/pz_agent_installer.py"
+      ],
+      "finished_at": "2026-08-07T09:00:00Z",
       "id": 38,
       "notes": "",
       "owner": "remote",
-      "started_at": null,
-      "status": "NOT_STARTED",
-      "tests": [],
+      "started_at": "2026-08-07T09:00:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/unit/test_installer_windows.py::test_uninstall_reports_the_config_as_kept_rather_than_removed",
+        "tests/unit/test_installer_windows.py::test_uninstall_leaves_backups_and_logs_alone"
+      ],
       "title": "Uninstall does not remove the config"
     },
     {
-      "commit": null,
+      "commit": "a7c16ba27c27c51a75f8c298b0aa0577823b0cf2",
       "depends_on": [
         38
       ],
-      "evidence": [],
-      "finished_at": null,
+      "evidence": [
+        "docs/control/evidence/step-30-40/windows-suite.txt"
+      ],
+      "finished_at": "2026-08-07T09:00:00Z",
       "id": 39,
-      "notes": "",
+      "notes": "The whole installer suite ran on windows-latest in run 31163394899. A Linux result would not have counted.",
       "owner": "remote",
-      "started_at": null,
-      "status": "NOT_STARTED",
-      "tests": [],
+      "started_at": "2026-08-07T09:00:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/unit/test_installer_windows.py::test_the_round_trip_leaves_no_residue_but_the_config"
+      ],
       "title": "Synthetic installer round trip on Windows"
     },
     {
-      "commit": null,
+      "commit": "a7c16ba27c27c51a75f8c298b0aa0577823b0cf2",
       "depends_on": [
         39
       ],
-      "evidence": [],
-      "finished_at": null,
+      "evidence": [
+        "docs/control/evidence/step-30-40/windows-suite.txt"
+      ],
+      "finished_at": "2026-08-07T09:00:00Z",
       "id": 40,
-      "notes": "",
+      "notes": "Run 31163394899: tests, both PyInstaller builds, both executables answering, the archive and the release gate all succeeded; nothing skipped.",
       "owner": "remote",
-      "started_at": null,
-      "status": "NOT_STARTED",
+      "started_at": "2026-08-07T09:00:00Z",
+      "status": "PASS",
       "tests": [],
       "title": "Commit: installer block green"
     },
     {
-      "commit": null,
+      "commit": "15296e507958501b7c2737c4676813c30d6a9d15",
       "depends_on": [
         40
       ],
-      "evidence": [],
-      "finished_at": null,
+      "evidence": [
+        "packages/pz_agent_cli/src/pz_agent_cli/app.py"
+      ],
+      "finished_at": "2026-08-07T09:00:00Z",
       "id": 41,
-      "notes": "",
+      "notes": "mcp_client_entry returns a dict; nothing is assembled from f-strings.",
       "owner": "remote",
-      "started_at": null,
-      "status": "NOT_STARTED",
-      "tests": [],
+      "started_at": "2026-08-07T09:00:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/contract/test_mcp_snippet_is_json.py"
+      ],
       "title": "Build the MCP config as a dict"
     },
     {
-      "commit": null,
+      "commit": "15296e507958501b7c2737c4676813c30d6a9d15",
       "depends_on": [
         41
       ],
-      "evidence": [],
-      "finished_at": null,
+      "evidence": [
+        "packages/pz_agent_cli/src/pz_agent_cli/app.py"
+      ],
+      "finished_at": "2026-08-07T09:00:00Z",
       "id": 42,
-      "notes": "",
+      "notes": "_mcp_snippet renders through json.dumps only.",
       "owner": "remote",
-      "started_at": null,
-      "status": "NOT_STARTED",
-      "tests": [],
+      "started_at": "2026-08-07T09:00:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/contract/test_mcp_snippet_is_json.py"
+      ],
       "title": "Serialise only through `json.dumps`"
     },
     {
-      "commit": null,
+      "commit": "a7c16ba27c27c51a75f8c298b0aa0577823b0cf2",
       "depends_on": [
         42
       ],
-      "evidence": [],
-      "finished_at": null,
+      "evidence": [
+        "docs/control/evidence/step-30-40/windows-suite.txt"
+      ],
+      "finished_at": "2026-08-07T09:00:00Z",
       "id": 43,
-      "notes": "",
+      "notes": "Five interpreter paths including one with an embedded quote; round-tripped through json.loads. Ran on windows-latest.",
       "owner": "remote",
-      "started_at": null,
-      "status": "NOT_STARTED",
-      "tests": [],
+      "started_at": "2026-08-07T09:00:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/contract/test_mcp_snippet_is_json.py"
+      ],
       "title": "Test a Windows interpreter path"
     },
     {
-      "commit": null,
+      "commit": "a7c16ba27c27c51a75f8c298b0aa0577823b0cf2",
       "depends_on": [
         43
       ],
-      "evidence": [],
-      "finished_at": null,
+      "evidence": [
+        "docs/control/evidence/step-30-40/windows-suite.txt"
+      ],
+      "finished_at": "2026-08-07T09:00:00Z",
       "id": 44,
-      "notes": "",
+      "notes": "Cyrillic, spaces and Program Files.",
       "owner": "remote",
-      "started_at": null,
-      "status": "NOT_STARTED",
-      "tests": [],
+      "started_at": "2026-08-07T09:00:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/contract/test_mcp_snippet_is_json.py"
+      ],
       "title": "Test Cyrillic and spaces"
     },
     {
-      "commit": null,
+      "commit": "15296e507958501b7c2737c4676813c30d6a9d15",
       "depends_on": [
         44
       ],
-      "evidence": [],
-      "finished_at": null,
+      "evidence": [
+        "packages/pz_agent_cli/src/pz_agent_cli/app.py"
+      ],
+      "finished_at": "2026-08-07T09:00:00Z",
       "id": 45,
       "notes": "",
       "owner": "remote",
-      "started_at": null,
-      "status": "NOT_STARTED",
+      "started_at": "2026-08-07T09:00:00Z",
+      "status": "PASS",
       "tests": [],
       "title": "Commit: MCP config correction"
     },
     {
-      "commit": null,
+      "commit": "fceb4162fdfafd4e63467a4010bcf6ec5405a704",
       "depends_on": [
         45
       ],
-      "evidence": [],
-      "finished_at": null,
+      "evidence": [
+        "docs/CORE_RPC.md"
+      ],
+      "finished_at": "2026-08-07T09:00:00Z",
       "id": 46,
-      "notes": "",
+      "notes": "The envelope, the caps, the descriptor, the token, the deadlines and the two families.",
       "owner": "remote",
-      "started_at": null,
-      "status": "NOT_STARTED",
+      "started_at": "2026-08-07T09:00:00Z",
+      "status": "PASS",
       "tests": [],
       "title": "Document the Local Core RPC protocol"
     },
     {
-      "commit": null,
+      "commit": "fceb4162fdfafd4e63467a4010bcf6ec5405a704",
       "depends_on": [
         46
       ],
-      "evidence": [],
-      "finished_at": null,
+      "evidence": [
+        "schemas/core_rpc_request.schema.json",
+        "schemas/core_rpc_response.schema.json"
+      ],
+      "finished_at": "2026-08-07T09:00:00Z",
       "id": 47,
-      "notes": "",
+      "notes": "Both directions pinned. Found a real gap: the schema required a format marker the decoder never checked. check_versions.py now fails if the schema's version drifts from the code's.",
       "owner": "remote",
-      "started_at": null,
-      "status": "NOT_STARTED",
-      "tests": [],
+      "started_at": "2026-08-07T09:00:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/contract/test_core_rpc_schema_conformance.py"
+      ],
       "title": "JSON schemas for the request/response envelope"
     },
     {
-      "commit": null,
+      "commit": "fceb4162fdfafd4e63467a4010bcf6ec5405a704",
       "depends_on": [
         47
       ],
-      "evidence": [],
-      "finished_at": null,
+      "evidence": [
+        "packages/pz_agent_core/src/pz_agent_core/rpc/token.py"
+      ],
+      "finished_at": "2026-08-07T09:00:00Z",
       "id": 48,
-      "notes": "",
+      "notes": "32 CSPRNG bytes, new every run.",
       "owner": "remote",
-      "started_at": null,
-      "status": "NOT_STARTED",
-      "tests": [],
+      "started_at": "2026-08-07T09:00:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/unit/test_rpc_token_and_descriptor.py::TestTheToken"
+      ],
       "title": "Random RPC auth token"
     },
     {
-      "commit": null,
+      "commit": "fceb4162fdfafd4e63467a4010bcf6ec5405a704",
       "depends_on": [
         48
       ],
-      "evidence": [],
-      "finished_at": null,
+      "evidence": [
+        "packages/pz_agent_core/src/pz_agent_core/rpc/token.py"
+      ],
+      "finished_at": "2026-08-07T09:00:00Z",
       "id": 49,
-      "notes": "",
+      "notes": "Mode 0600 set at creation by descriptor rather than chmod-ed after; absent from the descriptor and from every exception.",
       "owner": "remote",
-      "started_at": null,
-      "status": "NOT_STARTED",
-      "tests": [],
+      "started_at": "2026-08-07T09:00:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/unit/test_rpc_token_and_descriptor.py::TestTheToken::test_the_file_is_not_readable_by_anyone_else",
+        "tests/unit/test_rpc_token_and_descriptor.py::TestTheToken::test_the_token_lives_apart_from_the_descriptor",
+        "tests/unit/test_rpc_token_and_descriptor.py::TestTheToken::test_no_error_message_contains_the_token"
+      ],
       "title": "Safe storage of the auth token"
     },
     {
-      "commit": null,
+      "commit": "fceb4162fdfafd4e63467a4010bcf6ec5405a704",
       "depends_on": [
         49
       ],
-      "evidence": [],
-      "finished_at": null,
+      "evidence": [
+        "packages/pz_agent_core/src/pz_agent_core/rpc/descriptor.py"
+      ],
+      "finished_at": "2026-08-07T09:00:00Z",
       "id": 50,
-      "notes": "",
+      "notes": "<state-dir>/runtime/core-rpc.json, written atomically, refused when stale.",
       "owner": "remote",
-      "started_at": null,
-      "status": "NOT_STARTED",
-      "tests": [],
+      "started_at": "2026-08-07T09:00:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/unit/test_rpc_token_and_descriptor.py::TestFindingAServer",
+        "tests/unit/test_rpc_token_and_descriptor.py::TestWriting"
+      ],
       "title": "Runtime descriptor `core-rpc.json`"
     },
     {
@@ -1660,7 +1749,9 @@
     }
   ],
   "windows_ci": {
-    "status": "IN_PROGRESS",
-    "url": "https://github.com/natural0101/poject-zombigpt/actions/runs/31160864663"
+    "head_sha": "a7c16ba27c27c51a75f8c298b0aa0577823b0cf2",
+    "run_id": 31163394899,
+    "status": "GREEN",
+    "url": "https://github.com/natural0101/poject-zombigpt/actions/runs/31163394899"
   }
 }

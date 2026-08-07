@@ -45,3 +45,30 @@ the PyInstaller build of pz-agent-mcp.exe:
 15296e50 with packaging/windows/specutil.py. Step 30 stays IN_PROGRESS until a
 run is green end to end — the test suite being green is a necessary part of
 that and not the whole of it.
+
+Closed
+------
+
+  a7c16ba2  run 31163394899   0 failed, 3714 passed, 22 skipped
+
+and, for the first time on this branch, every later stage of the workflow too:
+
+  Tests                                            success
+  Build pz-agent.exe                               success
+  Build pz-agent-mcp.exe                           success
+  Both executables answer                          success
+  Assemble the archive                             success
+  Release gate                                     success
+  Upload the release candidate                     success
+
+No step skipped. The `pz-agent-mcp.exe` build was fixed at 15296e50 by
+packaging/windows/specutil.py, which reads the SDK's package directory instead
+of importing each module to discover it — `mcp.cli` calls `sys.exit` at import
+time without its optional `typer` extra, and a `SystemExit` is not an
+`Exception`, so PyInstaller's `on_error` could not skip it.
+
+Nothing was loosened to get here: no assertion removed, no Windows failure
+turned into a skip, and the workflow runs every check it ran at the branch
+point. Steps 91-95 are not claimed on this run — they come after the RPC, MCP
+and voice stages in the plan, and will need their own green run once those
+land.

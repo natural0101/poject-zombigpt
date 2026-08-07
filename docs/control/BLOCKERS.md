@@ -8,7 +8,13 @@ the regression test.
 
 ## Open
 
-### B-001 — the Windows workflow is red (step 12 evidence, blocks step 30)
+_(none)_
+
+
+
+## Closed
+
+### B-001 — the Windows workflow was red (step 12 evidence, blocked step 30)
 
 - **Step:** 30
 - **Reproduce:** the Windows job of
@@ -17,8 +23,7 @@ the regression test.
 - **Failure:** `24 failed, 3633 passed, 22 skipped`.
 - **Root causes:** recorded in `docs/control/evidence/step-01-10/windows-failures.txt`
   and split in `DECISIONS.md` under D-002.
-- **Status:** open. Fixes are landing under steps 14–29; the blocker closes when
-  a Windows run is green, which is step 30 and nothing earlier.
+- **Status:** closed.
 - **Measured progress:** 24 failures at `873037c0`; 13 at `df2db383`
   (run 31160929042); 1 at `ce70711` (run 31162211524). The last one is
   `test_verify_flags_a_member_that_reached_the_archive_unredacted`, and it was
@@ -30,7 +35,13 @@ the regression test.
   produced a different line on each platform. Fixed by matching each separator
   position independently; regression tests in
   `tests/contract/test_windows_path_shapes.py`.
+- **Closed at:** `a7c16ba2`, run
+  <https://github.com/natural0101/poject-zombigpt/actions/runs/31163394899> —
+  `3714 passed, 22 skipped`, and every later stage of the workflow succeeded:
+  both PyInstaller builds, both executables answering, the archive and the
+  release gate. Nothing skipped.
+- **Not closed by:** loosening anything. No assertion was removed, no Windows
+  failure became a skip, and the workflow still runs every check it ran at the
+  branch point.
 
-## Closed
 
-_(none yet)_
