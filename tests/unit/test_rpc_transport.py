@@ -349,10 +349,22 @@ class TestAddresses:
         assert address.startswith("\\\\.\\pipe\\")
         assert str(tmp_path) not in address, "the pipe name leaked the state directory"
 
-    def test_a_posix_address_is_inside_the_runtime_directory(self, tmp_path: Path) -> None:
-        address = new_address(tmp_path, family=FAMILY_UNIX)
+    def test_a_posix_address_is_inside_the_runtime_directory(self) -> None:
+        """A fixed short root, deliberately not `tmp_path`.
 
-        assert Path(address).parent == tmp_path
+        The claim here is about how the address is *composed*, and `tmp_path` on
+        a Windows runner is 116 bytes — past the `sun_path` limit — so asking for
+        a POSIX address under it correctly refuses, and this test failed for a
+        reason that had nothing to do with what it was checking. The length rule
+        has its own test below; this one must not depend on where pytest happens
+        to put its temporary directories.
+        """
+        root = Path("/srv/pz/runtime")
+
+        address = new_address(root, family=FAMILY_UNIX)
+
+        assert Path(address).parent == root
+        assert Path(address).name.endswith(".sock")
 
     def test_a_posix_address_that_will_not_bind_says_so_before_it_tries(
         self, tmp_path: Path
