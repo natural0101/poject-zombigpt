@@ -177,10 +177,23 @@ def _rewrite(
 
 
 def _lone_archive(path: Path, members: dict[str, bytes]) -> Path:
-    """A hand-built ZIP, for shapes ``build`` would never produce."""
+    """A hand-built ZIP, for shapes ``build`` would never produce.
+
+    Member names are assigned *after* the ``ZipInfo`` exists, because its
+    constructor rewrites them: ``if os.sep != "/" and os.sep in filename:
+    filename = filename.replace(os.sep, "/")``. On Windows that silently turns a
+    name written here with a backslash into one with a forward slash, so a test
+    naming a member ``C:\\Users\\...`` got ``C:/Users/...`` on the one platform
+    the check exists for — and the refusal it asserted ("uses a native
+    separator") was replaced by a different, equally correct one ("carries a
+    drive letter"). The test failed on Windows only, for a reason that was
+    entirely about the fixture.
+    """
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
         for name, body in members.items():
-            archive.writestr(zipfile.ZipInfo(name, date_time=_EPOCH), body)
+            info = zipfile.ZipInfo(date_time=_EPOCH)
+            info.filename = name
+            archive.writestr(info, body)
     return path
 
 
@@ -506,22 +519,40 @@ def test_a_member_named_twice_is_refused(tmp_path: Path) -> None:
     assert "more than once" in str(caught.value)
 
 
-def test_a_native_separator_in_a_member_name_is_refused_without_echoing_it(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    ("member", "category"),
+    [
+        ("mod\\media\\Иван.lua", "uses a native separator instead of /"),
+        ("C:/Users/Иван/mod.info", "carries a drive letter or an alternate stream marker"),
+    ],
+    ids=["backslash", "drive-letter"],
+)
+def test_an_unportable_member_name_is_refused_without_echoing_it(
+    tmp_path: Path, member: str, category: str
 ) -> None:
+    """Both categories, each with a name that reaches the check unaltered.
+
+    Split in two because the single case that was here named
+    ``C:\\Users\\Иван\\mod.info`` — which carries a backslash *and* a drive
+    letter — and asserted the backslash category. That is the first branch on
+    Linux and, after ``ZipInfo`` rewrote the separator, the second on Windows.
+    One name cannot pin an ordered classification on two platforms; two names,
+    each unambiguous, can.
+
+    The name is never echoed either way. These are exactly the names that may be
+    native absolute paths, and ``C:\\Users\\Иван\\…`` in a refusal reaches a bug
+    report with the operator's account name in it.
+    """
     archive = _lone_archive(
-        tmp_path / "native.zip",
-        {
-            build_rc.MANIFEST_NAME: _index_bytes([]),
-            "C:\\Users\\Иван\\mod.info": MOD_INFO_BODY,
-        },
+        tmp_path / "unportable.zip",
+        {build_rc.MANIFEST_NAME: _index_bytes([]), member: MOD_INFO_BODY},
     )
     with pytest.raises(build_rc.ArchiveError) as caught:
         build_rc.verify_archive(archive)
     message = str(caught.value)
     assert "not portable" in message
-    assert "uses a native separator instead of /" in message
-    for fragment in ("Иван", "C:", "mod.info"):
+    assert category in message
+    for fragment in ("Иван", "C:", "mod.info", "mod\\media"):
         assert fragment not in message
 
 
