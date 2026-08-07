@@ -52,6 +52,21 @@ MIN_TOKEN_BYTES: Final = 32
 # value is the name of the file the secret lives in, which is not a secret.
 TOKEN_FILENAME: Final = "core-rpc.key"  # noqa: S105
 
+#: ``os.O_BINARY`` where the platform has it, and nothing where it does not.
+#:
+#: This is not a portability nicety. On Windows ``os.open`` defaults to **text
+#: mode**, so ``os.write`` translates every ``0x0A`` in the payload into
+#: ``0x0D 0x0A``. A token is 32 random bytes; the chance that at least one of
+#: them is a newline is about one in eight. On those runs the file on disk was
+#: 33 bytes and did not match the token the server was authenticating with, so
+#: a client read a secret that had never been issued and the connection was
+#: refused — intermittently, on Windows only, for one run in eight, with a
+#: message about authentication rather than about encoding.
+#:
+#: Caught by the Windows workflow, not by anything here: on POSIX ``O_BINARY``
+#: does not exist because there is nothing to distinguish.
+_BINARY: Final = getattr(os, "O_BINARY", 0)
+
 
 class TokenError(RuntimeError):
     """A token could not be issued or read.
@@ -82,7 +97,7 @@ def issue_token(runtime_dir: Path) -> bytes:
         # with no file at all.
         descriptor = os.open(
             path,
-            os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+            os.O_WRONLY | os.O_CREAT | os.O_TRUNC | _BINARY,
             stat.S_IRUSR | stat.S_IWUSR,
         )
         try:

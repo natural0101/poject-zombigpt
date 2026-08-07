@@ -35,6 +35,7 @@ from pz_agent_core.rpc.descriptor import (
     runtime_dir,
     write_descriptor,
 )
+from pz_agent_core.rpc import token as token_module
 from pz_agent_core.rpc.token import (
     MIN_TOKEN_BYTES,
     TOKEN_FILENAME,
@@ -75,6 +76,78 @@ class TestTheToken:
 
         assert first != second
         assert read_token(runtime_dir(state)) == second
+
+    def test_the_file_holds_exactly_the_bytes_that_were_issued(self, state: Path) -> None:
+        """Length as well as content, because the failure was a length change.
+
+        On Windows `os.open` defaults to text mode, so `os.write` turned every
+        `0x0A` in the token into `0x0D 0x0A`. About one token in eight contains a
+        newline, so one Windows run in eight wrote 33 bytes, and the client read
+        a secret that had never been issued. It surfaced as an authentication
+        refusal, which is the last place anyone would look for an encoding bug.
+        """
+        for _ in range(64):
+            token = issue_token(runtime_dir(state))
+            path = runtime_dir(state) / TOKEN_FILENAME
+
+            assert path.stat().st_size == MIN_TOKEN_BYTES
+            assert path.read_bytes() == token
+
+    def test_a_token_containing_a_newline_survives_verbatim(self, state: Path) -> None:
+        """The specific byte, forced rather than waited for.
+
+        The loop above meets a newline eventually; this one guarantees it, so
+        the case cannot pass by luck on a run where no token happened to contain
+        one.
+        """
+        forced = b"\x01" * 15 + b"\n" + b"\x02" * 16
+        assert len(forced) == MIN_TOKEN_BYTES
+
+        path = runtime_dir(state)
+        path.mkdir(parents=True, exist_ok=True)
+        (path / TOKEN_FILENAME).write_bytes(forced)
+
+        assert read_token(path) == forced
+        assert (path / TOKEN_FILENAME).stat().st_size == MIN_TOKEN_BYTES
+
+    def test_the_token_is_opened_in_binary_mode_where_that_is_a_distinction(
+        self, state: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The only form of this assertion a POSIX machine can make.
+
+        `O_BINARY` is 0 on POSIX, so asserting `flags & os.O_BINARY` here is
+        asserting `flags & 0 == 0`, which is true of everything. That was the
+        first version of this test and it passed against the very code that
+        shipped the bug — a guard that cannot fail, written to catch a defect
+        that had already happened.
+
+        So the module's `_BINARY` is replaced with the value Windows actually
+        uses, and the flags are checked for it. The substitution is what makes
+        this a test rather than a tautology: on POSIX there is no observable
+        difference, and the only honest thing left to check is that the call
+        site would carry the flag if the platform had one.
+        """
+        windows_o_binary = 0x8000
+        monkeypatch.setattr(token_module, "_BINARY", windows_o_binary)
+        seen: list[int] = []
+        real = os.open
+
+        def recording(path: object, flags: int, mode: int = 0o777, **kwargs: object) -> int:
+            seen.append(flags)
+            return real(path, flags & ~windows_o_binary, mode, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(os, "open", recording)
+        issue_token(runtime_dir(state))
+
+        assert seen, "issue_token did not open anything by descriptor"
+        assert all(flags & windows_o_binary for flags in seen), (
+            "the token file is opened in text mode; on Windows that turns a "
+            "newline byte inside the secret into two bytes"
+        )
+
+    def test_the_binary_flag_is_the_platform_s_own(self) -> None:
+        """And it must still be whatever the running platform says it is."""
+        assert token_module._BINARY == getattr(os, "O_BINARY", 0)
 
     def test_two_tokens_are_never_the_same(self, state: Path) -> None:
         """Cheap, but it is the assertion that fails if the CSPRNG is swapped out."""
