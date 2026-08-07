@@ -574,7 +574,7 @@ def test_a_terminal_plan_is_reported_exactly_once() -> None:
 
 
 def test_the_goal_channels_own_refusals_each_have_their_own_sentence() -> None:
-    """QUEUE_REJECTED, INVALID_ARGUMENT and PRECONDITION_FAILED are not «Не получилось.»
+    """QUEUE_REJECTED, INVALID_ARGUMENT and PRECONDITION_FAILED get real sentences.
 
     These three are what the goal channel reports for a submission that never
     ran, and they are the ones a user can act on differently: wait, rephrase,

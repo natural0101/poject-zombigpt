@@ -94,7 +94,7 @@ See [`VOICE.md`](VOICE.md).
 
 | Module | What it is |
 | --- | --- |
-| `__main__.py` | The console entry point. Four decisions and nine exit codes; owns no domain logic |
+| `__main__.py` | The console entry point. Four decisions and ten exit codes; owns no domain logic |
 | `catalog.py` | The published surface: 34 `ToolSpec`s and 7 `ResourceSpec`s, with bounds imported from the adapters that will receive them |
 | `router.py`, `resources.py` | Tool and resource handlers |
 | `validation.py`, `envelope.py`, `scrub.py`, `idempotency.py` | Argument checking, the result/error envelopes, redaction, replay |
@@ -122,7 +122,7 @@ gate. `saves.py`, `memory.py`, `modinstall.py`, `smoke.py`, `status.py`,
 `driver.py` are the loop and the speech pump; `queue.py`, `events.py`,
 `messages.py`, `phrases.py`, `intent.py`, `intents.py`, `state.py`, `config.py`
 are its vocabulary and its bounds. `adapters/` holds the TeamON plugin and the
-fake; `bridge/` holds the JSONL protocol and the supervised child process;
+fake; `teamon.py` holds the JSONL protocol and the supervised child process;
 `plan_port.py` puts the plan port on the Core RPC link; `ports.py` re-exports
 the *same* ports the MCP boundary uses, which is what stops the microphone being
 a privileged caller.

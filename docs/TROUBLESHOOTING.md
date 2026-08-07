@@ -30,8 +30,9 @@ still unfixed.
 | `PZD009` | `conflicting_files` | Something is left over in the exchange directory that this build did not write — usually a previous version's journals. |
 | `PZD010` | `active_session` | Reports whether a session is open and which mode it is in. `unknown` with no exchange directory is normal before the first run. |
 
-A check can report `pass`, `warn`, `fail` or `unknown`, and **`unknown` is not a
-pass**. It means the check could not be performed — almost always because
+A check can report `pass`, `info`, `warn`, `fail` or `unknown` — `info` is a
+fact rather than a verdict ("no session is attached" is neither healthy nor
+unhealthy), and **`unknown` is not a pass**. It means the check could not be performed — almost always because
 something above it failed — and `doctor` says which.
 
 ---
@@ -40,11 +41,12 @@ something above it failed — and `doctor` says which.
 
 `pz-agent-mcp` is launched as a subprocess by your MCP client, so when it
 refuses, what you see in the client's log is an exit code and one line on
-stderr. There are nine, all declared as `EXIT_*` constants in
-`packages/pz_agent_mcp/src/pz_agent_mcp/__main__.py`, and they are nine rather
+stderr. There are ten, all declared as `EXIT_*` constants in
+`packages/pz_agent_mcp/src/pz_agent_mcp/__main__.py`, and they are ten rather
 than fewer because the remedies are different: "no sidecar is running", "the
-sidecar died without cleaning up", "there are two installs on this machine" and
-"the SDK extra is missing" send you to four different places.
+sidecar died without cleaning up", "there are two installs on this machine",
+"the SDK extra is missing" and "the SDK is the wrong version" send you to five
+different places.
 
 | Code | Constant | Cause | Remedy |
 | --- | --- | --- | --- |
@@ -57,11 +59,14 @@ sidecar died without cleaning up", "there are two installs on this machine" and
 | 6 | `EXIT_DESCRIPTOR_UNREADABLE` | There is a file where the descriptor belongs and it is not one: truncated, foreign, or left by a start that did not finish. | `pz-agent stop` then `pz-agent start` rewrites it. Restarting a running sidecar will not. |
 | 7 | `EXIT_ANSWER_UNREADABLE` | Something answered on the sidecar's address and this build cannot read the answer. Never reported as a refusal: the core did not say no, this side could not tell what it said. | Check both versions match, then `pz-agent doctor`. |
 | 8 | `EXIT_NO_STATE_DIR` | Neither directory flag was given and the process cannot work out which state directory to use — either the CLI package that owns the layout is not importable (an incomplete install), or the machine's directories could not be read. | Name it with `--state-dir`. `pz-agent doctor` reports what is unreadable. |
+| 9 | `EXIT_SDK_INCOMPATIBLE` | The `mcp` extra is installed and is not a version this build can drive — it needs the 2.x server API. Distinct from exit 3 because the remedy is a version constraint rather than an install: `pip install pz-agent[mcp]` would not fix it. | `pip install "mcp>=2,<3"`. |
 
-Codes 3 and 8 fire before anything is dialled. Codes 4 to 7 mean the link was
-tried. `tests/contract/test_mcp_exit_codes_documented.py` reads the `EXIT_*`
-constants out of the module and fails when one of them is undocumented, so this
-table cannot fall behind the executable.
+Codes 3, 8 and 9 fire before anything is dialled. Codes 4 to 7 mean the link
+was tried. `tests/contract/test_mcp_exit_codes_documented.py` reads the
+`EXIT_*` constants out of the module and fails when `configs/mcp/README.md`
+leaves one of them undocumented — that table cannot fall behind the executable.
+This one carries no such guard and is kept current by hand; when the two
+disagree, believe that file.
 
 Two invocations never reach any of that machinery and answer on a machine with
 no game, no sidecar and no SDK:
@@ -246,7 +251,7 @@ Neither side re-arms itself on recovery. Restart the sidecar with
 
 ## "Restore refused"
 
-`restore` will not run while Project Zomboid is open. This is an exception, not
+`restore-save` will not run while Project Zomboid is open. This is an exception, not
 a warning, and there is no flag to override it — restoring a save under a
 running game is how you get a corrupted one.
 

@@ -107,13 +107,14 @@ Now ask for something, through the MCP client you have configured:
 
 > "Eat something safe from my backpack."
 
-**Not through voice.** The companion in this build carries `arm`, `disarm` and
-`stop` into a running sidecar and nothing else: there is no channel that carries
-a *goal* from a second process, so a spoken "eat something" is refused and the
-companion answers «Не получилось.» `pz-agent voice check <phrase>` says so for
-any phrase, before you are in a game and wondering. See
-[`VOICE.md`](VOICE.md) for what voice does carry — which is the half that
-matters most, because "стоп" is a stop.
+**Or through voice, for the four goals it carries.** The companion routes a
+spoken «поешь» / «попей» / «почитай» / «продолжай» into a running sidecar over
+the Local Core RPC link as a typed `goal.submit` — a closed token, never the
+transcript — alongside `arm`-refusal, `disarm` and `stop`. Anything outside
+those four is refused with a sentence naming why, and
+`pz-agent voice check <phrase>` says which way any phrase would go, before you
+are in a game and wondering. See [`VOICE.md`](VOICE.md) for the full surface —
+and "стоп" still bypasses everything, link or no link.
 
 What happens:
 

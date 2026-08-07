@@ -4,12 +4,12 @@ Prepared to the gate in [`docs/RELEASE.md`](docs/RELEASE.md), whose "The final
 report" section lists nine things this document must state. They are §1 to §9
 below, in that order.
 
-**Base commit:** `dev` at `6f73bc0` (see below — it is refreshed each time this file is)
-**Versions:** product 0.1.0 · protocol 1.1 · schema 1.0 · mod 0.1.0 · supported build 42.20
+**Base commit:** `main` at `edeff8e` (see below — it is refreshed each time this file is)
+**Versions:** product 0.1.0 · protocol 1.1 · rpc protocol 1.0 · schema 1.0 · mod 0.1.0 · supported build 42.20
 
 A report cannot name the commit that contains it — the hash does not exist until
 the commit is made. The hash above is this report's parent. Check
-`git log 6f73bc0..HEAD` before trusting any number here against a newer tree.
+`git log edeff8e..HEAD` before trusting any number here against a newer tree.
 
 **Note the version.** The release candidate is named `v1.0.0-rc1`, and every
 version constant in the tree says `0.1.0`. No `1.0.0` exists in `version.py`,
@@ -17,13 +17,14 @@ version constant in the tree says `0.1.0`. No `1.0.0` exists in `version.py`,
 filename is a target, not a state.
 
 Every figure below was produced by running something at this commit. The
-previous revision of this document was written against `main` at `6a57f74`, 36
-commits back, and had drifted badly: it claimed 2338 Python tests (there are
-3677), 1269 Lua assertions (2875), 202 mypy files (271), 7 schemas (6), 30
-luacheck files (62), nine registered adapters (19) and an installer that placed
-17 files (30). None of that was dishonest when written. All of it was wrong by
-the time anyone read it, which is why this revision states its base commit at
-the top and why the numbers were re-measured rather than carried over.
+previous revision of this document was written against `dev` at `6f73bc0`, 78
+commits back, and had drifted: it claimed 3677 Python tests (there are 6581,
+and three of them now fail), 271 mypy files (341), 316 formatted files (424),
+6 schemas (10), 31 MCP tools (34), 62 luacheck files (63), a second skip that
+no longer exists, and a green gate where `scripts/check.sh` now exits 1. None
+of that was dishonest when written. All of it was wrong by the time anyone read
+it, which is why this revision states its base commit at the top and why the
+numbers were re-measured rather than carried over.
 
 ---
 
@@ -56,6 +57,10 @@ precisely so a scenario nobody ran cannot report a pass.
 the original graph — the mod's command executor, the seventeen game adapters,
 the model-backed planners, the live-test harness, the Windows RC and the
 handoff documentation — is recorded there under "The playable-agent branch".
+The release-candidate work after that — the Local Core RPC link, the typed goal
+channel and the voice route over it — is tracked in
+`docs/control/MASTER_PLAN.yaml` and `docs/control/STATUS.json`, which
+`docs/PROGRESS.md` points to.
 
 Measured at this commit:
 
@@ -63,7 +68,7 @@ Measured at this commit:
 | --- | --- |
 | `ActionName` members | 22 (17 owned by the mod's adapter files, 5 control plane) |
 | Adapters in the assembled registry | 19 |
-| MCP tools | 31, of which 19 submit an action |
+| MCP tools | 34, of which 19 submit an action |
 | MCP resources | 7, none subscribable |
 | CLI commands | 17 |
 | Capability probes | 12 |
@@ -155,8 +160,10 @@ does not exist (20–22, 29); two are a field or a variable read in one place an
 written in none, or written in one place and read nowhere (23, 28); and nine are
 both at once — a subsystem connected to nothing with documents, shipped
 archives, live scenarios or a governing agreement already resting on it (18, 19,
-24, 25, 26, 27, 30, 31, 32). The family is not closed. These are the most
-recently found, not the last there are.
+24, 25, 26, 27, 30, 31, 32). The family is not closed, and these are no longer
+the most recently found: the ones after them are numbered R-001 to R-007 in
+`docs/control/BLOCKERS.md`, found by the release-candidate work and recorded
+where that work is tracked rather than appended here.
 
 18. **`DiagnosticLog` was constructed nowhere, so the sidecar wrote no log.**
     Complete, rotating, redacting, level-filtered, well tested — and built only
@@ -192,7 +199,7 @@ recently found, not the last there are.
     one is `remember forget`, and it appeared in no document at all.
 22. **`docs/TROUBLESHOOTING.md` sent a user to `pz-agent status --explain`** for
     the food policy's rejection list, and said the thresholds are "in
-    configuration" when `[safety]` holds four keys and none of them is one.
+    configuration" when `[safety]` holds five keys and none of them is one.
     Found by the guard written for 20 and 21 rather than by review, which is the
     point of writing a guard instead of two corrections.
 23. **The mod could never publish `experimental`.** `CapabilityRuntime` reads
@@ -232,13 +239,20 @@ recently found, not the last there are.
     "Why `env` is empty" arguing against precisely this, all three shipped
     configurations carry `"env": {}`, and the test pinning that covered the
     checked-in files and stopped where the product started handing one out.
-29. **`docs/QUICKSTART.md` told a new user to command the agent by voice.** This
-    build carries arm, disarm and stop from a second process and no channel
-    carries a goal, so the route named in section 7 answers «Не получилось.»
+29. **`docs/QUICKSTART.md` told a new user to command the agent by voice.** When
+    this was found, the build carried arm, disarm and stop from a second process
+    and no channel carried a goal, so the route named in section 7 answered «Не
+    получилось.» — and the fix was to say so in the document. The channel has
+    since been built: the Local Core RPC link carries `goal.submit`,
+    `pz_agent_voice.plan_port.services_over_core_rpc` routes a spoken goal over
+    it, `pz-agent voice run` wires that route, and
+    `tests/contract/test_voice_goal_e2e.py` crosses the seam — so the QUICKSTART
+    passage that now says voice carries no goal is the half of this defect that
+    has gone stale in the opposite direction.
 30. **`voice run` wrote nothing to `logs/`** — defect 18's shape one package
     over, with `LOCAL_DEBUG_MAP.md` naming `logs/` for both voice symptoms
     including «стоп» heard while the character kept going.
-31. **The standalone installer in `installer/` is reachable from nothing** — 927
+31. **The standalone installer in `installer/` is reachable from nothing** — 948
     tested lines and a guide that reads as *the* install instructions, in no
     shipped artefact and run by nothing. Kept and labelled rather than deleted:
     it is the only path that works before anything is installed.
@@ -261,8 +275,8 @@ thing.
 **None.** Against build 42.20, zero engine symbols are confirmed.
 
 [`docs/GAME_API_VERIFICATION.md`](docs/GAME_API_VERIFICATION.md) lists every
-symbol the mod assumes, each marked `requires_live` with an empty "Actual"
-column. The capability probes report at best `available_unverified` from a
+symbol the mod assumes, each marked `requires_live` with an "Actual" column no
+live run has ever filled in. The capability probes report at best `available_unverified` from a
 static scan of the install's own Lua; only a live ack through `confirm()`
 promotes one to `verified`, and no live ack has ever been produced.
 
@@ -283,8 +297,9 @@ Two symbols deserve naming individually, because their failure modes are quiet:
 - **`isClient` / `isServer`** — the no-multiplayer gate rests on these. If
   neither can be read, an ordinary single-player session refuses every mutating
   command, which is the correct conservative outcome and is indistinguishable at
-  a glance from the agent being broken. They are the first rows in
-  `GAME_API_VERIFICATION.md` for that reason.
+  a glance from the agent being broken. They have their own section in
+  `GAME_API_VERIFICATION.md` — "The multiplayer reading — check this before
+  anything else" — for that reason.
 - **`ISTakeWaterAction`** — three places in this repository once stated three
   different argument orders. The document now records the one the mod actually
   calls, `:new(character, waterObject, amount, item)`. A build that orders them
@@ -294,25 +309,40 @@ Two symbols deserve naming individually, because their failure modes are quiet:
 
 ## 3. Tests and their results
 
-`scripts/check.sh` at this commit, every step:
+`scripts/check.sh` at this commit, every step — **and it exits 1**:
 
 ```
-ruff format        ok    316 files already formatted
-ruff lint          ok    All checks passed!
-mypy               ok    no issues found in 271 source files
-forbidden patterns ok    no stub bodies, no TODO markers, no eval/exec/loadstring, no secrets
-version sync       ok    product=0.1.0 protocol=1.1 schema=1.0 mod=0.1.0
-schema validity    ok    6 schema(s) valid
-playbook in sync   ok    docs/LIVE_TEST_PLAYBOOK.md matches its 20 scenarios
-pytest             ok    3677 passed, 2 skipped
-luacheck           ok    0 warnings / 0 errors in 62 files
-lua tests          ok    2875 assertions across 26 suites, 0 failed
+ruff format        ok      424 files already formatted
+ruff lint          FAILED  2 × RUF002 in tests/unit/test_voice_session.py
+mypy               ok      no issues found in 341 source files
+forbidden patterns ok      no forbidden patterns found
+version sync       ok      product=0.1.0 protocol=1.1 schema=1.0 mod=0.1.0
+schema validity    ok      10 schema(s) valid
+playbook in sync   ok      docs/LIVE_TEST_PLAYBOOK.md matches its 20 scenarios
+pytest             FAILED  6574 passed, 4 skipped, 3 failed
+luacheck           ok      0 warnings / 0 errors in 63 files
+lua tests          ok      2875 assertions across 26 suites, 0 failed
 ```
 
-**The two skips, named rather than summarised.** One is a capability-tier
-disagreement on `movement.move_to` in `test_mcp_action_coverage.py`; one is
-`test_capabilities_scanner.py` declining to assert that file permissions deny a
-read, because the suite runs as root. Neither is a missing optional dependency.
+**The gate is red, and saying so is what this report is for.** The three pytest
+failures: two in `tests/unit/test_master_plan.py`, where `check_master_plan.py`
+refuses the recorded plan (`E13-M01-T018` is PASS while the task it depends on
+is NOT_STARTED, and `docs/control/STATUS.json` describes the parent commit while
+files have changed since); one in `tests/unit/test_voice_plan_port.py`, where
+this very commit gave the goal channel's refusals their own sentences and left a
+test asserting the old «Не получилось.» The ruff failure is the same commit's
+docstring tripping RUF002 on Cyrillic. All three are the mid-flight state of the
+release-candidate work, not the subsystems this report describes — and none of
+that softens the fact that `main` does not pass its own gate today.
+
+**The four skips, named rather than summarised.** One is a capability-tier
+disagreement on `movement.move_to` in `test_mcp_action_coverage.py`; two are
+`test_mcp_server.py` declining to test the no-SDK refusal because the MCP SDK
+*is* installed in this environment; one is `test_teamon_bridge.py` on
+`subprocess.CREATE_NO_WINDOW`, which exists only on Windows. None is a missing
+optional dependency. The root-privileges skip in `test_capabilities_scanner.py`
+that the previous revision named is gone: the test now injects the refused read
+instead of provoking it with `chmod`.
 
 **On the Python matrix.** `.venv` runs 3.11.15 and that is the interpreter every
 number above came from. `python3.12` exists in this container but has no pytest
@@ -326,10 +356,10 @@ result observed here.
 engine globals. It proves the mod's logic. It proves nothing about Build 42.20,
 and its own docstrings say so.
 
-`tests/contract/` is where this build's characteristic defect gets caught. Ten
-seam tests exist because ten seams were found broken; each was mutation-checked,
-because a seam test that would not have failed is not evidence that the seam
-holds.
+`tests/contract/` is where this build's characteristic defect gets caught. It
+holds thirty-seven seam files now; the first ten existed because ten seams were
+found broken, each mutation-checked, because a seam test that would not have
+failed is not evidence that the seam holds.
 
 `tests/unit/test_lua_observation_contract.py` runs the mod's observation builder
 under `lua5.4` and puts its bytes through both gates the sidecar puts them
@@ -416,9 +446,11 @@ design; the sdist and the Windows package carry the mod.
 candidates are guesses. Detection reports an honest unknown rather than
 substituting the target build.
 
-**The Windows executables have never been built.** `docs/LIMITATIONS.md` warns
-that the launcher is unsigned; it has not been signed because it has not been
-compiled. See §8.
+**The Windows executables have now been built — by CI, not here.**
+`.github/workflows/windows.yml` compiled both with PyInstaller and went green at
+`276b9d9` (`docs/control/STATUS.json` records it, marked stale against this
+head). Nothing carried them back into `dist/`: the archive here still ships
+without them, and neither executable has been signed. See §8.
 
 ---
 
@@ -456,8 +488,8 @@ Full walkthrough: [`docs/QUICKSTART.md`](docs/QUICKSTART.md).
 
 ## 7. The commit hash
 
-`7ea7ea9` on `dev`. See the header for why this is the parent rather than the
-containing commit; `git log 7ea7ea9..HEAD --oneline` shows anything this
+`edeff8e` on `main`. See the header for why this is the parent rather than the
+containing commit; `git log edeff8e..HEAD --oneline` shows anything this
 document does not cover.
 
 ---
@@ -473,29 +505,34 @@ dist/pz-agent-windows-v1.0.0-rc1.zip
 
 **It is marked INCOMPLETE and it is not a release candidate by this project's
 own gate.** `BUILD-MANIFEST.json` records `complete: false`, `build_rc.py` exits
-1, and `scripts/check_release.py --rc` refuses:
+1, and `scripts/check_release.py --rc` refuses — now on the red suite as well as
+on the missing executables:
 
 ```
+[ok  ] archive:          pz-agent-windows-v1.0.0-rc1.zip, 69 entr(ies)
 [FAIL] archive.complete: the archive declares 2 missing file(s): bin/pz-agent.exe, bin/pz-agent-mcp.exe
-[FAIL] archive.bin:      missing from bin/: pz-agent.exe, pz-agent-mcp.exe
-[ok  ] archive.bat:      all 11 wrappers are at the root
-[ok  ] archive.digests:  68 file(s) match the digests recorded for them
 [ok  ] archive.claims:   the archive claims no live-test evidence
-[ok  ] tests:            3677 of 3679 passed, 2 skipped
+[ok  ] archive.bat:      all 11 wrappers are at the root
+[FAIL] archive.bin:      missing from bin/: pz-agent.exe, pz-agent-mcp.exe
+[ok  ] archive.digests:  68 file(s) match the digests recorded for them
+[FAIL] tests:            3 failure(s) and 0 error(s) in 6581 test(s)
+
+REFUSED v1.0.0-rc1: 3 of 7 check(s) failed.
 ```
 
 Both executables need PyInstaller on Windows. `.github/workflows/windows.yml`
-builds them on `windows-latest`; nothing in this Linux container can.
+builds them on `windows-latest`; nothing in this Linux container can. That
+workflow has since run green at `276b9d9`, building both on the runner — but the
+archive in `dist/` predates that run and was not rebuilt from it.
 
 `check_release.py --release` refuses additionally on
 `release/evidence-manifest.json`, which does not exist and is produced by
 `pz-agent live-test finalize` and by nothing else. That refusal is the gate
 working.
 
-No wheel or sdist was built at this commit: `uv` is not installed in this
-container. The hashes in the previous revision of this report
-(`fe649932…`, `e1f6d665…`) described artefacts from a build 34 commits ago and
-have been removed rather than repeated.
+No wheel or sdist was built at this commit. The pair in `dist/` still carries
+the hashes recorded in `dist/SHA256SUMS` by a build dozens of commits old
+(`fe649932…`, `e1f6d665…`); they describe that tree, not this one.
 
 ---
 
@@ -543,7 +580,7 @@ Project Zomboid Build 42.20 on Windows, and on nothing else.
 
 ### Things only a live run can settle
 
-9. **Every engine symbol in `docs/GAME_API_VERIFICATION.md`** — 48 rows marked
+9. **Every engine symbol in `docs/GAME_API_VERIFICATION.md`** — 50 rows marked
    `requires_live`. Note that `grep -rn "Build 42:" pz-mod/` returns 6 lines
    covering roughly 8 symbols, so it is *not* a complete list of the guesses;
    the document is.
@@ -572,11 +609,13 @@ Project Zomboid Build 42.20 on Windows, and on nothing else.
 It does not say the architecture is ready and only needs testing. It does not
 say a user can take it from here.
 
-It says: twenty-eight tasks are implemented and covered by 3677 Python tests and
-2875 Lua assertions; thirty-two defects were found by seam tests and closed, one
-of them a safety gate that had been documented for weeks and never written; two
-tasks are blocked on a game that does not exist in this environment; and §9 is
-the complete list of what closing them requires.
+It says: twenty-eight tasks are implemented and covered by 6581 Python tests and
+2875 Lua assertions — 6574 of the Python tests passing at this commit, with §3
+naming the three that are not and the lint that fails beside them; thirty-two
+defects were found by seam tests and closed, one of them a safety gate that had
+been documented for weeks and never written; two tasks are blocked on a game
+that does not exist in this environment; and §9 is the complete list of what
+closing them requires.
 
 Where a claim could not be checked, this report says so rather than rounding up.
 That is the same rule the code follows: success means a postcondition was

@@ -10,15 +10,15 @@ exactly how to run it.
 | | |
 |---|---|
 | Repository | `natural0101/poject-zombigpt` |
-| Branch | `feature/playable-agent-1.0` |
-| Base | `dev` |
-| Merged into `main`? | **No.** Merging is the local agent's final step, after evidence exists. |
+| Branch | `main` |
+| Base | — `feature/playable-agent-1.0` (base `dev`) is merged in, and `main` has moved past it |
+| Merged into `main`? | **Yes.** An earlier revision of this row said no, and that merging would wait for live evidence. The merge has since happened — `fef7edd` brought the Windows, MCP and voice runtime work into `main` — and evidence still does not exist: all twenty scenarios remain `NOT_RUN`. What still waits for evidence is the tag and the release. See §4. |
 | Tag | **None.** `v1.0.0` is deliberately not created. See §4. |
-| Release candidate | `dist/pz-agent-windows-v1.0.0-rc1.zip` |
+| Release candidate | `dist/pz-agent-windows-v1.0.0-rc1.zip` — built here without the two Windows executables; see §5 |
 
 ```
 git fetch --all --prune
-git checkout feature/playable-agent-1.0
+git checkout main
 git pull --ff-only
 git rev-parse HEAD
 ```
@@ -75,7 +75,8 @@ python -c "import inspect, pz_agent_cli.app as a; print('planner=' in inspect.ge
 ```
 
 `True` is what you want. `tests/contract/test_sidecar_planner_wiring.py` holds
-it: removing the wiring fails eight of its assertions.
+it: removing the wiring fails fourteen of its fifteen tests, measured by doing
+exactly that in a scratch copy of the tree.
 
 ASSISTED mode never went through the planner at all — its commands come from
 MCP — so nothing above affects it.
@@ -129,15 +130,25 @@ call returns is that the *request* is in force, not that the game has already
 stopped; the second is not observable from outside the game, and nothing here
 pretends otherwise.
 
-**A spoken goal reaches no planner.** Nothing in this build carries a goal from
-a second process into the running sidecar, and writing one to the command queue
-would put the microphone past the reflex guard, the capability gate and the
-policy engine in a single step. So goals are refused, `status` says so, and
-`voice check` says so for any goal phrase. Stopping by voice works; commanding
-by voice does not.
+**A spoken goal now reaches the planner.** An earlier revision of this
+paragraph said nothing carried a goal from a second process into the running
+sidecar, and that goals were therefore refused. That stopped being true when
+the Local Core RPC link landed (`CORE_RPC.md`, in the repository's `docs`
+directory — not carried in the release archive): `voice run` submits a
+spoken goal to the running sidecar over `goal.submit`, by the same method, the
+same codec and the same refusals a tool call uses, so the microphone is not a
+privileged caller — the seam is `pz_agent_cli/voice.py`. The channel is
+deliberately narrow: a transcript resolves to one of four closed tokens —
+`eat`, `drink`, `read`, `resume` (`VoiceGoal` in `pz_agent_voice/messages.py`)
+— or to nothing, and no transcript text crosses the boundary. A goal needs a
+running sidecar: `voice check` dials `goal.status` before saying where a goal
+would go, and names `pz-agent start` when nothing answers. The stop
+deliberately does not take the link, for the reason above — a goal needs a
+sidecar, and a stop has to work when nothing is running.
 
-**Windows packaging.** Self-contained executables, the BAT files listed in §6,
-an installer and uninstaller, and the RC ZIP.
+**Windows packaging.** Self-contained executables — PyInstaller specs, built
+only by the Windows CI, so absent from a ZIP built in this container; see §5 —
+the BAT files listed in §6, an installer and uninstaller, and the RC ZIP.
 
 ## 3. What was verified, and how
 
@@ -145,15 +156,27 @@ Everything below ran and passed in the remote environment:
 
 - the Python test suite (unit, contract and integration) under **both**
   supported Python versions, in clean editable installs. That claim is now
-  **older than the tree**: the suite measures 3471 passed and 2 skipped at the
-  current commit, and only Python 3.11.15 has pytest installed in this
-  container, so the 3.12 half is CI configuration rather than a result observed
-  here. Treat the matrix as declared, not demonstrated. This line had been standing
+  **older than the tree**: at the commit this revision was measured against
+  (`edeff8e`) the suite measures 6574 passed, 4 skipped and **3 failed**. Two of
+  the three are the master-plan gate refusing the recorded plan — a task marked
+  PASS depends on one still `NOT_STARTED`, and `STATUS.json` describes an older
+  commit — and the third is `tests/unit/test_voice_plan_port.py::
+  test_a_goal_the_channel_refuses_is_spoken_about_and_not_echoed`: the
+  goal-channel work gave the "busy" refusal its own sentence and the test still
+  expects the generic one. The suite is **not green today**, and only
+  Python 3.11.15 has pytest installed in this container, so the 3.12 half is CI
+  configuration rather than a result observed here. Treat the matrix as
+  declared, not demonstrated. This line had been standing
   since long before voice, memory, the live-test runner and the packaging landed
   — it was re-run rather than inherited, because a claim about a build is only
   about the build it was made against;
-- `mypy` in strict mode over the whole project;
-- `ruff format --check` and `ruff check`;
+- `mypy` in strict mode over the whole project — still clean when re-run at the
+  current commit;
+- `ruff format --check` and `ruff check`. Format is still clean;
+  `ruff check` re-run at the current commit finds **2 errors**, both RUF002
+  confusable-Cyrillic hits in a docstring the in-flight goal-channel work added
+  to `tests/unit/test_voice_session.py` without the `noqa` guard its siblings
+  carry;
 - the mod's own Lua suite under a plain interpreter, with fake engine globals;
 - `luacheck` over the mod and its tests;
 - schema validity (every schema compiles as Draft 2020-12) and version sync
@@ -198,9 +221,11 @@ Everything below ran and passed in the remote environment:
   could not find, one line each, and reports how many it copied and how many it
   skipped rather than a bare success — on an untouched workspace that is "copied
   0", and every skipped line is a path you can go and look at;
-  `pz-agent-mcp --describe` answers with the whole published surface — 31 tools
-  and 7 resources — with no game, no sidecar and no MCP SDK installed, which is
-  what makes it the thing to run first when writing a client;
+  `pz-agent-mcp --describe` answers with the whole published surface — 34 tools
+  and 7 resources, re-measured at the current commit after the goal channel
+  added `pz_goal_submit`, `pz_goal_status` and `pz_goal_cancel` — with no game
+  and no sidecar, which is what makes it the thing to run first when writing a
+  client;
 - **`restore-save`, both directions.** A save was corrupted — one file
   rewritten, one deleted — and restored from a backup taken by `backup-save`;
   both came back. Then, with a live game heartbeat in the exchange directory,
@@ -254,15 +279,22 @@ following was done, and none of it is claimed:
   at `experimental` and why `consume.drink_source` refuses to treat the vessel's
   own volume as proof of anything.
 - **`v1.0.0` and its GitHub Release.** `scripts/check_release.py --release`
-  fails today because `release/evidence-manifest.json` does not exist. That
-  failure is the gate working.
+  fails today — it refuses `v1.0.0` with 4 of its 8 checks: no
+  `release/evidence-manifest.json`, no test report handed to the gate, and the
+  RC archive missing the two executables in both the completeness and the
+  `bin/` check. That failure is the gate working.
 
 The RC ZIP is built and its SHA-256 is printed by the build. That hash covers
 the artefact, not any claim about it having been run in a game.
 
 ## 5. Installing
 
-From the RC ZIP (no Python, no git needed):
+From the RC ZIP (no Python, no git needed — **but only from an RC built on
+Windows**; the Windows CI builds `bin\pz-agent.exe` and `bin\pz-agent-mcp.exe`
+with PyInstaller, and the ZIP in this container's `dist/` was built without
+them. Its own `BUILD-MANIFEST.json` says so — `complete: false`, the two
+executables listed as missing — and `install.bat` then falls back to a
+`pz-agent` already on `PATH`, which a clean machine does not have):
 
 ```
 install.bat

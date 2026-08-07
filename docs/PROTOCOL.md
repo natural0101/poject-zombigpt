@@ -1,15 +1,18 @@
 # Protocol
 
-There are two wire boundaries in this system, and they are versioned apart.
+There are three wire boundaries in this system, and they are versioned apart.
 
 | Boundary | Between | Version constant | Value on this build |
 | --- | --- | --- | --- |
 | Exchange protocol | Lua mod ↔ sidecar | `PROTOCOL_VERSION` | `1.1` |
 | Payload schema | stamped into every observation, ack, event and plan | `SCHEMA_VERSION` | `1.0` |
 | Local Core RPC | sidecar ↔ a local client process (today `pz-agent-mcp`) | `RPC_PROTOCOL_VERSION` | `1.0` |
+| Voice bridge | companion ↔ the TeamON bridge child's stdin/stdout | `BRIDGE_PROTOCOL_VERSION` | `1.0` |
 
-All three live in `pz_agent_core/version.py`, which is the single source of
-truth; `scripts/check_versions.py` fails the release when a restatement drifts.
+The first three live in `pz_agent_core/version.py`, which is the single source
+of truth; `scripts/check_versions.py` fails the release when a restatement
+drifts. `BRIDGE_PROTOCOL_VERSION` lives apart, in `pz_agent_voice.teamon`, and
+`check_versions.py` does not police it.
 
 The mod and the sidecar share no memory, no socket and no process. They
 communicate through a set of files in the user's Lua directory, written as a
@@ -20,8 +23,8 @@ blob.
 
 ## What is actually in `schemas/`
 
-Eight files, and this section describes what each one contains rather than what
-a reader might expect it to. All eight declare
+Ten files, and this section describes what each one contains rather than what
+a reader might expect it to. All ten declare
 `$schema: https://json-schema.org/draft/2020-12/schema` and an `$id` under
 `https://example.local/pz-agent/`.
 
@@ -35,8 +38,16 @@ a reader might expect it to. All eight declare
 | `config.schema.json` | PZ Agent Configuration | `game`, `session`, `safety`, `planner`, `voice` | yes |
 | `core_rpc_request.schema.json` | PZ Agent Local Core RPC Request | `format`, `protocol`, `id`, `method`, `params` | yes |
 | `core_rpc_response.schema.json` | PZ Agent Local Core RPC Response | `format`, `protocol`, `id`, `ok` | yes |
+| `goal.schema.json` | PZ Agent Goal Request | `kind`, `idempotency_key`, `params` | yes |
+| `teamon_bridge.schema.json` | PZ Agent TeamON Bridge Message | `v`, `type` | yes — per `oneOf` branch |
 
-Only three of the eight are exercised by a conformance test.
+The two newest documents do not describe the journal at all: `goal.schema.json`
+is one goal submission as `goal.submit` carries it over the Core RPC link and
+`pz_goal_submit` accepts it over MCP, and `teamon_bridge.schema.json` is one
+line of the voice bridge's stdin/stdout protocol. Neither payload ever touches
+the exchange directory.
+
+Eight of the ten are exercised by a test.
 `tests/contract/test_schema_conformance.py` validates `command.schema`,
 `action_result.schema` and `observation.schema` in both directions — what
 `to_dict()` emits must validate, and what the schema permits must parse — and
@@ -44,12 +55,16 @@ also asserts that every `ActionName`, `ActionStatus`, `ReasonCode`,
 `SessionMode`, `DangerLevel`, `ContainerKind`, `RiskClass`, `ActionOwnership`
 and `CapabilityState` member appears where the schema names it.
 `tests/contract/test_core_rpc_schema_conformance.py` covers the two Core RPC
-documents. `plan.schema.json` is checked from a unit test
+documents, `tests/contract/test_goal_schema_conformance.py` the goal document
+and `tests/contract/test_teamon_schema_conformance.py` the bridge document —
+both in the same two directions. `plan.schema.json` is checked from a unit test
 (`tests/unit/test_planner_plan.py`), which validates a built plan against it and
 pins `MAX_PLAN_STEPS` and `MAX_SUMMARY_CHARS` to the schema's own numbers.
 
 **`event.schema.json` and `config.schema.json` are validated by nothing in this
-tree.** Nothing loads them at runtime and no test asserts against them.
+tree.** Nothing loads them at runtime and no test asserts against them —
+`scripts/check_schemas.py` does compile all ten, but compiling a schema
+validates no payload.
 `config.schema.json` has visibly drifted from `pz_agent_cli.config.SCHEMA`,
 which is what actually validates `config.toml`:
 
@@ -80,8 +95,8 @@ of them is a typo this document is entitled to correct:
 `pz_agent_cli.autonomy.build_planner` clamps the configured value with
 `min(config planner.max_steps, 5)` and says so in a comment. The MCP path's `8`
 is *not* clamped anywhere this document could find, and
-`PlanProposalRequest.__post_init__` raises `ValueError` for a `max_steps` above
-5. What a client actually gets back from `pz_plan_execute` with the default
+`PlanRequest.__post_init__` (`pz_agent_core.planner.provider`) raises
+`ValueError` for a `max_steps` above 5. What a client actually gets back from `pz_plan_execute` with the default
 limits has **not been verified here** — it needs a running sidecar, which no
 test in this tree stands up for that call.
 
@@ -270,7 +285,7 @@ members of `ReasonCode`:
 ## Observations
 
 `schemas/observation.schema.json`, `schema_version` const `"1.0"`. The largest
-of the eight documents and the only one that is not uniformly closed.
+of the ten documents and the only one that is not uniformly closed.
 
 Required: `schema_version`, `session_id`, `seq`, `timestamp_ms`, `game`,
 `player`, `safety`, `action`. Optional: `full` (boolean, default true),
@@ -353,9 +368,11 @@ an open object.
 `plan_changed`, `voice_input`, `voice_output`, `diagnostic`.
 
 Two of those names — `voice_input` and `voice_output` — are the only place the
-word "voice" appears in `schemas/`. Nothing in this tree emits or consumes them;
-they are a slot the schema reserves. Do not read them as evidence that voice
-events cross this journal.
+word "voice" appears in the journal's own schemas; its one other appearance in
+`schemas/` is `teamon_bridge.schema.json`, which describes the voice bridge's
+stdin/stdout link, not this journal. Nothing in this tree emits or consumes
+them; they are a slot the schema reserves. Do not read them as evidence that
+voice events cross this journal.
 
 ## Plans
 

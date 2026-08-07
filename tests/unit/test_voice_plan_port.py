@@ -108,6 +108,7 @@ _CLOCK_GRANULE: Final = 0.016
 #: however the table was edited.
 STOP_ACK: Final = "Остановился."
 GOAL_REFUSED: Final = "Не получилось."
+QUEUE_BUSY: Final = "Я ещё занят прошлой задачей."
 EATING: Final = "Ищу, что съесть."
 DRINKING: Final = "Ищу, что выпить."
 READING: Final = "Ищу, что почитать."
@@ -611,10 +612,11 @@ def test_a_goal_the_channel_refuses_is_spoken_about_and_not_echoed(start: Start)
     """The channel answers with a refusal rather than raising.
 
     ``QUEUE_REJECTED`` is what the queue answers when its cap is reached and when
-    a goal is already active. The companion says something about it — silence is
-    the failure a voice interface cannot signal — and the turn's detail carries
-    the reason code and the active goal's id, both of which the core minted. The
-    core's own English sentence stays out of the loudspeaker.
+    a goal is already active. The companion now says which of those it is — the
+    busy sentence, not the generic failure — because "wait" and "rephrase" are
+    different acts. The turn's detail carries the reason code and the active
+    goal's id, both of which the core minted. The core's own English sentence
+    stays out of the loudspeaker.
     """
     refusal = {
         "reason_code": "QUEUE_REJECTED",
@@ -627,7 +629,7 @@ def test_a_goal_the_channel_refuses_is_spoken_about_and_not_echoed(start: Start)
     turn = session.handle(said("агент, поешь"))
 
     assert sidecar.methods == ["goal.submit"]
-    assert spoken(session) == [GOAL_REFUSED]
+    assert spoken(session) == [QUEUE_BUSY]
     assert [message.kind for message in session.queue.pending] == [OutputKind.ERROR]
     assert session.plan_active is False
     assert "QUEUE_REJECTED" in turn.detail

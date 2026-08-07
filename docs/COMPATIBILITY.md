@@ -179,9 +179,10 @@ so once the character is asleep there is no timed action to interrupt and no
 queue entry to cancel, and a panic stop cannot reach them.
 
 `eat_percentage` is a good example of why the state matters. If percentage
-eating is verified, the food policy picks a fraction so the character neither
-overeats nor wastes a large item on a small need. If it is not, the policy falls
-back to whole units — and says so in the rationale.
+eating is usable — `verified` or `available_unverified` from the scan — the food
+policy picks a fraction so the character neither overeats nor wastes a large
+item on a small need. If it is not, the policy falls back to whole units — and
+says so in the rationale, naming the probe's state.
 
 ---
 

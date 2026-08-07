@@ -28,11 +28,11 @@ grep -rn "Build 42:" pz-mod/
 ```
 
 **Это не исчерпывающий список.** Команда возвращает шесть строк в двух файлах,
-а `docs/GAME_API_VERIFICATION.md` помечает `requires_live` пятьдесят два
-символа — то есть grep покрывает примерно восьмую часть неподтверждённого.
+а `docs/GAME_API_VERIFICATION.md` помечает `requires_live` пятьдесят
+символов — то есть grep покрывает примерно восьмую часть неподтверждённого.
 Полный перечень — в этом документе; grep удобен, чтобы быстро прыгнуть к
 комментарию, но не для того, чтобы решить, что символ в порядке, раз его там
-нет. Почти каждый провал первого живого прогона будет одним из пятидесяти двух.
+нет. Почти каждый провал первого живого прогона будет одним из пятидесяти.
 
 ## 1. Прочитай перед тем, как что-либо запускать
 
@@ -55,7 +55,7 @@ grep -rn "Build 42:" pz-mod/
 
 ```
 git fetch --all --prune
-git checkout feature/playable-agent-1.0
+git checkout main
 git pull --ff-only
 
 install.bat
@@ -171,8 +171,9 @@ resume-live-tests.bat
    по каждому артефакту. Он откажется, если чего-то не хватает, и назовёт чего.
 6. `python scripts/check_release.py --release` — гейт, который сейчас падает и
    обязан падать, пока нет манифеста с живыми доказательствами.
-7. Только теперь: merge в `dev`, затем в `main`, тег `v1.0.0`, GitHub Release с
-   ZIP и его SHA-256.
+7. Только теперь: тег `v1.0.0` на `main` (ветки уже слиты — работа шла в
+   `feature/playable-agent-1.0`, ушла в `dev` и затем в `main`), GitHub
+   Release с ZIP и его SHA-256.
 
 Порядок именно такой. Тег ставится после того, как доказательства собраны, а не
 до.
@@ -195,8 +196,12 @@ The prompt above is self-contained. Two things are worth saying out loud to the
 person running it:
 
 - **The remote stage deliberately did not tag v1.0.0.** The release gate
-  (`scripts/check_release.py --release`) fails today, on purpose, because
-  `release/evidence-manifest.json` does not exist. That failure is the design
-  working, not a broken build.
-- **The branch is `feature/playable-agent-1.0` and it was not merged.** Merging
-  is the local agent's last step, after evidence exists.
+  (`scripts/check_release.py --release`) fails today, on purpose:
+  `release/evidence-manifest.json` does not exist, no test report is handed to
+  the gate, and the RC archive lacks the two executables only a Windows
+  PyInstaller build can produce. Every one of those is a live-only gap. That
+  failure is the design working, not a broken build.
+- **The playable-agent work is already merged.** `feature/playable-agent-1.0`
+  went into `dev` and then `main`, and later runtime fixes landed on `main`
+  after it — deploy from `main`. The local agent's last step is the tag, after
+  evidence exists, not a merge.

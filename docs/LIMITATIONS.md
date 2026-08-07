@@ -25,10 +25,11 @@ this repository is a claim about code, not about the game.**
 **2. The TeamON voice bridge is exercised only against a fake subprocess.**
 `tests/contract/test_teamon_bridge_e2e.py` launches a real child process over a
 real pipe and speaks the real JSONL framing to it — but the child is a script
-the test writes to a temporary directory, and it is built to be impossible to
-mistake for the real thing: it refuses to start without `--acknowledge-fake`, it
-announces an implementation name that is not in `SUPPORTED_VOICE_ADAPTERS`, and
-it says `live: false` in its handshake. Nothing in that file imports the vendor
+the test writes to a temporary directory at run time — so nothing a build or an
+import walk can reach speaks this protocol — and it is built to be impossible to
+mistake for the real thing: it refuses to start without `--acknowledge-fake`, so
+a configuration pointed at it by accident meets a program that exits non-zero
+with nothing on stdout instead of a convincing handshake. Nothing in that file imports the vendor
 SDK, opens a microphone or produces a sound. What is proven is the *wire
 contract* — framing, bounds, refusals, process lifetime, kill behaviour. What is
 not proven is that a bridge written against the real SDK behaves the way that
@@ -124,7 +125,7 @@ the SDK is present but no `TeamONClient` was supplied — because no binding fro
 the vendor surface has been verified from this repository. Whoever has the SDK
 either writes the three methods and passes the client to
 `select_adapter(..., client=...)`, or runs the bridge program on the far end of
-`pz_agent_voice.bridge`. See [`VOICE.md`](VOICE.md) for which of those the CLI
+`pz_agent_voice.teamon`. See [`VOICE.md`](VOICE.md) for which of those the CLI
 currently wires.
 
 **`config.schema.json` is loaded by nothing and has drifted.** No code and no
@@ -141,8 +142,8 @@ tabulates the differences. Treat the code as the contract.
 a plan at 5 steps; `pz_plan_execute` publishes — and *defaults to* — 8;
 `planner.max_steps` in `config.toml` accepts up to 32. The CLI clamps the
 configured value to 5 explicitly. The MCP path's 8 is not clamped anywhere this
-document could find, and `PlanProposalRequest.__post_init__` raises `ValueError`
-above 5. **What a client actually gets back from `pz_plan_execute` with default
+document could find, and the core planner's `PlanRequest.__post_init__` raises
+`ValueError` above 5. **What a client actually gets back from `pz_plan_execute` with default
 limits is unverified**: it needs a sidecar serving the call, which the point
 above says nothing stands up.
 
