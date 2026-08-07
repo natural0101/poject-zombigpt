@@ -475,6 +475,63 @@ SPAWN_GRACE_S: Final = 0.3
 SPAWN_LOG_TAIL: Final = 400
 
 
+@dataclass(frozen=True, slots=True)
+class SpawnedProcess:
+    """A handle on a child this process started, and the four questions to ask it.
+
+    :func:`_default_spawner` returns only a pid, because that is what a
+    supervisor publishes: the child is detached and outlives this process, so a
+    handle would be meaningless to a later ``status`` call reading a file.
+
+    A *test* is the other case. It starts a child, wants to know whether it is
+    still running, and has to stop it afterwards — and the portable way to do
+    all three is the handle, not the pid. ``os.kill(pid, 0)`` is not a liveness
+    check on Windows: CPython maps it to ``TerminateProcess``, so it kills what
+    it was asked about. ``signal.SIGKILL`` does not exist there at all.
+
+    So the handle is exposed and the pid is derived from it, rather than tests
+    reaching for POSIX signals that the supported platform does not have.
+    """
+
+    #: The child's process id, which is what the supervisor records.
+    pid: int
+    _process: subprocess.Popen[bytes]
+
+    def poll(self) -> int | None:
+        """The exit code, or None while it is still running."""
+        return self._process.poll()
+
+    def terminate(self) -> None:
+        """Ask it to stop. ``TerminateProcess`` on Windows, ``SIGTERM`` elsewhere."""
+        self._process.terminate()
+
+    def kill(self) -> None:
+        """Stop it without asking."""
+        self._process.kill()
+
+    def wait(self, timeout: float | None = None) -> int:
+        """Reap it. Raises :class:`subprocess.TimeoutExpired` past *timeout*."""
+        return self._process.wait(timeout=timeout)
+
+    def stop(self, *, timeout: float = 5.0) -> None:
+        """Terminate, then kill if it did not go. For a test's teardown."""
+        self.terminate()
+        try:
+            self._process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            self._process.kill()
+            self._process.wait(timeout=timeout)
+
+
+def spawn_detached(argv: Sequence[str], cwd: Path, log_path: Path) -> SpawnedProcess:
+    """Start a detached child and confirm it is still there. Returns the handle.
+
+    The whole of :func:`_default_spawner`'s work, with the handle kept rather
+    than discarded. See :class:`SpawnedProcess` for why a caller might want it.
+    """
+    return _spawn(argv, cwd, log_path)
+
+
 def _default_spawner(argv: Sequence[str], cwd: Path, log_path: Path) -> int:
     """Start a detached child, confirm it is still there, and return its pid.
 
@@ -500,6 +557,11 @@ def _default_spawner(argv: Sequence[str], cwd: Path, log_path: Path) -> int:
     ``SPAWN_GRACE_S`` after it was spawned. A child that dies later is a
     different failure, and ``status`` is what reports that one.
     """
+    return _spawn(argv, cwd, log_path).pid
+
+
+def _spawn(argv: Sequence[str], cwd: Path, log_path: Path) -> SpawnedProcess:
+    """The spawn itself. Shared by the pid-returning and handle-returning forms."""
     log_path.parent.mkdir(parents=True, exist_ok=True)
     extra: dict[str, Any] = {}
     if os.name == "nt":
@@ -531,7 +593,7 @@ def _default_spawner(argv: Sequence[str], cwd: Path, log_path: Path) -> int:
         # it. Holding the reference until then says so, rather than leaving a
         # warning for someone to explain away.
         _DETACHED_CHILDREN.append(process)
-        return process.pid
+        return SpawnedProcess(pid=process.pid, _process=process)
     raise SpawnDiedError(pid=process.pid, exit_code=exited, log_tail=_log_tail(log_path))
 
 

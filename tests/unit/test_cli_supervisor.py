@@ -30,6 +30,7 @@ from pz_agent_cli.supervisor import (
     game_running_for_restore,
     list_processes,
     probe_game_running,
+    spawn_detached,
 )
 from pz_agent_core.protocol import SessionMode
 from pz_agent_core.session.heartbeat import Heartbeat, Peer, PeerLiveness
@@ -549,13 +550,18 @@ class TestTheChildIsConfirmedAlive:
         """The other direction, without which a gate that always refuses passes."""
         log = tmp_path / "sidecar.out"
 
-        pid = _default_spawner([sys.executable, "-c", "import time; time.sleep(30)"], tmp_path, log)
+        # The handle, not the pid. `os.kill(pid, 0)` is not a liveness check on
+        # Windows — CPython maps it to TerminateProcess, so it kills what it was
+        # asked about — and `signal.SIGKILL` does not exist there at all. Both
+        # made this test unrunnable on the platform the release targets.
+        child = spawn_detached([sys.executable, "-c", "import time; time.sleep(30)"], tmp_path, log)
 
-        assert pid > 0
         try:
-            os.kill(pid, 0)
+            assert child.pid > 0
+            assert child.poll() is None, "the child was reported started and is already gone"
         finally:
-            os.kill(pid, signal.SIGKILL)
+            child.stop()
+        assert child.poll() is not None, "the child outlived the test"
 
     def test_start_surfaces_the_death_and_claims_no_pid(self, tmp_path: Path) -> None:
         """A record for a process already gone would make status say STOPPED.

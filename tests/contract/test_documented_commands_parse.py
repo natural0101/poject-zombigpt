@@ -30,6 +30,7 @@ from typing import Final
 import pytest
 
 from pz_agent_cli.app import build_parser
+from pz_agent_core.platform.paths import portable_relative_path
 from pz_agent_mcp.__main__ import build_parser as mcp_parser
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[2]
@@ -129,7 +130,9 @@ def _invocations() -> list[tuple[str, str, list[str]]]:
                     # command; it does not tell anyone to type it bare. A block
                     # is different — what is in one is what a reader copies.
                     continue
-                built.append((f"{path.relative_to(REPO_ROOT)}:{number}", raw.strip(), argv))
+                built.append(
+                    (f"{portable_relative_path(path, REPO_ROOT)}:{number}", raw.strip(), argv)
+                )
     assert built, "no invocations were extracted; the pattern has stopped matching"
     return built
 
@@ -191,7 +194,9 @@ def _mcp_invocations() -> list[tuple[str, str, list[str]]]:
                         # A bare mention of the program by name is not an
                         # instruction; in a block it is one, and is checked.
                         continue
-                    built.append((f"{path.relative_to(REPO_ROOT)}:{number}", raw.strip(), argv))
+                    built.append(
+                        (f"{portable_relative_path(path, REPO_ROOT)}:{number}", raw.strip(), argv)
+                    )
     return built
 
 
