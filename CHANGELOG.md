@@ -37,6 +37,16 @@ drift out of sync with `pz_agent_core.version`.
   gained an optional `on_dispatch` observer and the loop pairs the two. An
   action refused before dispatch is recorded with its reason and no command,
   because that is the case an operator is most likely to be reading a trace for.
+- **`live-test collect` takes the trace, which no scenario knows to ask for.**
+  `collect` builds its file list from each scenario's declared `logs`, and all
+  twenty of those lists were written when nothing in the product produced a
+  trace — so the newest piece of evidence would have stayed in the workspace
+  while `docs/LOCAL_GAME_HANDOFF.md` told an operator to replay it from the
+  evidence. The current file and every rotated generation are now copied into
+  the scenario's `logs/` unconditionally, alongside the journals and snapshots
+  that are collected the same way. The current file is named rather than
+  globbed, so its absence is *reported*; the rotated generations are globbed,
+  because a scenario short enough not to rotate is not missing anything.
 - **A rotated trace stays replayable from its first line.** Found by writing the
   first one: `replay_observations` refuses an observation diff it has no
   baseline for, and a rotation that fell on a diff put one at the top of the new

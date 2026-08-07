@@ -9,7 +9,7 @@ green · `wip` in progress · `todo` not started · `live` blocked on a step tha
 physically requires a running game.
 
 Last updated: 28 of 30 tasks closed; T029 and T030 are blocked on a live game,
-not deferred. 3542 Python tests and 2864 Lua assertions across 26 suites,
+not deferred. 3544 Python tests and 2864 Lua assertions across 26 suites,
 mypy strict over 266 files, `scripts/check.sh` green — measured under Python
 3.11.15, which is the only interpreter with the suite installed here. CI
 declares a 3.11/3.12 matrix; that is configuration, not a result observed in

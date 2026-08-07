@@ -19,7 +19,7 @@ from typing import Any
 
 import pytest
 
-from pz_agent_cli.context import EXIT_FAILURE, EXIT_OK
+from pz_agent_cli.context import EXIT_FAILURE, EXIT_OK, TRACE_NAME, resolve_workspace
 from pz_agent_cli.livetest.evidence import (
     EvidenceLayout,
     LiveTestError,
@@ -1151,6 +1151,45 @@ class TestCommands:
 
         copied = EvidenceLayout(root).logs_dir(MOVE) / "console.txt"
         assert copied.read_text(encoding="utf-8") == "a lua error"
+
+    def test_collect_takes_the_trace_no_scenario_knows_to_ask_for(
+        self, prepared: tuple[CliWorld, Path]
+    ) -> None:
+        """The evidence a failed scenario is diagnosed from, and the newest file.
+
+        The twenty scenarios' ``logs`` lists were written when nothing produced
+        a trace, so none of them names one. Collecting only what they declare
+        would leave `pz-agent replay` — the command the handoff tells an
+        operator to run on the evidence — with nothing in the evidence to read.
+        """
+        world, root = prepared
+        workspace = resolve_workspace(world.ctx)
+        workspace.trace_dir.mkdir(parents=True, exist_ok=True)
+        (workspace.trace_dir / TRACE_NAME).write_text("{}\n", encoding="utf-8")
+
+        cli(world, root, "collect", "--scenario", MOVE)
+
+        copied = EvidenceLayout(root).logs_dir(MOVE) / TRACE_NAME
+        assert copied.is_file(), "the trace was left behind in the workspace"
+
+    def test_collect_takes_the_rotated_generations_of_the_trace_too(
+        self, prepared: tuple[CliWorld, Path]
+    ) -> None:
+        """A scenario long enough to rotate is the one worth having in full.
+
+        The current file alone would be the last few minutes of a two-hour run,
+        which is rarely the part that went wrong.
+        """
+        world, root = prepared
+        workspace = resolve_workspace(world.ctx)
+        workspace.trace_dir.mkdir(parents=True, exist_ok=True)
+        (workspace.trace_dir / TRACE_NAME).write_text("{}\n", encoding="utf-8")
+        (workspace.trace_dir / f"{TRACE_NAME}.1").write_text("older\n", encoding="utf-8")
+
+        cli(world, root, "collect", "--scenario", MOVE)
+
+        logs = EvidenceLayout(root).logs_dir(MOVE)
+        assert (logs / f"{TRACE_NAME}.1").read_text(encoding="utf-8") == "older\n"
 
     def test_resume_reports_when_there_is_nothing_left(
         self, prepared: tuple[CliWorld, Path]
