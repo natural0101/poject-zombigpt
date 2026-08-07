@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/pz-agent/core_rpc_request.schema.json",
+  "title": "PZ Agent Local Core RPC Request",
+  "description": "One call from a local client — today the MCP executable — to the sidecar's Core RPC server. Local only: the transport is a Windows named pipe or a Unix socket, never a network address. The `protocol` const records what this build emits; a decoder accepts any peer whose major matches, because a minor bump only adds methods.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "protocol", "id", "method", "params"],
+  "properties": {
+    "format": {
+      "const": "pz-agent-core-rpc/1"
+    },
+    "protocol": {
+      "const": "1.0"
+    },
+    "id": {
+      "description": "Chosen by the client and echoed back. Opaque to the server; an answer carrying a different one is refused rather than matched.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "method": {
+      "description": "A dotted name from the closed set the router publishes.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$"
+    },
+    "params": {
+      "type": "object"
+    }
+  }
+}
