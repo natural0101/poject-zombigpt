@@ -5,9 +5,9 @@ communicate through a set of files in the user's Lua directory, written as a
 **journal of commands and acknowledgements** rather than as a shared mutable
 blob.
 
-Source of truth: the JSON Schema documents in [`schemas/`](../schemas). The
+Source of truth: the JSON Schema documents in [`schemas/`](https://github.com/natural0101/poject-zombigpt/tree/main/schemas). The
 Python dataclasses in `pz_agent_core.protocol` are the in-process mirror, and
-[`tests/contract/`](../tests/contract) fails the build if the two disagree.
+[`tests/contract/`](https://github.com/natural0101/poject-zombigpt/tree/main/tests/contract) fails the build if the two disagree.
 
 ---
 

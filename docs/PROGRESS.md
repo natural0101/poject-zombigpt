@@ -1,7 +1,7 @@
 # Progress
 
 Live status of the task graph in
-[`docs/blueprint/task_graph.yaml`](blueprint/task_graph.yaml). This file is the
+[`docs/blueprint/task_graph.yaml`](https://github.com/natural0101/poject-zombigpt/blob/main/docs/blueprint/task_graph.yaml). This file is the
 handover point between work sessions: read it first, update it last.
 
 **Legend** — `done` implementation + tests + docs complete and `scripts/check.sh`
@@ -9,7 +9,7 @@ green · `wip` in progress · `todo` not started · `live` blocked on a step tha
 physically requires a running game.
 
 Last updated: 28 of 30 tasks closed; T029 and T030 are blocked on a live game,
-not deferred. 3653 Python tests and 2875 Lua assertions across 26 suites,
+not deferred. 3656 Python tests and 2875 Lua assertions across 26 suites,
 mypy strict over 269 files, `scripts/check.sh` green — measured under Python
 3.11.15, which is the only interpreter with the suite installed here. CI
 declares a 3.11/3.12 matrix; that is configuration, not a result observed in
@@ -24,7 +24,7 @@ with them. See [the playable-agent section](#the-playable-agent-branch) below,
 and [`LOCAL_GAME_HANDOFF.md`](LOCAL_GAME_HANDOFF.md) for what still needs a
 machine with the game on it.
 
-**Twenty-six defects that branch found are worth reading before any further work**,
+**Twenty-seven defects that branch found are worth reading before any further work**,
 because they are one family and the family is not closed. Every subsystem was
 written, tested and green; what nothing tested was whether the subsystems were
 *connected*.
@@ -40,6 +40,7 @@ written, tested and green; what nothing tested was whether the subsystems were
 | 7 | The memory store was complete and connected to nothing | `reserves_item` always answered False, so §7.9 rested on tag rules alone, and no home point could exist |
 | 8 | `pz_agent_voice` was imported by nothing and had no entry point | Russian voice control was complete, tested, and impossible to start |
 | 9 | The mod could drink from a sink; the sidecar had no argument for it, and the path it did have ran under the wrong capability | Two faults in one place: a working mod feature unreachable from Python, *and* `drink_world_source` — which §12.4 caps at `experimental` — reachable through `drink_carried`, which a scan verifies |
+| 27 | **Seven links in the archive's own README resolved to nothing** | Defect 13's general case, left open by fixing the two instances. An operator on Windows has no repository, so a relative link is a file beside the one they are reading or nothing. `ARCHITECTURE.md` and `PROTOCOL.md` ship now; the links about building the project became absolute. `tests/contract/test_archive_documents_resolve.py` builds the archive and follows every link in it |
 | 26 | **`safety.panic_hotkey` had a validator, an error message and no consumer** | The mod binds DirectInput scancode 88 directly and reads no configuration, so any other value bound nothing — and this is the stop button. A user rebinding away from F12 (Steam's screenshot key, so there is a real reason to) was told "configuration is valid" and had bound nothing. Any value but `F12` is a hard error now, naming the two routes that do work; rebinding for real needs the mod to read a published keycode *and* a live run to prove the new key reaches the stop |
 | 25 | **`game.install_dir` and `game.user_dir` were read by nothing** | `doctor`'s own remediation for `PZD001`, `TROUBLESHOOTING.md` for `PZD001` and `PZD003`, and `configs/mcp/README.md` all send a blocked user to set them. Those two failures brick every other command — a GOG or manual copy Steam does not list, a profile moved by OneDrive or `-cachedir` — and the escape hatch did nothing: the user got "configuration is valid" and the identical failure telling them to do what they had just done |
 | 24 | **No configuration could produce `disabled_by_policy`** | The state existed, the mod guarded on it, `PermissionEngine` refused on it with a message written for a user, and `docs/COMPATIBILITY.md` — which ships in the Windows archive — listed it as "available, but configuration forbids it" three rows above its own warning that a panic stop cannot reach a sleeping character. There was no key to write, and unknown keys are hard errors. Closed by implementing the switch, the way defect 10 was |

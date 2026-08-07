@@ -30,6 +30,20 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **Every link a shipped document makes now lands inside the archive.** Defect
+  13 was one instance of this — two documents the archive omitted while its own
+  shipped documents told an operator to open them — and the fix was two names in
+  a tuple, which left the general case untouched. Seven of the archive README's
+  links resolved to nothing: `CONTRIBUTING.md`, `AGENTS.md`,
+  `docs/ARCHITECTURE.md`, `docs/PROTOCOL.md`, `docs/TESTING.md`,
+  `docs/DEVELOPMENT.md` and the blueprint directory, plus `PROGRESS.md`'s link
+  to the task graph and `PROTOCOL.md`'s to `schemas/` and `tests/contract/`. An
+  operator on Windows has no repository, so a relative link is either a file
+  beside the one they are reading or nothing at all. `ARCHITECTURE.md` and
+  `PROTOCOL.md` now ship — the second is what `LOCAL_DEBUG_MAP.md` and
+  `LIVE_TEST_PLAYBOOK.md` assume when they discuss journals, refs and recovery —
+  and the links about *building* the project became absolute, so a GitHub reader
+  follows them and an operator gets a URL rather than a dead path.
 - **`game.install_dir` and `game.user_dir` now do something.** Both were parsed,
   validated, typed and read by nothing, while `doctor`'s own remediation for
   `PZD001`, `docs/TROUBLESHOOTING.md` for `PZD001` and `PZD003`, and

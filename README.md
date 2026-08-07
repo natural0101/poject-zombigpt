@@ -116,7 +116,7 @@ scripts/check.sh fast     # skip integration tests
 ```
 
 Branches: `main` is the released line, `dev` is integration. See
-[`CONTRIBUTING.md`](CONTRIBUTING.md) and [`AGENTS.md`](AGENTS.md) — the latter is
+[`CONTRIBUTING.md`](https://github.com/natural0101/poject-zombigpt/blob/main/CONTRIBUTING.md) and [`AGENTS.md`](https://github.com/natural0101/poject-zombigpt/blob/main/AGENTS.md) — the latter is
 the working agreement for AI agents contributing to this repository, and it is
 binding on humans too.
 
@@ -132,13 +132,13 @@ binding on humans too.
 | [`docs/MCP_TOOLS.md`](docs/MCP_TOOLS.md) | Every tool and resource, with schemas |
 | [`docs/SAFETY.md`](docs/SAFETY.md) | Modes, risk classes, reflex guard |
 | [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md) | Verified API journal per build |
-| [`docs/TESTING.md`](docs/TESTING.md) | Unit, contract, Lua harness, game smoke |
+| [`docs/TESTING.md`](https://github.com/natural0101/poject-zombigpt/blob/main/docs/TESTING.md) | Unit, contract, Lua harness, game smoke |
 | [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) | Doctor codes and remedies |
 | [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md) | What this cannot do, and why |
-| [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) | Layout, the four CI gates, adding an action |
+| [`docs/DEVELOPMENT.md`](https://github.com/natural0101/poject-zombigpt/blob/main/docs/DEVELOPMENT.md) | Layout, the four CI gates, adding an action |
 | [`docs/RELEASE.md`](docs/RELEASE.md) | Version rules and the release gate |
 | [`docs/PROGRESS.md`](docs/PROGRESS.md) | Live task-graph status |
-| [`docs/blueprint/`](docs/blueprint/) | The original specification this implements |
+| [`docs/blueprint/`](https://github.com/natural0101/poject-zombigpt/blob/main/docs/blueprint/) | The original specification this implements |
 
 ---
 

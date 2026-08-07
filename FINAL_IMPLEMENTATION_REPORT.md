@@ -4,12 +4,12 @@ Prepared to the gate in [`docs/RELEASE.md`](docs/RELEASE.md), whose "The final
 report" section lists nine things this document must state. They are §1 to §9
 below, in that order.
 
-**Base commit:** `dev` at `959dc18` (see below — it is refreshed each time this file is)
+**Base commit:** `dev` at `b2a4eea` (see below — it is refreshed each time this file is)
 **Versions:** product 0.1.0 · protocol 1.1 · schema 1.0 · mod 0.1.0 · supported build 42.20
 
 A report cannot name the commit that contains it — the hash does not exist until
 the commit is made. The hash above is this report's parent. Check
-`git log 959dc18..HEAD` before trusting any number here against a newer tree.
+`git log b2a4eea..HEAD` before trusting any number here against a newer tree.
 
 **Note the version.** The release candidate is named `v1.0.0-rc1`, and every
 version constant in the tree says `0.1.0`. No `1.0.0` exists in `version.py`,
@@ -19,7 +19,7 @@ filename is a target, not a state.
 Every figure below was produced by running something at this commit. The
 previous revision of this document was written against `main` at `6a57f74`, 36
 commits back, and had drifted badly: it claimed 2338 Python tests (there are
-3653), 1269 Lua assertions (2875), 202 mypy files (269), 7 schemas (6), 30
+3656), 1269 Lua assertions (2875), 202 mypy files (269), 7 schemas (6), 30
 luacheck files (62), nine registered adapters (19) and an installer that placed
 17 files (30). None of that was dishonest when written. All of it was wrong by
 the time anyone read it, which is why this revision states its base commit at
@@ -275,7 +275,7 @@ forbidden patterns ok    no stub bodies, no TODO markers, no eval/exec/loadstrin
 version sync       ok    product=0.1.0 protocol=1.1 schema=1.0 mod=0.1.0
 schema validity    ok    6 schema(s) valid
 playbook in sync   ok    docs/LIVE_TEST_PLAYBOOK.md matches its 20 scenarios
-pytest             ok    3653 passed, 2 skipped
+pytest             ok    3656 passed, 2 skipped
 luacheck           ok    0 warnings / 0 errors in 62 files
 lua tests          ok    2875 assertions across 26 suites, 0 failed
 ```
@@ -437,9 +437,9 @@ document does not cover.
 
 ```
 dist/pz-agent-windows-v1.0.0-rc1.zip
-  sha256   199a1c023ae21863e24f343799620067342d4bf6a6cc1de042df547c9cc3139f
-  size     264 288 bytes
-  entries  66 (65 files plus BUILD-MANIFEST.json)
+  sha256   504bcf7bb2cb5e3c06e9425fa55f6a0eb744099f270d00f7b35b7263974b12fd
+  size     276 107 bytes
+  entries  68 (67 files plus BUILD-MANIFEST.json)
 ```
 
 **It is marked INCOMPLETE and it is not a release candidate by this project's
@@ -450,9 +450,9 @@ own gate.** `BUILD-MANIFEST.json` records `complete: false`, `build_rc.py` exits
 [FAIL] archive.complete: the archive declares 2 missing file(s): bin/pz-agent.exe, bin/pz-agent-mcp.exe
 [FAIL] archive.bin:      missing from bin/: pz-agent.exe, pz-agent-mcp.exe
 [ok  ] archive.bat:      all 11 wrappers are at the root
-[ok  ] archive.digests:  65 file(s) match the digests recorded for them
+[ok  ] archive.digests:  67 file(s) match the digests recorded for them
 [ok  ] archive.claims:   the archive claims no live-test evidence
-[ok  ] tests:            3653 of 3655 passed, 2 skipped
+[ok  ] tests:            3656 of 3658 passed, 2 skipped
 ```
 
 Both executables need PyInstaller on Windows. `.github/workflows/windows.yml`
@@ -543,7 +543,7 @@ Project Zomboid Build 42.20 on Windows, and on nothing else.
 It does not say the architecture is ready and only needs testing. It does not
 say a user can take it from here.
 
-It says: twenty-eight tasks are implemented and covered by 3653 Python tests and
+It says: twenty-eight tasks are implemented and covered by 3656 Python tests and
 2875 Lua assertions; twenty-six defects were found by seam tests and closed, one
 of them a safety gate that had been documented for weeks and never written; two
 tasks are blocked on a game that does not exist in this environment; and §9 is
