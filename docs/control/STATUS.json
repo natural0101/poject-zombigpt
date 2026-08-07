@@ -3,11 +3,11 @@
   "branch": "fix/windows-mcp-voice-runtime",
   "current_step": 20,
   "github_release": null,
-  "head_commit": "1c1f10f408e3dcfcd813ef8ca8859fdebf30eabd",
+  "head_commit": "f8c161cbcb37589400dd880cc608ad812e0214d5",
   "last_passed_step": 19,
   "linux_ci": {
-    "status": "GREEN_LOCAL",
-    "url": null
+    "status": "IN_PROGRESS",
+    "url": "https://github.com/natural0101/poject-zombigpt/actions?query=branch%3Afix%2Fwindows-mcp-voice-runtime"
   },
   "live_game_percent": 0,
   "live_scenarios": {
@@ -409,7 +409,7 @@
       "notes": "",
       "owner": "remote",
       "started_at": null,
-      "status": "NOT_STARTED",
+      "status": "IN_PROGRESS",
       "tests": [],
       "title": "`portable_relative_path()`"
     },
@@ -1615,7 +1615,7 @@
     }
   ],
   "windows_ci": {
-    "status": "RED",
-    "url": "https://github.com/natural0101/poject-zombigpt/actions/runs/31156087690"
+    "status": "IN_PROGRESS",
+    "url": "https://github.com/natural0101/poject-zombigpt/actions/runs/31160864663"
   }
 }
