@@ -124,7 +124,7 @@ _E11_BUILD = [
     ),
     (
         "Keep the console attached so a client can read stdio",
-        6,
+        7,
         "console=True in both specs",
         "read the specs",
         "",
@@ -132,7 +132,7 @@ _E11_BUILD = [
     ),
     (
         "Leave both executables unpacked and unsigned rather than UPX-compressed",
-        6,
+        7,
         "upx=False and strip=False, because a packed unsigned binary reads as malware",
         "read the specs",
         "",
@@ -175,7 +175,7 @@ _E11_ARCHIVE = [
     ),
     (
         "Include the mod payload",
-        6,
+        7,
         "the mod directory is present with its mod.info",
         ".venv/bin/python scripts/check_release.py",
         f"{T}/test_check_release.py",
@@ -183,7 +183,7 @@ _E11_ARCHIVE = [
     ),
     (
         "Include the installer and the launcher",
-        6,
+        7,
         "both are present",
         ".venv/bin/python scripts/check_release.py",
         f"{T}/test_check_release.py",
@@ -191,7 +191,7 @@ _E11_ARCHIVE = [
     ),
     (
         "Include every document an operator needs, and no dangling link",
-        6,
+        7,
         "every relative link in a shipped document resolves inside the archive",
         f".venv/bin/pytest {C}/test_archive_documents_resolve.py -q",
         f"{C}/test_archive_documents_resolve.py",
@@ -207,7 +207,7 @@ _E11_ARCHIVE = [
     ),
     (
         "Record the archive digest in the plan when it is built",
-        6,
+        7,
         "the recorded sha256 matches the uploaded artefact",
         "read the windows workflow run",
         "",
@@ -242,7 +242,7 @@ _E11_GATE = [
     ),
     (
         "Publish the RC as a workflow artefact with its digest",
-        6,
+        7,
         "the artefact and its sha256 are both recorded",
         "read the windows workflow run",
         "",
@@ -250,7 +250,7 @@ _E11_GATE = [
     ),
     (
         "Record the RC digest in the evidence index",
-        6,
+        7,
         "the index carries the artefact digest",
         "cat docs/control/EVIDENCE_INDEX.md",
         "",

@@ -31,10 +31,12 @@ STATUS_ORDER: Final = ("PASS", "IN_PROGRESS", "FAIL", "BLOCKED", "NOT_STARTED")
 
 
 def weighted(tasks: list[dict[str, Any]]) -> float:
-    total = sum(task["weight"] for task in tasks)
+    # int() rather than a cast: the weights come out of YAML as Any, and a task
+    # whose weight parsed as a string would otherwise divide silently wrong.
+    total = sum(int(task["weight"]) for task in tasks)
     if not total:
         return 0.0
-    done = sum(task["weight"] for task in tasks if task["status"] == "PASS")
+    done = sum(int(task["weight"]) for task in tasks if task["status"] == "PASS")
     return done / total * 100.0
 
 

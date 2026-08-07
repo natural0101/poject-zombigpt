@@ -20,9 +20,9 @@ weight_bands:
   - 6
   transport:
   - 5
-  - 7
-  integration:
   - 6
+  integration:
+  - 7
   - 8
   security:
   - 7
@@ -2333,7 +2333,7 @@ epics:
     - id: E05-M02-T004
       subsystem: rpc
       action: Refuse a pickle stream in either direction
-      weight: 7
+      weight: 6
       band: transport
       owner: remote
       depends_on:
@@ -2349,7 +2349,7 @@ epics:
     - id: E05-M02-T005
       subsystem: rpc
       action: Refuse a pickle whose __reduce__ would execute on load
-      weight: 7
+      weight: 6
       band: transport
       owner: remote
       depends_on:
@@ -2461,7 +2461,7 @@ epics:
     - id: E05-M02-T012
       subsystem: rpc
       action: Keep every refusal message free of the payload it rejected
-      weight: 7
+      weight: 6
       band: transport
       owner: remote
       depends_on:
@@ -2701,7 +2701,7 @@ epics:
     - id: E05-M04-T006
       subsystem: rpc
       action: Refuse a descriptor naming a process that is gone
-      weight: 7
+      weight: 6
       band: transport
       owner: remote
       depends_on:
@@ -2733,7 +2733,7 @@ epics:
     - id: E05-M04-T008
       subsystem: rpc
       action: Refuse an AF_INET family outright
-      weight: 7
+      weight: 6
       band: transport
       owner: remote
       depends_on:
@@ -2758,7 +2758,7 @@ epics:
     - id: E05-M05-T001
       subsystem: rpc
       action: Bind AF_PIPE on Windows
-      weight: 7
+      weight: 6
       band: transport
       owner: remote
       depends_on: []
@@ -2821,7 +2821,7 @@ epics:
     - id: E05-M05-T005
       subsystem: rpc
       action: Use send_bytes and recv_bytes only, never send and recv
-      weight: 7
+      weight: 6
       band: transport
       owner: remote
       depends_on:
@@ -2837,7 +2837,7 @@ epics:
     - id: E05-M05-T006
       subsystem: rpc
       action: Refuse a connection presenting the wrong token
-      weight: 7
+      weight: 6
       band: transport
       owner: remote
       depends_on:
@@ -2853,7 +2853,7 @@ epics:
     - id: E05-M05-T007
       subsystem: rpc
       action: Keep the key out of the refusal message
-      weight: 7
+      weight: 6
       band: transport
       owner: remote
       depends_on:
@@ -2926,7 +2926,7 @@ epics:
     - id: E05-M06-T001
       subsystem: rpc
       action: Unblock a thread parked in accept when the server closes
-      weight: 7
+      weight: 6
       band: transport
       owner: remote
       depends_on: []
@@ -2973,7 +2973,7 @@ epics:
     - id: E05-M06-T004
       subsystem: rpc
       action: Start the RPC server inside the sidecar's lifecycle
-      weight: 7
+      weight: 6
       band: transport
       owner: remote
       depends_on:
@@ -2989,7 +2989,7 @@ epics:
     - id: E05-M06-T005
       subsystem: rpc
       action: Revoke the token and remove the descriptor on sidecar shutdown
-      weight: 7
+      weight: 6
       band: transport
       owner: remote
       depends_on:
@@ -3005,7 +3005,7 @@ epics:
     - id: E05-M06-T006
       subsystem: rpc
       action: Keep the RPC server off the panic-stop path so a stop never waits on it
-      weight: 7
+      weight: 6
       band: transport
       owner: remote
       depends_on:
@@ -3052,7 +3052,7 @@ epics:
     - id: E06-M01-T002
       subsystem: rpc-codec
       action: Refuse a bool where an int is required
-      weight: 6
+      weight: 7
       band: integration
       owner: remote
       depends_on:
@@ -3100,7 +3100,7 @@ epics:
     - id: E06-M01-T005
       subsystem: rpc-codec
       action: Codec the session snapshot and stop report
-      weight: 6
+      weight: 7
       band: integration
       owner: remote
       depends_on:
@@ -3132,7 +3132,7 @@ epics:
     - id: E06-M01-T007
       subsystem: rpc-codec
       action: Codec the plan request, step record and plan record
-      weight: 6
+      weight: 7
       band: integration
       owner: remote
       depends_on:
@@ -3164,7 +3164,7 @@ epics:
     - id: E06-M01-T009
       subsystem: rpc-codec
       action: Codec the doctor check and log record
-      weight: 6
+      weight: 7
       band: integration
       owner: remote
       depends_on:
@@ -3349,7 +3349,7 @@ epics:
     - id: E06-M02-T010
       subsystem: rpc-client
       action: Implement RemoteCoreServices.memory
-      weight: 6
+      weight: 7
       band: integration
       owner: remote
       depends_on:
@@ -3365,7 +3365,7 @@ epics:
     - id: E06-M02-T011
       subsystem: rpc-client
       action: Implement RemoteCoreServices.diagnostics
-      weight: 6
+      weight: 7
       band: integration
       owner: remote
       depends_on:
@@ -4299,7 +4299,7 @@ epics:
     - id: E08-M01-T004
       subsystem: goals
       action: Publish the goal JSON schema
-      weight: 6
+      weight: 7
       band: integration
       owner: remote
       depends_on:
@@ -4719,7 +4719,7 @@ epics:
     - id: E09-M01-T003
       subsystem: voice
       action: Keep arm, disarm and stop on their existing short path
-      weight: 7
+      weight: 6
       band: transport
       owner: remote
       depends_on:
@@ -4735,7 +4735,7 @@ epics:
     - id: E09-M01-T004
       subsystem: voice
       action: Prove a stop still works when the RPC link is down
-      weight: 7
+      weight: 6
       band: transport
       owner: remote
       depends_on:
@@ -4791,7 +4791,7 @@ epics:
     - id: E09-M02-T002
       subsystem: voice
       action: Refuse an intent with no GoalKind rather than inventing one
-      weight: 7
+      weight: 6
       band: transport
       owner: remote
       depends_on:
@@ -4855,7 +4855,7 @@ epics:
     - id: E09-M02-T006
       subsystem: voice
       action: Keep the transcript out of the goal
-      weight: 7
+      weight: 6
       band: transport
       owner: remote
       depends_on:
@@ -4871,7 +4871,7 @@ epics:
     - id: E09-M02-T007
       subsystem: voice
       action: Keep the transcript out of the sidecar entirely
-      weight: 7
+      weight: 6
       band: transport
       owner: remote
       depends_on:
@@ -4887,7 +4887,7 @@ epics:
     - id: E09-M02-T008
       subsystem: voice
       action: Keep the transcript out of the logs
-      weight: 7
+      weight: 6
       band: transport
       owner: remote
       depends_on:
@@ -4903,7 +4903,7 @@ epics:
     - id: E09-M02-T009
       subsystem: voice
       action: Keep the transcript out of the support bundle
-      weight: 7
+      weight: 6
       band: transport
       owner: remote
       depends_on:
@@ -4935,7 +4935,7 @@ epics:
     - id: E09-M02-T011
       subsystem: voice
       action: Recognise the stop phrase before any other intent
-      weight: 7
+      weight: 6
       band: transport
       owner: remote
       depends_on:
@@ -5008,7 +5008,7 @@ epics:
     - id: E09-M03-T001
       subsystem: voice
       action: Deliver a goal from a spoken phrase to the core
-      weight: 7
+      weight: 6
       band: transport
       owner: remote
       depends_on: []
@@ -5039,7 +5039,7 @@ epics:
     - id: E09-M03-T003
       subsystem: voice
       action: Cancel a goal by voice
-      weight: 7
+      weight: 6
       band: transport
       owner: remote
       depends_on:
@@ -5088,7 +5088,7 @@ epics:
     - id: E09-M03-T006
       subsystem: voice
       action: Prove a fake voice adapter is not counted as a real integration
-      weight: 7
+      weight: 6
       band: transport
       owner: remote
       depends_on:
@@ -5199,7 +5199,7 @@ epics:
     - id: E10-M01-T006
       subsystem: voice-bridge
       action: Never block the stop path on the bridge
-      weight: 7
+      weight: 6
       band: transport
       owner: remote
       depends_on:
@@ -5263,7 +5263,7 @@ epics:
     - id: E10-M01-T010
       subsystem: voice-bridge
       action: Keep no credential in the bridge configuration
-      weight: 7
+      weight: 6
       band: transport
       owner: remote
       depends_on:
@@ -5319,7 +5319,7 @@ epics:
     - id: E10-M02-T003
       subsystem: voice-bridge
       action: Carry an intent to the bridge without the transcript
-      weight: 7
+      weight: 6
       band: transport
       owner: remote
       depends_on:
@@ -5457,7 +5457,7 @@ epics:
     - id: E10-M03-T001
       subsystem: voice-bridge
       action: Run the bridge against a fake subprocess implementing the contract
-      weight: 7
+      weight: 6
       band: transport
       owner: remote
       depends_on: []
@@ -5472,7 +5472,7 @@ epics:
     - id: E10-M03-T002
       subsystem: voice-bridge
       action: Deliver an intent through the bridge to a goal
-      weight: 7
+      weight: 6
       band: transport
       owner: remote
       depends_on:
@@ -5488,7 +5488,7 @@ epics:
     - id: E10-M03-T003
       subsystem: voice-bridge
       action: Survive the bridge exiting mid-exchange
-      weight: 7
+      weight: 6
       band: transport
       owner: remote
       depends_on:
@@ -5520,7 +5520,7 @@ epics:
     - id: E10-M03-T005
       subsystem: voice-bridge
       action: Prove the fake bridge is not counted as a TeamON integration
-      weight: 7
+      weight: 6
       band: transport
       owner: remote
       depends_on:
@@ -5568,7 +5568,7 @@ epics:
     - id: E10-M03-T008
       subsystem: voice-bridge
       action: Keep the bridge optional so the sidecar runs without it
-      weight: 7
+      weight: 6
       band: transport
       owner: remote
       depends_on:
@@ -5600,7 +5600,7 @@ epics:
     - id: E10-M03-T010
       subsystem: voice-bridge
       action: Prove no transcript reaches the bridge under any path
-      weight: 7
+      weight: 6
       band: transport
       owner: remote
       depends_on:
@@ -5834,7 +5834,7 @@ epics:
     - id: E11-M02-T007
       subsystem: packaging
       action: Keep the console attached so a client can read stdio
-      weight: 6
+      weight: 7
       band: integration
       owner: remote
       depends_on:
@@ -5850,7 +5850,7 @@ epics:
     - id: E11-M02-T008
       subsystem: packaging
       action: Leave both executables unpacked and unsigned rather than UPX-compressed
-      weight: 6
+      weight: 7
       band: integration
       owner: remote
       depends_on:
@@ -5938,7 +5938,7 @@ epics:
     - id: E11-M03-T005
       subsystem: packaging
       action: Include the mod payload
-      weight: 6
+      weight: 7
       band: integration
       owner: remote
       depends_on:
@@ -5954,7 +5954,7 @@ epics:
     - id: E11-M03-T006
       subsystem: packaging
       action: Include the installer and the launcher
-      weight: 6
+      weight: 7
       band: integration
       owner: remote
       depends_on:
@@ -5970,7 +5970,7 @@ epics:
     - id: E11-M03-T007
       subsystem: packaging
       action: Include every document an operator needs, and no dangling link
-      weight: 6
+      weight: 7
       band: integration
       owner: remote
       depends_on:
@@ -6003,7 +6003,7 @@ epics:
     - id: E11-M03-T009
       subsystem: packaging
       action: Record the archive digest in the plan when it is built
-      weight: 6
+      weight: 7
       band: integration
       owner: remote
       depends_on:
@@ -6075,7 +6075,7 @@ epics:
     - id: E11-M04-T004
       subsystem: release
       action: Publish the RC as a workflow artefact with its digest
-      weight: 6
+      weight: 7
       band: integration
       owner: remote
       depends_on:
@@ -6091,7 +6091,7 @@ epics:
     - id: E11-M04-T005
       subsystem: release
       action: Record the RC digest in the evidence index
-      weight: 6
+      weight: 7
       band: integration
       owner: remote
       depends_on:

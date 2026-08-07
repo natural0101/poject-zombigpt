@@ -742,7 +742,7 @@ _E05_ENVELOPE = [
     ),
     (
         "Refuse a pickle stream in either direction",
-        7,
+        6,
         "pickle.dumps of any payload raises rather than loading",
         ".venv/bin/pytest tests/unit/test_rpc_wire.py -q",
         "tests/unit/test_rpc_wire.py::TestPickleIsNotAcceptedAnywhere",
@@ -750,7 +750,7 @@ _E05_ENVELOPE = [
     ),
     (
         "Refuse a pickle whose __reduce__ would execute on load",
-        7,
+        6,
         "the adversarial payload is refused, not merely a benign one",
         ".venv/bin/pytest tests/unit/test_rpc_wire.py -q",
         "tests/unit/test_rpc_wire.py::TestPickleIsNotAcceptedAnywhere::test_a_pickle_that_would_execute_on_load_is_refused",
@@ -806,7 +806,7 @@ _E05_ENVELOPE = [
     ),
     (
         "Keep every refusal message free of the payload it rejected",
-        7,
+        6,
         "a secret-shaped value in a malformed payload is absent from str(exc)",
         ".venv/bin/pytest tests/unit/test_rpc_wire.py -q",
         "tests/unit/test_rpc_wire.py::TestARefusalNeverQuotesThePayload",
@@ -924,7 +924,7 @@ _E05_DESCRIPTOR = [
     ),
     (
         "Refuse a descriptor naming a process that is gone",
-        7,
+        6,
         "a reaped pid raises StaleDescriptor rather than being dialled",
         ".venv/bin/pytest tests/unit/test_rpc_token_and_descriptor.py -q",
         "tests/unit/test_rpc_token_and_descriptor.py::TestFindingAServer::test_a_descriptor_naming_a_dead_process_is_refused",
@@ -940,7 +940,7 @@ _E05_DESCRIPTOR = [
     ),
     (
         "Refuse an AF_INET family outright",
-        7,
+        6,
         "a network address in a descriptor is never dialled",
         ".venv/bin/pytest tests/unit/test_rpc_token_and_descriptor.py -q",
         "tests/unit/test_rpc_token_and_descriptor.py::TestFindingAServer::test_an_af_inet_address_is_refused_because_this_link_is_local",
@@ -951,7 +951,7 @@ _E05_DESCRIPTOR = [
 _E05_TRANSPORT = [
     (
         "Bind AF_PIPE on Windows",
-        7,
+        6,
         "a server binds and answers on a named pipe in a windows-latest run",
         "read the windows workflow run",
         "tests/unit/test_rpc_transport.py",
@@ -983,7 +983,7 @@ _E05_TRANSPORT = [
     ),
     (
         "Use send_bytes and recv_bytes only, never send and recv",
-        7,
+        6,
         "poisoning Connection.send and Connection.recv does not break a real call",
         ".venv/bin/pytest tests/unit/test_rpc_transport.py -q",
         "tests/unit/test_rpc_transport.py::TestNothingIsPickled",
@@ -991,7 +991,7 @@ _E05_TRANSPORT = [
     ),
     (
         "Refuse a connection presenting the wrong token",
-        7,
+        6,
         "the call raises RpcUnavailable and the server keeps serving",
         ".venv/bin/pytest tests/unit/test_rpc_transport.py -q",
         "tests/unit/test_rpc_transport.py::TestAuthentication",
@@ -999,7 +999,7 @@ _E05_TRANSPORT = [
     ),
     (
         "Keep the key out of the refusal message",
-        7,
+        6,
         "neither the wrong key nor the real one appears in str(exc)",
         ".venv/bin/pytest tests/unit/test_rpc_transport.py -q",
         "tests/unit/test_rpc_transport.py::TestAuthentication::test_the_refusal_does_not_quote_the_key",
@@ -1034,7 +1034,7 @@ _E05_TRANSPORT = [
 _E05_SERVER = [
     (
         "Unblock a thread parked in accept when the server closes",
-        7,
+        6,
         "serve_forever returns after close; the thread is not alive",
         ".venv/bin/pytest tests/unit/test_rpc_transport.py -q",
         "tests/unit/test_rpc_transport.py::TestShutdown::test_close_ends_the_serving_thread",
@@ -1058,7 +1058,7 @@ _E05_SERVER = [
     ),
     (
         "Start the RPC server inside the sidecar's lifecycle",
-        7,
+        6,
         "pz-agent start brings up the server, writes the descriptor and issues a token",
         ".venv/bin/pytest tests/unit/test_cli_supervisor.py -q",
         "tests/unit/test_rpc_sidecar_lifecycle.py",
@@ -1066,7 +1066,7 @@ _E05_SERVER = [
     ),
     (
         "Revoke the token and remove the descriptor on sidecar shutdown",
-        7,
+        6,
         "after pz-agent stop, neither file exists",
         ".venv/bin/pytest tests/unit/test_rpc_sidecar_lifecycle.py -q",
         "tests/unit/test_rpc_sidecar_lifecycle.py",
@@ -1074,7 +1074,7 @@ _E05_SERVER = [
     ),
     (
         "Keep the RPC server off the panic-stop path so a stop never waits on it",
-        7,
+        6,
         "a panic stop completes while the RPC server is blocked",
         ".venv/bin/pytest tests/unit/test_rpc_sidecar_lifecycle.py -q",
         "tests/unit/test_rpc_sidecar_lifecycle.py",

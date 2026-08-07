@@ -53,8 +53,8 @@ BANDS: Final = {
     "portability": (3, 5),
     "packaging": (3, 5),
     "evidence": (4, 6),
-    "transport": (5, 7),
-    "integration": (6, 8),
+    "transport": (5, 6),
+    "integration": (7, 8),
     "security": (7, 9),
     "live": (9, 10),
 }
