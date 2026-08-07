@@ -797,25 +797,13 @@ def _read_index(archive: zipfile.ZipFile) -> dict[str, tuple[str, int]]:
             f"the index in this archive is larger than the {MAX_INDEX_BYTES} byte "
             "ceiling. Rebuild it with build_rc.py."
         )
+    _refuse_deep_nesting(raw)
     try:
         document = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ArchiveError(
             f"the {MANIFEST_NAME} in this archive is not valid UTF-8 JSON, so no "
             "member can be checked against it. Rebuild it with build_rc.py."
-        ) from exc
-    except RecursionError as exc:
-        # MAX_INDEX_BYTES bounds how many bytes the index may be and says nothing
-        # about how deeply they may nest. Two kilobytes of "[" exhaust the
-        # interpreter's stack while staying three orders of magnitude under that
-        # ceiling, and json.loads raises rather than returning, so without this
-        # clause `--verify` dies with a traceback on exactly the archive it was
-        # pointed at because somebody already suspected it. A ceiling that only
-        # counts bytes is not a bound on the work parsing them costs.
-        raise ArchiveError(
-            f"the {MANIFEST_NAME} in this archive nests too deeply to parse. A "
-            "release index is a flat list of entries; whatever wrote this was not "
-            "build_rc.py, so discard the archive rather than rebuilding its index."
         ) from exc
     if not isinstance(document, dict) or document.get("format") != MANIFEST_FORMAT:
         raise ArchiveError(
@@ -843,6 +831,50 @@ def _read_index(archive: zipfile.ZipFile) -> dict[str, tuple[str, int]]:
             )
         index[path] = (sha256, size)
     return index
+
+
+#: How deeply a release index may nest before it is refused. A real one is two
+#: levels — an object holding a list of flat entries — so ten is generous by a
+#: factor of five and still far below any interpreter's limit.
+MAX_INDEX_DEPTH: Final = 10
+
+
+def _refuse_deep_nesting(raw: bytes) -> None:
+    """Refuse an index that nests past :data:`MAX_INDEX_DEPTH`, before parsing it.
+
+    ``MAX_INDEX_BYTES`` bounds how many bytes the index may be and says nothing
+    about how deeply they may nest: two kilobytes of ``[`` stays three orders of
+    magnitude under that ceiling and is still a stack overflow waiting to happen.
+    A ceiling that only counts bytes is not a bound on the work of parsing them.
+
+    This used to be a ``try/except RecursionError`` around ``json.loads``, which
+    was wrong in a way only a version matrix could show. Whether 2000 levels
+    raises ``RecursionError`` is a property of the interpreter, not of the input:
+    CPython 3.11 blew its stack and refused, and 3.12 — whose recursion handling
+    changed — parsed the same bytes happily and fell through to a *different*
+    refusal with a *different* message. The test asserting the message passed on
+    one leg of the matrix and failed on the other, and the guard it was testing
+    was only ever incidental.
+
+    Counting brackets before parsing is deterministic on every interpreter, and
+    it refuses *before* the work rather than after surviving it. Bytes are
+    scanned rather than decoded: the delimiters are ASCII, a string containing a
+    literal ``[`` can only inflate the count and never hide one, and refusing an
+    index for looking too deep is the safe direction of that error.
+    """
+    depth = 0
+    for byte in raw:
+        if byte in b"[{":
+            depth += 1
+            if depth > MAX_INDEX_DEPTH:
+                raise ArchiveError(
+                    f"the {MANIFEST_NAME} in this archive nests too deeply to parse "
+                    f"(past {MAX_INDEX_DEPTH} levels). A release index is a flat list "
+                    "of entries; whatever wrote this was not build_rc.py, so discard "
+                    "the archive rather than rebuilding its index."
+                )
+        elif byte in b"]}":
+            depth -= 1
 
 
 def verify_archive(path: Path, *, required: Sequence[str] = ()) -> Verification:
