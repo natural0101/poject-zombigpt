@@ -45,7 +45,7 @@ _BRANCH_POINT: Final = "873037c081800cf4f4373b9307fc1cdff3140e99"
 
 def _resolves(sha: str) -> bool:
     return (
-        subprocess.run(  # noqa: S603
+        subprocess.run(
             ["git", "cat-file", "-e", f"{sha}^{{commit}}"],
             capture_output=True,
             cwd=REPO_ROOT,
