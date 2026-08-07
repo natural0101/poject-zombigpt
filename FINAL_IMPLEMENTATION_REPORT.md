@@ -4,12 +4,12 @@ Prepared to the gate in [`docs/RELEASE.md`](docs/RELEASE.md), whose "The final
 report" section lists nine things this document must state. They are §1 to §9
 below, in that order.
 
-**Base commit:** `dev` at `d091512` (see below — it is refreshed each time this file is)
+**Base commit:** `dev` at `959dc18` (see below — it is refreshed each time this file is)
 **Versions:** product 0.1.0 · protocol 1.1 · schema 1.0 · mod 0.1.0 · supported build 42.20
 
 A report cannot name the commit that contains it — the hash does not exist until
 the commit is made. The hash above is this report's parent. Check
-`git log d091512..HEAD` before trusting any number here against a newer tree.
+`git log 959dc18..HEAD` before trusting any number here against a newer tree.
 
 **Note the version.** The release candidate is named `v1.0.0-rc1`, and every
 version constant in the tree says `0.1.0`. No `1.0.0` exists in `version.py`,
@@ -19,7 +19,7 @@ filename is a target, not a state.
 Every figure below was produced by running something at this commit. The
 previous revision of this document was written against `main` at `6a57f74`, 36
 commits back, and had drifted badly: it claimed 2338 Python tests (there are
-3544), 1269 Lua assertions (2864), 202 mypy files (266), 7 schemas (6), 30
+3653), 1269 Lua assertions (2875), 202 mypy files (269), 7 schemas (6), 30
 luacheck files (62), nine registered adapters (19) and an installer that placed
 17 files (30). None of that was dishonest when written. All of it was wrong by
 the time anyone read it, which is why this revision states its base commit at
@@ -69,11 +69,11 @@ Measured at this commit:
 | Capability probes | 12 |
 | Live-test scenarios | 20 |
 
-### Nineteen defects, found and closed
+### Twenty-six defects, found and closed
 
 Every subsystem in this build was written, tested and green. What nothing tested
 was whether the subsystems were *connected*, or whether the documents describing
-them were true. Nineteen defects of those two shapes were found, each by a test
+them were true. Twenty-six defects of those two shapes were found, each by a test
 that crosses a seam rather than covering a unit, and each mutation-checked:
 
 **Nine were wiring** — a subsystem complete and connected to nothing:
@@ -149,9 +149,12 @@ harder shape, because a reader has no reason to doubt them:
     correctly struck out. Nothing leaked. The harm is the habit: a verifier
     that flags its own success teaches an operator to ignore the next flag.
 
-**Two were both at once** — a subsystem connected to nothing, with documents
-and live scenarios already built on top of it. The family is not closed; these
-are the two most recently found, not the last two there are.
+**The remaining nine stopped splitting cleanly**, which is itself the finding.
+Three are documents naming commands that do not exist (20–22); one is a field
+read in one place and written in none (23); and five are both at once — a
+subsystem connected to nothing with documents, shipped archives or live
+scenarios already resting on it (18, 19, 24, 25, 26). The family is not closed.
+These are the most recently found, not the last there are.
 
 18. **`DiagnosticLog` was constructed nowhere, so the sidecar wrote no log.**
     Complete, rotating, redacting, level-filtered, well tested — and built only
@@ -176,7 +179,48 @@ are the two most recently found, not the last two there are.
     baseline — so every run long enough to rotate would have produced a trace
     that read back as a refusal. Found by a test that rotates for real.
 
-Numbers 10 to 19 are the reason this report states its base commit and
+20. **`SECURITY.md` told a vulnerability reporter to redact with a flag that
+    does not exist.** "Do not attach a raw support bundle to a public issue
+    until you have checked it with `pz-agent logs --redact --verify`" — there is
+    no `--redact`, and the command exits 2 with an argparse usage message. That
+    sentence is the single gate between a reporter and an unredacted archive on
+    a public issue.
+21. **`PRIVACY.md` documented data deletion under a command the CLI does not
+    have.** `pz-agent memory --forget`. There is no `memory` command; the real
+    one is `remember forget`, and it appeared in no document at all.
+22. **`docs/TROUBLESHOOTING.md` sent a user to `pz-agent status --explain`** for
+    the food policy's rejection list, and said the thresholds are "in
+    configuration" when `[safety]` holds four keys and none of them is one.
+    Found by the guard written for 20 and 21 rather than by review, which is the
+    point of writing a guard instead of two corrections.
+23. **The mod could never publish `experimental`.** `CapabilityRuntime` reads
+    `adapter.experimental`; `Toolkit.declare` never carried the field. Read in
+    one place, written in none — the same shape as number 1. Two adapters
+    carried comments saying "the probe caps this at experimental" and both
+    published as ordinary unverified, while `docs/PROTOCOL.md` documents the
+    file with an example showing a state its own writer could not emit.
+24. **No configuration could produce `disabled_by_policy`.** The state existed,
+    the mod guarded on it, `PermissionEngine` refused on it with a message
+    written for a user, and `docs/COMPATIBILITY.md` — in the Windows archive —
+    listed it as "available, but configuration forbids it" three rows above its
+    own warning that a panic stop cannot reach a sleeping character. There was
+    no key to write and unknown keys are hard errors. Implemented rather than
+    documented away, the way number 10 was.
+25. **`game.install_dir` and `game.user_dir` were read by nothing.** The
+    documented escape hatch for the two failures that brick every other
+    command — a GOG or manual copy Steam does not list, a profile moved by
+    OneDrive or `-cachedir`. `doctor`'s own remediation, `TROUBLESHOOTING.md`
+    for two codes, and `configs/mcp/README.md` all send a blocked user to set
+    them, and setting them did nothing: "configuration is valid", then the
+    identical failure telling them to do what they had just done.
+26. **`safety.panic_hotkey` had a validator, an error message and no consumer.**
+    The mod binds scancode 88 directly and reads no configuration, so any other
+    value bound nothing — and this is the stop button. Any value but `F12` is a
+    hard error now. Rebinding for real needs the mod to read a published keycode
+    *and* a live run to prove the new key reaches the stop; neither exists, and
+    saying so is the honest answer.
+
+Numbers 10 to 26 are the reason this report states its base commit and
 re-measures rather than carrying figures forward. A stale number is a small
 lie; a document describing a safety gate that does not exist is a different
 thing.
@@ -226,14 +270,14 @@ Two symbols deserve naming individually, because their failure modes are quiet:
 ```
 ruff format        ok    316 files already formatted
 ruff lint          ok    All checks passed!
-mypy               ok    no issues found in 266 source files
+mypy               ok    no issues found in 269 source files
 forbidden patterns ok    no stub bodies, no TODO markers, no eval/exec/loadstring, no secrets
 version sync       ok    product=0.1.0 protocol=1.1 schema=1.0 mod=0.1.0
 schema validity    ok    6 schema(s) valid
 playbook in sync   ok    docs/LIVE_TEST_PLAYBOOK.md matches its 20 scenarios
-pytest             ok    3544 passed, 2 skipped
+pytest             ok    3653 passed, 2 skipped
 luacheck           ok    0 warnings / 0 errors in 62 files
-lua tests          ok    2864 assertions across 26 suites, 0 failed
+lua tests          ok    2875 assertions across 26 suites, 0 failed
 ```
 
 **The two skips, named rather than summarised.** One is a capability-tier
@@ -393,8 +437,8 @@ document does not cover.
 
 ```
 dist/pz-agent-windows-v1.0.0-rc1.zip
-  sha256   e3c67c6443e7f8cc2435df5e4d531c6d31d0b11668d020d41650357c17ea1ea8
-  size     261 600 bytes
+  sha256   199a1c023ae21863e24f343799620067342d4bf6a6cc1de042df547c9cc3139f
+  size     264 288 bytes
   entries  66 (65 files plus BUILD-MANIFEST.json)
 ```
 
@@ -408,7 +452,7 @@ own gate.** `BUILD-MANIFEST.json` records `complete: false`, `build_rc.py` exits
 [ok  ] archive.bat:      all 11 wrappers are at the root
 [ok  ] archive.digests:  65 file(s) match the digests recorded for them
 [ok  ] archive.claims:   the archive claims no live-test evidence
-[ok  ] tests:            3544 of 3546 passed, 2 skipped
+[ok  ] tests:            3653 of 3655 passed, 2 skipped
 ```
 
 Both executables need PyInstaller on Windows. `.github/workflows/windows.yml`
@@ -499,8 +543,8 @@ Project Zomboid Build 42.20 on Windows, and on nothing else.
 It does not say the architecture is ready and only needs testing. It does not
 say a user can take it from here.
 
-It says: twenty-eight tasks are implemented and covered by 3544 Python tests and
-2864 Lua assertions; nineteen defects were found by seam tests and closed, one
+It says: twenty-eight tasks are implemented and covered by 3653 Python tests and
+2875 Lua assertions; twenty-six defects were found by seam tests and closed, one
 of them a safety gate that had been documented for weeks and never written; two
 tasks are blocked on a game that does not exist in this environment; and §9 is
 the complete list of what closing them requires.

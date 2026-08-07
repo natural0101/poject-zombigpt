@@ -10,7 +10,77 @@ drift out of sync with `pz_agent_core.version`.
 
 ## [Unreleased]
 
+### Added
+
+- **`safety.disabled_capabilities`: switch a capability off by name.** The
+  state `disabled_by_policy` existed, the mod guarded on it, `PermissionEngine`
+  refused on it with a message written for a user — *"X is switched off by
+  configuration"* — and `docs/COMPATIBILITY.md`, which ships inside the Windows
+  archive, listed it as "available, but configuration forbids it". No
+  configuration could produce it: the only constructor was called from three
+  tests, there was no key to write, and unknown keys are hard errors here, so
+  anything an operator invented was rejected. The page's own warning three rows
+  below — that a panic stop cannot reach a sleeping character — gave a cautious
+  reader a concrete reason to want the switch the same page described.
+  Implemented rather than documented away, the way the multiplayer refusal was.
+  Applied by the ledger rather than by editing the capability report, because
+  the report is evidence about the install and a user's decision is not a
+  finding about it; `status` reports a switched-off capability with that reason
+  instead of dropping the name; an unknown name is a configuration error.
+
 ### Fixed
+
+- **`game.install_dir` and `game.user_dir` now do something.** Both were parsed,
+  validated, typed and read by nothing, while `doctor`'s own remediation for
+  `PZD001`, `docs/TROUBLESHOOTING.md` for `PZD001` and `PZD003`, and
+  `configs/mcp/README.md` all told a blocked user to set them. Those two
+  failures brick every other command — a GOG or manual copy Steam does not
+  list, a profile moved by OneDrive or `-cachedir` — so the one documented
+  escape hatch produced "configuration is valid" and then the identical failure
+  telling the user to do what they had just done. Discovery now runs a second
+  pass with the configured paths. Precedence is command line, then
+  configuration, then discovery. A configured path that does not exist is
+  reported *at that path* rather than falling back to a search, so a typo is
+  visible instead of hidden behind the original error.
+- **`safety.panic_hotkey` no longer accepts a value it cannot bind.**
+  `PZAgent_Main.lua` binds DirectInput scancode 88 directly and reads no
+  configuration, so every value other than `F12` bound nothing — and this is the
+  stop button. A user rebinding away from F12 (Steam's default screenshot key,
+  so there is a real reason to) was told "configuration is valid" and had bound
+  nothing at all. Any other value is now a hard error naming the two routes that
+  do work: `pz-agent stop`, and the `panic.stop` sentinel. Rebinding for real
+  needs the mod to read a published keycode *and* a live run to prove the new
+  key reaches the stop; until both exist, saying so is the honest answer.
+- **The mod can publish `experimental`.** `CapabilityRuntime` reads
+  `adapter.experimental` and `Toolkit.declare` never carried the field, so it
+  was read in one place and written in none — the same shape as the very first
+  defect on this branch. Two adapters carried comments saying "the probe caps
+  this at experimental" and both published as ordinary `available_unverified`,
+  while `docs/PROTOCOL.md` documents `capabilities.json` with an example showing
+  a state its own writer could not emit. `survival_sleep` and
+  `drink_world_source` declare it now.
+- **Three documents told users to run commands that do not exist.**
+  `SECURITY.md` — the page a vulnerability reporter lands on — said to check a
+  support bundle with `pz-agent logs --redact --verify` before attaching it to a
+  public issue; there is no `--redact`, so the single gate between a reporter
+  and an unredacted archive was an instruction that exits 2. `PRIVACY.md` said
+  `pz-agent memory --forget` clears the memory store; there is no `memory`
+  command, and the real one — `remember forget` — appeared in no document at
+  all. `docs/TROUBLESHOOTING.md` sent a user to `pz-agent status --explain` for
+  the food policy's rejection list, and additionally said the thresholds are
+  "in configuration" when `[safety]` holds four keys and none of them is one.
+  All three corrected, and `tests/contract/test_documented_commands_parse.py`
+  now puts every `pz-agent` command line any shipped document prints through
+  the real parser — it is what found the third one.
+- **The reflex guard's comment described the opposite of the running system.**
+  `ReflexConfig.block_at` said the engine's threat threshold and its own compare
+  against two inputs of which "only one is filled in by anything". Both are
+  filled in and both are live: `Observe.lua` sets the danger floor from the
+  squares around the player, and the guard takes the higher of that and its own
+  assessment. A maintainer trusting the comment would have concluded
+  `ActionEngine.threat_threshold` was dead configuration — and it is the only
+  thing that interrupts a two-minute `literature.read` when a zombie closes,
+  because the guard cannot run while the engine holds the tick.
 
 - **The sidecar now writes the log nineteen live scenarios tell an operator to
   collect.** `DiagnosticLog` was complete — rotating, redacting, level-filtered,

@@ -230,7 +230,7 @@ session is `INVALID_REF`, not a retryable miss.
 | `available_unverified` | The symbol exists in the local files; nothing has exercised it |
 | `experimental` | Works, but not reliably enough to use unattended |
 | `unsupported` | No verified API. The reason is recorded |
-| `disabled_by_policy` | Available, but configuration forbids it |
+| `disabled_by_policy` | Available, and listed in `safety.disabled_capabilities` |
 
 A static scan of local Lua files can produce `available_unverified` at best.
 Only a live runtime confirmation produces `verified`, and a report loaded from a

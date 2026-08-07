@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final
 
+from pz_agent_core.capabilities import PROBES_BY_NAME
 from pz_agent_core.planner.providers import (
     DEFAULT_CONNECT_TIMEOUT_S,
     DEFAULT_MAX_ATTEMPTS,
@@ -65,6 +66,15 @@ MAX_AUTONOMOUS_RADIUS: Final = 100
 MAX_PLAN_STEPS: Final = 32
 
 MAX_HOTKEY_LEN: Final = 16
+
+#: The key the mod actually binds. ``PZAgent_Main.lua`` hardcodes DirectInput
+#: scancode 88 — F12 — deliberately, rather than reading a ``Keyboard`` global
+#: whose presence in build 42.20 nobody has probed. Named here so the one place
+#: that refuses another value and the one place that documents it cannot drift
+#: apart. Rebinding needs the mod to read a published keycode *and* a live run
+#: to prove the new key reaches the stop; until both exist, saying so is the
+#: honest answer and silently accepting the setting is not.
+BOUND_PANIC_HOTKEY: Final = "F12"
 
 #: Providers this build can actually run. ``none`` — the deterministic path —
 #: stays the default: it needs no network, no key and no endpoint, and it is the
@@ -159,6 +169,21 @@ _STR: Final = "string"
 _BOOL: Final = "boolean"
 _INT: Final = "integer"
 
+#: An array of quoted strings. One key uses it — ``safety.disabled_capabilities``
+#: — and it exists because that key is a *set* of names: spelling it as a
+#: comma-joined string would make "did I get the separator right" a thing the
+#: user has to guess about a safety control.
+_STR_LIST: Final = "string-list"
+
+#: Entries one list-valued key may hold. Twelve probes exist; the bound is well
+#: clear of that and keeps a pasted file from becoming an unbounded loop.
+MAX_LIST_ITEMS: Final = 64
+
+#: Capability names ``safety.disabled_capabilities`` will accept, taken from the
+#: probe table rather than restated, so a probe added tomorrow is switchable off
+#: the same day and a name this file invented could never validate.
+KNOWN_CAPABILITIES: Final = tuple(sorted(PROBES_BY_NAME))
+
 
 def _transport_keys() -> dict[str, FieldSpec]:
     """The bounds every HTTP-backed provider shares.
@@ -209,6 +234,7 @@ SCHEMA: Final[Mapping[str, Mapping[str, FieldSpec]]] = {
         "manual_takeover": FieldSpec(_BOOL, True),
         "max_autonomous_radius": FieldSpec(_INT, 30, minimum=1, maximum=MAX_AUTONOMOUS_RADIUS),
         "allow_multiplayer": FieldSpec(_BOOL, False),
+        "disabled_capabilities": FieldSpec(_STR_LIST, [], choices=KNOWN_CAPABILITIES),
     },
     "planner": {
         "provider": FieldSpec(_STR, "none", choices=SUPPORTED_PROVIDERS),
@@ -301,6 +327,12 @@ def _toml_scalar(value: Any) -> str:
         return "true" if value else "false"
     if isinstance(value, int):
         return str(value)
+    if isinstance(value, list):
+        # Rendered as an array rather than as str(list), which produces
+        # ``"['a']"`` — a quoted string that parses, validates as the wrong type
+        # and makes the support bundle's copy of the file disagree with the
+        # user's. What this method renders has to load again as what went in.
+        return "[" + ", ".join(_toml_scalar(item) for item in value) + "]"
     escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
     return f'"{escaped}"'
 
@@ -523,10 +555,49 @@ def _closest(key: str, candidates: Sequence[str]) -> str | None:
     return None if best is None else best[1]
 
 
+def _check_list(dotted: str, raw: Any, spec: FieldSpec) -> tuple[Any, ConfigProblem | None]:
+    """One array of quoted strings, checked against the names it may hold.
+
+    A misspelt entry is an error rather than an ignored line. The key names
+    capabilities to switch *off*, so an entry that matches nothing would leave
+    the user believing they disabled something and leave the agent free to use
+    it — the same failure the module docstring refuses for unknown keys, and
+    with more at stake.
+    """
+    if not isinstance(raw, list):
+        return None, _type_problem(dotted, raw, "an array of quoted strings")
+    if len(raw) > MAX_LIST_ITEMS:
+        return None, ConfigProblem(
+            path=dotted,
+            code=CODE_OUT_OF_RANGE,
+            detail=f"{len(raw)} entries; the most this key takes is {MAX_LIST_ITEMS}",
+            remediation=f"list at most {MAX_LIST_ITEMS} names",
+        )
+    cleaned: list[str] = []
+    for entry in raw:
+        if not isinstance(entry, str) or not entry:
+            return None, _type_problem(dotted, entry, "a quoted string")
+        if spec.choices and entry not in spec.choices:
+            return None, ConfigProblem(
+                path=dotted,
+                code=CODE_NOT_ALLOWED,
+                detail=f"{entry!r} is not a capability this build knows",
+                remediation=(
+                    "use one of: " + ", ".join(spec.choices) + ". Run 'pz-agent doctor' to "
+                    "see the state each one is currently in"
+                ),
+            )
+        if entry not in cleaned:
+            cleaned.append(entry)
+    return cleaned, None
+
+
 def _check_value(dotted: str, raw: Any, spec: FieldSpec) -> tuple[Any, ConfigProblem | None]:
     """Type-, choice- and range-check one value."""
     if raw is None and spec.nullable:
         return None, None
+    if spec.kind == _STR_LIST:
+        return _check_list(dotted, raw, spec)
     if spec.kind == _BOOL:
         if not isinstance(raw, bool):
             return None, _type_problem(dotted, raw, "true or false")
@@ -726,6 +797,25 @@ def _forbidden(values: Mapping[str, Mapping[str, Any]]) -> list[ConfigProblem]:
                     "loads is a flag someone will rely on."
                 ),
                 remediation="remove it, or set it to false",
+            )
+        )
+    hotkey = str(values["safety"]["panic_hotkey"])
+    if hotkey.upper() != BOUND_PANIC_HOTKEY:
+        problems.append(
+            ConfigProblem(
+                path="safety.panic_hotkey",
+                code=CODE_NOT_ALLOWED,
+                detail=(
+                    f"this build's panic key is fixed at {BOUND_PANIC_HOTKEY}. The mod binds "
+                    f"its scancode directly and reads no configuration, so {hotkey!r} would "
+                    "bind nothing — and this is the stop button, which is the last setting "
+                    "that may appear to work and not"
+                ),
+                remediation=(
+                    f'set it to "{BOUND_PANIC_HOTKEY}". To stop the agent by another route, '
+                    "run 'pz-agent stop', or create the file panic.stop in the exchange "
+                    "directory — the mod obeys it while it is present"
+                ),
             )
         )
     return problems

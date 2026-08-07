@@ -173,6 +173,46 @@ print("- nothing published claims an action outside the whitelist")
 local pending = PZ.Adapters.PENDING_PROTOCOL or {}
 equal(#pending, 0, "no adapter claims an action the protocol does not know")
 
+print("- the two capabilities 12.4 caps are published as experimental")
+
+-- CapabilityRuntime reads `adapter.experimental` and publishes EXPERIMENTAL
+-- instead of AVAILABLE_UNVERIFIED when it is set. Toolkit.declare carried no
+-- such field, so the flag was read here and written nowhere: two adapters had
+-- comments saying "the probe caps this at experimental" and both published as
+-- ordinary unverified, while docs/PROTOCOL.md documents capabilities.json with
+-- an example showing a state its own writer could not emit.
+--
+-- Asserted against the capability names rather than the adapters, because what
+-- an operator reads is the published report and the report is keyed that way.
+local EXPERIMENTAL_CAPABILITIES = {
+  survival_sleep = true,
+  drink_world_source = true,
+}
+
+local declared = {}
+for index = 1, #published do
+  local adapter = published[index]
+  if adapter.capability ~= nil then
+    declared[adapter.capability] = adapter.experimental == true
+  end
+end
+
+for capability in pairs(EXPERIMENTAL_CAPABILITIES) do
+  ok(
+    declared[capability] == true,
+    capability .. " declares itself experimental, so the runtime can publish that state"
+  )
+end
+
+for capability, isExperimental in pairs(declared) do
+  if not EXPERIMENTAL_CAPABILITIES[capability] then
+    ok(
+      isExperimental == false,
+      capability .. " does not claim an experimental ceiling it has no reason for"
+    )
+  end
+end
+
 print("- every adapter names the engine symbols it needs")
 
 for index = 1, #published do

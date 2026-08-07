@@ -132,7 +132,7 @@ At any moment, any of these:
 .venv\Scripts\pz-agent stop
 ```
 
-- press the panic hotkey in game (`F12` by default);
+- press the panic hotkey in game (**F12**, fixed in this build — `safety.panic_hotkey` refuses any other value rather than binding nothing);
 - say "stop" to the voice adapter — it bypasses everything;
 - **just move.** Any manual input cancels automation immediately.
 

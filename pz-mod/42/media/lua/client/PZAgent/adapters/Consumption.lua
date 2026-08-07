@@ -610,6 +610,11 @@ sourceArgs.source_ref = { type = ARG.REF, required = true, kinds = { square = tr
 local DrinkSource = toolkit().declare({
   name = "consume.drink_source",
   capability = toolkit().CAPABILITY.DRINK_WORLD_SOURCE,
+  -- §12.4 lists the world water action as unconfirmed, so the ceiling is
+  -- `experimental` rather than `available_unverified` even when every symbol
+  -- resolves. The file header has said so since this adapter was written; this
+  -- is the line that makes the published report say it too.
+  experimental = true,
   requires = DRINK_SOURCE_REQUIRES,
   timeout_ms = Consumption.TIMEOUT_MS,
   poll_interval_ms = Consumption.POLL_MS,

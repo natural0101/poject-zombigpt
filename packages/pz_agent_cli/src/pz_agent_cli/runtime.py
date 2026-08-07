@@ -45,7 +45,7 @@ from __future__ import annotations
 
 import time
 from collections import OrderedDict, deque
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path
@@ -495,6 +495,7 @@ class CapabilityRecord:
         detail: str,
         *,
         notes: Sequence[str] = (),
+        disabled: Collection[str] = (),
     ) -> CapabilityRecord:
         """Summarise *report* for the status readout.
 
@@ -502,18 +503,28 @@ class CapabilityRecord:
         verified capability is usable: they are different claims. Usable means
         the symbols are on this install; verified means an action actually ran
         and its postcondition was observed in this session.
+
+        A capability the user switched off is removed from ``usable`` and given
+        a reason in ``refused``, so ``status`` says *why* rather than leaving a
+        name that silently stopped appearing. It stays in ``verified`` when it
+        is: a live ack happened, and the record of that is evidence about the
+        install rather than about the current setting.
         """
         verified = tuple(
             sorted(c.name for c in report.capabilities if c.state is CapabilityState.VERIFIED)
         )
+        switched_off = frozenset(disabled)
+        refused = dict(report.unusable_reasons())
+        for name in sorted(switched_off):
+            refused[name] = "switched off in config.toml (safety.disabled_capabilities)"
         return cls(
             resolved=True,
             detail=detail,
             build=report.build,
             revision=report.revision,
-            usable=report.usable_names(),
+            usable=tuple(n for n in report.usable_names() if n not in switched_off),
             verified=verified,
-            refused=dict(report.unusable_reasons()),
+            refused=refused,
             notes=tuple(notes)[:MAX_NOTES],
         )
 
@@ -638,6 +649,16 @@ class CapabilityLedger:
     #: a confirmation can never write the report inside it.
     protected_roots: tuple[Path, ...] = ()
     notes: tuple[str, ...] = ()
+    #: Capabilities the user switched off in ``config.toml``. The one input to
+    #: this class that is not evidence — it is a decision, and it only ever
+    #: subtracts. ``CapabilityState.DISABLED_BY_POLICY`` and the refusal
+    #: ``PermissionEngine`` prints for it ("switched off by configuration")
+    #: existed, and both were unreachable: no configuration could produce the
+    #: state, while ``docs/COMPATIBILITY.md`` — which ships in the Windows
+    #: archive — listed it as "available, but configuration forbids it" three
+    #: rows above its own warning that ``survival_sleep`` cannot be reached by a
+    #: panic stop.
+    disabled: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
         if not self.detail:
@@ -648,7 +669,16 @@ class CapabilityLedger:
         return self.report is not None
 
     def usable(self, name: str) -> bool:
-        """The :data:`~pz_agent_core.actions.engine.CapabilityCheck` for this session."""
+        """The :data:`~pz_agent_core.actions.engine.CapabilityCheck` for this session.
+
+        The disabled set is applied *here* rather than by editing the report,
+        because the report is the evidence ledger: it records what the install
+        can do, and a user's decision is not a finding about the install. It
+        also means a capability switched off and then switched back on needs no
+        rescan to become usable again.
+        """
+        if name in self.disabled:
+            return False
         report = self.report
         return report is not None and report.usable(name)
 
@@ -656,7 +686,9 @@ class CapabilityLedger:
         report = self.report
         if report is None:
             return CapabilityRecord.unresolved(self.detail, notes=self.notes)
-        return CapabilityRecord.from_report(report, self.detail, notes=self.notes)
+        return CapabilityRecord.from_report(
+            report, self.detail, notes=self.notes, disabled=self.disabled
+        )
 
     def publish(self) -> CapabilityRecord:
         """Write the record where ``status`` reads it. Returns what was written.

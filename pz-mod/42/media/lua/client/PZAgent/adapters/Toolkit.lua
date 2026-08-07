@@ -1182,6 +1182,13 @@ function Toolkit.declare(spec)
     action = spec.name,
     name = spec.name,
     capability = spec.capability,
+    -- Read by PZAgent.CapabilityRuntime, which publishes `experimental` instead
+    -- of `available_unverified` when it is set. It was read there and set here
+    -- by nothing, so the mod could not report the state at all: two adapters
+    -- carried comments saying "the probe caps this at experimental" and both
+    -- published as ordinary unverified, while docs/PROTOCOL.md documents the
+    -- file with an example showing a state its writer could not emit.
+    experimental = spec.experimental or false,
     args = spec.args,
     required_symbols = spec.requires or {},
 
