@@ -14,17 +14,19 @@ than assuming.
 
 from __future__ import annotations
 
+import secrets
 import sys
 import threading
 import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
 from pz_agent_core.rpc.descriptor import FAMILY_PIPE, FAMILY_UNIX, RpcDescriptor
-from pz_agent_core.rpc.token import issue_token
+from pz_agent_core.rpc.token import MIN_TOKEN_BYTES, issue_token, read_token
 from pz_agent_core.rpc.transport import (
     AddressTooLong,
     RpcClient,
@@ -113,6 +115,47 @@ class TestTheLinkWorks:
 
 
 class TestAuthentication:
+    def test_the_key_the_server_holds_is_the_key_a_client_reads(self, tmp_path: Path) -> None:
+        """The seam the token bug fell through, and nothing was watching it.
+
+        `issue_token` returns the secret *and* writes it. The server is started
+        with the returned value; a client reads the file. Every test held both
+        ends of that in memory, so nobody compared the two — and on Windows they
+        differed, because `os.open` defaults to text mode and turned a `0x0A`
+        inside the secret into two bytes. About one token in eight contains a
+        newline, so one Windows run in eight refused a connection that should
+        have been fine.
+
+        The token is forced to contain a newline rather than waited for: at one
+        in eight, a random token makes this pass by luck seven times out of
+        eight, which is worse than not testing it.
+        """
+        runtime = tmp_path / "runtime"
+        runtime.mkdir(parents=True)
+        forced = b"\xa1" * 7 + b"\n" + b"\xb2" * 8 + b"\r" + b"\xc3" * 15
+        assert len(forced) == MIN_TOKEN_BYTES
+
+        with mock.patch.object(secrets, "token_bytes", return_value=forced):
+            issued = issue_token(runtime)
+
+        assert issued == forced, "issue_token did not return what it was given"
+        assert read_token(runtime) == issued, (
+            "the file does not hold the key the server was handed; a client "
+            "reading it would authenticate with a secret that was never issued"
+        )
+
+        server = RpcServer(new_address(runtime), authkey=issued, handler=_echo)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            from_file = read_token(runtime)
+            client = RpcClient(server.descriptor(), authkey=from_file, deadline=GRACE)
+
+            assert client.call("session.status").ok
+        finally:
+            server.close()
+            thread.join(timeout=GRACE)
+
     def test_the_wrong_key_cannot_call_anything(self, serving: Start) -> None:
         harness = serving(_echo)
 
