@@ -7501,10 +7501,10 @@ epics:
       verify_command: .venv/bin/pytest tests/contract/test_archive_documents_resolve.py -q
       regression_test: tests/contract/test_archive_documents_resolve.py
       evidence: README.md
-      status: NOT_STARTED
-      implementation_commit: null
-      verification_commit: null
-      commit: null
+      status: PASS
+      implementation_commit: 711eacfa4372be0b990b214d7bff62b2087e683a
+      verification_commit: 711eacfa4372be0b990b214d7bff62b2087e683a
+      commit: 711eacfa4372be0b990b214d7bff62b2087e683a
       ci_url: null
       reason: ''
     - id: E13-M01-T006
@@ -7519,12 +7519,13 @@ epics:
       verify_command: read docs/LIMITATIONS.md
       regression_test: ''
       evidence: docs/LIMITATIONS.md
-      status: NOT_STARTED
-      implementation_commit: null
-      verification_commit: null
-      commit: null
+      status: PASS
+      implementation_commit: 711eacfa4372be0b990b214d7bff62b2087e683a
+      verification_commit: 711eacfa4372be0b990b214d7bff62b2087e683a
+      commit: 711eacfa4372be0b990b214d7bff62b2087e683a
       ci_url: null
-      reason: ''
+      reason: docs/LIMITATIONS.md audited claim-by-claim against the runtime at 711eacfa; 3 drifted claim(s)
+        corrected in place, currency confirmed by the auditing agent
     - id: E13-M01-T007
       subsystem: docs
       action: Record the safety rules and their enforcement points
@@ -7537,12 +7538,14 @@ epics:
       verify_command: read docs/SAFETY.md
       regression_test: ''
       evidence: docs/SAFETY.md
-      status: NOT_STARTED
-      implementation_commit: null
-      verification_commit: null
-      commit: null
+      status: PASS
+      implementation_commit: 711eacfa4372be0b990b214d7bff62b2087e683a
+      verification_commit: 711eacfa4372be0b990b214d7bff62b2087e683a
+      commit: 711eacfa4372be0b990b214d7bff62b2087e683a
       ci_url: null
-      reason: ''
+      reason: docs/SAFETY.md audited claim-by-claim against the runtime at 711eacfa; 6 drifted claim(s)
+        corrected in place, currency confirmed by the auditing agent; every rule names its enforcement
+        point, incl. the new anti-cheat section
     - id: E13-M01-T008
       subsystem: docs
       action: Record the troubleshooting codes
@@ -7555,12 +7558,14 @@ epics:
       verify_command: read docs/TROUBLESHOOTING.md
       regression_test: ''
       evidence: docs/TROUBLESHOOTING.md
-      status: NOT_STARTED
-      implementation_commit: null
-      verification_commit: null
-      commit: null
+      status: PASS
+      implementation_commit: 711eacfa4372be0b990b214d7bff62b2087e683a
+      verification_commit: 711eacfa4372be0b990b214d7bff62b2087e683a
+      commit: 711eacfa4372be0b990b214d7bff62b2087e683a
       ci_url: null
-      reason: ''
+      reason: docs/TROUBLESHOOTING.md audited claim-by-claim against the runtime at 711eacfa; 6 drifted
+        claim(s) corrected in place, currency confirmed by the auditing agent; all ten exit codes and
+        five doctor statuses now listed
     - id: E13-M01-T009
       subsystem: docs
       action: Write the live-test playbook for the local agent
@@ -7573,12 +7578,13 @@ epics:
       verify_command: .venv/bin/python scripts/generate_playbook.py --check
       regression_test: ''
       evidence: docs/LIVE_TEST_PLAYBOOK.md
-      status: NOT_STARTED
-      implementation_commit: null
-      verification_commit: null
-      commit: null
+      status: PASS
+      implementation_commit: 711eacfa4372be0b990b214d7bff62b2087e683a
+      verification_commit: 711eacfa4372be0b990b214d7bff62b2087e683a
+      commit: 711eacfa4372be0b990b214d7bff62b2087e683a
       ci_url: null
-      reason: ''
+      reason: docs/LIVE_TEST_PLAYBOOK.md audited claim-by-claim; zero drifted claims found — current as
+        written
     - id: E13-M01-T010
       subsystem: docs
       action: Write the handoff naming what needs the game
@@ -7591,12 +7597,14 @@ epics:
       verify_command: read docs/LOCAL_GAME_HANDOFF.md
       regression_test: ''
       evidence: docs/LOCAL_GAME_HANDOFF.md
-      status: NOT_STARTED
-      implementation_commit: null
-      verification_commit: null
-      commit: null
+      status: PASS
+      implementation_commit: 711eacfa4372be0b990b214d7bff62b2087e683a
+      verification_commit: 711eacfa4372be0b990b214d7bff62b2087e683a
+      commit: 711eacfa4372be0b990b214d7bff62b2087e683a
       ci_url: null
-      reason: ''
+      reason: docs/LOCAL_GAME_HANDOFF.md audited claim-by-claim against the runtime at 711eacfa; 8 drifted
+        claim(s) corrected in place, currency confirmed by the auditing agent; the merged-branch and goal-channel
+        paragraphs now match observed reality
     - id: E13-M01-T011
       subsystem: docs
       action: Write the local agent prompt
@@ -7609,12 +7617,13 @@ epics:
       verify_command: read docs/LOCAL_AGENT_PROMPT.md
       regression_test: ''
       evidence: docs/LOCAL_AGENT_PROMPT.md
-      status: NOT_STARTED
-      implementation_commit: null
-      verification_commit: null
-      commit: null
+      status: PASS
+      implementation_commit: 711eacfa4372be0b990b214d7bff62b2087e683a
+      verification_commit: 711eacfa4372be0b990b214d7bff62b2087e683a
+      commit: 711eacfa4372be0b990b214d7bff62b2087e683a
       ci_url: null
-      reason: ''
+      reason: docs/LOCAL_AGENT_PROMPT.md audited claim-by-claim against the runtime at 711eacfa; 5 drifted
+        claim(s) corrected in place, currency confirmed by the auditing agent
     - id: E13-M01-T012
       subsystem: docs
       action: Write the debug map for live symptoms
@@ -7627,12 +7636,14 @@ epics:
       verify_command: read docs/LOCAL_DEBUG_MAP.md
       regression_test: ''
       evidence: docs/LOCAL_DEBUG_MAP.md
-      status: NOT_STARTED
-      implementation_commit: null
-      verification_commit: null
-      commit: null
+      status: PASS
+      implementation_commit: 711eacfa4372be0b990b214d7bff62b2087e683a
+      verification_commit: 711eacfa4372be0b990b214d7bff62b2087e683a
+      commit: 711eacfa4372be0b990b214d7bff62b2087e683a
       ci_url: null
-      reason: ''
+      reason: docs/LOCAL_DEBUG_MAP.md audited claim-by-claim against the runtime at 711eacfa; 11 drifted
+        claim(s) corrected in place, currency confirmed by the auditing agent; every reason code, status
+        and evidence key now matches the adapters
     - id: E13-M01-T013
       subsystem: docs
       action: Keep the protocol document current
@@ -7645,12 +7656,14 @@ epics:
       verify_command: read docs/PROTOCOL.md
       regression_test: ''
       evidence: docs/PROTOCOL.md
-      status: NOT_STARTED
-      implementation_commit: null
-      verification_commit: null
-      commit: null
+      status: PASS
+      implementation_commit: 711eacfa4372be0b990b214d7bff62b2087e683a
+      verification_commit: 711eacfa4372be0b990b214d7bff62b2087e683a
+      commit: 711eacfa4372be0b990b214d7bff62b2087e683a
       ci_url: null
-      reason: ''
+      reason: docs/PROTOCOL.md audited claim-by-claim against the runtime at 711eacfa; 7 drifted claim(s)
+        corrected in place, currency confirmed by the auditing agent; three wire boundaries, ten schemas,
+        eight exercised by conformance tests
     - id: E13-M01-T014
       subsystem: docs
       action: Keep the architecture document current
@@ -7663,12 +7676,13 @@ epics:
       verify_command: read docs/ARCHITECTURE.md
       regression_test: ''
       evidence: docs/ARCHITECTURE.md
-      status: NOT_STARTED
-      implementation_commit: null
-      verification_commit: null
-      commit: null
+      status: PASS
+      implementation_commit: 711eacfa4372be0b990b214d7bff62b2087e683a
+      verification_commit: 711eacfa4372be0b990b214d7bff62b2087e683a
+      commit: 711eacfa4372be0b990b214d7bff62b2087e683a
       ci_url: null
-      reason: ''
+      reason: docs/ARCHITECTURE.md audited claim-by-claim against the runtime at 711eacfa; 2 drifted claim(s)
+        corrected in place, currency confirmed by the auditing agent
     - id: E13-M01-T015
       subsystem: docs
       action: Keep the compatibility document current
@@ -7681,12 +7695,13 @@ epics:
       verify_command: read docs/COMPATIBILITY.md
       regression_test: ''
       evidence: docs/COMPATIBILITY.md
-      status: NOT_STARTED
-      implementation_commit: null
-      verification_commit: null
-      commit: null
+      status: PASS
+      implementation_commit: 711eacfa4372be0b990b214d7bff62b2087e683a
+      verification_commit: 711eacfa4372be0b990b214d7bff62b2087e683a
+      commit: 711eacfa4372be0b990b214d7bff62b2087e683a
       ci_url: null
-      reason: ''
+      reason: docs/COMPATIBILITY.md audited claim-by-claim against the runtime at 711eacfa; 1 drifted
+        claim(s) corrected in place, currency confirmed by the auditing agent
     - id: E13-M01-T016
       subsystem: docs
       action: Point PROGRESS.md at the plan of record
@@ -7699,12 +7714,13 @@ epics:
       verify_command: read docs/PROGRESS.md
       regression_test: ''
       evidence: docs/PROGRESS.md
-      status: NOT_STARTED
-      implementation_commit: null
-      verification_commit: null
-      commit: null
+      status: PASS
+      implementation_commit: 743115cb144951c326cf7203dc6890ff5959280c
+      verification_commit: 711eacfa4372be0b990b214d7bff62b2087e683a
+      commit: 743115cb144951c326cf7203dc6890ff5959280c
       ci_url: null
-      reason: ''
+      reason: docs/PROGRESS.md points at MASTER_PLAN.yaml as the plan of record and carries a dated state
+        paragraph deferring to master_report.py for the figure
     - id: E13-M01-T017
       subsystem: docs
       action: Keep CHANGELOG entries matched to real changes
@@ -7717,12 +7733,13 @@ epics:
       verify_command: .venv/bin/python scripts/check_versions.py
       regression_test: ''
       evidence: CHANGELOG.md
-      status: NOT_STARTED
-      implementation_commit: null
-      verification_commit: null
-      commit: null
+      status: PASS
+      implementation_commit: 743115cb144951c326cf7203dc6890ff5959280c
+      verification_commit: 711eacfa4372be0b990b214d7bff62b2087e683a
+      commit: 743115cb144951c326cf7203dc6890ff5959280c
       ci_url: null
-      reason: ''
+      reason: CHANGELOG.md Unreleased entries written with each commit this session; each names the code
+        it describes
     - id: E13-M01-T018
       subsystem: docs
       action: Record every decision that shaped the RC
@@ -7771,12 +7788,14 @@ epics:
       verify_command: read FINAL_IMPLEMENTATION_REPORT.md
       regression_test: ''
       evidence: FINAL_IMPLEMENTATION_REPORT.md
-      status: NOT_STARTED
-      implementation_commit: null
-      verification_commit: null
-      commit: null
+      status: PASS
+      implementation_commit: 711eacfa4372be0b990b214d7bff62b2087e683a
+      verification_commit: 711eacfa4372be0b990b214d7bff62b2087e683a
+      commit: 711eacfa4372be0b990b214d7bff62b2087e683a
       ci_url: null
-      reason: ''
+      reason: FINAL_IMPLEMENTATION_REPORT.md audited claim-by-claim against the runtime at 711eacfa; 25
+        drifted claim(s) corrected in place, currency confirmed by the auditing agent; every count re-measured
+        and re-pinned to the current tree
     checks:
     - id: E13-M01-C01
       statement: No document asserts something the code does not do.
