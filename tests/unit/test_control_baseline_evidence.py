@@ -43,6 +43,38 @@ _SHA = re.compile(r"\b[0-9a-f]{40}\b")
 _BRANCH_POINT: Final = "873037c081800cf4f4373b9307fc1cdff3140e99"
 
 
+def _shallow() -> bool:
+    """Whether this clone has been truncated.
+
+    A shallow clone does not contain the older commits, so `git cat-file` says
+    no for a SHA that is perfectly good. That is not the failure these tests are
+    looking for, and reporting it as one sends a reader hunting a typo in a file
+    that is correct. CI checks out with `fetch-depth: 0` for exactly this
+    reason; if that is ever removed, the message below says so rather than
+    letting the tests fail mysteriously.
+
+    Deliberately not a skip. A skipped test here would let the guarantee lapse
+    the moment somebody trimmed the checkout, which is precisely how a guard
+    stops guarding.
+    """
+    return (
+        subprocess.run(
+            ["git", "rev-parse", "--is-shallow-repository"],
+            capture_output=True,
+            text=True,
+            cwd=REPO_ROOT,
+            check=False,
+        ).stdout.strip()
+        == "true"
+    )
+
+
+_SHALLOW_HINT: Final = (
+    " — this clone is shallow, so the object is absent rather than wrong; "
+    "restore `fetch-depth: 0` on the checkout step"
+)
+
+
 def _resolves(sha: str) -> bool:
     return (
         subprocess.run(
@@ -74,7 +106,9 @@ def test_every_recorded_sha_resolves() -> None:
 
     assert found, "no full SHA was recorded, so nothing was pinned"
     unresolvable = sorted(sha for sha in found if not _resolves(sha))
-    assert unresolvable == [], f"recorded SHAs that no longer resolve: {unresolvable}"
+    assert unresolvable == [], f"recorded SHAs that no longer resolve: {unresolvable}" + (
+        _SHALLOW_HINT if _shallow() else ""
+    )
 
 
 def test_the_branch_point_is_recorded_and_reachable() -> None:
@@ -82,7 +116,9 @@ def test_the_branch_point_is_recorded_and_reachable() -> None:
     recorded = BRANCHES.read_text(encoding="utf-8")
 
     assert _BRANCH_POINT in recorded, "the branch point is not in the branch list"
-    assert _resolves(_BRANCH_POINT)
+    assert _resolves(_BRANCH_POINT), f"the branch point {_BRANCH_POINT} does not resolve" + (
+        _SHALLOW_HINT if _shallow() else ""
+    )
 
 
 def test_each_branch_line_names_a_branch_and_a_full_sha() -> None:

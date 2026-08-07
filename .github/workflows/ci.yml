@@ -24,6 +24,15 @@ jobs:
         python-version: ["3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The whole history, not the default single commit. The baseline
+          # evidence under docs/control/evidence/ records the SHAs this work
+          # started from, and tests/unit/test_control_baseline_evidence.py
+          # resolves every one of them with `git cat-file` — that resolution is
+          # what makes the file evidence rather than prose. On a shallow clone
+          # those objects are simply absent, so the test failed in CI for a
+          # reason that had nothing to do with the SHAs being wrong.
+          fetch-depth: 0
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
