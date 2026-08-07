@@ -20,6 +20,25 @@ That is why the effect is comparable with ``pz-agent disarm`` at all — the two
 commands reach the same disarmed session by different routes, and only one of
 them also reaches the game.
 
+The goal route is the other one, and it is a socket
+--------------------------------------------------
+
+A spoken goal used to be refused here on the grounds that no channel carried one
+into a running sidecar. It does now, so the refusal is gone and with it the only
+way a test could show a goal "went somewhere" without a wire existing. What
+replaces it is a real :class:`~pz_agent_core.rpc.transport.RpcServer` on a real
+socket, with a real descriptor and a real token, in the same state directory
+``pz-agent start`` would write them into — and the assertion is on what that
+server *received*. A bundle that refused locally leaves it empty however
+plausible the exception.
+
+Which method carries the goal is deliberately not asserted. ``docs/control/
+DECISIONS.md`` records the move from ``plan.execute`` to the typed goal channel,
+and both are methods of the same link reached through the same wiring function;
+what this file is responsible for is that the CLI's wiring reaches a core at all,
+with the spoken goal named in the request. The full round trip — admission,
+exclusivity, budget — is ``tests/contract/test_voice_goal_e2e.py``.
+
 What this file cannot test is a live TeamON session. The SDK is not installed
 here and its surface has never been verified from this repository, so
 ``voice run`` refuses on every real configuration — and that refusal is asserted
@@ -32,7 +51,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import threading
 import uuid
+from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final
@@ -53,7 +74,6 @@ from pz_agent_cli.context import EXIT_FAILURE, EXIT_OK, Workspace, resolve_works
 from pz_agent_cli.runtime import LoopLimits, SidecarLoop
 from pz_agent_cli.voice import (
     VOICE_RECORD_NAME,
-    GoalUnroutable,
     VoiceRecord,
     VoiceRefused,
     build_companion,
@@ -66,18 +86,60 @@ from pz_agent_cli.voice import (
 )
 from pz_agent_core.ipc.layout import IpcLayout
 from pz_agent_core.planner.providers import DEFAULT_TEAMON_KEY_ENV
-from pz_agent_core.protocol import DangerLevel, SessionMode
+from pz_agent_core.protocol import DangerLevel, JsonDict, SessionMode
+from pz_agent_core.rpc.descriptor import runtime_dir, write_descriptor
+from pz_agent_core.rpc.token import issue_token
+from pz_agent_core.rpc.transport import RpcServer, new_address
+from pz_agent_core.rpc.wire import ErrorCode, RpcRequest, RpcResponse
 from pz_agent_core.session.heartbeat import HeartbeatMonitor, Peer
 from pz_agent_core.version import PRODUCT_VERSION
 from pz_agent_voice import phrases
 from pz_agent_voice.adapters.fake import FakeVoiceAdapter
+from pz_agent_voice.adapters.teamon import TeamONTranscript
 from pz_agent_voice.driver import VoiceCompanion
-from pz_agent_voice.messages import VoiceIntent
+from pz_agent_voice.messages import VoiceGoal, VoiceIntent
 from pz_agent_voice.ports import VoiceServices
 from tests.fixtures.cli_worlds import CliWorld, make_world
 from tests.fixtures.voice_doubles import FakeTeamONClient, settle
 
 BUILD: Final = "42.20"
+
+#: Long enough that a loaded runner does not fail a happy path, short enough
+#: that a genuine hang ends one test rather than the suite's patience.
+GRACE: Final = 10.0
+
+#: The methods of the Local Core RPC link that carry a spoken goal into the
+#: sidecar. Two, because ``docs/control/DECISIONS.md`` records the move from the
+#: first to the second, and this file asserts that the request arrived rather
+#: than which of them carried it.
+GOAL_METHODS: Final[tuple[str, ...]] = ("plan.execute", "goal.submit")
+
+#: Where each of those two writes the goal, and what «поешь» has to be by the
+#: time it gets there. Hand-written on both sides: a params body derived from
+#: the encoder under test would assert that the encoder equals itself.
+GOAL_IN_PARAMS: Final[dict[str, tuple[str, str]]] = {
+    "plan.execute": ("goal", "eat"),
+    "goal.submit": ("kind", "satisfy_hunger"),
+}
+
+#: What the fixture core answers ``plan.execute`` with. Not defaults: the status
+#: is not the first member of its enum and a step carries both optional keys, so
+#: a decoder that dropped a field and fell back cannot pass.
+PLAN_ANSWER: Final[JsonDict] = {
+    "plan_id": "plan-9",
+    "status": "started",
+    "step_index": 2,
+    "steps": [
+        {
+            "index": 0,
+            "action": "movement.move_to",
+            "status": "succeeded",
+            "reason_code": "POSTCONDITION_MET",
+            "action_id": "action-4",
+        },
+        {"index": 1, "action": "consume.eat", "status": "started"},
+    ],
+}
 
 #: One tick per call, so every assertion below names the tick it is about.
 LIMITS: Final = LoopLimits(
@@ -153,6 +215,86 @@ class FakeMod:
         self.layout.panic_stop.write_text("", encoding="utf-8")
         self.beat()
         return True
+
+
+# ---------------------------------------------------------------------------
+# the sidecar side of the goal route
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class Core:
+    """A real RPC server on a real socket, and every request it was handed.
+
+    Deliberately not the shipped :class:`~pz_agent_mcp.remote.server.CoreRouter`:
+    what is under test here is the CLI's half of the link, and a router would
+    bring a session, an engine and a queue along with it — every one of which can
+    refuse for its own reasons, none of which are this file's subject.
+    """
+
+    state_dir: Path
+    server: RpcServer
+    thread: threading.Thread
+    seen: list[RpcRequest]
+
+    @property
+    def methods(self) -> list[str]:
+        return [request.method for request in self.seen]
+
+    def close(self) -> None:
+        self.server.close()
+        self.thread.join(timeout=GRACE)
+
+
+StartCore = Callable[[Path], Core]
+
+
+@pytest.fixture
+def start_core() -> Iterator[StartCore]:
+    """Bring up real cores in the state directories given, and reap them all."""
+    started: list[Core] = []
+
+    def _start(state_dir: Path) -> Core:
+        runtime = runtime_dir(state_dir)
+        runtime.mkdir(parents=True, exist_ok=True)
+        key = issue_token(runtime)
+        seen: list[RpcRequest] = []
+
+        def dispatch(request: RpcRequest) -> RpcResponse:
+            seen.append(request)
+            if request.method == "plan.execute":
+                return RpcResponse(id=request.id, ok=True, result=dict(PLAN_ANSWER))
+            if request.method == "goal.status":
+                return RpcResponse(
+                    id=request.id,
+                    ok=True,
+                    result={"active": None, "pending": [], "named": None},
+                )
+            # Anything else is answered honestly rather than with a body this
+            # fixture invented: the assertions that matter are about the request
+            # that arrived, and a made-up success would be the fabricated answer
+            # this project refuses everywhere else.
+            return RpcResponse(
+                id=request.id,
+                ok=False,
+                error_code=ErrorCode.UNKNOWN_METHOD,
+                error_message=(
+                    f"this fixture answers plan.execute and goal.status, not {request.method}"
+                ),
+            )
+
+        server = RpcServer(new_address(runtime), authkey=key, handler=dispatch)
+        write_descriptor(state_dir, server.descriptor())
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        core = Core(state_dir=state_dir, server=server, thread=thread, seen=seen)
+        started.append(core)
+        return core
+
+    yield _start
+
+    for core in started:
+        core.close()
 
 
 # ---------------------------------------------------------------------------
@@ -249,8 +391,17 @@ def assemble(tmp_path: Path, **config: Any) -> Listening:
     way would prove something about the test rather than about the command. Only
     the adapter is substituted, and it has to be: the shipped one needs a vendor
     SDK that is not installed, which is itself asserted below.
+
+    The state directory is moved to a one-letter path under *tmp_path*, and not
+    for tidiness: the goal route binds a Unix socket inside it, ``sun_path``
+    bounds that address to 100 bytes, and the profile directory a
+    :func:`~tests.fixtures.cli_worlds.make_world` machine hands out — a Cyrillic
+    account name under a pytest temporary directory — is well past it. Every
+    other path follows the override, so ``config.toml``, the voice record and the
+    logs stay where the commands look for them.
     """
     world = make_world(tmp_path)
+    world.ctx = world.ctx.with_overrides(state_dir=tmp_path / "s")
     write_config(world, **config)
     world.clock.freeze()
     workspace = resolve_workspace(world.ctx)
@@ -474,16 +625,19 @@ async def test_a_phrase_that_matches_nothing_is_reported_and_causes_no_action(
 
 
 @pytest.mark.asyncio
-async def test_a_spoken_goal_is_refused_and_submitted_nowhere(tmp_path: Path) -> None:
-    """The gap this build has, asserted as a gap rather than left to be discovered.
+async def test_a_spoken_goal_arrives_at_a_real_core_over_the_link(
+    tmp_path: Path, start_core: StartCore
+) -> None:
+    """The whole of T002, and the assertion is on what the server received.
 
-    There is no channel from a second process into the running sidecar's planner,
-    so the goal is refused and nothing is written anywhere. What must not happen
-    is a goal that quietly reaches the command queue: that would put the
-    microphone past the reflex guard and the capability gate in one step.
+    The core is started *after* the companion, which is not incidental: the link
+    resolves the descriptor and the token on every call, so a user may say «поешь»
+    to a companion that was listening before the sidecar existed. A wiring that
+    dialled once at construction would leave ``seen`` empty here.
     """
     with assemble(tmp_path) as live:
         live.arm()
+        core = start_core(live.workspace.state_dir)
         queue_before = live.mod.layout.command_queue.read_bytes() if _exists(live) else b""
         await live.start()
 
@@ -491,18 +645,76 @@ async def test_a_spoken_goal_is_refused_and_submitted_nowhere(tmp_path: Path) ->
 
         turn = live.companion.last_turn
         assert turn is not None
-        assert turn.plan is None
-        assert "GoalUnroutable" in turn.detail
+        assert turn.intent is VoiceIntent.GOAL
+        assert turn.goal is VoiceGoal.EAT
         queue_after = live.mod.layout.command_queue.read_bytes() if _exists(live) else b""
         await live.finish()
 
+    assert len(core.seen) == 1, f"the core was asked {core.methods}"
+    method = core.seen[0].method
+    assert method in GOAL_METHODS, f"{method} does not carry a goal into the sidecar"
+    key, token = GOAL_IN_PARAMS[method]
+    assert core.seen[0].params[key] == token, "the request did not name the goal that was spoken"
+    # The other half of the same claim: the microphone reached the core, and it
+    # reached it *only* through the core. A goal written into the mod's own queue
+    # would be past the reflex guard, the capability gate and the policy engine
+    # in one step.
     assert queue_after == queue_before, "a spoken goal reached the command queue"
-    with pytest.raises(GoalUnroutable):
-        live.services.plans.current()
+
+
+@pytest.mark.asyncio
+async def test_a_spoken_goal_with_no_sidecar_is_refused_out_loud(tmp_path: Path) -> None:
+    """No core at all: the companion says so, and still hears the next «стоп».
+
+    This is the state a user is in before ``pz-agent start``, and it is the one
+    the removed placeholder made permanent. The difference is that the refusal is
+    now the link's — "nothing was listening" — rather than this build's "there is
+    no such feature".
+    """
+    with assemble(tmp_path) as live:
+        live.arm()
+        await live.start()
+
+        await live.say("агент, поешь")
+        refused = [message.text for message in live.adapter.started]
+
+        await live.say("стоп")
+        assert live.mod.latch_requested(), "a failed goal left the stop word unheard"
+        await live.finish()
+
+    assert refused == [phrases.PLAN_REFUSED]
 
 
 def _exists(live: Listening) -> bool:
     return live.mod.layout.command_queue.is_file()
+
+
+def test_voice_check_asks_the_channel_and_reports_what_it_answered(
+    tmp_path: Path, start_core: StartCore
+) -> None:
+    """The command a user runs to find out whether a goal would land.
+
+    Run twice against one machine: once with a core listening and once after it
+    has stopped, with its descriptor still on disk naming this very much alive
+    process. Anything short of a connection reports both runs the same way, and
+    the second would be the answer "routed" about a socket nobody is accepting on.
+    """
+    world = make_world(tmp_path)
+    world.ctx = world.ctx.with_overrides(state_dir=tmp_path / "s")
+    core = start_core(resolve_workspace(world.ctx).state_dir)
+
+    assert world.run("voice", "check", "агент", "поешь") == EXIT_OK
+    listening = world.stdout
+
+    core.close()
+    world.reset_streams()
+    assert world.run("voice", "check", "агент", "поешь") == EXIT_OK
+    gone = world.stdout
+
+    assert core.methods == ["goal.status"], "the check submitted something to find out"
+    assert "reachable" in listening and "UNREACHABLE" not in listening
+    assert "UNREACHABLE" in gone
+    assert "pz-agent start" in gone
 
 
 @pytest.mark.asyncio
@@ -671,7 +883,91 @@ def test_a_supplied_teamon_client_is_what_gets_constructed(tmp_path: Path) -> No
     assert record is not None
     assert record.adapter == ADAPTER_TEAMON
     assert record.running is False, "the record still says listening after the stream ended"
-    assert record.goals_routed is False
+    assert record.goals_routed is True, "the companion that ran had a goal route and said it did"
+
+
+class RecordWatcher(FakeTeamONClient):
+    """A recogniser that reads the voice record before it yields anything.
+
+    The record a companion writes when it starts is rewritten when it exits, so
+    nothing asserted after the run can see it — and that first record is the one
+    ``pz-agent status`` reads in the only state where it matters: while something
+    is listening. Opening the transcript stream is the moment the companion is
+    up, which is why the look happens here rather than in the test body.
+    """
+
+    def __init__(self, path: Path) -> None:
+        super().__init__()
+        self.path = path
+        self.seen: VoiceRecord | None = None
+
+    async def transcripts(self) -> AsyncIterator[TeamONTranscript]:
+        self.seen = read_voice_record(self.path)
+        return await super().transcripts()
+
+
+def test_the_record_a_listening_companion_leaves_says_where_its_goals_go(
+    tmp_path: Path,
+) -> None:
+    """Read from inside the run, because that is when a user would run ``status``."""
+    world = make_world(tmp_path)
+    write_config(world)
+    world.ctx.env[DEFAULT_TEAMON_KEY_ENV] = FAKE_KEY  # type: ignore[index]
+    workspace = resolve_workspace(world.ctx)
+    watcher = RecordWatcher(workspace.state_dir / VOICE_RECORD_NAME)
+
+    assert run_voice_run(world.ctx, as_json=False, client=watcher) == EXIT_OK
+
+    assert watcher.seen is not None, "no record existed while the companion was listening"
+    assert watcher.seen.running is True
+    assert watcher.seen.goals_routed is True
+    # And the same fact said out loud to whoever started it.
+    assert "Core RPC link" in world.stdout
+
+
+def test_the_json_a_script_reads_says_where_the_goals_went(tmp_path: Path) -> None:
+    """``--json`` is the form a wrapper reads, and it carries the same fact.
+
+    Printed rather than only recorded, because a script that starts the
+    companion has no other way to find out whether the goals it is about to
+    speak have a channel at all — and a body that said ``false`` while the
+    record said ``true`` would be two answers to one question.
+    """
+    world = make_world(tmp_path)
+    write_config(world)
+    world.ctx.env[DEFAULT_TEAMON_KEY_ENV] = FAKE_KEY  # type: ignore[index]
+
+    assert run_voice_run(world.ctx, as_json=True, client=FakeTeamONClient()) == EXIT_OK
+
+    payload = json.loads(world.stdout)
+    assert payload["started"] is True
+    assert payload["goals_routed"] is True
+    assert payload["ok"] is True
+
+
+def test_the_log_records_that_the_companion_started_with_a_goal_route(tmp_path: Path) -> None:
+    """The half of the answer an operator has after the process is gone.
+
+    The record is rewritten on exit, so ``voice.start`` in the log is the only
+    place that still says what the companion had while it was listening — which
+    is the question behind "«поешь» did nothing" long after the terminal is
+    closed.
+    """
+    world = make_world(tmp_path)
+    write_config(world)
+    world.ctx.env[DEFAULT_TEAMON_KEY_ENV] = FAKE_KEY  # type: ignore[index]
+    workspace = resolve_workspace(world.ctx)
+
+    assert run_voice_run(world.ctx, as_json=False, client=FakeTeamONClient()) == EXIT_OK
+
+    written = (workspace.logs_dir / "pz-agent.jsonl").read_text(encoding="utf-8")
+    starts = [
+        record
+        for record in (json.loads(line) for line in written.splitlines() if line.strip())
+        if record["event"] == "voice.start"
+    ]
+    assert starts, "nothing in the log says a companion started"
+    assert starts[0]["fields"]["goals_routed"] is True
 
 
 def test_the_companion_writes_the_log_the_debug_map_sends_an_operator_to(
@@ -770,8 +1066,8 @@ def test_status_shows_voice_switched_off_as_off(tmp_path: Path) -> None:
     assert "voice.enabled is false" in world.stdout
 
 
-def test_status_says_a_companion_is_listening_and_what_it_cannot_do(tmp_path: Path) -> None:
-    """The record is written by the process that holds the adapter, and read here."""
+def a_listening_record(tmp_path: Path, *, goals_routed: bool) -> CliWorld:
+    """A machine whose state directory holds the record a running companion wrote."""
     world = make_world(tmp_path)
     write_config(world)
     workspace = resolve_workspace(world.ctx)
@@ -784,13 +1080,36 @@ def test_status_says_a_companion_is_listening_and_what_it_cannot_do(tmp_path: Pa
             detail="a companion is listening on teamon",
             pid=4242,
             started_at_ms=1_700_000_000_000,
+            goals_routed=goals_routed,
         ),
     )
+    return world
+
+
+def test_status_says_a_companion_is_listening_and_where_its_goals_go(tmp_path: Path) -> None:
+    """The record is written by the process that holds the adapter, and read here."""
+    world = a_listening_record(tmp_path, goals_routed=True)
 
     assert world.run("status") == EXIT_OK
 
     assert "LISTENING" in world.stdout
     assert "pid 4242" in world.stdout
+    assert "over the Core RPC link" in world.stdout
+    assert "reaches no planner" not in world.stdout
+
+
+def test_status_still_reads_a_record_written_without_a_goal_route(tmp_path: Path) -> None:
+    """A companion from the build that had none, described as it was.
+
+    ``goals_routed`` is a field rather than a sentence in the renderer precisely
+    so that this record — which a user may still have in their state directory —
+    is reported as what it was instead of being described with today's wiring.
+    """
+    world = a_listening_record(tmp_path, goals_routed=False)
+
+    assert world.run("status") == EXIT_OK
+
+    assert "LISTENING" in world.stdout
     assert "a spoken goal reaches no planner" in world.stdout
 
 

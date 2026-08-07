@@ -19,28 +19,75 @@ implementation detail:
 4. A transcript the recogniser is unsure of produces a question, never an
    action.
 
-What leaves this module towards the planner is a member of
-:class:`~.messages.VoiceGoal` inside a :class:`~pz_agent_mcp.ports.PlanRequest`.
-The transcript itself is read by the matcher in :mod:`.intent` and then dropped;
-it is never stored, never forwarded and never spoken back.
+What leaves this module towards the core is a :class:`~pz_agent_core.goals.
+GoalKind` and a range-checked :class:`~pz_agent_core.goals.GoalParams` inside a
+:class:`~pz_agent_core.goals.GoalRequest`. Both are closed vocabularies declared
+in the core; the transcript itself is read by the matcher in :mod:`.intent` and
+then dropped; it is never stored, never forwarded and never spoken back.
+
+The goal channel, not the plan channel
+--------------------------------------
+
+``docs/control/DECISIONS.md`` § "The voice companion routes through
+``goal.submit``, not ``plan.execute``" decided this and gave the reason:
+``PlanRequest.goal`` is a ``str`` with nowhere to carry a quantity, so
+"почитай двенадцать страниц" could only reach a planner as text — and text off a
+microphone is the one thing that may not cross. :data:`_GOAL_KIND` is that
+decision's mapping table, reproduced here because this is the module that
+applies it, and checked against the core's own tables at import.
+
+:attr:`~.messages.VoiceGoal.RESUME` is deliberately absent from that table. It
+names nothing to *do*; it names something to do about work already submitted,
+which is what :meth:`~pz_agent_mcp.ports.GoalPort.status` and the channel's own
+activation answer. Inventing a fifth :class:`~pz_agent_core.goals.GoalKind` for
+it would be a stub wearing an enum member's clothes.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Final
 
+from pz_agent_core.goals import (
+    GOAL_SPECS,
+    MAX_GOAL_STEPS,
+    MAX_GOAL_WALL_MS,
+    MIN_GOAL_WALL_MS,
+    NUMERIC_RANGES,
+    PARAM_NAMES,
+)
 from pz_agent_core.ipc.clocks import Clock
-from pz_agent_core.protocol import ActionStatus, DangerLevel
+from pz_agent_core.protocol import ActionStatus, DangerLevel, ReasonCode
 
 from . import phrases
-from .config import DEFAULT_VOICE_CONFIG, VoiceConfig
+from .config import (
+    DEFAULT_VOICE_CONFIG,
+    MAX_PLAN_REAL_SECONDS,
+    MAX_PLAN_STEPS,
+    VoiceConfig,
+)
 from .events import TtsEventStream
-from .intent import classify, is_stop
-from .messages import OutputKind, VoiceGoal, VoiceInput, VoiceIntent, VoiceOutput
+from .intent import classify, extract_quantities, is_stop
+from .messages import (
+    IntentRefusal,
+    OutputKind,
+    VoiceGoal,
+    VoiceInput,
+    VoiceIntent,
+    VoiceOutput,
+)
 from .ports import (
+    GoalBudget,
+    GoalKind,
+    GoalParams,
+    GoalPort,
+    GoalRecord,
+    GoalRequest,
+    GoalState,
     IdFactory,
     PlanRecord,
-    PlanRequest,
     SessionSnapshot,
     StopReport,
     VoiceServices,
@@ -56,6 +103,152 @@ TOPIC_STOP: Final = "stop"
 TOPIC_PLAN: Final = "plan"
 TOPIC_CLARIFY: Final = "clarify"
 TOPIC_SESSION: Final = "session"
+
+#: The spoken goals that name work, and the kind each becomes. Taken from the
+#: table in ``docs/control/DECISIONS.md`` and held against the core's own
+#: :data:`~pz_agent_core.goals.GOAL_SPECS` by :func:`_check_goal_tables`, so a
+#: kind that grows a required parameter stops this module importing rather than
+#: producing goals the channel will refuse one utterance at a time.
+_GOAL_KIND: Final[Mapping[VoiceGoal, GoalKind]] = MappingProxyType(
+    {
+        VoiceGoal.EAT: GoalKind.SATISFY_HUNGER,
+        VoiceGoal.DRINK: GoalKind.SATISFY_THIRST,
+        VoiceGoal.READ: GoalKind.READ_FOR_BOREDOM,
+    }
+)
+
+#: The spoken goals that are control verbs over a goal already submitted. Stated
+#: as a set rather than left as "whatever is missing from :data:`_GOAL_KIND`", so
+#: that a new member of :class:`~.messages.VoiceGoal` is an import failure and
+#: not a silently unroutable word.
+_CONTROL_GOALS: Final[frozenset[VoiceGoal]] = frozenset({VoiceGoal.RESUME})
+
+#: How many *spoken* units make one of the core's, per parameter. Speech says
+#: "восемьдесят процентов" and :data:`~pz_agent_core.goals.NUMERIC_RANGES` holds
+#: ``satisfy_to`` as a fraction of one, so a number has to be divided before it
+#: is range-checked or an ordinary request would be refused as far too large.
+#:
+#: :mod:`.intent` states the same fact privately for its own resolver and
+#: :mod:`.phrases` states it again to read a range out loud; neither exposes it,
+#: so it is restated here and pinned against ``NUMERIC_RANGES`` at import. Three
+#: statements of one scale is a drift risk worth naming rather than hiding: the
+#: fix is a public converter in :mod:`.intent`, which this module does not own.
+_SPOKEN_PER_CORE_UNIT: Final[Mapping[str, float]] = MappingProxyType(
+    {
+        "target_level": 1.0,
+        "satisfy_to": 100.0,
+        "pages": 1.0,
+    }
+)
+
+
+#: The one unit conversion between :class:`~.config.VoiceConfig`, which bounds a
+#: spoken command in seconds, and :class:`~pz_agent_core.goals.GoalBudget`, which
+#: bounds a goal in milliseconds.
+_MS_PER_SECOND: Final = 1_000
+
+
+def _check_goal_tables() -> None:
+    """Refuse to import tables that have drifted from the core's or the config's.
+
+    Four separate failures, each of which would otherwise surface as one badly
+    handled utterance rather than as a broken build.
+    """
+    unroutable = set(VoiceGoal) - set(_GOAL_KIND) - _CONTROL_GOALS
+    if unroutable:
+        raise RuntimeError(
+            f"spoken goal(s) {sorted(goal.value for goal in unroutable)} name neither a "
+            "goal kind nor a control verb, so nothing can be done with them"
+        )
+    both = set(_GOAL_KIND) & _CONTROL_GOALS
+    if both:
+        raise RuntimeError(
+            f"spoken goal(s) {sorted(goal.value for goal in both)} are both a goal kind "
+            "and a control verb"
+        )
+    for goal, kind in _GOAL_KIND.items():
+        required = GOAL_SPECS[kind].required
+        if required:
+            raise RuntimeError(
+                f"{goal.value} maps to {kind.value}, which requires {sorted(required)}; "
+                "no phrasing in this package supplies them"
+            )
+    if set(_SPOKEN_PER_CORE_UNIT) != set(NUMERIC_RANGES):
+        raise RuntimeError("_SPOKEN_PER_CORE_UNIT has drifted from NUMERIC_RANGES")
+    # The budget a spoken goal carries is built from VoiceConfig, so the config's
+    # own ceilings have to fit inside the channel's. They do today; a config that
+    # was widened past the channel would otherwise turn every spoken goal into a
+    # ValueError at submission time.
+    if MAX_PLAN_STEPS > MAX_GOAL_STEPS:
+        raise RuntimeError(
+            f"a voice config may ask for {MAX_PLAN_STEPS} steps and the goal channel "
+            f"allows {MAX_GOAL_STEPS}"
+        )
+    if not MIN_GOAL_WALL_MS <= _MS_PER_SECOND <= MAX_GOAL_WALL_MS:
+        raise RuntimeError("the shortest configurable voice budget is not a goal budget")
+    if MAX_PLAN_REAL_SECONDS * _MS_PER_SECOND > MAX_GOAL_WALL_MS:
+        raise RuntimeError(
+            f"a voice config may ask for {MAX_PLAN_REAL_SECONDS}s of wall clock and the "
+            f"goal channel allows {MAX_GOAL_WALL_MS}ms"
+        )
+
+
+_check_goal_tables()
+
+
+@dataclass(frozen=True, slots=True)
+class _Quantities:
+    """Either the typed parameters a phrase named, or why it named none.
+
+    Exactly one of the two is meaningful, and the refusal is a member of
+    :class:`~.messages.IntentRefusal` with the *name* of the parameter it is
+    about — never the number the user said, which is what
+    :meth:`~pz_agent_core.goals.NumericRange.check` would have quoted back.
+    """
+
+    params: GoalParams = field(default_factory=GoalParams)
+    refusal: IntentRefusal | None = None
+    parameter: str = ""
+
+
+def _typed_params(kind: GoalKind, words: tuple[str, ...]) -> _Quantities:
+    """The quantities *words* named for *kind*, in the core's units, or a refusal.
+
+    Iterated in :data:`~pz_agent_core.goals.PARAM_NAMES` order rather than in the
+    order the words arrived, so two bad quantities in one sentence always produce
+    the same refusal and the companion is not a coin flip.
+
+    A parameter the kind does not accept is refused rather than dropped: silently
+    ignoring "до пятого уровня" on a request to eat would serve a goal the user
+    did not ask for and say nothing about the half that was discarded.
+    """
+    spec = GOAL_SPECS[kind]
+    accepted = spec.required | spec.optional
+    spoken = extract_quantities(words)
+    typed: dict[str, float] = {}
+    for name in PARAM_NAMES:
+        said = spoken.get(name)
+        if said is None:
+            continue
+        if name not in accepted:
+            return _Quantities(refusal=IntentRefusal.PARAMETER_NOT_ACCEPTED, parameter=name)
+        value = said / _SPOKEN_PER_CORE_UNIT[name]
+        try:
+            NUMERIC_RANGES[name].check(value, name=name)
+        except ValueError:
+            # The range's own message quotes the number back, which is right for
+            # a traceback and wrong for a loudspeaker. Only the fact of the
+            # failure survives; the sentence comes from the closed table in
+            # phrases.py, built from the range and the parameter's name.
+            return _Quantities(refusal=IntentRefusal.PARAMETER_OUT_OF_RANGE, parameter=name)
+        typed[name] = value
+    return _Quantities(
+        params=GoalParams(
+            target_level=int(typed["target_level"]) if "target_level" in typed else None,
+            satisfy_to=typed.get("satisfy_to"),
+            pages=int(typed["pages"]) if "pages" in typed else None,
+        )
+    )
 
 
 class VoiceSession:
@@ -86,6 +279,7 @@ class VoiceSession:
         self._clarifications = 0
         self._plan_active = False
         self._last_plan: tuple[str, ActionStatus] | None = None
+        self._last_goal: tuple[str, GoalState] | None = None
         self._takeover_reported = False
         self._revision = 0
         self._status_failure = ""
@@ -106,7 +300,13 @@ class VoiceSession:
 
     @property
     def plan_active(self) -> bool:
-        """True while a submitted plan has not reported a terminal status."""
+        """True while work the companion started has not reached a terminal state.
+
+        Set from the goal the channel admitted — a goal is open until the channel
+        says otherwise — and updated again by :meth:`report_plan` for the plans a
+        sidecar runs to serve it. The name is the one the driver and the HUD
+        already read; what it tracks is now the goal as well as the plan.
+        """
         return self._plan_active
 
     @property
@@ -195,6 +395,7 @@ class VoiceSession:
         self._clarifications = 0
         self._plan_active = False
         self._last_plan = None
+        self._last_goal = None
         self._takeover_reported = False
 
         try:
@@ -239,6 +440,44 @@ class VoiceSession:
         if record.status is ActionStatus.SUCCEEDED:
             return self._say(OutputKind.CONFIRMATION, TOPIC_PLAN, phrases.PLAN_DONE)
         return self._say(OutputKind.ERROR, TOPIC_PLAN, phrases.refusal(record.stopped_reason))
+
+    def report_goal(self, record: GoalRecord) -> VoiceOutput | None:
+        """Say something about *record*, but only if it is news.
+
+        The goal-channel counterpart of :meth:`report_plan`, and it exists
+        because without it a spoken goal could be submitted and never reported.
+        The companion used to submit a ``PlanRequest``, so ``report_plan`` was
+        the whole progress path; goals travel on their own channel now
+        (``docs/control/DECISIONS.md``) and a ``GoalRecord`` is not a
+        ``PlanRecord``. Translating one into the other at the boundary was the
+        other option and it is worse: two records with different terminal
+        vocabularies — a goal can be ``EXPIRED`` or ``EXHAUSTED`` and a plan
+        cannot — would have had to collapse onto ``ActionStatus``, and the
+        distinction the user needs ("it ran out of time" versus "it failed")
+        would be the one lost.
+
+        Same "never speak every tick" rule as :meth:`report_plan`: the caller
+        may poll at whatever rate it observes the channel at, and the user hears
+        one sentence per actual transition.
+        """
+        signature = (record.goal_id, record.state)
+        if signature == self._last_goal:
+            return None
+        self._last_goal = signature
+        self._plan_active = record.is_open
+        if record.is_open:
+            return None
+        if record.state is GoalState.SUCCEEDED:
+            return self._say(OutputKind.CONFIRMATION, TOPIC_PLAN, phrases.PLAN_DONE)
+        # Every other terminal state — failed, cancelled, expired, exhausted —
+        # is a refusal the user can act on, and the reason code is what names
+        # which. A goal that ended with no code still gets a sentence rather
+        # than silence: not knowing why is not a reason to say nothing.
+        return self._say(
+            OutputKind.ERROR,
+            TOPIC_PLAN,
+            phrases.refusal(record.reason_code) if record.reason_code else phrases.PLAN_REFUSED,
+        )
 
     def report_manual_takeover(self) -> VoiceOutput | None:
         """Announce that the player took control, once per takeover."""
@@ -296,78 +535,194 @@ class VoiceSession:
             self._status_failure = f"{type(exc).__name__}: {exc}"
             return None
 
+    def _refused_goal(
+        self, raw: VoiceInput, goal: VoiceGoal, text: str, *, detail: str
+    ) -> VoiceTurn:
+        """One shape for every way a spoken goal does not become a submission.
+
+        Always an utterance, never silence: a companion that heard a command,
+        did nothing about it and said nothing about that is indistinguishable
+        from one that is not listening. *text* comes from :mod:`.phrases`, which
+        is a closed table, so nothing the recogniser produced can reach it.
+        """
+        return VoiceTurn(
+            intent=VoiceIntent.GOAL,
+            state=self._state,
+            goal=goal,
+            utterances=(self._say(OutputKind.ERROR, TOPIC_PLAN, text, at_ms=raw.at_ms),),
+            detail=detail,
+        )
+
+    def _budget(self, kind: GoalKind) -> GoalBudget:
+        """The bounds this companion's config puts on one spoken goal.
+
+        Wall clock and steps are the user's own wiring — a spoken command is
+        allowed to run for as long as :class:`~.config.VoiceConfig` says and no
+        longer — and the pending time to live is the kind's, because speech has
+        no phrasing for "how long may this wait before it starts" and inventing
+        one here would be a number nobody chose. Sending all three rather than
+        omitting the budget is what keeps a config that was tightened from being
+        quietly ignored by the channel's defaults.
+        """
+        return GoalBudget(
+            max_wall_ms=self._config.plan_max_real_seconds * _MS_PER_SECOND,
+            max_steps=self._config.plan_max_steps,
+            pending_ttl_ms=GOAL_SPECS[kind].budget.pending_ttl_ms,
+        )
+
     def _start_goal(self, raw: VoiceInput, goal: VoiceGoal) -> VoiceTurn:
         snapshot = self._snapshot()
         if snapshot is None:
             # Not knowing the state is not the same as knowing it is fine: the
             # honest answer is the one that says nothing was started.
-            return VoiceTurn(
-                intent=VoiceIntent.GOAL,
-                state=self._state,
-                goal=goal,
-                utterances=(
-                    self._say(OutputKind.ERROR, TOPIC_PLAN, phrases.NOT_CONNECTED, at_ms=raw.at_ms),
-                ),
+            return self._refused_goal(
+                raw,
+                goal,
+                phrases.NOT_CONNECTED,
                 detail=f"session port raised {self._status_failure}",
             )
         if not snapshot.connected:
-            return VoiceTurn(
-                intent=VoiceIntent.GOAL,
-                state=self._state,
-                goal=goal,
-                utterances=(
-                    self._say(OutputKind.ERROR, TOPIC_PLAN, phrases.NOT_CONNECTED, at_ms=raw.at_ms),
-                ),
-                detail="the game is not connected",
+            return self._refused_goal(
+                raw, goal, phrases.NOT_CONNECTED, detail="the game is not connected"
             )
         if not snapshot.armed:
-            return VoiceTurn(
-                intent=VoiceIntent.GOAL,
-                state=self._state,
-                goal=goal,
-                utterances=(
-                    self._say(OutputKind.ERROR, TOPIC_PLAN, phrases.NOT_ARMED, at_ms=raw.at_ms),
-                ),
-                detail="the session is disarmed",
+            return self._refused_goal(
+                raw, goal, phrases.NOT_ARMED, detail="the session is disarmed"
             )
 
-        request = PlanRequest(
-            goal=goal.value,
-            mode=snapshot.mode,
-            max_steps=self._config.plan_max_steps,
-            max_real_seconds=self._config.plan_max_real_seconds,
-            idempotency_key=self._ids(),
-        )
+        goals = self._services.goals
+        if goals is None:
+            return self._refused_goal(
+                raw,
+                goal,
+                phrases.refusal(ReasonCode.CAPABILITY_UNAVAILABLE),
+                detail="this companion was assembled without a goal channel",
+            )
+        if goal in _CONTROL_GOALS:
+            return self._resume(raw, goals)
+
+        kind = _GOAL_KIND[goal]
+        quantities = _typed_params(kind, raw.words())
+        if quantities.refusal is not None:
+            # Refused before the wire is touched. The number was the user's and
+            # is not repeated; the sentence names the parameter and its declared
+            # range, both of which this process minted.
+            return self._refused_goal(
+                raw,
+                goal,
+                phrases.intent_refusal(quantities.refusal, parameter=quantities.parameter),
+                detail=(
+                    f"{quantities.parameter} refused as {quantities.refusal.value}; "
+                    "nothing was submitted"
+                ),
+            )
+
         try:
-            record = self._services.plans.execute(request)
+            admission = goals.submit(
+                GoalRequest(
+                    kind=kind,
+                    idempotency_key=self._ids(),
+                    params=quantities.params,
+                    budget=self._budget(kind),
+                )
+            )
         except Exception as exc:
-            return VoiceTurn(
-                intent=VoiceIntent.GOAL,
-                state=self._state,
-                goal=goal,
-                utterances=(
-                    self._say(OutputKind.ERROR, TOPIC_PLAN, phrases.PLAN_REFUSED, at_ms=raw.at_ms),
-                ),
-                detail=f"plan port raised {type(exc).__name__}: {exc}",
+            # Bounded by the port's own deadline, so a wedged core arrives here
+            # as an exception rather than as a turn that never returns.
+            return self._refused_goal(
+                raw,
+                goal,
+                phrases.PLAN_REFUSED,
+                detail=f"goal channel raised {type(exc).__name__}: {exc}",
             )
 
-        self._plan_active = not record.status.is_terminal
-        self._last_plan = (record.plan_id, record.status)
+        refusal = admission.refusal
+        if refusal is not None:
+            named = f" (active goal {refusal.active_goal_id})" if refusal.active_goal_id else ""
+            return self._refused_goal(
+                raw,
+                goal,
+                phrases.refusal(refusal.reason_code),
+                detail=f"the goal channel refused with {refusal.reason_code.value}{named}",
+            )
+        record = admission.goal
+        if record is None:
+            # An admission carries exactly one of a goal and a refusal, so this
+            # is unreachable. It is answered rather than asserted because an
+            # exception escaping handle() would end the driver's transcript loop,
+            # and the transcript the user says next is the one that has to reach
+            # the stop.
+            return self._refused_goal(
+                raw,
+                goal,
+                phrases.PLAN_REFUSED,
+                detail="the goal channel answered with neither a goal nor a refusal",
+            )
+
+        self._plan_active = record.is_open
         # The agent is acting again, so the next time the player takes over,
         # that is news. Without this the announcement fires once per process:
         # § 5.16 ends with the user saying "продолжай", which arrives here as
         # VoiceGoal.RESUME, and nothing else re-arms it.
         self._takeover_reported = False
         utterance = self._say(
-            OutputKind.CONFIRMATION, TOPIC_PLAN, phrases.GOAL_ACCEPTED[goal], at_ms=raw.at_ms
+            OutputKind.CONFIRMATION, TOPIC_PLAN, phrases.KIND_ACCEPTED[kind], at_ms=raw.at_ms
         )
+        again = " (already submitted)" if admission.duplicate else ""
         return VoiceTurn(
             intent=VoiceIntent.GOAL,
             state=self._state,
             goal=goal,
-            plan=record,
             utterances=(utterance,),
-            detail=f"submitted goal {goal.value}",
+            detail=f"goal {record.goal_id} is {kind.value} in state {record.state.value}{again}",
+        )
+
+    def _resume(self, raw: VoiceInput, goals: GoalPort) -> VoiceTurn:
+        """Answer "продолжай" from the channel rather than by submitting anything.
+
+        Resume names no work. It is a statement about work already submitted, so
+        it is served by reading the channel: a goal that is active is already
+        continuing, and a goal that is pending is one the channel's own
+        activation will start. Both are things to confirm; neither is a reason to
+        submit a second goal, which is what a fifth
+        :class:`~pz_agent_core.goals.GoalKind` would have made this do.
+        """
+        try:
+            status = goals.status()
+        except Exception as exc:
+            return self._refused_goal(
+                raw,
+                VoiceGoal.RESUME,
+                phrases.PLAN_REFUSED,
+                detail=f"goal channel raised {type(exc).__name__}: {exc}",
+            )
+        open_goal = status.active if status.active is not None else next(iter(status.pending), None)
+        if open_goal is None:
+            # There is nothing to continue, and saying "продолжаю" here would be
+            # the fabricated success the engine's honesty rule exists to prevent.
+            return self._refused_goal(
+                raw,
+                VoiceGoal.RESUME,
+                phrases.PLAN_REFUSED,
+                detail="the goal channel holds no open goal, so there is nothing to continue",
+            )
+        self._plan_active = open_goal.is_open
+        self._takeover_reported = False
+        utterance = self._say(
+            OutputKind.CONFIRMATION,
+            TOPIC_PLAN,
+            phrases.GOAL_ACCEPTED[VoiceGoal.RESUME],
+            at_ms=raw.at_ms,
+        )
+        return VoiceTurn(
+            intent=VoiceIntent.GOAL,
+            state=self._state,
+            goal=VoiceGoal.RESUME,
+            utterances=(utterance,),
+            detail=(
+                f"continuing goal {open_goal.goal_id}, which is {open_goal.kind.value} "
+                f"in state {open_goal.state.value}"
+            ),
         )
 
     def _ask_which(self, raw: VoiceInput, goals: tuple[VoiceGoal, ...]) -> VoiceTurn:

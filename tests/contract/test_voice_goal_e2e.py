@@ -1,12 +1,9 @@
 """A spoken sentence, all the way into the core's goal channel, over a real link.
 
 Every other test of the voice loop stops at a port. ``tests/unit/test_voice_session.py``
-drives a :class:`~pz_agent_voice.session.VoiceSession` over
-:class:`~tests.fixtures.mcp_doubles.FakePlanPort`; ``tests/contract/test_voice_wiring.py``
-drives a companion over the CLI's :class:`~pz_agent_cli.voice.UnroutedPlanPort`,
-which refuses on principle. Both are green. Neither can tell you whether a goal a
-user *said* ends up in :class:`~pz_agent_core.goals.GoalQueue`, because in
-neither one does a goal channel exist. That is the gap this file is for, and it
+drives a :class:`~pz_agent_voice.session.VoiceSession` over doubles. Those are
+green and they cannot tell you whether a goal a user *said* ends up in
+:class:`~pz_agent_core.goals.GoalQueue`. That is the gap this file is for, and it
 is the gap the project keeps re-discovering: two subsystems that work and a join
 nobody exercised.
 
@@ -31,23 +28,27 @@ between it and the goal is the shipping code:
 * the channel — a real :class:`~pz_agent_core.goals.GoalQueue`, whose admission,
   exclusivity and stop levers are the thing every assertion below is about.
 
-Two pieces are written here because they do not exist in the tree, and each is
-named as a gap in the report rather than smuggled in as scenery.
-:class:`GoalChannelPlans` translates a :class:`~pz_agent_mcp.ports.PlanRequest`
-into a :class:`~pz_agent_core.goals.GoalRequest`: nothing joins
-:class:`~pz_agent_voice.messages.VoiceGoal` to
-:class:`~pz_agent_core.goals.GoalKind` anywhere in this build, so
-:data:`KIND_FOR_SPOKEN_GOAL` is a hand-written literal table and the tests pin
-each row against a second, independently written string.
-:meth:`Spoken.report_progress` is one turn of the progress loop a sidecar would
-run; no such loop exists yet either.
+One piece is written here because it does not exist in the tree, and it is named
+as a gap rather than smuggled in as scenery: :meth:`Spoken.report_progress` is
+one turn of the progress loop a sidecar would run, and no such loop exists yet.
+
+An earlier revision carried a second piece — a ``GoalChannelPlans`` shim that
+translated a ``PlanRequest`` into a ``GoalRequest``, because at the time nothing
+in the build joined :class:`~pz_agent_voice.messages.VoiceGoal` to
+:class:`~pz_agent_core.goals.GoalKind`. The companion does that itself now
+(``docs/control/DECISIONS.md``), so the shim is gone. Keeping it would have been
+worse than dead code: its table was a *second* copy of the mapping, and a test
+could have gone on passing against a translation the shipped companion no longer
+performs. :data:`KIND_FOR_SPOKEN_GOAL` survives on purpose — it is this file's
+own independently written statement of the same mapping, checked against the
+product rather than imported from it.
 
 What the fake adapter cannot tell you
 -------------------------------------
 
 :class:`TestTheSuiteFailsWhenTheGoalNeverReachesTheCore` is the load-bearing
 class. It runs the same companion twice more — once with the link severed, once
-with the link up and answered by a port that accepts every plan and admits none
+with the link up and answered by a port that accepts every goal and admits none
 of them — and in both runs every *structural* observation a microphone-side test
 makes still holds: the transcript classifies, the turn carries the goal, the
 companion speaks, nothing is cut short and nothing raises. (The severed run says
@@ -84,12 +85,14 @@ from typing import Final
 import pytest
 
 from pz_agent_core.goals import (
+    GOAL_SPECS,
+    GoalAdmission,
     GoalKind,
-    GoalParams,
     GoalQueue,
     GoalRecord,
     GoalRequest,
     GoalState,
+    key_digest,
 )
 from pz_agent_core.protocol import ActionName, ActionStatus, ReasonCode, SessionMode
 from pz_agent_core.rpc.descriptor import write_descriptor
@@ -98,9 +101,10 @@ from pz_agent_core.rpc.transport import RpcServer, new_address
 from pz_agent_core.rpc.wire import RpcRequest, RpcResponse
 from pz_agent_mcp.ports import (
     CoreServices,
-    PlanPort,
+    GoalCancellation,
+    GoalChannelStatus,
+    GoalPort,
     PlanRecord,
-    PlanRequest,
     SessionSnapshot,
     StopReport,
 )
@@ -118,7 +122,6 @@ from tests.fixtures.ipc_builders import FakeClock
 from tests.fixtures.mcp_doubles import (
     CountingIds,
     Doubles,
-    FakePlanPort,
     FakeSessionPort,
     succeeded_result,
 )
@@ -157,11 +160,13 @@ WIRE_KEEP: Final = 32
 # Hand-written rather than derived. A test that computes its expectation from
 # the code under test agrees with that code however it changes.
 
-#: Which goal kind each spoken goal becomes. **Nothing in the tree does this**:
-#: :class:`~pz_agent_voice.messages.VoiceGoal` is what a transcript resolves to,
-#: :class:`~pz_agent_core.goals.GoalKind` is what the channel admits, and no
-#: module joins them — so this table is the test's own statement of the mapping
-#: and every row is checked against a separately written wire value below.
+#: Which goal kind each spoken goal becomes.
+#:
+#: The product does this now — ``pz_agent_voice.session._GOAL_KIND`` — and this
+#: table is deliberately NOT imported from there. It is this file's independent
+#: statement of the same mapping, so a row changed on one side and not the other
+#: fails here. A test that asserted the product's table against itself would
+#: agree with any mapping at all, including a wrong one.
 #: ``RESUME`` maps to nothing on purpose: resuming is a re-arming, not a goal,
 #: and inventing a kind for it would widen a closed channel by a member the
 #: planner cannot serve.
@@ -245,58 +250,46 @@ class ChannelRefused(RuntimeError):
 
 
 @dataclass
-class GoalChannelPlans:
-    """``plan.execute`` and ``plan.current``, served by the real goal channel.
+class QueueGoalPort:
+    """The real :class:`~pz_agent_mcp.ports.GoalPort`, served by the real queue.
 
-    This class is the piece the build is missing. The MCP boundary declares
-    :class:`~pz_agent_mcp.ports.PlanPort`, the core owns
-    :class:`~pz_agent_core.goals.GoalQueue`, and nothing joins them — so a
-    spoken goal has a wire to travel on and nowhere to land. What is written
-    here is the smallest honest join: a closed lookup from the spoken token to a
-    kind, one submission, and a record built from what the channel answered.
+    This replaces a translation shim whose own docstring said it was "the piece
+    the build is missing" — a ``PlanRequest`` arriving, a hand-written table
+    turning the spoken token into a kind, and a ``PlanRecord`` going back. That
+    was true when it was written and stopped being true: the companion submits a
+    ``GoalRequest`` now (``docs/control/DECISIONS.md``), ``CoreRouter`` routes
+    ``goal.submit`` / ``goal.status`` / ``goal.cancel``, and the mapping from a
+    spoken token to a kind lives in ``session.py`` where the product keeps it.
 
-    Submission does *not* activate. Activation is the sidecar's own loop
-    (:meth:`~pz_agent_core.goals.GoalQueue.activate_next`), so what a caller
-    gets back is ``ACCEPTED`` for a goal that is ``PENDING``, which is the
-    honest word rather than a placeholder — and the tests drive that loop by
-    hand so the promotion is visible rather than implied.
+    Leaving the shim in place would have been worse than dead code. Its table
+    was a *second* copy of that mapping, so a test could have gone on passing
+    against a translation the shipped companion no longer performs — the
+    scaffold asserting a join the product had moved.
+
+    Nothing here decides anything: it is the queue's own answers in the port's
+    shape, which is what the sidecar will hand the router.
     """
 
     channel: GoalQueue
     #: Every request that arrived, for assertions about what actually crossed.
-    requests: list[PlanRequest] = field(default_factory=list)
-    _last_goal_id: str | None = None
+    submitted: list[GoalRequest] = field(default_factory=list)
 
-    def execute(self, request: PlanRequest) -> PlanRecord:
-        self.requests.append(request)
-        spoken = VoiceGoal(request.goal) if request.goal in set(VoiceGoal) else None
-        kind = KIND_FOR_SPOKEN_GOAL.get(spoken) if spoken is not None else None
-        if kind is None:
-            raise UnroutableSpokenGoal("that spoken goal names no goal kind this channel can serve")
-        admission = self.channel.submit(
-            GoalRequest(kind=kind, idempotency_key=request.idempotency_key, params=GoalParams())
+    def submit(self, request: GoalRequest) -> GoalAdmission:
+        self.submitted.append(request)
+        return self.channel.submit(request)
+
+    def status(self, goal_id: str | None = None) -> GoalChannelStatus:
+        named = self.channel.record(goal_id) if goal_id is not None else None
+        return GoalChannelStatus(
+            active=self.channel.active, pending=self.channel.pending, named=named
         )
-        refusal = admission.refusal
-        if refusal is not None:
-            raise ChannelRefused(refusal.message)
-        goal = admission.goal
-        if goal is None:
-            # `GoalAdmission` carries exactly one of the two, so reaching this
-            # would mean the core's own invariant had gone; it is still checked
-            # rather than asserted away, because the alternative is a `None`
-            # dereference reported as a link failure.
-            raise ChannelRefused("the channel answered with neither a goal nor a refusal")
-        self._last_goal_id = goal.goal_id
-        return _as_plan(goal)
 
-    def current(self) -> PlanRecord | None:
-        goal_id = self._last_goal_id
-        if goal_id is None:
-            return None
-        record = self.channel.record(goal_id)
-        if record is None:
-            return None
-        return _as_plan(record)
+    def cancel(self, goal_id: str) -> GoalCancellation:
+        goal = self.channel.record(goal_id)
+        if goal is None:
+            return GoalCancellation(goal=None, requested=False)
+        requested = self.channel.request_cancel(goal_id)
+        return GoalCancellation(goal=self.channel.record(goal_id) or goal, requested=requested)
 
 
 @dataclass
@@ -409,7 +402,7 @@ class Link:
     """A running sidecar, as the companion would find one."""
 
     channel: GoalQueue
-    plans: PlanPort
+    goals: GoalPort
     session: GoalChannelSession
     wire: WireTap
     state_dir: Path
@@ -426,21 +419,22 @@ class Link:
         return self.channel.activate_next().goal
 
 
-def arrived_at(link: Link) -> list[PlanRequest]:
+def arrived_at(link: Link) -> list[GoalRequest]:
     """Every request the goal-channel translation received on the far side.
 
-    Narrowed here rather than at each call site: :attr:`Link.plans` is declared
+    Narrowed here rather than at each call site: :attr:`Link.goals` is declared
     as the port so that a link serving something else — the cheerful port in
     T006 — is the same type, and a test asking this of that link is a test with
     a bug rather than one with an empty list.
     """
-    plans = link.plans
-    assert isinstance(plans, GoalChannelPlans), "this link does not serve the goal channel"
-    return plans.requests
+    goals = link.goals
+    goals = link.goals
+    assert isinstance(goals, QueueGoalPort), "this link does not serve the goal channel"
+    return goals.submitted
 
 
-def serve(tmp_path: Path, *, channel: GoalQueue, plans: PlanPort) -> Link:
-    """Stand a core up behind a real socket, serving *plans* over *channel*."""
+def serve(tmp_path: Path, *, channel: GoalQueue, goals: GoalPort) -> Link:
+    """Stand a core up behind a real socket, serving *goals* over *channel*."""
     state_dir = tmp_path / f"pz-agent-{next(_COUNTER)}"
     runtime = state_dir / "runtime"
     runtime.mkdir(parents=True)
@@ -448,8 +442,13 @@ def serve(tmp_path: Path, *, channel: GoalQueue, plans: PlanPort) -> Link:
 
     doubles = Doubles()
     session = GoalChannelSession(channel=channel, inner=doubles)
-    services: CoreServices = replace(doubles.services, session=session, plans=plans)
-    wire = WireTap(CoreRouter(services))
+    services: CoreServices = replace(doubles.services, session=session, goals=goals)
+    # goals= is passed explicitly. CoreRouter does NOT read services.goals: the
+    # field is Optional and the router may contain no comparison at all (its own
+    # test reads its AST and fails on a single If node), so choosing between a
+    # channel and the absent one is a decision that lives at the call site. The
+    # sidecar makes it too; this is that call site for the test.
+    wire = WireTap(CoreRouter(services, goals=goals))
 
     server = RpcServer(new_address(runtime), authkey=key, handler=wire)
     write_descriptor(state_dir, server.descriptor())
@@ -458,7 +457,7 @@ def serve(tmp_path: Path, *, channel: GoalQueue, plans: PlanPort) -> Link:
     _SERVERS.append((server, thread))
     return Link(
         channel=channel,
-        plans=plans,
+        goals=goals,
         session=session,
         wire=wire,
         state_dir=state_dir,
@@ -471,7 +470,7 @@ def serve(tmp_path: Path, *, channel: GoalQueue, plans: PlanPort) -> Link:
 def link(tmp_path: Path) -> Link:
     """The whole core: a real goal channel behind a real router and socket."""
     channel = GoalQueue(clock=FakeClock())
-    return serve(tmp_path, channel=channel, plans=GoalChannelPlans(channel=channel))
+    return serve(tmp_path, channel=channel, goals=QueueGoalPort(channel=channel))
 
 
 # ---------------------------------------------------------------------------
@@ -489,6 +488,9 @@ class Spoken:
     session: VoiceSession
     companion: VoiceCompanion
     task: asyncio.Task[None] | None = None
+    #: The goal this progress loop is following, so a finished one is still
+    #: asked about by id rather than lost when it leaves the active slot.
+    _tracking: str | None = None
 
     @property
     def said(self) -> list[str]:
@@ -519,18 +521,34 @@ class Spoken:
         await settle()
         return turn
 
-    async def report_progress(self) -> PlanRecord | None:
+    async def report_progress(self) -> GoalRecord | None:
         """One turn of the progress loop a sidecar would run.
 
-        Reads the plan over the link and hands it to
-        :meth:`~pz_agent_voice.session.VoiceSession.report_plan`, which decides
+        Reads the goal channel over the link and hands the record to
+        :meth:`~pz_agent_voice.session.VoiceSession.report_goal`, which decides
         whether it is news. No such loop exists in the build yet; this is the
         smallest thing that puts a record the *core* produced in front of the
         companion, which is what "the user is told" has to mean.
+
+        It used to read ``plans.current()``. That went silent the moment the
+        companion started submitting to the goal channel — the planner had
+        nothing to report because nothing had asked it — and the goal ran to
+        completion with the user never told. ``report_goal`` did not exist then;
+        that gap was the finding, and this reads the channel the goal is
+        actually on.
+
+        ``named`` is preferred over ``active`` so a goal that has already
+        finished is still reported: a poll that only ever looked at the active
+        slot would miss every goal that ended between two polls, which is most
+        of them.
         """
-        record = self.services.plans.current()
+        goals = self.services.goals
+        assert goals is not None, "this companion was assembled without a goal channel"
+        status = goals.status(self._tracking)
+        record = status.named or status.active
         if record is not None:
-            self.session.report_plan(record)
+            self._tracking = record.goal_id
+            self.session.report_goal(record)
         await settle()
         return record
 
@@ -639,23 +657,34 @@ class TestASpokenPhraseReachesTheCore:
         record = assert_the_core_received(link, kind, wire_value=wire_value)
         assert record.goal_id, "the channel minted no id for the goal it admitted"
 
-        assert [request.goal for request in arrived_at(link)] == [goal.value], (
-            "the far side did not receive exactly the spoken token"
+        assert [request.kind for request in arrived_at(link)] == [kind], (
+            "the far side did not receive exactly the kind the spoken token maps to"
         )
         assert phrases.GOAL_ACCEPTED[goal] in spoken.said
 
     @pytest.mark.asyncio
-    async def test_the_call_that_carried_it_was_plan_execute(self, link: Link) -> None:
+    async def test_the_call_that_carried_it_was_goal_submit(self, link: Link) -> None:
         """The goal took the declared method, not some second route.
 
         Asserted against the literal name rather than
         :class:`~pz_agent_mcp.remote.methods.Method`, so a renamed method is a
         protocol change this test notices instead of one it follows.
+
+        This used to assert ``plan.execute``. The companion submits to the typed
+        goal channel now (``docs/control/DECISIONS.md``), and the *negative* half
+        below is the part that matters: a build that submitted on both routes, or
+        fell back to the planner when the channel refused, would satisfy a bare
+        "goal.submit is present" check and is caught here.
         """
         async with companion_over(link) as spoken:
             await spoken.say("Агент, поешь")
 
-        assert "plan.execute" in [method for method, _ in link.wire.calls]
+        called = [method for method, _ in link.wire.calls]
+        assert "goal.submit" in called
+        assert "plan.execute" not in called, (
+            "the companion also called the planner; a spoken goal takes one route "
+            f"and the wire shows {called}"
+        )
         assert_the_core_received(link, GoalKind.SATISFY_HUNGER, wire_value="satisfy_hunger")
 
     @pytest.mark.asyncio
@@ -727,8 +756,8 @@ class TestTheUserIsToldWhenTheGoalEnds:
 
             running = await spoken.report_progress()
             assert running is not None
-            assert running.plan_id == record.goal_id, "the id the user tracks is not the core's"
-            assert running.status is ActionStatus.STARTED
+            assert running.goal_id == record.goal_id, "the id the user tracks is not the core's"
+            assert running.is_open, "the goal was reported finished while it was still running"
             assert phrases.PLAN_DONE not in spoken.said, "the end was announced before it happened"
 
             ended = link.channel.succeed(
@@ -741,7 +770,7 @@ class TestTheUserIsToldWhenTheGoalEnds:
             finished = await spoken.report_progress()
 
         assert finished is not None
-        assert finished.status is ActionStatus.SUCCEEDED
+        assert finished.state is GoalState.SUCCEEDED
         assert phrases.PLAN_DONE in spoken.said, "the goal ended and the user was never told"
 
     @pytest.mark.asyncio
@@ -764,7 +793,7 @@ class TestTheUserIsToldWhenTheGoalEnds:
             reported = await spoken.report_progress()
 
         assert reported is not None
-        assert reported.stopped_reason is ReasonCode.NO_SAFE_FOOD
+        assert reported.reason_code is ReasonCode.NO_SAFE_FOOD
         assert phrases.refusal(ReasonCode.NO_SAFE_FOOD) in spoken.said
         assert phrases.PLAN_DONE not in spoken.said, "a failed goal was reported as done"
 
@@ -879,6 +908,44 @@ class TestASpokenCancelEndsTheActiveGoal:
 # ---------------------------------------------------------------------------
 
 
+@dataclass
+class CheerfulGoalPort:
+    """A goal port that accepts everything and serves nothing.
+
+    The most dangerous shape a fake takes: it answers the way a working channel
+    answers — a real ``GoalAdmission`` carrying a real ``GoalRecord`` with an id
+    and ``PENDING`` — so every companion-side assertion passes. It simply never
+    tells the queue. This is what "a fake adapter answering happily is not an
+    integration" means concretely, and the test below is the only thing that can
+    tell it from the real port.
+    """
+
+    submitted: list[GoalRequest] = field(default_factory=list)
+    _issued: int = 0
+
+    def submit(self, request: GoalRequest) -> GoalAdmission:
+        self.submitted.append(request)
+        self._issued += 1
+        return GoalAdmission(
+            goal=GoalRecord(
+                goal_id=f"cheerful-{self._issued:04d}",
+                kind=request.kind,
+                params=request.params,
+                budget=request.budget or GOAL_SPECS[request.kind].budget,
+                key_digest=key_digest(request.idempotency_key),
+                sequence=self._issued,
+                state=GoalState.PENDING,
+                submitted_at_ms=0,
+            )
+        )
+
+    def status(self, goal_id: str | None = None) -> GoalChannelStatus:
+        return GoalChannelStatus()
+
+    def cancel(self, goal_id: str) -> GoalCancellation:
+        return GoalCancellation(goal=None, requested=False)
+
+
 class TestTheSuiteFailsWhenTheGoalNeverReachesTheCore:
     """The decisive one. A green fake adapter must not be able to hide this.
 
@@ -933,8 +1000,8 @@ class TestTheSuiteFailsWhenTheGoalNeverReachesTheCore:
         caught.
         """
         channel = GoalQueue(clock=FakeClock())
-        cheerful = FakePlanPort()
-        happy = serve(tmp_path, channel=channel, plans=cheerful)
+        cheerful = CheerfulGoalPort()
+        happy = serve(tmp_path, channel=channel, goals=cheerful)
 
         async with companion_over(happy) as spoken:
             turn = await spoken.say("Агент, поешь")
@@ -942,10 +1009,8 @@ class TestTheSuiteFailsWhenTheGoalNeverReachesTheCore:
         # Every assertion a companion-side test would make.
         assert turn.intent is VoiceIntent.GOAL
         assert turn.goal is VoiceGoal.EAT
-        assert turn.plan is not None
-        assert turn.plan.status is ActionStatus.ACCEPTED
-        assert phrases.GOAL_ACCEPTED[VoiceGoal.EAT] in spoken.said
-        assert [request.goal for request in cheerful.requests] == ["eat"], (
+        assert phrases.GOAL_ACCEPTED[VoiceGoal.EAT] in spoken.said, turn.detail
+        assert [request.kind for request in cheerful.submitted] == [GoalKind.SATISFY_HUNGER], (
             "the request did not even reach the far side of the link"
         )
 

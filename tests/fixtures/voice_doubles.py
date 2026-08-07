@@ -22,8 +22,11 @@ import asyncio
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass, field
 
+from pz_agent_core.goals import GoalAdmission, GoalRequest
 from pz_agent_core.protocol import SessionMode
 from pz_agent_mcp.ports import (
+    GoalCancellation,
+    GoalChannelStatus,
     PlanRecord,
     PlanRequest,
     SessionPort,
@@ -75,6 +78,35 @@ class RaisingPlanPort:
 
     def current(self) -> PlanRecord | None:
         return None
+
+
+class RaisingGoalPort:
+    """A goal channel that raises, the way an unreachable sidecar does.
+
+    Distinct from :class:`RaisingPlanPort` rather than a rename of it: the plan
+    port still exists and still answers ``report_plan``, so a double that raised
+    for both would stop the two failures being told apart. This one records what
+    it was asked before it raises, so a test can prove the submission was
+    attempted rather than skipped.
+    """
+
+    def __init__(self, error: Exception | None = None) -> None:
+        self.error = error or RuntimeError("the goal channel is not available")
+        self.submitted: list[GoalRequest] = []
+        self.status_calls: list[str | None] = []
+        self.cancelled: list[str] = []
+
+    def submit(self, request: GoalRequest) -> GoalAdmission:
+        self.submitted.append(request)
+        raise self.error
+
+    def status(self, goal_id: str | None = None) -> GoalChannelStatus:
+        self.status_calls.append(goal_id)
+        raise self.error
+
+    def cancel(self, goal_id: str) -> GoalCancellation:
+        self.cancelled.append(goal_id)
+        raise self.error
 
 
 class RaisingSessionPort:
@@ -239,6 +271,31 @@ class VoiceHarness:
 
 
 def make_services(doubles: Doubles) -> VoiceServices:
+    """The bundle a wired companion gets, goal channel included.
+
+    ``goals`` is what a spoken goal now travels on: the companion submits a
+    ``GoalRequest`` to the typed channel rather than a ``PlanRequest`` to the
+    planner, for the reason recorded in ``docs/control/DECISIONS.md`` — a
+    ``PlanRequest`` has nowhere to carry ``pages=12`` that is not free text.
+
+    ``plans`` stays because ``report_plan`` still speaks about plan records the
+    sidecar pushes in; nothing in the package submits one any more.
+
+    Leaving ``goals`` unset here would have made every session built by
+    :func:`make_session` answer a spoken goal with ``CAPABILITY_UNAVAILABLE``,
+    which is a real shipped configuration and therefore has its own fixture
+    below rather than being the default nobody chose.
+    """
+    return VoiceServices(session=doubles.session, plans=doubles.plans, goals=doubles.goals)
+
+
+def make_services_without_a_goal_channel(doubles: Doubles) -> VoiceServices:
+    """A companion assembled with no goal channel, which is assemblable on purpose.
+
+    An embedder supplying its own ports need not have one, and the companion has
+    to say so rather than drop the goal. Named so a test that wants that case
+    asks for it, instead of getting it by forgetting.
+    """
     return VoiceServices(session=doubles.session, plans=doubles.plans)
 
 

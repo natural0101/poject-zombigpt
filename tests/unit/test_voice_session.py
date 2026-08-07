@@ -11,7 +11,8 @@ from dataclasses import replace
 
 import pytest
 
-from pz_agent_core.protocol import ActionStatus, DangerLevel, ReasonCode, SessionMode
+from pz_agent_core.goals import GoalKind
+from pz_agent_core.protocol import ActionStatus, DangerLevel, ReasonCode
 from pz_agent_mcp.ports import PlanRecord
 from pz_agent_voice import phrases
 from pz_agent_voice.config import VoiceConfig
@@ -24,7 +25,7 @@ from tests.fixtures.mcp_doubles import Doubles
 from tests.fixtures.voice_doubles import (
     HOSTILE_TRANSCRIPT,
     BlindSessionPort,
-    RaisingPlanPort,
+    RaisingGoalPort,
     RaisingSessionPort,
     make_session,
 )
@@ -166,15 +167,24 @@ def test_stop_is_callable_directly_for_the_panic_hotkey() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_the_planner_receives_a_goal_token_never_the_transcript() -> None:
+def test_the_goal_channel_receives_a_kind_never_the_transcript() -> None:
+    """The whole width of the channel is a closed enum member.
+
+    This used to read the planner's request. The companion submits to the typed
+    goal channel now, and the property is stronger there rather than merely
+    relocated: ``GoalKind`` is an enum, so there is no field on the wire that
+    *could* hold a fragment of what was said. The check below is over the whole
+    submitted record, not a hand-picked few fields, so a parameter added later
+    that did carry text would fail here.
+    """
     session, doubles, _ = make_session()
 
     turn = session.handle(said(HOSTILE_TRANSCRIPT))
 
     assert turn.goal is VoiceGoal.EAT
-    request = doubles.plans.requests[0]
-    assert request.goal == VoiceGoal.EAT.value
-    submitted = f"{request.goal}{request.mode.value}{request.idempotency_key}"
+    request = doubles.goals.submitted[0]
+    assert request.kind is GoalKind.SATISFY_HUNGER
+    submitted = repr(request)
     for fragment in ("SYSTEM", "ignore previous", "secrets.txt", "AUTONOMOUS"):
         assert fragment not in submitted
 
@@ -196,20 +206,27 @@ def test_an_injected_second_command_word_produces_a_question_not_two_plans() -> 
     turn = session.handle(said(f"{HOSTILE_TRANSCRIPT} and read a book"))
 
     assert turn.intent is VoiceIntent.AMBIGUOUS
-    assert doubles.plans.requests == []
+    assert doubles.goals.submitted == []
 
 
-def test_the_plan_request_carries_the_configured_limits_not_the_transcripts() -> None:
+def test_the_goal_carries_the_configured_budget_not_the_transcripts() -> None:
+    """The ceilings come from VoiceConfig, and a spoken goal cannot widen them.
+
+    ``GoalBudget`` is where they land now. Asserted against the numbers the
+    config was built with rather than against the kind's defaults, because the
+    kind's defaults are what a goal gets when nobody chose — and this test is
+    about somebody having chosen.
+    """
     session, doubles, _ = make_session(
         config=VoiceConfig(plan_max_steps=3, plan_max_real_seconds=9)
     )
 
     session.handle(said("агент, почитай"))
 
-    request = doubles.plans.requests[0]
-    assert request.max_steps == 3
-    assert request.max_real_seconds == 9
-    assert request.mode is SessionMode.ASSISTED
+    request = doubles.goals.submitted[0]
+    assert request.budget is not None
+    assert request.budget.max_steps == 3
+    assert request.budget.max_wall_ms == 9_000
 
 
 def test_two_goals_produce_two_distinct_idempotency_keys() -> None:
@@ -218,8 +235,12 @@ def test_two_goals_produce_two_distinct_idempotency_keys() -> None:
     session.handle(said("агент, поешь"))
     session.handle(said("почитай"))
 
-    keys = [request.idempotency_key for request in doubles.plans.requests]
-    assert len(set(keys)) == 2
+    keys = [request.idempotency_key for request in doubles.goals.submitted]
+    assert len(keys) == 2, "both goals should have been submitted"
+    assert len(set(keys)) == 2, (
+        "two spoken goals shared an idempotency key, so the channel would treat "
+        "the second as a resubmission of the first and serve one"
+    )
 
 
 # --------------------------------------------------------------------------
@@ -232,7 +253,7 @@ def test_a_command_without_a_wake_word_is_ignored_in_silence() -> None:
 
     turn = session.handle(said("поешь"))
 
-    assert doubles.plans.requests == []
+    assert doubles.goals.submitted == []
     assert turn.utterances == ()
     assert session.queue.pending == ()
 
@@ -243,7 +264,7 @@ def test_the_wake_word_and_the_command_may_arrive_together() -> None:
     turn = session.handle(said("агент, поешь"))
 
     assert turn.goal is VoiceGoal.EAT
-    assert len(doubles.plans.requests) == 1
+    assert len(doubles.goals.submitted) == 1
 
 
 def test_a_wake_session_expires_and_stops_accepting_commands() -> None:
@@ -252,7 +273,7 @@ def test_a_wake_session_expires_and_stops_accepting_commands() -> None:
 
     session.handle(said("поешь", at_ms=BASE_TIME_MS + 5_001))
 
-    assert doubles.plans.requests == []
+    assert doubles.goals.submitted == []
     assert session.state is VoiceState.IDLE
 
 
@@ -262,7 +283,7 @@ def test_a_wake_session_stays_open_within_its_window() -> None:
 
     session.handle(said("поешь", at_ms=BASE_TIME_MS + 4_999))
 
-    assert len(doubles.plans.requests) == 1
+    assert len(doubles.goals.submitted) == 1
 
 
 def test_wake_words_can_be_turned_off_entirely() -> None:
@@ -270,7 +291,7 @@ def test_wake_words_can_be_turned_off_entirely() -> None:
 
     session.handle(said("поешь"))
 
-    assert len(doubles.plans.requests) == 1
+    assert len(doubles.goals.submitted) == 1
 
 
 # --------------------------------------------------------------------------
@@ -284,7 +305,7 @@ def test_two_goals_produce_a_question_and_no_plan() -> None:
     turn = session.handle(said("агент, поешь и попей"))
 
     assert turn.intent is VoiceIntent.AMBIGUOUS
-    assert doubles.plans.requests == []
+    assert doubles.goals.submitted == []
     assert session.state is VoiceState.AWAITING_ANSWER
     assert texts(session) == [phrases.clarify_between(VoiceGoal.EAT, VoiceGoal.DRINK)]
 
@@ -296,7 +317,7 @@ def test_the_answer_to_a_clarification_starts_that_goal() -> None:
     turn = session.handle(said("попей"))
 
     assert turn.goal is VoiceGoal.DRINK
-    assert doubles.plans.requests[0].goal == VoiceGoal.DRINK.value
+    assert doubles.goals.submitted[0].kind is GoalKind.SATISFY_THIRST
     assert session.pending_question == ()
     assert session.state is VoiceState.LISTENING
 
@@ -307,7 +328,7 @@ def test_answering_a_clarification_needs_no_second_wake_word() -> None:
 
     session.handle(said("почитай"))
 
-    assert len(doubles.plans.requests) == 1
+    assert len(doubles.goals.submitted) == 1
 
 
 def test_declining_a_clarification_drops_it_without_starting_anything() -> None:
@@ -318,7 +339,7 @@ def test_declining_a_clarification_drops_it_without_starting_anything() -> None:
     turn = session.handle(said("отмена"))
 
     assert turn.intent is VoiceIntent.DENY
-    assert doubles.plans.requests == []
+    assert doubles.goals.submitted == []
     assert session.pending_question == ()
     assert session.queue.pending == ()
 
@@ -333,7 +354,7 @@ def test_the_clarification_budget_is_bounded() -> None:
     assert first.intent is VoiceIntent.AMBIGUOUS
     assert second.intent is VoiceIntent.UNKNOWN
     assert session.pending_question == ()
-    assert doubles.plans.requests == []
+    assert doubles.goals.submitted == []
 
 
 def test_a_misheard_answer_to_a_clarification_is_not_treated_as_an_answer() -> None:
@@ -347,7 +368,7 @@ def test_a_misheard_answer_to_a_clarification_is_not_treated_as_an_answer() -> N
     turn = session.handle(said("попей", confidence=0.2))
 
     assert turn.intent is VoiceIntent.AMBIGUOUS
-    assert doubles.plans.requests == []
+    assert doubles.goals.submitted == []
     assert texts(session) == [phrases.CLARIFY_REPEAT]
     assert session.pending_question == (VoiceGoal.EAT, VoiceGoal.DRINK)
     assert session.state is VoiceState.AWAITING_ANSWER
@@ -366,7 +387,7 @@ def test_misheard_answers_spend_the_same_bounded_budget() -> None:
     assert second.intent is VoiceIntent.UNKNOWN
     assert second.detail == "clarification budget spent; the question is dropped"
     assert session.pending_question == ()
-    assert doubles.plans.requests == []
+    assert doubles.goals.submitted == []
 
 
 def test_a_confident_answer_after_a_misheard_one_still_works() -> None:
@@ -377,7 +398,7 @@ def test_a_confident_answer_after_a_misheard_one_still_works() -> None:
     turn = session.handle(said("попей", confidence=0.9))
 
     assert turn.goal is VoiceGoal.DRINK
-    assert doubles.plans.requests[0].goal == VoiceGoal.DRINK.value
+    assert doubles.goals.submitted[0].kind is GoalKind.SATISFY_THIRST
 
 
 def test_a_clarification_that_names_neither_option_does_not_pick_one() -> None:
@@ -388,7 +409,7 @@ def test_a_clarification_that_names_neither_option_does_not_pick_one() -> None:
 
     # "Почитай" is a goal, but not one of the two on offer; guessing that the
     # user meant the nearest option is exactly what must not happen.
-    assert doubles.plans.requests == []
+    assert doubles.goals.submitted == []
 
 
 def test_a_low_confidence_transcript_asks_to_repeat_instead_of_acting() -> None:
@@ -398,7 +419,7 @@ def test_a_low_confidence_transcript_asks_to_repeat_instead_of_acting() -> None:
     turn = session.handle(said("поешь", confidence=0.4))
 
     assert turn.intent is VoiceIntent.AMBIGUOUS
-    assert doubles.plans.requests == []
+    assert doubles.goals.submitted == []
     assert texts(session) == [phrases.CLARIFY_REPEAT]
 
 
@@ -442,7 +463,7 @@ def test_a_disconnected_game_is_reported_and_nothing_is_submitted() -> None:
 
     session.handle(said("агент, поешь"))
 
-    assert doubles.plans.requests == []
+    assert doubles.goals.submitted == []
     assert texts(session) == [phrases.NOT_CONNECTED]
 
 
@@ -452,20 +473,26 @@ def test_a_disarmed_session_is_reported_and_nothing_is_submitted() -> None:
 
     session.handle(said("агент, поешь"))
 
-    assert doubles.plans.requests == []
+    assert doubles.goals.submitted == []
     assert texts(session) == [phrases.NOT_ARMED]
 
 
-def test_a_planner_that_raises_is_reported_not_swallowed() -> None:
+def test_a_goal_channel_that_raises_is_reported_not_swallowed() -> None:
+    """An unreachable core produces a sentence, never silence.
+
+    ``goals.submitted`` is asserted non-empty first: without it the test would
+    also pass against a companion that never attempted the submission at all,
+    which is a different bug wearing the same spoken answer.
+    """
     doubles = Doubles()
-    plans = RaisingPlanPort()
+    goals = RaisingGoalPort()
     session, _, _ = make_session(
-        doubles, services=VoiceServices(session=doubles.session, plans=plans)
+        doubles, services=VoiceServices(session=doubles.session, plans=doubles.plans, goals=goals)
     )
 
     turn = session.handle(said("агент, поешь"))
 
-    assert plans.requests
+    assert goals.submitted, "the companion never tried to submit the goal"
     assert texts(session) == [phrases.PLAN_REFUSED]
     assert turn.plan is None
     assert "RuntimeError" in turn.detail
@@ -482,7 +509,7 @@ def test_a_session_port_that_cannot_answer_does_not_end_the_conversation() -> No
 
     # Nothing was submitted, the failure is named in the turn, and — the point
     # of catching it — the session is still able to take the next transcript.
-    assert doubles.plans.requests == []
+    assert doubles.goals.submitted == []
     assert texts(session) == [phrases.NOT_CONNECTED]
     assert turn.utterances[0].kind is OutputKind.ERROR
     assert "RuntimeError" in turn.detail

@@ -135,27 +135,39 @@ about the tree rather than about the design.
 
 `pz_agent_voice.plan_port` exists and provides `core_plan_port(state_dir)` and
 `services_over_core_rpc(session, state_dir)`, which build
-`RemoteCoreServices.from_state_dir(...).plans` — the same `plan.execute` the MCP
-server submits through, with no second encoder and no second path into the
-engine. It owns one thing of its own: the deadline.
+`RemoteCoreServices.from_state_dir(...)` — the same `goal.submit` the MCP
+server's `pz_goal_submit` tool submits through, with no second encoder and no
+second path into the engine. It owns one thing of its own: the deadline.
 `VOICE_PLAN_DEADLINE_SECONDS` is 3.0 and `MAX_VOICE_PLAN_DEADLINE_SECONDS` is
 10.0, refused at wiring time rather than at the first utterance, because a
 companion that goes silent for ten seconds is a user who repeats themselves —
 and with a fresh idempotency key per transcript, that is how one goal becomes
 two.
 
-**`pz-agent voice run` does not use it yet.** `pz_agent_cli.voice.voice_services`
-still builds the bundle with `UnroutedPlanPort`, which raises `GoalUnroutable`
-from both `execute()` and `current()`; the companion says «Не получилось.», the
-voice record writes `goals_routed: false`, and `pz-agent status` prints the gap.
-A spoken **stop** and a spoken **status** work; a spoken **goal** is refused, and
-`voice check` says so for any phrase that resolves to one.
+**`pz-agent voice run` uses it now.** `pz_agent_cli.voice.voice_services` calls
+`services_over_core_rpc`, so a spoken goal reaches the sidecar over the Local
+Core RPC link. `UnroutedPlanPort` and `GoalUnroutable` are gone; the voice record
+writes `goals_routed: true`.
+
+A spoken goal travels on **`goal.submit`**, not `plan.execute` — the typed goal
+channel, because a `PlanRequest` has nowhere to carry "twelve pages" that is not
+free text. `docs/control/DECISIONS.md` records why. `VoiceGoal.RESUME` submits
+nothing: it is a statement about work already sent, answered from `goal.status`.
+
+`voice check` **dials** rather than reading the descriptor, and the difference is
+the point: a sidecar killed rather than stopped leaves a valid descriptor naming
+a live pid, which is exactly the state in which a file-only check answers
+"routed" with nothing listening. It makes one read-only `goal.status` call,
+bounded at 2 seconds, and only for a phrase that resolves to a goal — so
+`voice check стоп` still runs with no sidecar, no game and no discovery.
 
 Verify which state the tree is in with one command:
 
 ```
-grep -n "UnroutedPlanPort\|services_over_core_rpc" packages/pz_agent_cli/src/pz_agent_cli/voice.py
+grep -rn "UnroutedPlanPort\|services_over_core_rpc" packages/pz_agent_cli/src/pz_agent_cli/voice.py
 ```
+
+The first name should return nothing and the second should return a line.
 
 ## The adapter contract
 

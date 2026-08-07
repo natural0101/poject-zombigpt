@@ -97,7 +97,17 @@ from pz_agent_core.diagnostics import (
     verify_bundle,
 )
 from pz_agent_core.diagnostics.redaction import null_redactor
-from pz_agent_core.goals import PARAM_NAMES, GoalKind, GoalRequest, TrainableSkill
+from pz_agent_core.goals import (
+    GOAL_SPECS,
+    PARAM_NAMES,
+    GoalAdmission,
+    GoalKind,
+    GoalRecord,
+    GoalRequest,
+    GoalState,
+    TrainableSkill,
+    key_digest,
+)
 from pz_agent_core.ipc.layout import IpcLayout
 from pz_agent_core.planner.providers import DEFAULT_TEAMON_KEY_ENV
 from pz_agent_core.protocol import ActionStatus, SessionMode
@@ -116,7 +126,20 @@ from pz_agent_core.rpc import (
 )
 from pz_agent_core.rpc.descriptor import FAMILY_PIPE, FAMILY_UNIX
 from pz_agent_core.rpc.transport import local_family, new_address
-from pz_agent_mcp.ports import PlanPort, PlanRecord, SessionPort
+from pz_agent_mcp.ports import (
+    GoalCancellation,
+    GoalChannelStatus,
+    GoalPort,
+    PlanPort,
+    PlanRecord,
+    SessionPort,
+)
+from pz_agent_mcp.remote.codec.goals import (
+    decode_goal_request,
+    encode_goal_admission,
+    encode_goal_cancellation,
+    encode_goal_channel_status,
+)
 from pz_agent_mcp.remote.codec.plans import encode_plan_current, encode_plan_record
 from pz_agent_mcp.remote.methods import Method
 from pz_agent_voice import intents, phrases
@@ -130,7 +153,7 @@ from pz_agent_voice.intents import (
     to_goal_request,
 )
 from pz_agent_voice.messages import VoiceGoal, VoiceInput, VoiceIntent
-from pz_agent_voice.plan_port import VOICE_PLAN_DEADLINE_SECONDS, core_plan_port
+from pz_agent_voice.plan_port import VOICE_PLAN_DEADLINE_SECONDS, core_goal_port, core_plan_port
 from pz_agent_voice.ports import VoiceServices
 from pz_agent_voice.session import VoiceSession
 from pz_agent_voice.teamon import (
@@ -787,18 +810,60 @@ class RawCore:
 
 
 def _answer(data: bytes) -> RpcResponse:
-    """A well-formed answer to whichever plan method was asked."""
+    """A well-formed answer to whichever plan or goal method was asked.
+
+    Answering rather than refusing matters here: a refusal short-circuits the
+    caller, so a port whose method always failed would put one request on the
+    wire and never the ones that follow it — and this file scans what is on the
+    wire. The bodies are the smallest well-formed ones, because nothing here
+    asserts about them; the assertions are all about the bytes going the other
+    way.
+    """
     request = decode_request(data)
     if request.method == Method.PLAN_EXECUTE:
         record = PlanRecord(plan_id="plan-1", status=ActionStatus.ACCEPTED, step_index=0)
         return RpcResponse(id=request.id, ok=True, result=encode_plan_record(record))
     if request.method == Method.PLAN_CURRENT:
         return RpcResponse(id=request.id, ok=True, result=encode_plan_current(None))
+    if request.method == Method.GOAL_SUBMIT:
+        return RpcResponse(id=request.id, ok=True, result=encode_goal_admission(_admitted(request)))
+    if request.method == Method.GOAL_STATUS:
+        return RpcResponse(
+            id=request.id, ok=True, result=encode_goal_channel_status(GoalChannelStatus())
+        )
+    if request.method == Method.GOAL_CANCEL:
+        return RpcResponse(
+            id=request.id,
+            ok=True,
+            result=encode_goal_cancellation(GoalCancellation(goal=None, requested=False)),
+        )
     return RpcResponse(
         id=request.id,
         ok=False,
         error_code=ErrorCode.UNKNOWN_METHOD,
-        error_message="this core answers plan methods only",
+        error_message="this core answers plan and goal methods only",
+    )
+
+
+def _admitted(request: RpcRequest) -> GoalAdmission:
+    """A goal admitted, built from what was actually asked for.
+
+    Echoing the request's own kind rather than a constant, so a companion that
+    submitted the wrong kind would be visible in the record it gets back rather
+    than masked by a fixture that always says the same thing.
+    """
+    submitted = decode_goal_request(request.params)
+    return GoalAdmission(
+        goal=GoalRecord(
+            goal_id="goal-0001",
+            kind=submitted.kind,
+            params=submitted.params,
+            budget=submitted.budget or GOAL_SPECS[submitted.kind].budget,
+            key_digest=key_digest(submitted.idempotency_key),
+            sequence=1,
+            state=GoalState.PENDING,
+            submitted_at_ms=0,
+        )
     )
 
 
@@ -822,32 +887,43 @@ def test_no_rpc_call_from_the_voice_package_carries_transcript_text(
 ) -> None:
     """E09-M02-T007. Every phrase, through the real link, searched as bytes.
 
-    The port is the shipped one —
-    :func:`~pz_agent_voice.plan_port.core_plan_port` over
-    :class:`~pz_agent_mcp.remote.client.RemotePlanPort` — resolving a real
-    descriptor and a real token, so what the assertions read is what the voice
-    package actually put on the socket.
+    The ports are the shipped ones —
+    :func:`~pz_agent_voice.plan_port.core_goal_port` and
+    :func:`~pz_agent_voice.plan_port.core_plan_port` over the real remote
+    client — resolving a real descriptor and a real token, so what the
+    assertions read is what the voice package actually put on the socket.
+
+    Both are wired on purpose. A spoken goal travels on ``goal.submit`` now
+    (``docs/control/DECISIONS.md``); this test used to wire the plan port alone,
+    and after the companion moved it went on passing while scanning a route
+    nothing used and missing the one every goal takes. A privacy floor that
+    watches the wrong wire is worse than none, because it reads as coverage.
     """
-    port = core_plan_port(tmp_path / "s", deadline=VOICE_PLAN_DEADLINE_SECONDS)
+    goals = core_goal_port(tmp_path / "s", deadline=VOICE_PLAN_DEADLINE_SECONDS)
+    plans = core_plan_port(tmp_path / "s", deadline=VOICE_PLAN_DEADLINE_SECONDS)
     doubles = Doubles()
     session = VoiceSession(
-        VoiceServices(session=doubles.session, plans=port),
+        VoiceServices(session=doubles.session, plans=plans, goals=goals),
         clock=FakeClock(),
         ids=CountingIds("voice"),
     )
 
     for index, (_, phrase) in enumerate(CANARY_PHRASES):
         session.handle(VoiceInput(transcript=phrase, at_ms=index, final=True, confidence=1.0))
-    # The other half of the port. No phrase reaches it on its own, and a method
-    # nothing exercised is a method nothing scanned.
-    assert port.current() is None
+    # The other halves of both ports. No phrase reaches these on its own, and a
+    # method nothing exercised is a method nothing scanned.
+    assert plans.current() is None
+    goals.status()
 
     assert core.payloads, "nothing reached the link, so this test proved nothing"
-    assert Method.PLAN_EXECUTE in core.methods()
+    assert Method.GOAL_SUBMIT in core.methods(), (
+        "no goal was submitted, so the route every spoken goal takes went unscanned"
+    )
+    assert Method.GOAL_STATUS in core.methods()
     assert Method.PLAN_CURRENT in core.methods()
-    # The goal token did cross — the channel works, and it is one enum member
-    # wide. Written as the literal bytes rather than derived from the encoder.
-    assert any(b'"goal":"eat"' in payload for payload in core.payloads)
+    # The kind did cross — the channel works, and it is one enum member wide.
+    # Written as the literal bytes rather than derived from the encoder.
+    assert any(b'"kind":"satisfy_hunger"' in payload for payload in core.payloads)
     for payload in core.payloads:
         assert _canary_leaks(payload) == (), decode_request(payload).method
 
@@ -860,6 +936,7 @@ def test_every_method_the_voice_package_can_reach_over_the_link_is_enumerated() 
     call nothing in this file searches.
     """
     assert _protocol_methods(PlanPort) == {"execute", "current"}
+    assert _protocol_methods(GoalPort) == {"submit", "status", "cancel"}
     assert _protocol_methods(SessionPort) == {"status", "arm", "disarm", "stop"}
 
 

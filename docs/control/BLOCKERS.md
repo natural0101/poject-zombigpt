@@ -88,12 +88,27 @@ E09-M02 maps intents onto `GoalKind` and the channel is reached by
 `goal.submit`. Both exist; nothing decides which one voice uses. Recorded rather
 than guessed at.
 *Blocks:* E09-M01 and E09-M02 closing together.
+**CLOSED** — decided in `docs/control/DECISIONS.md`: `goal.submit`, because a
+`PlanRequest` has nowhere to carry a quantity that is not free text, and
+E09-M02-T003/T004 require one. Implemented; the companion submits a
+`GoalRequest` and `plan.execute` is asserted absent from the wire.
 
-### R-005 — `UnroutedPlanPort` still refuses goals in the CLI
+### R-005 — `UnroutedPlanPort` still refuses goals in the CLI — **CLOSED**
 
 E09-M01-T002 requires that no code path answers "not routed". The voice package
-is clean; `pz_agent_cli/src/pz_agent_cli/voice.py` (23 references) and
-`status.py` (1) are not, and two test files assert the old behaviour.
+was clean; `pz_agent_cli/voice.py` (23 references) and `status.py` (1) were not.
+
+Closed: `voice_services` calls `services_over_core_rpc`, `UnroutedPlanPort`,
+`GoalUnroutable` and `GOALS_UNROUTED` are deleted, and a scan asserts no file
+under `packages/pz_agent_cli/src` carries those names again — guarded by
+requiring the scan to have found `voice.py` first, so a scan over nothing cannot
+pass. `voice check` dials the channel rather than reading the descriptor,
+because a sidecar killed rather than stopped leaves a descriptor naming a live
+pid, and a file-only check answers "routed" with nothing listening.
+
+The verifier found five claimed behaviours with no test that could catch their
+absence, including that branch: a core that accepts the connection and then
+refuses `goal.status` was reported ROUTED. All five are now covered.
 
 ### R-006 — the required workflows have not run against HEAD
 
