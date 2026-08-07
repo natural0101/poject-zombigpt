@@ -119,11 +119,11 @@ and it is tracked somewhere else, under a stricter rule: **one step is one
 percentage point, and a step is `PASS` only with a commit and an evidence path
 that exists.**
 
-- [`docs/control/PLAN.md`](control/PLAN.md) — the hundred steps in twelve stages,
+- [`docs/control/PLAN.md`](https://github.com/natural0101/poject-zombigpt/blob/main/docs/control/PLAN.md) — the hundred steps in twelve stages,
   what a `PASS` costs, and the nine substitutions that may never be counted (a
   Linux result as evidence about Windows, a mock as evidence about the game, a
   PyInstaller spec with no built executable, …).
-- [`docs/control/STATUS.json`](control/STATUS.json) — the only place progress is
+- [`docs/control/STATUS.json`](https://github.com/natural0101/poject-zombigpt/blob/main/docs/control/STATUS.json) — the only place progress is
   recorded. `overall_percent` is **counted** by `scripts/progress_report.py`,
   never written by hand.
 - `scripts/check_progress.py` — the gate, not a report. It refuses a percentage
@@ -131,7 +131,7 @@ that exists.**
   a gap in the sequence, a step passing while a dependency has not, a live-game
   step passing at all from this environment, a Windows step passing while the
   Windows workflow is red, and step 100 passing with no GitHub Release.
-- [`docs/control/BLOCKERS.md`](control/BLOCKERS.md) — one entry per thing that
+- [`docs/control/BLOCKERS.md`](https://github.com/natural0101/poject-zombigpt/blob/main/docs/control/BLOCKERS.md) — one entry per thing that
   stopped a step, closed only by a fix plus a regression test.
 
 Three totals are counted separately because they are separately blocked:
