@@ -164,3 +164,40 @@ def test_a_percent_encoded_separator_leaves_no_backslash_behind(
 
     assert "%5C" not in rendered and "%5c" not in rendered, rendered
     assert "\\" not in rendered, rendered
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        # A native prefix joined to a POSIX suffix: `f"{path}/Zomboid"`, or a
+        # log line assembled from `str(dir)` and a slash-separated name. Real,
+        # and the shape that made the Windows suite report `home_dir` where
+        # `user_dir` applies.
+        (f"{HOME}/Zomboid", USER_DIR_PLACEHOLDER),
+        (f"{HOME}/Zomboid/logs", f"{USER_DIR_PLACEHOLDER}/logs"),
+        (f"{HOME}/Zomboid\\logs", f"{USER_DIR_PLACEHOLDER}/logs"),
+        ("C:/Users\\Иван/Zomboid/logs", f"{USER_DIR_PLACEHOLDER}/logs"),
+        ("C:\\Users/Иван\\Zomboid", USER_DIR_PLACEHOLDER),
+    ],
+)
+def test_a_path_that_mixes_separators_still_finds_the_longest_directory(
+    windows_redactor: Redactor, raw: str, expected: str
+) -> None:
+    """The more specific directory has to win whatever the separators look like.
+
+    Spellings used to be enumerated whole — all-`/`, all-`\\`, all-doubled — so
+    a path that mixed them matched none of them, and the shorter `home_dir`
+    literal (which happened to be spelled consistently up to where it ended)
+    matched instead. Not a leak: the path was still struck out. But under
+    `<USER_HOME>` rather than `<ZOMBOID>`, so the same file produced a different
+    line on Windows than on Linux, which is the one thing the placeholder is
+    for.
+    """
+    assert windows_redactor.text(raw) == expected
+
+
+def test_the_finding_names_the_directory_that_actually_applies(
+    windows_redactor: Redactor,
+) -> None:
+    """`verify_bundle` prints these labels; a wrong one misdescribes the redaction."""
+    assert "user_dir" in windows_redactor.findings(f"{HOME}/Zomboid/logs")

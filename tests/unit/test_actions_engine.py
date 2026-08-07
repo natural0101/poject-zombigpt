@@ -555,6 +555,49 @@ def test_manual_action_in_the_queue_blocks_the_send() -> None:
     assert harness.sink.sent == []
 
 
+def test_manual_takeover_before_the_send_refuses_rather_than_cancels() -> None:
+    """The pre-flight half of the takeover check, which nothing else covered.
+
+    `test_manual_takeover_mid_flight_cancels` pushes a clean observation first,
+    so it exercises `_in_flight_abort` alone. Deleting the identical check from
+    `_interrupt_abort` left the whole suite green while the engine dispatched a
+    command into a character the player had already taken control of — the
+    command goes out, then gets cancelled, which is not the same thing as never
+    going out. The assertion that matters is the second one.
+    """
+    harness = make_harness(StubAdapter(verify_after=1))
+    harness.source.repeat(make_observation(seq=1, safety=make_safety(manual_takeover=True)))
+
+    result = harness.engine.execute(a_request())
+
+    assert result.reason_code is ReasonCode.USER_TAKEOVER
+    assert result.status is ActionStatus.REJECTED
+    assert harness.sink.sent == [], "a command reached the mod after the player took over"
+
+
+def test_a_blocking_action_arriving_mid_flight_cancels_the_command() -> None:
+    """The mid-flight half of `blocks_automation`, the pre-flight one being above.
+
+    Both halves of both interrupt conditions now have a test; before this, each
+    condition had exactly one, and which one differed between them.
+    """
+    harness = make_harness(StubAdapter(verify_after=None, timeout_ms=5_000))
+    harness.source.push(make_observation(seq=1))
+    harness.source.repeat(
+        make_observation(
+            seq=2, action=make_action_state(ownership=ActionOwnership.MANUAL, busy=True)
+        )
+    )
+
+    result = harness.engine.execute(a_request())
+
+    assert result.reason_code is ReasonCode.PLAYER_BUSY_MANUAL_ACTION
+    assert result.status is ActionStatus.CANCELLED
+    assert harness.sink.cancelled == [
+        (harness.sink.last.command_id, ReasonCode.PLAYER_BUSY_MANUAL_ACTION)
+    ]
+
+
 def test_disarmed_session_refuses_a_mutating_command() -> None:
     harness = make_harness(StubAdapter(verify_after=1))
     harness.source.push(make_observation(seq=1, safety=make_safety(armed=False)))

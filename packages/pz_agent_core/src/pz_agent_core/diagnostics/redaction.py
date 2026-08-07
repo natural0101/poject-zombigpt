@@ -146,15 +146,16 @@ def _normalisations(literal: str) -> set[str]:
     }
 
 
-def _literal_variants(literal: str) -> set[str]:
-    """Every spelling of *literal* that could appear in a record."""
-    variants: set[str] = set()
-    for base in _normalisations(literal):
-        for separated in (base, base.replace("\\", "/"), base.replace("/", "\\")):
-            variants.add(separated)
-            variants.add(separated.replace("\\", "\\\\"))
-            variants.add(quote(separated, safe=":/"))
-    return {variant for variant in variants if variant}
+def _segment_spellings(segment: str) -> list[str]:
+    """The spellings one path segment can arrive in, longest first.
+
+    Percent-encoding is applied per segment rather than to the whole path, so
+    that a partly-encoded path — the common shape, where a native prefix has
+    been joined to a URL-derived suffix — matches as readily as a wholly
+    encoded one.
+    """
+    spellings = {segment, quote(segment, safe=":"), quote(segment)}
+    return sorted((s for s in spellings if s), key=len, reverse=True)
 
 
 #: A separator, in any of the four spellings a record can carry one in: ``/``
@@ -187,6 +188,37 @@ def _posix_tail(tail: str) -> str:
     return _ENCODED_SEPARATOR.sub("/", tail.replace("\\\\", "/").replace("\\", "/"))
 
 
+def _literal_body(literal: str) -> str:
+    """A pattern matching *literal* however its separators happen to be spelled.
+
+    Built segment by segment rather than by enumerating whole spellings of the
+    path. Enumerating cannot cover a *mixed* path — ``C:\\Users\\Иван/Zomboid``,
+    which is what `str(path) + "/" + name` produces and what a log line
+    assembled from a native prefix and a POSIX suffix looks like — because the
+    mixtures are exponential in the number of separators. Matching each
+    separator position independently covers all of them.
+
+    The failure this closes is not a leak: ``home_dir`` matched where
+    ``user_dir`` should have, so the path was still struck out, but under the
+    wrong placeholder and reported under the wrong label. The placeholder exists
+    so two machines produce the same line for the same file, and a Windows box
+    writing ``<USER_HOME>/Zomboid`` where Linux writes ``<ZOMBOID>`` is that
+    guarantee failing quietly.
+    """
+    alternatives: list[str] = []
+    for base in _normalisations(literal):
+        rendered: list[str] = []
+        for segment in re.split(r"[\\/]", base):
+            if not segment:
+                # A leading separator: the empty head of an absolute POSIX path.
+                rendered.append("")
+                continue
+            spellings = "|".join(re.escape(s) for s in _segment_spellings(segment))
+            rendered.append(f"(?:{spellings})")
+        alternatives.append(f"(?:{_SEPARATOR})".join(rendered))
+    return "|".join(sorted(set(alternatives), key=len, reverse=True))
+
+
 def _literal_rule(
     label: str, literal: str, placeholder: str, *, word: bool = False
 ) -> RedactionRule:
@@ -197,8 +229,7 @@ def _literal_rule(
     It also marks a rule as *not* a path: an account name has no tail to
     normalise, and consuming one would eat the rest of the line.
     """
-    variants = sorted(_literal_variants(literal), key=len, reverse=True)
-    body = "|".join(re.escape(variant) for variant in variants)
+    body = _literal_body(literal)
     if word:
         return RedactionRule(
             label=label,

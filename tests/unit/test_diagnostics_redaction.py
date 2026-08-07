@@ -192,17 +192,40 @@ PEM_HEADER = "-----BEGIN " + "PRIVATE KEY" + "-----"
 
 
 @pytest.mark.parametrize(
-    ("sample", "placeholder"),
+    ("sample", "placeholder", "secret"),
     [
-        ("steamid=76561198012345678", SECRET_PLACEHOLDER),
-        ("owner 76561198012345678 joined", STEAM_ID_PLACEHOLDER),
-        ("Authorization: Bearer abcdefghijklmnop", SECRET_PLACEHOLDER),
-        ('{"api_key": "abc123def456"}', SECRET_PLACEHOLDER),
-        (PEM_HEADER, SECRET_PLACEHOLDER),
+        ("steamid=76561198012345678", SECRET_PLACEHOLDER, "76561198012345678"),
+        ("owner 76561198012345678 joined", STEAM_ID_PLACEHOLDER, "76561198012345678"),
+        ("Authorization: Bearer abcdefghijklmnop", SECRET_PLACEHOLDER, "abcdefghijklmnop"),
+        ('{"api_key": "abc123def456"}', SECRET_PLACEHOLDER, "abc123def456"),
+        (PEM_HEADER, SECRET_PLACEHOLDER, "PRIVATE KEY"),
     ],
 )
-def test_credential_shapes_are_struck_out(sample: str, placeholder: str) -> None:
-    assert placeholder in null_redactor().text(sample)
+def test_credential_shapes_are_struck_out(sample: str, placeholder: str, secret: str) -> None:
+    """Both halves, because only one of them is the point.
+
+    Asserting the placeholder appears says a rule fired. It does not say the
+    secret left, and those are different claims: a value pattern that matched
+    one character instead of one-or-more would insert ``<REDACTED>`` in front of
+    a still-intact key and satisfy every containment check in this file. The
+    second assertion is the one the user is relying on when they attach a
+    support bundle to a public issue.
+    """
+    redacted = null_redactor().text(sample)
+
+    assert placeholder in redacted
+    assert secret not in redacted, redacted
+
+
+@pytest.mark.parametrize(
+    "secret",
+    ["a", "ab", "abc123def456", "sk-live-9f8e7d6c5b4a3210", "x" * 200],
+)
+def test_a_credential_value_is_struck_out_whole_whatever_its_length(secret: str) -> None:
+    """A value rule that stops after one character leaves the rest of the key."""
+    redacted = null_redactor().text(f"api_key={secret}")
+
+    assert redacted == f"api_key={SECRET_PLACEHOLDER}", redacted
 
 
 def test_a_key_shaped_token_is_removed_even_without_a_label() -> None:
@@ -323,19 +346,26 @@ class TestRedactionIsIdempotentToTheVerifier:
         )
 
     @pytest.mark.parametrize(
-        "line",
+        ("line", "secret"),
         [
-            "api_key=sk-live-9f8e7d6c5b4a3210",
-            "password=hunter2",
-            "token: abcdef0123456789",
-            "authorization=Bearer abcdefghijklmnop",
+            ("api_key=sk-live-9f8e7d6c5b4a3210", "sk-live-9f8e7d6c5b4a3210"),
+            ("password=hunter2", "hunter2"),
+            ("token: abcdef0123456789", "abcdef0123456789"),
+            ("authorization=Bearer abcdefghijklmnop", "abcdefghijklmnop"),
         ],
     )
-    def test_a_real_credential_is_struck_out_and_reported(self, line: str) -> None:
-        """The half that must not be lost while fixing the other one."""
-        redactor = self._redactor()
+    def test_a_real_credential_is_struck_out_and_reported(self, line: str, secret: str) -> None:
+        """The half that must not be lost while fixing the other one.
 
-        assert SECRET_PLACEHOLDER in redactor.text(line)
+        The placeholder appearing and the secret leaving are separate claims;
+        this file used to make only the first, which left the verifier free to
+        call a bundle clean while the key was still in it.
+        """
+        redactor = self._redactor()
+        redacted = redactor.text(line)
+
+        assert SECRET_PLACEHOLDER in redacted
+        assert secret not in redacted, redacted
         assert redactor.findings(line), "a live credential must still be reported"
 
     @pytest.mark.parametrize(
