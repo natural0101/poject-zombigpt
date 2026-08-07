@@ -9,15 +9,15 @@
   "counts": {
     "BLOCKED": 0,
     "FAIL": 0,
-    "IN_PROGRESS": 108,
-    "NOT_STARTED": 229,
-    "PASS": 143
+    "IN_PROGRESS": 0,
+    "NOT_STARTED": 124,
+    "PASS": 356
   },
-  "head_commit": "276b9d90797e6cfd9c79d107f007acee7d3770d9",
+  "head_commit": "0ca9a28a3eb755477dbe93cd239bc76ba0bb9817",
   "linux_ci": {
     "commit": "276b9d90797e6cfd9c79d107f007acee7d3770d9",
-    "describes_current_head": true,
-    "status": "GREEN"
+    "describes_current_head": false,
+    "status": "STALE:GREEN"
   },
   "live_scenarios": {
     "failed": 0,
@@ -26,8 +26,8 @@
   },
   "metrics": {
     "CODE_IMPLEMENTATION": {
-      "pass_weight": 416,
-      "percent": 34.3,
+      "pass_weight": 1192,
+      "percent": 98.3,
       "total_weight": 1213
     },
     "FINAL_RELEASE": {
@@ -41,42 +41,42 @@
       "total_weight": 599
     },
     "MCP_OPERABILITY": {
-      "pass_weight": 0,
-      "percent": 0.0,
+      "pass_weight": 264,
+      "percent": 100.0,
       "total_weight": 264
     },
     "RC_PACKAGING": {
-      "pass_weight": 35,
-      "percent": 17.3,
+      "pass_weight": 121,
+      "percent": 59.9,
       "total_weight": 202
     },
     "VOICE_OPERABILITY": {
-      "pass_weight": 0,
-      "percent": 0.0,
+      "pass_weight": 324,
+      "percent": 100.0,
       "total_weight": 324
     },
     "WINDOWS_COMPATIBILITY": {
-      "pass_weight": 215,
-      "percent": 74.1,
+      "pass_weight": 282,
+      "percent": 97.2,
       "total_weight": 290
     }
   },
-  "pass_weight": 772,
+  "pass_weight": 2115,
   "plan_of_record": "docs/control/MASTER_PLAN.yaml",
   "release_candidate": {
     "archive_sha256": "3eb5ca63c4d113f3a3a48914a7cd206f77439a24a80f891fcea60b205733bbe2",
     "live_game": "NOT_RUN",
     "source_commit": "276b9d90797e6cfd9c79d107f007acee7d3770d9",
-    "status": "CURRENT",
+    "status": "STALE",
     "workflow_run": "https://github.com/natural0101/poject-zombigpt/actions/runs/31214158408"
   },
   "repository": "https://github.com/natural0101/poject-zombigpt",
   "total_tasks": 480,
   "total_weight": 3104,
-  "weighted_progress_percent": 24.87,
+  "weighted_progress_percent": 68.14,
   "windows_ci": {
     "commit": "276b9d90797e6cfd9c79d107f007acee7d3770d9",
-    "describes_current_head": true,
-    "status": "GREEN"
+    "describes_current_head": false,
+    "status": "STALE:GREEN"
   }
 }

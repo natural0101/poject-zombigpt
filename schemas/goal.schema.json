@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/pz-agent/goal.schema.json",
+  "title": "PZ Agent Goal Request",
+  "description": "One goal submission, as `goal.submit` carries it over the Core RPC link and as `pz_goal_submit` accepts it over MCP. A goal is the widest thing anything outside the deterministic core may express — a kind from a closed enum with typed, range-checked parameters — and this object is the only message on the link whose content originated with a language model or a microphone. There is deliberately no free-text field anywhere in it. The answer's goal record is under $defs/record: it travels inside RPC results, never in this slot, and it carries the key's 16-hex-char digest rather than the key, so no encoding of a goal can hand the caller's bytes back out.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["kind", "idempotency_key", "params"],
+  "properties": {
+    "kind": { "$ref": "#/$defs/kind" },
+    "idempotency_key": {
+      "description": "Chosen by the caller to make resubmission safe. The channel stores only its digest.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:\\-]{0,63}$"
+    },
+    "params": { "$ref": "#/$defs/params" },
+    "budget": { "$ref": "#/$defs/budget" }
+  },
+  "$defs": {
+    "kind": {
+      "description": "The closed set of things a goal may ask for. A transcript or a model's output selects one of these tokens or it selects nothing.",
+      "enum": ["satisfy_hunger", "satisfy_thirst", "read_for_boredom", "train_skill", "learn_recipe"]
+    },
+    "params": {
+      "description": "Typed, range-checked, per-kind. The encoder omits an absent parameter rather than writing null, so every key present carries a value. Which keys a kind requires is the model's business (train_skill needs skill and target_level); the schema states the types and ranges every kind shares.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "skill": {
+          "enum": ["carpentry", "cooking", "farming", "electrical", "metalworking", "mechanics", "tailoring", "foraging", "fishing", "trapping", "first_aid"]
+        },
+        "target_level": { "type": "integer", "minimum": 1, "maximum": 10 },
+        "satisfy_to": {
+          "description": "A fraction of the stat's range, never a percentage.",
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0
+        },
+        "pages": { "type": "integer", "minimum": 1, "maximum": 200 }
+      }
+    },
+    "budget": {
+      "description": "The three bounds that together guarantee a terminal state: wall clock alone lets instantly-failing steps hold the channel, steps alone let one hanging step run forever, and the pending TTL covers a goal admitted and never activated. Omitted entirely when the caller accepts the kind's default budget.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["max_wall_ms", "max_steps", "pending_ttl_ms"],
+      "properties": {
+        "max_wall_ms": { "type": "integer", "minimum": 1000, "maximum": 900000 },
+        "max_steps": { "type": "integer", "minimum": 1, "maximum": 12 },
+        "pending_ttl_ms": { "type": "integer", "minimum": 1, "maximum": 600000 }
+      }
+    },
+    "record": {
+      "description": "A goal as the core reports it. Every field, always: the three that may be absent are an explicit null, so a reader can tell 'still running' from 'the peer dropped two keys'. SUCCEEDED requires reason_code POSTCONDITION_MET and at least one evidence key — the honesty rule lives in the record type on both sides, not here.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["goal_id", "kind", "params", "budget", "key_digest", "sequence", "state", "submitted_at_ms", "started_at_ms", "finished_at_ms", "steps_used", "reason_code", "evidence_keys", "detail"],
+      "properties": {
+        "goal_id": {
+          "description": "Minted by the channel, UUID-shaped.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "kind": { "$ref": "#/$defs/kind" },
+        "params": { "$ref": "#/$defs/params" },
+        "budget": { "$ref": "#/$defs/budget" },
+        "key_digest": {
+          "description": "Sixteen hex characters over the idempotency key. The raw key never appears in any encoding of a goal.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{16}$"
+        },
+        "sequence": { "type": "integer", "minimum": 0 },
+        "state": {
+          "enum": ["pending", "active", "succeeded", "failed", "cancelled", "expired"]
+        },
+        "submitted_at_ms": { "type": "integer", "minimum": 0 },
+        "started_at_ms": { "type": ["integer", "null"], "minimum": 0 },
+        "finished_at_ms": { "type": ["integer", "null"], "minimum": 0 },
+        "steps_used": { "type": "integer", "minimum": 0 },
+        "reason_code": {
+          "description": "A member of the shared protocol ReasonCode enum, or null while the goal is not terminal. Stated by shape rather than enumerated: the set belongs to the protocol layer and is validated there; restating it here would be a second copy that drifts.",
+          "type": ["string", "null"],
+          "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+        },
+        "evidence_keys": {
+          "type": "array",
+          "maxItems": 8,
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9_.]{0,39}$" }
+        },
+        "detail": { "type": "string", "maxLength": 200 }
+      }
+    }
+  }
+}

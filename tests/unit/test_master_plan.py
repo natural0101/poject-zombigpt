@@ -32,6 +32,7 @@ sees hand-built fixtures is a model that has never met its own data.
 from __future__ import annotations
 
 import copy
+import json
 import shutil
 import subprocess
 import sys
@@ -430,6 +431,128 @@ class TestStatusCannotBeWrittenIntoStalenessRE:
 
         assert _reconcile_in(repo).returncode == 1
         assert _reconcile_in(repo, "--allow-dirty").returncode == 0
+
+
+class TestAVerdictSurvivesItsOwnRecording:
+    """GREEN and CURRENT are judged by what the code did, not by SHA equality.
+
+    The first version of the CI-verdict rule read ``entry.commit != HEAD`` — an
+    unsatisfiable rule of exactly the shape the ``head_commit`` rule's own
+    comment warns about. Recording a green run requires a commit; the commit
+    moves HEAD; the recorded verdict is refused by the very commit that did
+    nothing but record it. That shipped once, at ``3c70712``: a STATUS written
+    at the verified commit failed its own CI. So both rules now share the
+    ``head_commit`` predicate: the verdict's commit must be an ancestor of HEAD
+    with nothing outside ``docs/control/`` changed since.
+    """
+
+    @staticmethod
+    def _commit(repo: Path, message: str) -> None:
+        for command in (["git", "add", "-A"], ["git", "commit", "-q", "-m", message]):
+            subprocess.run(command, cwd=repo, check=True, capture_output=True, timeout=120)
+
+    @staticmethod
+    def _describes(repo: Path, sha: str) -> bool:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import sys; sys.path.insert(0, '.'); "
+                "from scripts.check_master_plan import describes_the_code_at_head; "
+                f"sys.exit(0 if describes_the_code_at_head({sha!r}) else 1)",
+            ],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=120,
+        )
+        assert result.returncode in (0, 1), result.stderr
+        return result.returncode == 0
+
+    def test_a_control_plane_commit_does_not_unsay_a_verdict(self, tmp_path: Path) -> None:
+        """The recording commit itself — the shape that failed at 3c70712."""
+        repo = _scratch_repo(tmp_path)
+        verified = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
+        ).stdout.strip()
+        (repo / "docs" / "control" / "STATUS.json").write_text("{}\n", encoding="utf-8")
+        self._commit(repo, "record the verdict")
+
+        assert self._describes(repo, verified)
+
+    def test_a_code_commit_does_unsay_it(self, tmp_path: Path) -> None:
+        repo = _scratch_repo(tmp_path)
+        verified = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
+        ).stdout.strip()
+        (repo / "packages" / "thing.py").write_text("x = 2\n", encoding="utf-8")
+        self._commit(repo, "change the code")
+
+        assert not self._describes(repo, verified)
+
+    def test_the_generator_agrees_a_recorded_verdict_is_still_green(self, tmp_path: Path) -> None:
+        """Reconciling after the recording commit keeps GREEN, not STALE:GREEN.
+
+        Without this, the generator and the gate would disagree about the same
+        history: the gate admitting a verdict the generator re-marks stale.
+        """
+        repo = _scratch_repo(tmp_path)
+        verified = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
+        ).stdout.strip()
+        (repo / "docs" / "control" / "NOTES.md").write_text("recorded\n", encoding="utf-8")
+        self._commit(repo, "control plane only")
+
+        result = _reconcile_in_with_shas(repo, "GREEN", verified)
+
+        assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
+        written = json.loads(
+            (repo / "docs" / "control" / "STATUS.json").read_text(encoding="utf-8")
+        )
+        assert written["linux_ci"]["status"] == "GREEN"
+        assert written["linux_ci"]["describes_current_head"] is True
+
+    def test_the_generator_still_marks_a_code_moved_verdict_stale(self, tmp_path: Path) -> None:
+        repo = _scratch_repo(tmp_path)
+        verified = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
+        ).stdout.strip()
+        (repo / "packages" / "thing.py").write_text("x = 2\n", encoding="utf-8")
+        self._commit(repo, "change the code")
+
+        result = _reconcile_in_with_shas(repo, "GREEN", verified)
+
+        assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
+        written = json.loads(
+            (repo / "docs" / "control" / "STATUS.json").read_text(encoding="utf-8")
+        )
+        assert written["linux_ci"]["status"] == "STALE:GREEN"
+        assert written["linux_ci"]["describes_current_head"] is False
+
+
+def _reconcile_in_with_shas(repo: Path, status: str, sha: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            sys.executable,
+            str(repo / "scripts" / "reconcile_status.py"),
+            "--linux",
+            status,
+            "--linux-sha",
+            sha,
+            "--windows",
+            status,
+            "--windows-sha",
+            sha,
+            "--rc-status",
+            "NOT_BUILT",
+        ],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=300,
+    )
 
 
 def _scratch_repo(tmp_path: Path) -> Path:

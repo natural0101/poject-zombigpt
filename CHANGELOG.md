@@ -12,6 +12,43 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Added
 
+- **The bridge protocol has a published schema.**
+  `schemas/teamon_bridge.schema.json` states the wire contract a TeamON bridge
+  implementer builds against: eight message types with their directions, the
+  closed goal-token set, the outcome statuses, the handle shape and the
+  utterance cap. `tests/contract/test_teamon_schema_conformance.py` holds the
+  schema and `pz_agent_voice.teamon` together in both directions — every line
+  the code can emit validates, every line the schema permits decodes — and
+  compares the closed sets set-for-set so neither place can drift. The error
+  branch deliberately leaves the fault-code set open: a reader must survive a
+  code from a newer bridge, and refusing the report of a failure loses the
+  failure.
+- **A CI verdict survives its own recording.** The plan gate refused a
+  STATUS.json claiming `GREEN` for any commit other than HEAD — an
+  unsatisfiable rule, because recording a verdict requires a commit and the
+  commit moves HEAD. It shipped and promptly refused its own recording commit.
+  `GREEN` and RC `CURRENT` are now judged by the same predicate as the
+  staleness rule always used: the verdict's commit must be an ancestor of HEAD
+  with nothing outside `docs/control/` changed since. A code change still
+  demotes the verdict to `STALE:GREEN` everywhere, generator and gate agreeing.
+
+### Changed
+
+- **The master plan reflects what a green `main` verified.** With both
+  workflows green at `276b9d9` and the release candidate built from it,
+  `scripts/verify_carryover.py` confirmed 133 tasks by running each one's named
+  regression test here and now — the typed goal channel, the voice companion,
+  the TeamON bridge, the RPC codecs and client, the MCP subprocess E2E surface,
+  and the failure-recovery suite among them. Eleven CI-observed facts (the two
+  executables building and answering on `windows-latest`, the archive being
+  assembled, the Windows suite reproduced through Actions) are recorded with
+  the run that observed them. Evidence pointers that predicted modules the
+  architecture never grew (`session/holder.py`, `safety/stop.py`,
+  `companion.py`) now name the modules the behaviours actually live in.
+  Weighted progress moves from 24.87% to 53.25%; nothing was claimed whose
+  test did not run, and the live-game fifth of the plan remains untouched at
+  zero from this environment.
+
 - **Local Core RPC: the channel that was missing between the two processes.**
   `pz-agent-mcp` is launched as a subprocess by an MCP client, so it never
   shares a process with the sidecar that owns the session, the observation store

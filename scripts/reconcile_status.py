@@ -61,10 +61,15 @@ def head() -> str:
 
 
 def _ci_field(status: str, sha: str, current: str) -> dict[str, Any]:
-    """A CI verdict, marked stale unless it belongs to the current HEAD."""
+    """A CI verdict, marked stale unless it still describes HEAD's code.
+
+    The predicate is :func:`check_master_plan.describes_the_code_at_head`, not
+    SHA equality: committing this file moves HEAD, and a verdict that stopped
+    belonging the moment it was recorded would be a verdict nothing can record.
+    """
     if status not in CI_STATES:
         raise SystemExit(f"CI status must be one of {CI_STATES}, got {status!r}")
-    belongs = sha == current
+    belongs = sha == current or check_master_plan.describes_the_code_at_head(sha)
     return {
         "status": status if belongs else f"STALE:{status}",
         "commit": sha,
@@ -84,9 +89,12 @@ def build(arguments: argparse.Namespace) -> dict[str, Any]:
     rc_status = arguments.rc_status
     if rc_status not in RC_STATES:
         raise SystemExit(f"RC status must be one of {RC_STATES}, got {rc_status!r}")
-    if rc_status == "CURRENT" and arguments.rc_sha != current:
+    if rc_status == "CURRENT" and not (
+        arguments.rc_sha == current
+        or check_master_plan.describes_the_code_at_head(arguments.rc_sha or "")
+    ):
         raise SystemExit(
-            "an RC may only be CURRENT when it was built from the current HEAD; "
+            "an RC may only be CURRENT when it was built from the code at HEAD; "
             f"HEAD is {current[:8]} and the RC came from {(arguments.rc_sha or 'nothing')[:8]}"
         )
 

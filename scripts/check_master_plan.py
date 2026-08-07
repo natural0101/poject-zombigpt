@@ -167,6 +167,32 @@ def _is_ancestor(earlier: str, later: str) -> bool:
     )
 
 
+def describes_the_code_at_head(sha: str) -> bool:
+    """Whether a claim made at *sha* is still a claim about HEAD's code.
+
+    True when *sha* is an ancestor of HEAD and nothing outside ``docs/control/``
+    has changed since. This is the same reasoning the ``head_commit`` staleness
+    rule states in prose: a commit that only rewrites the control plane leaves
+    every claim about the *code* true. It has to be shared by the CI-verdict and
+    release-candidate rules too, because "GREEN only when the SHA equals HEAD"
+    is unsatisfiable — recording a green run requires a commit, and the commit
+    changes the SHA. That exact shape shipped once: a STATUS written at the
+    verified commit was refused by its own child commit, the one that did
+    nothing but record it.
+    """
+    if not sha or not _is_ancestor(sha, "HEAD"):
+        return False
+    moved = subprocess.run(
+        ["git", "diff", "--name-only", sha, "HEAD"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=120,
+    ).stdout.split()
+    return all(path.startswith("docs/control/") for path in moved)
+
+
 def _provenance_problems(tasks: list[dict[str, Any]]) -> list[str]:
     """The refusals an independent monitor asked for, about *history*.
 
@@ -272,19 +298,26 @@ def _status_problems(document: dict[str, Any]) -> list[str]:
                     f"scripts/reconcile_status.py"
                 )
 
+    # "GREEN" and "CURRENT" are judged by the same predicate as head_commit
+    # above, not by SHA equality with HEAD: the commit that records a verdict
+    # is necessarily later than the commit the verdict is about, and a rule
+    # that refuses its own recording gets switched off rather than obeyed.
     for field in ("linux_ci", "windows_ci"):
         entry = status.get(field) or {}
-        if entry.get("status") == "GREEN" and entry.get("commit") != current:
+        verified = str(entry.get("commit") or "")
+        if entry.get("status") == "GREEN" and not describes_the_code_at_head(verified):
             found.append(
-                f"STATUS.json claims {field} GREEN for {str(entry.get('commit'))[:8]}, which "
-                f"is not HEAD; a workflow result for one commit is not evidence about another"
+                f"STATUS.json claims {field} GREEN for {verified[:8] or 'nothing'}, and the "
+                f"code has changed since; a workflow result for one commit is not evidence "
+                f"about another"
             )
 
     release = status.get("release_candidate") or {}
-    if release.get("status") == "CURRENT" and release.get("source_commit") != current:
+    built_from = str(release.get("source_commit") or "")
+    if release.get("status") == "CURRENT" and not describes_the_code_at_head(built_from):
         found.append(
             "STATUS.json marks the release candidate CURRENT while it was built from "
-            f"{str(release.get('source_commit'))[:8]}, not HEAD; it is STALE"
+            f"{built_from[:8] or 'nothing'} and the code has changed since; it is STALE"
         )
 
     blocked = [t["id"] for t in tasks if t["status"] in {"FAIL", "BLOCKED"}]

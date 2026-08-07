@@ -273,6 +273,23 @@ modded game.
 
 ---
 
+## The game process is not touched
+
+The agent plays Project Zomboid the way a mod is allowed to: through the
+modding API inside the game's own Lua sandbox, and through files the mod
+itself reads and writes. There is no other channel. Nothing here opens the
+game's memory, injects a DLL, simulates input into its window, or interferes
+with anti-cheat — not as policy but as absence, and the absence is enforced:
+
+| Rule | Enforced by |
+| --- | --- |
+| No process-memory or injection primitive in shipped code — `WriteProcessMemory`, `ReadProcessMemory`, `CreateRemoteThread`, `VirtualAllocEx`, `process_vm_writev` and kin are banned as identifiers, however reached | `scripts/check_forbidden.py` → `BANNED_PROCESS_TAMPERING`, in CI on every push |
+| `ctypes` is confined to one audited use: the RPC descriptor's liveness probe, which opens a process handle with `PROCESS_QUERY_LIMITED_INFORMATION` — enough to learn a pid exists, deliberately not enough to do anything to it | `scripts/check_forbidden.py` → `CTYPES_ALLOWED_IN`; `core/rpc/descriptor.py` documents the access right inline |
+| The only path from the sidecar to the game is the mod's command queue on disk; every command is one of the closed action set the mod's own adapters execute through the modding API | `core/ipc/layout.py`, `pz-mod`'s `ActionRuntime`; no other transport exists to reach the game |
+| No input simulation into the game window — there is no keystroke or mouse primitive anywhere in the shipped packages, and no fallback that would add one in multiplayer or anywhere else | the same identifier scan, and the closed plan/action schemas that have no field to carry input events |
+
+---
+
 ## Save protection
 
 `core/platform/backup.py`.

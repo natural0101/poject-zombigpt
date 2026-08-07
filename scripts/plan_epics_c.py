@@ -1100,7 +1100,7 @@ _E09_INTENT = [
         "no RPC call from the voice package carries transcript text",
         f".venv/bin/pytest {T}/test_voice_privacy.py -q",
         f"{T}/test_voice_privacy.py",
-        f"{VOICE}/companion.py",
+        f"{VOICE}/driver.py",
     ),
     (
         "Keep the transcript out of the logs",
@@ -1108,7 +1108,7 @@ _E09_INTENT = [
         "voice logs record intents and outcomes only",
         f".venv/bin/pytest {T}/test_voice_privacy.py -q",
         f"{T}/test_voice_privacy.py",
-        f"{VOICE}/companion.py",
+        f"{VOICE}/driver.py",
     ),
     (
         "Keep the transcript out of the support bundle",
@@ -1116,7 +1116,7 @@ _E09_INTENT = [
         "no bundle member contains a transcript",
         f".venv/bin/pytest {T}/test_voice_privacy.py -q",
         f"{T}/test_voice_privacy.py",
-        f"{VOICE}/companion.py",
+        f"{VOICE}/driver.py",
     ),
     (
         "Speak a refusal the user can act on",
@@ -1124,7 +1124,7 @@ _E09_INTENT = [
         "each refusal has a spoken form naming the cause",
         f".venv/bin/pytest {T}/test_voice_intents.py -q",
         f"{T}/test_voice_intents.py",
-        f"{VOICE}/companion.py",
+        f"{VOICE}/phrases.py",
     ),
     (
         "Recognise the stop phrase before any other intent",
@@ -1191,7 +1191,7 @@ _E09_E2E = [
         "an intent and its outcome reach a file, with no transcript",
         f".venv/bin/pytest {T}/test_voice_privacy.py -q",
         f"{T}/test_voice_privacy.py",
-        f"{VOICE}/companion.py",
+        f"{VOICE}/driver.py",
     ),
     (
         "Correct QUICKSTART to match what voice can actually do",
@@ -1403,7 +1403,7 @@ _E10_PROTOCOL = [
         "an error from the bridge is summarised, not read aloud",
         f".venv/bin/pytest {T}/test_teamon_bridge.py -q",
         f"{T}/test_teamon_bridge.py",
-        f"{VOICE}/companion.py",
+        f"{VOICE}/teamon.py",
     ),
     (
         "Bound the size of any bridge message",
@@ -1502,7 +1502,7 @@ _E10_E2E = [
         "voice check names the missing bridge",
         f".venv/bin/pytest {T}/test_teamon_bridge.py -q",
         f"{T}/test_teamon_bridge.py",
-        f"{VOICE}/companion.py",
+        f"{VOICE}/driver.py",
     ),
     (
         "Prove no transcript reaches the bridge under any path",

@@ -46,9 +46,7 @@ from pz_agent_voice.teamon import (
 
 pytestmark = pytest.mark.contract
 
-SCHEMA_PATH: Final = (
-    Path(__file__).resolve().parents[2] / "schemas" / "teamon_bridge.schema.json"
-)
+SCHEMA_PATH: Final = Path(__file__).resolve().parents[2] / "schemas" / "teamon_bridge.schema.json"
 
 
 @pytest.fixture(scope="module")
@@ -79,17 +77,12 @@ class TestOutbound:
         "message",
         [
             hello_message(),
-            speak_message(
-                utterance_id="utt-1", text="Иду есть.", priority=0, interruptible=True
-            ),
+            speak_message(utterance_id="utt-1", text="Иду есть.", priority=0, interruptible=True),
             speak_message(
                 utterance_id="utt-2", text="x" * MAX_TEXT_CHARS, priority=7, interruptible=False
             ),
             interrupt_message("utt-1"),
-            *[
-                goal_message(request_id=f"req-{member.value}", goal=member)
-                for member in VoiceGoal
-            ],
+            *[goal_message(request_id=f"req-{member.value}", goal=member) for member in VoiceGoal],
         ],
         ids=lambda m: str(m.type) if isinstance(m, BridgeMessage) else repr(m),
     )
@@ -147,9 +140,7 @@ class TestTheClosedSetsAgree:
         }
 
     def test_every_message_type_has_exactly_one_branch(self) -> None:
-        branches = [
-            branch["properties"]["type"]["const"] for branch in _document()["oneOf"]
-        ]
+        branches = [branch["properties"]["type"]["const"] for branch in _document()["oneOf"]]
         assert sorted(branches) == sorted(member.value for member in BridgeMessageType)
 
     def test_the_goal_tokens_are_the_voice_goal_enum(self) -> None:

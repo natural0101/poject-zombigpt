@@ -130,6 +130,49 @@ def test_a_todo_marker_is_rejected(tmp_path: Path) -> None:
     assert "stub-marker" in kinds
 
 
+def test_a_process_memory_primitive_is_rejected_however_it_is_reached(
+    tmp_path: Path,
+) -> None:
+    """The anti-cheat floor: every route to the primitive ends in its name.
+
+    Both spellings — the bare name a ``from ctypes import`` would produce and
+    the attribute a ``kernel32.`` handle would — because banning one and not
+    the other is a rule with a documented bypass.
+    """
+    as_name = _scan(tmp_path, "def f(h):\n    return WriteProcessMemory(h, 0, b'', 0)\n")
+    as_attr = _scan(tmp_path, "def f(k, h):\n    return k.CreateRemoteThread(h)\n")
+
+    assert "process-tampering" in as_name
+    assert "process-tampering" in as_attr
+
+
+def test_ctypes_outside_the_audited_probe_is_rejected(tmp_path: Path) -> None:
+    kinds = _scan(tmp_path, "import ctypes\n")
+
+    assert "ctypes-outside-the-probe" in kinds
+
+
+def test_the_one_audited_ctypes_use_is_the_one_the_allowlist_names() -> None:
+    """The exemption is exactly the descriptor's liveness probe, nothing more.
+
+    Scanning the real shipped tree keeps the allowlist honest in both
+    directions: an entry for a file with no ``ctypes`` left in it is a hole
+    waiting to be used, and a new import anywhere else must fail the gate
+    rather than widen it.
+    """
+    checker = _checker()
+    for allowed in checker.CTYPES_ALLOWED_IN:
+        source = (REPO_ROOT / allowed).read_text(encoding="utf-8")
+        assert "import ctypes" in source, f"{allowed} no longer uses ctypes; drop the entry"
+    findings = [
+        finding
+        for shipped in checker._iter_files(checker.SHIPPED_ROOTS, (".py",))
+        for finding in checker.check_python(shipped)
+        if finding.rule in {"process-tampering", "ctypes-outside-the-probe"}
+    ]
+    assert findings == [], [finding.render() for finding in findings]
+
+
 # ---------------------------------------------------------------------------
 # the documents against the scanner
 # ---------------------------------------------------------------------------

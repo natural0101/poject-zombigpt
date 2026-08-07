@@ -485,7 +485,7 @@ _E12_RECOVERY = [
         "the mod detects the dead heartbeat and stops acting",
         f".venv/bin/pytest {T}/test_session_recovery.py -q",
         f"{T}/test_session_recovery.py",
-        "packages/pz_agent_core/src/pz_agent_core/session/holder.py",
+        "packages/pz_agent_core/src/pz_agent_core/session/heartbeat.py",
     ),
     (
         "Recover when the game dies mid-action",
@@ -533,7 +533,7 @@ _E12_RECOVERY = [
         "a stop is honoured with no core, no game, no queue and no link",
         f".venv/bin/pytest {T}/test_safety_stop.py -q",
         f"{T}/test_safety_stop.py",
-        "packages/pz_agent_core/src/pz_agent_core/safety/stop.py",
+        "packages/pz_agent_core/src/pz_agent_core/safety/reflex.py",
     ),
     (
         "Never clear a queue entry the player owns",
@@ -541,7 +541,7 @@ _E12_RECOVERY = [
         "a stop clears only mod-owned entries",
         f".venv/bin/pytest {T}/test_safety_stop.py -q",
         f"{T}/test_safety_stop.py",
-        "packages/pz_agent_core/src/pz_agent_core/safety/stop.py",
+        "packages/pz_agent_core/src/pz_agent_core/safety/reflex.py",
     ),
     (
         "Refuse to act after a manual takeover, before dispatch",
@@ -565,7 +565,7 @@ _E12_RECOVERY = [
         "arming without a backup is refused",
         f".venv/bin/pytest {T}/test_session_arming.py -q",
         f"{T}/test_session_arming.py",
-        "packages/pz_agent_core/src/pz_agent_core/session/holder.py",
+        "packages/pz_agent_core/src/pz_agent_core/policy/autonomy.py",
     ),
     (
         "Bind the backup to the save the mod reports",
@@ -669,8 +669,8 @@ _E13 = [
         "Describe the MCP surface",
         2,
         "docs/MCP_TOOLS.md matches --describe",
-        f".venv/bin/pytest {C}/test_mcp_docs_match_catalogue.py -q",
-        f"{C}/test_mcp_docs_match_catalogue.py",
+        ".venv/bin/pytest tests/unit/test_mcp_configs.py -q",
+        "tests/unit/test_mcp_configs.py::test_the_documented_tools_are_the_whole_surface",
         "docs/MCP_TOOLS.md",
     ),
     (

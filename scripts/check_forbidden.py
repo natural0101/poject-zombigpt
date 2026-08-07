@@ -59,6 +59,31 @@ BANNED_ATTR_CALLS = {
     ("subprocess", "getoutput"): "shell execution",
 }
 
+#: The anti-cheat floor, as names rather than as a promise. The agent plays the
+#: game the way a mod is allowed to: through the modding API and the file IPC.
+#: Nothing in shipped code may open another process's memory, write into it, or
+#: start a thread there — the primitives a cheat or an injector is made of.
+#: Banned as identifiers wherever they appear, because every route to them
+#: (ctypes, pywin32, a vendored wrapper) ends in one of these names.
+BANNED_PROCESS_TAMPERING = {
+    "WriteProcessMemory": "writing another process's memory",
+    "ReadProcessMemory": "reading another process's memory",
+    "CreateRemoteThread": "code injection",
+    "VirtualAllocEx": "allocating in another process",
+    "VirtualProtectEx": "changing another process's page protection",
+    "NtWriteVirtualMemory": "writing another process's memory",
+    "process_vm_writev": "writing another process's memory",
+    "PTRACE_POKEDATA": "writing another process's memory",
+}
+
+#: ``ctypes`` reaches the OS with no seatbelt, so importing it is confined to
+#: the one audited use: the descriptor's liveness probe, which opens a process
+#: handle with PROCESS_QUERY_LIMITED_INFORMATION — enough to learn that a pid
+#: exists, deliberately not enough to do anything to it.
+CTYPES_ALLOWED_IN = {
+    Path("packages/pz_agent_core/src/pz_agent_core/rpc/descriptor.py"),
+}
+
 SECRET_PATTERNS = (
     (re.compile(r"sk-ant-[A-Za-z0-9_\-]{16,}"), "Anthropic API key"),
     (re.compile(r"sk-[A-Za-z0-9]{32,}"), "OpenAI-style API key"),
@@ -218,6 +243,39 @@ def check_python(path: Path) -> list[Finding]:
             for kw in node.keywords:
                 if kw.arg == "shell" and isinstance(kw.value, ast.Constant) and kw.value.value:
                     findings.append(Finding(path, node.lineno, "banned-call", "shell=True"))
+
+        if isinstance(node, (ast.Name, ast.Attribute)):
+            name = node.id if isinstance(node, ast.Name) else node.attr
+            if name in BANNED_PROCESS_TAMPERING:
+                findings.append(
+                    Finding(
+                        path,
+                        node.lineno,
+                        "process-tampering",
+                        f"{name}: {BANNED_PROCESS_TAMPERING[name]}; the agent plays "
+                        "through the modding API, never through another process's memory",
+                    )
+                )
+
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            modules = (
+                [alias.name for alias in node.names]
+                if isinstance(node, ast.Import)
+                else [node.module or ""]
+            )
+            if any(m == "ctypes" or m.startswith("ctypes.") for m in modules):
+                relative = path.relative_to(REPO_ROOT) if path.is_relative_to(REPO_ROOT) else path
+                if relative not in CTYPES_ALLOWED_IN:
+                    findings.append(
+                        Finding(
+                            path,
+                            node.lineno,
+                            "ctypes-outside-the-probe",
+                            "ctypes is confined to the descriptor's liveness probe; "
+                            "a new use needs its own audit and an entry in "
+                            "CTYPES_ALLOWED_IN",
+                        )
+                    )
     return findings
 
 

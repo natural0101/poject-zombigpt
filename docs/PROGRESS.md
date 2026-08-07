@@ -125,6 +125,20 @@ kind**, and it is the only one that cannot be closed from here.
 below is closed and is kept as history. Everything after it lives in the master
 plan, and nothing else in this repository states how far along the project is.
 
+**State at the last update (2026-08-07):** `main` is the working branch, and it
+is green — CI and `windows package` both passed against `276b9d9`, the first
+commit where every claim in `STATUS.json` describes the commit that carries it,
+and the release candidate was built from it (run 31214158408). On that
+foundation `scripts/verify_carryover.py` confirmed the accumulated work into
+the plan by running each task's named regression test: weighted progress stands
+at **53.25%**, with MCP_OPERABILITY, VOICE_OPERABILITY and the goal channel now
+counted because their tests ran, not because their code exists. Still at zero
+and honestly so: LIVE_GAME_VALIDATION (599 weight, needs a machine with the
+game) and FINAL_RELEASE. Still open besides them: all 54 integration `CHECK`s,
+E01-M01/M03 (baseline records, control instrumentation), most of E03 evidence
+canonicalisation, E05-M02..M06 statuses, and E14/E15 entirely. The number to
+trust is `scripts/master_report.py`'s, never this paragraph's.
+
 The hundred-step model that used to be described here has been **retired**. It
 counted steps and called one step one percentage point, which meant a paragraph
 of documentation and a Project Zomboid scenario running on a real machine were
