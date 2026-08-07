@@ -251,7 +251,20 @@ def _prepare(
         if not schema.is_file():
             # Without the schemas nothing can be written at all, so this is a
             # prepare-time refusal rather than a surprise on the first run.
-            problems.append(f"evidence schema missing: {schema}")
+            #
+            # The remedy is spelled out because the failure has a shape that
+            # looks like a bug: the schemas live in the evidence tree, which the
+            # release archive ships and a checkout has in git, so an operator
+            # only meets this by pointing --evidence-dir somewhere new — or by
+            # invoking the bundled executable directly, where "the directory I
+            # came from" is a temporary unpack folder. Every other refusal in
+            # this project names its way out; this one did not.
+            problems.append(
+                f"evidence schema missing: {schema}. The two schemas ship in the release "
+                "archive's evidence/schema/ and are in git in a checkout. Point "
+                "--evidence-dir at that tree (run-live-tests.bat does this for you), or "
+                "copy evidence/schema/*.json into the directory you chose."
+            )
 
     document: JsonDict = {
         "evidence_root": str(layout.root),

@@ -50,6 +50,25 @@ drift out of sync with `pz_agent_core.version`.
   postcondition accepts only thirst — a refill raises the vessel's volume and
   the drink lowers it again, so the vessel witnesses nothing in either
   direction. Published as `pz_action_drink_source`.
+- **The operator's loop is driven end to end.** `backup-save` → `prepare` →
+  `run`, through the real CLI over a synthetic Zomboid directory. Every step had
+  a unit test; the sequence did not, and the sequence is what a person performs.
+  It is here for a specific reason: gating `run` on `prepare` creates the
+  opposite risk to the one it closes, because a gate whose precondition can
+  never be satisfied is a bricked release, and nothing could previously tell
+  "refuses correctly" from "refuses always". The test asserts both directions.
+  It also pins the three refusals an operator can actually hit — a save whose
+  name does not say "test", a test save with no backup, and an evidence
+  directory with no schemas.
+- **A refusal that named no remedy now names one.** `prepare` reported
+  "evidence schema missing" and stopped. The schemas ship in the archive's
+  `evidence/schema/` and are in git in a checkout, so this is met only by
+  pointing `--evidence-dir` somewhere new — or by running the bundled
+  executable directly, where "the directory I came from" is a temporary unpack
+  folder. Every other refusal in this project names its way out; this one did
+  not. (The tempting fix — a second copy of the schemas inside the package —
+  was started and reverted: it would have created a second source of truth for
+  the documents that validate all release evidence, to improve a message.)
 - **`live-test run` and `resume` refuse until `prepare` has completed.** They
   did not. `prepare` is the subcommand that proves the world is safe to
   experiment on — a save whose name marks it a test world, and a backup that
