@@ -195,10 +195,26 @@ def test_broken_toml_names_the_syntax_error(tmp_path: Path) -> None:
 
 
 def test_a_missing_file_is_an_error_rather_than_silent_defaults(tmp_path: Path) -> None:
+    """And the remedy names a file that exists rather than a page that does not.
+
+    This asserted the remediation said "docs/QUICKSTART.md". That document
+    shows a configuration fragment and never names ``config.toml`` or
+    ``config.example.toml``, so an operator whose first ``start`` failed was
+    sent to a page that did not contain the thing they were told to copy. The
+    assertion held the wording in place while the wording was wrong, which is
+    why this one checks the file is really there instead.
+    """
     validation = load_config(tmp_path / "absent.toml")
 
     assert validation.errors[0].code == CODE_NOT_FOUND
-    assert "docs/QUICKSTART.md" in validation.errors[0].remediation
+    remediation = validation.errors[0].remediation
+    named = [word.strip(".,") for word in remediation.split() if word.endswith(".toml")]
+    assert named, f"the remedy names no file to copy: {remediation!r}"
+    repo_root = Path(__file__).resolve().parents[2]
+    for candidate in named:
+        assert (repo_root / candidate).is_file(), (
+            f"the remedy points at {candidate}, which does not exist"
+        )
 
 
 def test_an_oversized_file_is_refused_before_it_is_parsed(tmp_path: Path) -> None:

@@ -188,6 +188,14 @@ Everything below ran and passed in the remote environment:
   evidence — but "writes nothing" invited you to believe a failed prepare left
   no trace, and it leaves twenty directories. `live-test finalize` refuses and
   names every missing artefact, one line each;
+- **`restore-save`, both directions.** A save was corrupted — one file
+  rewritten, one deleted — and restored from a backup taken by `backup-save`;
+  both came back. Then, with a live game heartbeat in the exchange directory,
+  the same restore was refused with exit 1 and the tampered file left exactly
+  as it was. There is no flag that overrides that refusal, and this is the
+  command that can destroy a save, so it is the one worth having watched;
+- **the sidecar lifecycle, `start` → `status` → `stop`**, which is how the
+  defect above was found;
 - **the whole loop you will perform, end to end, through the real commands.**
   `backup-save` on a synthetic Zomboid directory, then `prepare --save`, then
   `run` — and the three refusals in between: a save whose name does not say

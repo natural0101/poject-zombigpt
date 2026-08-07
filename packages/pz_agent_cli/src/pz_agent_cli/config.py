@@ -347,8 +347,14 @@ def _read(path: Path) -> tuple[str | None, ConfigProblem | None]:
             code=CODE_NOT_FOUND,
             detail="no configuration file at this path",
             remediation=(
-                "create it by copying the sample in docs/QUICKSTART.md, or pass "
-                "--config with the path to yours"
+                # Names the file rather than a document. QUICKSTART.md shows a
+                # fragment and never names config.example.toml, so an operator
+                # whose very first `start` failed was sent to a page that does
+                # not contain the thing the message told them to copy. Both
+                # paths below ship in the release archive, and install.bat
+                # performs this copy itself.
+                "copy configs/agent/config.example.toml to this path — install.bat does "
+                "it for you — or pass --config with the path to yours"
             ),
         )
     except OSError as exc:
