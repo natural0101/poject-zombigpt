@@ -657,6 +657,12 @@ def test_an_index_naming_the_same_member_twice_is_refused(tmp_path: Path) -> Non
     assert "twice" in str(caught.value)
 
 
+def _nested_index(depth: int) -> bytes:
+    """A well-formed index whose ``files`` value is *depth* nested empty arrays."""
+    head = f'{{"format": "{build_rc.MANIFEST_FORMAT}", "files": '.encode()
+    return head + b"[" * depth + b"]" * depth + b"}"
+
+
 def test_an_index_that_nests_too_deeply_is_refused(tmp_path: Path) -> None:
     """A two-kilobyte index, three orders of magnitude under the byte ceiling.
 
@@ -667,9 +673,7 @@ def test_an_index_that_nests_too_deeply_is_refused(tmp_path: Path) -> None:
     code that elsewhere means "incomplete but internally honest", on an archive
     handed to it precisely because somebody already suspected it.
     """
-    nested = (
-        f'{{"format": "{build_rc.MANIFEST_FORMAT}", "files": '.encode() + b"[" * 2000 + b"]" * 2000 + b"}"
-    )
+    nested = _nested_index(2000)
     assert len(nested) < build_rc.MAX_INDEX_BYTES
     archive = _lone_archive(tmp_path / "deep.zip", {build_rc.MANIFEST_NAME: nested})
     with pytest.raises(build_rc.ArchiveError) as caught:
@@ -681,9 +685,7 @@ def test_verify_on_an_index_that_nests_too_deeply_exits_failure_without_a_traceb
     tmp_path: Path,
 ) -> None:
     """``verify_main`` documents that it never raises. It has to hold here too."""
-    nested = (
-        f'{{"format": "{build_rc.MANIFEST_FORMAT}", "files": '.encode() + b"[" * 2000 + b"]" * 2000 + b"}"
-    )
+    nested = _nested_index(2000)
     archive = _lone_archive(tmp_path / "deep-cli.zip", {build_rc.MANIFEST_NAME: nested})
     stream = io.StringIO()
     code = build_rc.main(["--verify", str(archive)], stream=stream)
@@ -789,14 +791,17 @@ def test_a_member_declaring_more_than_the_member_ceiling_is_refused(tmp_path: Pa
     assert "member ceiling" in str(caught.value)
 
 
-def test_a_member_that_expands_past_the_ceiling_it_declared_is_refused(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_a_member_declaring_less_than_it_holds_cannot_outrun_the_pre_check(
+    tmp_path: Path,
 ) -> None:
-    """The declared size is small and the real one is not: the classic bomb.
+    """The classic bomb — declare one byte, hold five hundred — cannot happen here.
 
-    The pre-check passes because the archive declared one byte. Only the running
-    count taken *while decompressing* notices, which is why that guard is inside
-    the read loop and not derived from ``file_size``.
+    ``ZipExtFile`` caps what it returns at ``zipinfo.file_size``, so a member can
+    never decompress to more than it declared, and the declaration was already
+    measured against the ceiling before a byte was read. What a shrunken
+    declaration buys an attacker is a short read, which fails its CRC. This is
+    pinned because it is the reason the *running total* rather than the per-member
+    count is the guard that does the work in ``_measure``.
     """
     body = b"X" * 500
     archive = _lone_archive(
@@ -804,16 +809,20 @@ def test_a_member_that_expands_past_the_ceiling_it_declared_is_refused(
         {build_rc.MANIFEST_NAME: _index_bytes([]), "docs/QUICKSTART.md": body},
     )
     _forge_declared_size(archive, "docs/QUICKSTART.md", 1)
-    monkeypatch.setattr(build_rc, "MAX_MEMBER_BYTES", 100)
     with pytest.raises(build_rc.ArchiveError) as caught:
         build_rc.verify_archive(archive)
-    assert "expands past the size this build verifies" in str(caught.value)
+    assert "CRC" in str(caught.value)
 
 
 def test_members_that_together_pass_the_total_ceiling_are_refused(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Each member fits; the archive does not. Nothing else counts the sum."""
+    """Each member fits the member ceiling; together they do not fit the total.
+
+    Only ``MAX_TOTAL_BYTES`` is lowered, so nothing but the running sum can be
+    what refuses this: every member here is four hundred bytes against a member
+    ceiling left at its real 512 MiB.
+    """
     archive = _lone_archive(
         tmp_path / "total.zip",
         {
@@ -821,7 +830,6 @@ def test_members_that_together_pass_the_total_ceiling_are_refused(
             **{f"docs/{index:03d}.md": b"Y" * 400 for index in range(10)},
         },
     )
-    monkeypatch.setattr(build_rc, "MAX_MEMBER_BYTES", 1000)
     monkeypatch.setattr(build_rc, "MAX_TOTAL_BYTES", 1500)
     with pytest.raises(build_rc.ArchiveError) as caught:
         build_rc.verify_archive(archive)

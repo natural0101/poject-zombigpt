@@ -732,10 +732,18 @@ def _measure(
                     break
                 size += len(chunk)
                 total += len(chunk)
+                # `total` is what this guard is for. The `size` half is defence in
+                # depth and is currently unreachable: ZipExtFile caps what it
+                # returns at zipinfo.file_size, which the pre-check above already
+                # measured against MAX_MEMBER_BYTES, so a member cannot decompress
+                # to more than it declared — an under-declared member yields a
+                # short read that fails its CRC instead. Kept because that is
+                # zipfile's guarantee and not this module's.
                 if size > MAX_MEMBER_BYTES or total > MAX_TOTAL_BYTES:
                     raise ArchiveError(
                         f"{info.filename} expands past the size this build verifies. "
-                        "The declared size was smaller: discard this archive."
+                        "Together the members exceed the total this build will "
+                        "decompress: discard this archive."
                     )
                 digest.update(chunk)
         measured.append(
