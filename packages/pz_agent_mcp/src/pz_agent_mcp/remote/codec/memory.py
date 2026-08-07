@@ -139,8 +139,11 @@ def _encode_data(data: Mapping[str, float | int | bool | None], *, where: str) -
     and the whole point of the field's type is that text cannot travel in it.
     """
     # Widened deliberately: the declared key and value types are what this
-    # function is verifying, so it must not be typed as though they held.
-    raw: Mapping[Any, Any] = data
+    # function is verifying, so it must not be typed as though they held — and
+    # that includes the container's own type, checked before it is walked.
+    raw: Any = data
+    if not isinstance(raw, Mapping):
+        raise CodecError(f"{where}: data must be an object")
     out: JsonDict = {}
     for key, value in raw.items():
         if not isinstance(key, str):
@@ -161,14 +164,28 @@ def _decode_data(payload: Mapping[str, Any], *, where: str) -> dict[str, float |
 
 
 def _encode_strings(values: Sequence[str], *, field: str, where: str) -> list[str]:
-    """Check and copy a sequence of strings on the way out."""
+    """Check and copy a sequence of strings on the way out.
+
+    The container is checked before its elements, and a ``str`` is refused as
+    the container specifically: a string *is* a sequence of one-character
+    strings, so the element loop below would accept ``refs="ref:room:2b"`` and
+    emit eleven single-character references. That payload is well-formed, so
+    the peer decodes it without complaint and both halves agree on a record the
+    core never held — the same silent-divergence failure the non-string ``data``
+    key check exists to stop. A ``Mapping`` is refused for the same reason: it
+    iterates as its keys, which are strings too.
+    """
     # Widened for the same reason as `data`: the element type is what is being
     # verified, so this must not be typed as though it already held.
-    raw: Sequence[Any] = values
+    raw: Any = values
+    if isinstance(raw, (str, bytes)) or not isinstance(raw, Sequence):
+        raise CodecError(f"{where}: {field} must be an array")
+    out: list[str] = []
     for item in raw:
         if not isinstance(item, str):
             raise CodecError(f"{where}: {field} must contain only strings")
-    return list(raw)
+        out.append(item)
+    return out
 
 
 def _decode_strings(payload: Mapping[str, Any], field: str, *, where: str) -> tuple[str, ...]:
@@ -191,8 +208,9 @@ def encode_memory_record(record: MemoryRecord) -> JsonDict:
     Raises:
         CodecError: ``data`` or ``refs`` carries something the record's type
             says it cannot — a string, a container, a non-finite number or a
-            non-string key. Refused here as well as on decode so a store that
-            smuggles text fails on the side that produced it.
+            non-string key — or is not the container its type says it is.
+            Refused here as well as on decode so a store that smuggles text
+            fails on the side that produced it.
     """
     return {
         "kind": record.kind,

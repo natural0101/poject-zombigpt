@@ -426,6 +426,19 @@ def test_status_body_refuses_a_record_that_is_not_an_object() -> None:
         decode_action_status({"record": "act-1"})
 
 
+def test_status_body_refuses_an_empty_record_object() -> None:
+    """ "No such action" is a *missing* key, never a present but empty one.
+
+    The two answers are one keystroke apart in the decoder and opposite in
+    meaning: a reader that treats an empty record as absence answers "the core
+    has never seen this id" when the truth is "the peer sent an answer it never
+    filled in". Deleting fields one at a time never reaches this shape, so it
+    needs its own case.
+    """
+    with pytest.raises(CodecError):
+        decode_action_status({"record": {}})
+
+
 # --------------------------------------------------------------------------
 # type confusion
 # --------------------------------------------------------------------------
@@ -437,6 +450,11 @@ def test_status_body_refuses_a_record_that_is_not_an_object() -> None:
         ("lease_ms", "20000"),  # int given a string
         ("lease_ms", True),  # int given a bool
         ("lease_ms", 12.5),  # int given a float
+        # ...and a float that is *within* the lease bounds. 12.5 truncates to
+        # 12, which the request's own range check refuses anyway, so on its own
+        # it cannot tell a missing type check from a passing range check. This
+        # one is only refused if the field is really read as an integer.
+        ("lease_ms", 20_000.5),
         ("session_id", 1234),  # string given an int
         ("idempotency_key", ["eat-1"]),  # string given an array
         ("args", "item_ref=item:9001"),  # object given a string
@@ -729,6 +747,27 @@ def test_a_rejected_number_is_not_quoted_either() -> None:
         decode_action_record(payload)
     assert "133.7" not in str(exc.value)
     assert "progress" in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("lease_ms", MAX_LEASE_MS + 1), ("idempotency_key", "k" * 121)],
+)
+def test_the_request_bounds_refusal_still_names_what_it_checked(field: str, value: Any) -> None:
+    """The request's own bounds get the same treatment as the record's.
+
+    Both refusals above assert only that *something* was raised, which a
+    message reduced to a bare "malformed" would still satisfy. The rule is
+    field and reason but never the value, and it applies on this path too.
+    """
+    payload = encode_action_request(valid_request())
+    payload[field] = value
+    with pytest.raises(CodecError) as exc:
+        decode_action_request(payload)
+    message = str(exc.value)
+    assert "action.request" in message
+    assert field in message
+    assert str(value) not in message
 
 
 def test_error_messages_still_name_the_field() -> None:

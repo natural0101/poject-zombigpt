@@ -29,10 +29,15 @@ second encoding of the same document is a second definition that drifts in the
 direction nobody tests.
 
 Their parse errors are ``ProtocolError``, whose text can quote the value it
-rejected. Those are replaced with a :class:`CodecError` naming the field and the
-reason and chained through ``from`` — the original stays reachable for a
-debugger, and nothing from the payload reaches the message that a bug report
-will quote.
+rejected — an evidence object or a session id. Those are replaced with a
+:class:`CodecError` naming the field and the reason and chained through ``from``:
+the original stays reachable for a debugger, and none of it reaches the message
+a bug report will quote.
+
+The one value this module does put in a message is an unrecognised ``action`` or
+``status``, which :func:`~pz_agent_mcp.remote.codec.require_enum` names on
+purpose and package-wide. Those two fields carry closed protocol identifiers, not
+game text; every field that can carry game text is refused without being quoted.
 """
 
 from __future__ import annotations

@@ -44,3 +44,39 @@ explicitly (`PureWindowsPath`, bytes with `\r\n`, an injected writer that
 translates newlines) so it fails here as well as there. A regression test that
 only fires on the platform nobody develops on is one that fires after the
 release.
+
+## D-010 — the 100-step plan is retired; progress is weighted, not counted
+
+The 100-step model reported `50%` for fifty passing steps. That number was a
+count, and a count says a documentation paragraph and a live Project Zomboid
+scenario are the same size. They are not, and the difference is the entire
+question.
+
+Replaced by `docs/control/MASTER_PLAN.yaml`: 480 tasks in 15 epics, each with a
+weight in a validated band, and
+
+    progress = sum(weight of PASS tasks) / sum(weight of all tasks) * 100
+
+computed on every read. Nothing stores a percentage, so there is no number to
+edit and none to drift.
+
+**Weight bands are enforced.** `scripts/build_master_plan.py` refuses a plan
+where a documentation task and a transport task, or a transport task and a live
+one, could carry the same weight. Without that rule, weight becomes a habit
+rather than a judgement, and the model decays back into a count.
+
+**Nothing inherited a PASS.** `scripts/verify_carryover.py` ignores the old
+record entirely. For each candidate it requires a named regression test, that
+test existing, that test *passing when run*, an evidence path that exists, and a
+commit that resolves. 193 tasks met all five. The gate then refused 11 of those
+because they were PASS over an unfinished dependency; demoting them cascaded to
+28. The honest figure fell from a claimed 50% to a measured **28.6%**.
+
+**Seven metrics, because one number hides a zero.** MCP operability and voice
+operability are both at 0.0% while Windows compatibility is at 89.3%. A single
+figure would have averaged that into something that sounds like progress.
+
+**An epic cannot close on task count.** Five conditions, all required, and the
+last is an integration scenario that exercises the epic end to end. Every defect
+this project has found was a subsystem that was complete, tested, green and
+connected to nothing — which is exactly what a task count cannot see.

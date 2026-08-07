@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import json
 import math
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import fields
 from typing import Any, cast
 
@@ -564,6 +564,51 @@ def test_a_non_string_data_key_is_refused() -> None:
         decode_memory_record(payload)
 
 
+@pytest.mark.parametrize("refs", ["ref:room:2b", "", b"ref:room:2b"])
+def test_a_string_given_as_refs_is_refused_on_encode(refs: Any) -> None:
+    """The container's type is checked, not just its elements.
+
+    A ``str`` is a sequence of one-character strings, so an element-only check
+    accepts ``refs="ref:room:2b"`` and emits eleven single-character
+    references. That payload is well-formed: the peer decodes it without
+    complaint, and both halves agree on a record the core never held. It is the
+    same silent divergence the non-string ``data`` key check exists to stop, and
+    it has to fail on the side holding the record.
+    """
+    with pytest.raises(CodecError):
+        encode_memory_record(full_record(refs=cast("Any", refs)))
+
+
+@pytest.mark.parametrize("kinds", ["container", "", {"container": 1}, 3, None])
+def test_a_non_array_given_as_query_kinds_is_refused_on_encode(kinds: Any) -> None:
+    """``kinds`` has the same hole as ``refs`` and closes it the same way.
+
+    A ``Mapping`` is refused alongside the string: it iterates as its keys,
+    which are strings too, so an element-only check would turn a dict into an
+    array of its keys.
+    """
+    with pytest.raises(CodecError):
+        encode_memory_query(MemoryQuery(kinds=cast("Any", kinds), limit=20))
+
+
+@pytest.mark.parametrize("refs", [{"0": "ref:a:1"}, 3, None, {"ref:a:1"}])
+def test_a_non_array_given_as_refs_is_refused_on_encode(refs: Any) -> None:
+    with pytest.raises(CodecError):
+        encode_memory_record(full_record(refs=cast("Any", refs)))
+
+
+@pytest.mark.parametrize("data", [[("count", 4)], "count=4", 4, None, ("count",)])
+def test_a_non_object_given_as_data_is_refused_on_encode(data: Any) -> None:
+    """And it is a ``CodecError``, not whatever ``.items()`` raises.
+
+    The boundary turns a ``CodecError`` into ``MALFORMED``; an ``AttributeError``
+    escaping the codec is an internal error on a payload the codec is supposed
+    to have judged.
+    """
+    with pytest.raises(CodecError):
+        encode_memory_record(full_record(data=cast("Any", data)))
+
+
 def test_the_label_is_still_free_text() -> None:
     """The refusals above are about ``data``, not about ``label``.
 
@@ -632,6 +677,20 @@ def test_no_refusal_from_the_encoder_repeats_the_value_either() -> None:
     with pytest.raises(CodecError) as excinfo:
         encode_memory_record(full_record(data=cast("Mapping[str, Any]", {SECRET: ["x"]})))
     assert SECRET not in _messages(excinfo.value)
+
+
+def test_no_encoder_refusal_for_a_bad_container_repeats_the_value_either() -> None:
+    """The container refusals are as close to the payload as the value ones."""
+    builds: tuple[Callable[[], object], ...] = (
+        lambda: encode_memory_record(full_record(refs=cast("Any", SECRET))),
+        lambda: encode_memory_record(full_record(data=cast("Any", SECRET))),
+        lambda: encode_memory_query(MemoryQuery(kinds=cast("Any", SECRET), limit=20)),
+        lambda: encode_memory_record(full_record(refs=cast("Any", {SECRET: 1}))),
+    )
+    for build in builds:
+        with pytest.raises(CodecError) as excinfo:
+            build()
+        assert SECRET not in _messages(excinfo.value)
 
 
 def test_no_query_refusal_repeats_the_value_it_rejected() -> None:

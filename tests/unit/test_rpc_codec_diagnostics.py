@@ -18,6 +18,14 @@ Three of the assertions look like paranoia and are the point of the file:
   not allowed to redact it again, or to shorten it: the caller bounds the
   number of records, not their content, and a truncated log line is a log line
   that lies about what was logged.
+
+And one section is here because a round trip cannot see it: encode and decode
+changed together — ``detail`` and ``remediation`` swapped on the way out and
+swapped back on the way in — leaves every equality in this file true while the
+bytes on the wire say the opposite of what they mean. So the encoded object is
+also compared against a literal, and a literal payload against the record it
+must decode to. Those are the only assertions here that state what a key
+*means*, which is the part a peer build has to agree with.
 """
 
 from __future__ import annotations
@@ -278,6 +286,123 @@ def test_a_zero_limit_is_carried_and_is_not_a_missing_one() -> None:
     query = TailQuery(limit=0)
     assert encode_tail_query(query)["limit"] == 0
     assert decode_tail_query(encode_tail_query(query)) == query
+
+
+# -- the wire shape itself, written out by hand ---------------------------
+#
+# Everything above this line tests the pair against itself. A round trip is
+# blind to any change made to both halves at once: swap `detail` and
+# `remediation` in the encoder and swap them back in the decoder and every
+# equality above still holds, while the object on the wire now carries the
+# remediation under the key a peer reads as the detail. The tests here are the
+# other half of that — the encoded object compared against a literal, and a
+# literal compared against the record it must decode to. They are the only
+# statement of what the key *means*, which is the part a second implementation
+# on the other end of the pipe has to agree with.
+
+
+def test_the_encoded_check_is_exactly_this_object() -> None:
+    """The key-to-value binding, not just the key set.
+
+    Every value below is distinct and recognisable, so no permutation of the
+    fields can satisfy this assertion.
+    """
+    check = DoctorCheck(
+        code="steam_library",
+        ok=False,
+        detail="detail: the game directory named in the config does not exist",
+        remediation="remediation: run pz-agent config set game_dir <path>",
+    )
+    assert encode_doctor_check(check) == {
+        "code": "steam_library",
+        "ok": False,
+        "detail": "detail: the game directory named in the config does not exist",
+        "remediation": "remediation: run pz-agent config set game_dir <path>",
+    }
+
+
+def test_the_encoded_log_record_is_exactly_this_object() -> None:
+    record = LogRecord(
+        timestamp_ms=1_719_000_000_123,
+        level="warning",
+        component="ipc",
+        message="message: queue write retried after a locked file",
+        code="ipc.retry",
+        action_id="act-7f1c9a2b",
+    )
+    assert encode_log_record(record) == {
+        "timestamp_ms": 1_719_000_000_123,
+        "level": "warning",
+        "component": "ipc",
+        "message": "message: queue write retried after a locked file",
+        "code": "ipc.retry",
+        "action_id": "act-7f1c9a2b",
+    }
+
+
+def test_the_encoded_tail_query_is_exactly_this_object() -> None:
+    query = TailQuery(limit=50, level="warning", component="actions", action_id="act-7f1c9a2b")
+    assert encode_tail_query(query) == {
+        "limit": 50,
+        "level": "warning",
+        "component": "actions",
+        "action_id": "act-7f1c9a2b",
+    }
+
+
+def test_a_hand_written_check_payload_decodes_field_for_field() -> None:
+    """The decoder read against a payload no encoder in this file produced.
+
+    This is the direction that matters when the peer is a build that is not
+    this one: the payload is what the protocol says, and the record is what
+    this side must make of it.
+    """
+    decoded = decode_doctor_check(
+        {
+            "code": "steam_library",
+            "ok": False,
+            "detail": "detail: the game directory named in the config does not exist",
+            "remediation": "remediation: run pz-agent config set game_dir <path>",
+        }
+    )
+    assert decoded.code == "steam_library"
+    assert decoded.ok is False
+    assert decoded.detail == "detail: the game directory named in the config does not exist"
+    assert decoded.remediation == "remediation: run pz-agent config set game_dir <path>"
+
+
+def test_a_hand_written_log_payload_decodes_field_for_field() -> None:
+    decoded = decode_log_record(
+        {
+            "timestamp_ms": 1_719_000_000_123,
+            "level": "warning",
+            "component": "ipc",
+            "message": "message: queue write retried after a locked file",
+            "code": "ipc.retry",
+            "action_id": "act-7f1c9a2b",
+        }
+    )
+    assert decoded.timestamp_ms == 1_719_000_000_123
+    assert decoded.level == "warning"
+    assert decoded.component == "ipc"
+    assert decoded.message == "message: queue write retried after a locked file"
+    assert decoded.code == "ipc.retry"
+    assert decoded.action_id == "act-7f1c9a2b"
+
+
+def test_a_hand_written_tail_query_payload_decodes_field_for_field() -> None:
+    decoded = decode_tail_query(
+        {
+            "limit": 50,
+            "level": "warning",
+            "component": "actions",
+            "action_id": "act-7f1c9a2b",
+        }
+    )
+    assert decoded.limit == 50
+    assert decoded.level == "warning"
+    assert decoded.component == "actions"
+    assert decoded.action_id == "act-7f1c9a2b"
 
 
 # -- the list bodies -------------------------------------------------------

@@ -17,6 +17,7 @@ unique, and an empty one survives.
 from __future__ import annotations
 
 import json
+import traceback
 from dataclasses import fields
 from typing import Any
 
@@ -723,10 +724,38 @@ def test_a_negative_step_index_does_not_produce_a_record(step_index: int) -> Non
     with pytest.raises(CodecError) as excinfo:
         decode_plan_record(payload)
     assert "step_index" in str(excinfo.value)
-    # The record's own message quotes the number ("got -1"); this one must not,
-    # and chaining it would have put it in the traceback anyway.
+    # The record's own message quotes the number ("got -1"); this one must not.
     assert str(step_index) not in str(excinfo.value)
-    assert excinfo.value.__cause__ is None
+
+
+@pytest.mark.parametrize("step_index", [-1, -99])
+def test_the_records_own_message_does_not_survive_into_the_traceback(step_index: int) -> None:
+    """``from None`` is load bearing, and only the rendered traceback shows it.
+
+    ``PlanRecord.__post_init__`` raises ``ValueError(f"... got {step_index}")``.
+    The codec replaces it, and the replacement must not drag the original along:
+    a traceback is written to a log and pasted into a bug report before any
+    redactor sees it.
+
+    Asserting ``__cause__ is None`` does **not** pin this. Dropping the ``from
+    None`` clause entirely leaves ``__cause__`` as ``None`` too — it sets
+    ``__context__``, and Python renders an unsuppressed context with the same
+    "During handling of the above exception" chain that a ``__cause__`` gets.
+    So the number reappears in the traceback while ``__cause__ is None`` still
+    holds. The formatted traceback is the thing that actually leaks, so that is
+    what is asserted here, with ``__suppress_context__`` pinned alongside it to
+    name the mechanism.
+    """
+    payload = encode_plan_record(full_record())
+    payload["step_index"] = step_index
+    with pytest.raises(CodecError) as excinfo:
+        decode_plan_record(payload)
+    error = excinfo.value
+    rendered = "".join(traceback.format_exception(type(error), error, error.__traceback__))
+    assert str(step_index) not in rendered
+    assert "got" not in rendered.split("plan.record:")[-1]
+    assert error.__cause__ is None
+    assert error.__suppress_context__ is True
 
 
 def test_a_zero_step_index_is_a_real_answer_not_a_refusal() -> None:
@@ -782,6 +811,32 @@ def test_a_plan_key_that_is_not_an_object_is_refused() -> None:
     with pytest.raises(CodecError) as excinfo:
         decode_plan_current({"plan": ["p-1"]})
     assert "plan" in str(excinfo.value)
+
+
+def test_an_explicitly_null_plan_key_is_refused_rather_than_read_as_no_plan() -> None:
+    """Absence is the *missing key*, and only the missing key.
+
+    This is the one place in this module where omission and an explicit ``null``
+    are **not** the same answer — the optional fields on a step and on a record
+    accept either. It is deliberate and it matches the two codecs this pair was
+    modelled on: ``decode_action_status`` and ``decode_latest_observation`` both
+    test membership, so ``{"record": null}`` and ``{"observation": null}`` are
+    errors there too. Encoders in this package never emit the null, so a peer
+    that sends one is a peer that did not encode with this package, and reading
+    it as "nothing is running" would be a guess.
+
+    Pinned because the two readings are one character apart — ``key not in
+    payload`` versus ``payload.get(key) is None`` — and nothing else here would
+    notice the swap.
+    """
+    with pytest.raises(CodecError) as excinfo:
+        decode_plan_current({"plan": None})
+    assert "plan" in str(excinfo.value)
+
+
+def test_an_unrelated_key_without_a_plan_is_still_no_plan() -> None:
+    """Absence is decided by the ``plan`` key alone, not by an empty body."""
+    assert decode_plan_current({"cursor": "abc"}) is None
 
 
 # -- messages name the field and the reason, never the value --------------
