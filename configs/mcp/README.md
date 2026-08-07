@@ -5,12 +5,25 @@ know before you paste any of them in.
 
 ## What happens when a client launches this today
 
-`pz-agent-mcp` starts, finds no core services attached to its process, writes
-one sentence to stderr saying so, and exits with status 1. That is the honest
-behaviour, not a bug in these files: the MCP boundary reads through the ports
-the **sidecar** owns while it holds the exchange directory's lock, and this
-build has no channel that hands those ports to a second process. An embedder
-passes them in with `main(services=...)`.
+`pz-agent-mcp` refuses, at one of two gates, and **which one tells you what to
+do next**. The exit codes are distinct on purpose.
+
+**Exit 3 — the MCP SDK is not installed.** The stdio server needs an optional
+extra: `pip install pz-agent[mcp]`. This gate fires first, so it is what you
+meet on a plain install. The remedy is a single command, which is why it has a
+code of its own rather than sharing one with a refusal you cannot fix.
+
+**Exit 1 — no core services are attached to this process.** With the SDK
+present, this is the honest behaviour rather than a bug in these files: the MCP
+boundary reads through the ports the **sidecar** owns while it holds the
+exchange directory's lock, and this build has no channel that hands those ports
+to a second process. An embedder passes them in with `main(services=...)`.
+
+(An earlier revision of this paragraph described only the second gate and said
+you would see status 1. On a machine without the extra you see status 3, and
+the message is about a missing package rather than a missing sidecar. A client
+author diagnosing the wrong thing is what a first-contact document is for
+preventing.)
 
 So today these configurations do two useful things: they are the exact shape a
 client needs, and they let you confirm the executable is where the client

@@ -188,6 +188,11 @@ Everything below ran and passed in the remote environment:
   evidence — but "writes nothing" invited you to believe a failed prepare left
   no trace, and it leaves twenty directories. `live-test finalize` refuses and
   names every missing artefact, one line each;
+- **`live-test collect` and the MCP server.** `collect` names every file it
+  could not find and reports "copied 0, skipped 15" rather than a bare success;
+  `pz-agent-mcp --describe` answers with the whole published surface — 31 tools
+  and 7 resources — with no game, no sidecar and no MCP SDK installed, which is
+  what makes it the thing to run first when writing a client;
 - **`restore-save`, both directions.** A save was corrupted — one file
   rewritten, one deleted — and restored from a backup taken by `backup-save`;
   both came back. Then, with a live game heartbeat in the exchange directory,
