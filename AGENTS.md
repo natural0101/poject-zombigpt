@@ -30,8 +30,20 @@ file, this file wins.
 and will raise without it — do not route around that constructor.
 
 **No stubs on the critical path.** No `TODO`/`FIXME`, no bare `pass` body, no
-`NotImplementedError`, no empty except, no fabricated success.
-`scripts/check_forbidden.py` enforces this and runs in CI.
+`NotImplementedError`, no `except:` without an exception type, no fabricated
+success. `scripts/check_forbidden.py` enforces those and runs in CI.
+
+**A handler that swallows is a review question, not a scanner one**, and this
+paragraph used to claim otherwise: it listed an empty exception handler among
+the things CI rejects, and no such check existed. It cannot be one honestly. The tree
+contains `except (OSError, UnicodeDecodeError): pass` that falls through to a
+second lookup, and several `except OSError: return` that deliberately trade a
+diagnostic for a session in flight, each with the reasoning written above it.
+A scanner cannot tell those from a swallowed failure, so the rule is: **a
+handler that discards an exception must say in a comment what it is discarding
+and why that is the smaller loss.** Reviewers enforce it. What the scanner does
+enforce is the untyped `except:`, which is never right here because it also
+catches `KeyboardInterrupt` and `SystemExit`.
 
 **Capability honesty.** Never assume an API exists because a wiki or an old mod
 used it. Unverified → `available_unverified`. Unavailable → `unsupported` with a

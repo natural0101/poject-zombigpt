@@ -4,12 +4,12 @@ Prepared to the gate in [`docs/RELEASE.md`](docs/RELEASE.md), whose "The final
 report" section lists nine things this document must state. They are §1 to §9
 below, in that order.
 
-**Base commit:** `dev` at `b2a4eea` (see below — it is refreshed each time this file is)
+**Base commit:** `dev` at `bc248f9` (see below — it is refreshed each time this file is)
 **Versions:** product 0.1.0 · protocol 1.1 · schema 1.0 · mod 0.1.0 · supported build 42.20
 
 A report cannot name the commit that contains it — the hash does not exist until
 the commit is made. The hash above is this report's parent. Check
-`git log b2a4eea..HEAD` before trusting any number here against a newer tree.
+`git log bc248f9..HEAD` before trusting any number here against a newer tree.
 
 **Note the version.** The release candidate is named `v1.0.0-rc1`, and every
 version constant in the tree says `0.1.0`. No `1.0.0` exists in `version.py`,
@@ -19,7 +19,7 @@ filename is a target, not a state.
 Every figure below was produced by running something at this commit. The
 previous revision of this document was written against `main` at `6a57f74`, 36
 commits back, and had drifted badly: it claimed 2338 Python tests (there are
-3656), 1269 Lua assertions (2875), 202 mypy files (269), 7 schemas (6), 30
+3674), 1269 Lua assertions (2875), 202 mypy files (271), 7 schemas (6), 30
 luacheck files (62), nine registered adapters (19) and an installer that placed
 17 files (30). None of that was dishonest when written. All of it was wrong by
 the time anyone read it, which is why this revision states its base commit at
@@ -69,11 +69,11 @@ Measured at this commit:
 | Capability probes | 12 |
 | Live-test scenarios | 20 |
 
-### Twenty-six defects, found and closed
+### Thirty-two defects, found and closed
 
 Every subsystem in this build was written, tested and green. What nothing tested
 was whether the subsystems were *connected*, or whether the documents describing
-them were true. Twenty-six defects of those two shapes were found, each by a test
+them were true. Thirty-two defects of those two shapes were found, each by a test
 that crosses a seam rather than covering a unit, and each mutation-checked:
 
 **Nine were wiring** — a subsystem complete and connected to nothing:
@@ -149,12 +149,14 @@ harder shape, because a reader has no reason to doubt them:
     correctly struck out. Nothing leaked. The harm is the habit: a verifier
     that flags its own success teaches an operator to ignore the next flag.
 
-**The remaining nine stopped splitting cleanly**, which is itself the finding.
-Three are documents naming commands that do not exist (20–22); one is a field
-read in one place and written in none (23); and five are both at once — a
-subsystem connected to nothing with documents, shipped archives or live
-scenarios already resting on it (18, 19, 24, 25, 26). The family is not closed.
-These are the most recently found, not the last there are.
+**The remaining fifteen stopped splitting cleanly**, which is itself the
+finding. Four are documents naming a command, a route or an enforcement that
+does not exist (20–22, 29); two are a field or a variable read in one place and
+written in none, or written in one place and read nowhere (23, 28); and nine are
+both at once — a subsystem connected to nothing with documents, shipped
+archives, live scenarios or a governing agreement already resting on it (18, 19,
+24, 25, 26, 27, 30, 31, 32). The family is not closed. These are the most
+recently found, not the last there are.
 
 18. **`DiagnosticLog` was constructed nowhere, so the sidecar wrote no log.**
     Complete, rotating, redacting, level-filtered, well tested — and built only
@@ -220,7 +222,34 @@ These are the most recently found, not the last there are.
     *and* a live run to prove the new key reaches the stop; neither exists, and
     saying so is the honest answer.
 
-Numbers 10 to 26 are the reason this report states its base commit and
+27. **Seven links in the archive's own README resolved to nothing** — defect
+    13's general case, left open by fixing its two instances. An operator on
+    Windows has no repository, so a relative link is a file beside the one they
+    are reading or nothing at all.
+28. **`pz-agent start` printed an MCP configuration setting
+    `PZ_AGENT_STATE_DIR`**, a name occurring exactly once in the repository: in
+    the literal that printed it. `configs/mcp/README.md` has a section titled
+    "Why `env` is empty" arguing against precisely this, all three shipped
+    configurations carry `"env": {}`, and the test pinning that covered the
+    checked-in files and stopped where the product started handing one out.
+29. **`docs/QUICKSTART.md` told a new user to command the agent by voice.** This
+    build carries arm, disarm and stop from a second process and no channel
+    carries a goal, so the route named in section 7 answers «Не получилось.»
+30. **`voice run` wrote nothing to `logs/`** — defect 18's shape one package
+    over, with `LOCAL_DEBUG_MAP.md` naming `logs/` for both voice symptoms
+    including «стоп» heard while the character kept going.
+31. **The standalone installer in `installer/` is reachable from nothing** — 927
+    tested lines and a guide that reads as *the* install instructions, in no
+    shipped artefact and run by nothing. Kept and labelled rather than deleted:
+    it is the only path that works before anything is installed.
+32. **AGENTS.md and CONTRIBUTING.md claimed CI rejects an empty exception
+    handler.** No such check existed, for exactly the handler style this
+    codebase writes, and it cannot be scanned honestly — the tree has typed
+    handlers that fall through and typed handlers that deliberately swallow with
+    their reasoning written above them. The untyped `except:` is scanned now;
+    the swallow is a stated review rule. The scanner itself had no tests.
+
+Numbers 10 to 32 are the reason this report states its base commit and
 re-measures rather than carrying figures forward. A stale number is a small
 lie; a document describing a safety gate that does not exist is a different
 thing.
@@ -270,12 +299,12 @@ Two symbols deserve naming individually, because their failure modes are quiet:
 ```
 ruff format        ok    316 files already formatted
 ruff lint          ok    All checks passed!
-mypy               ok    no issues found in 269 source files
+mypy               ok    no issues found in 271 source files
 forbidden patterns ok    no stub bodies, no TODO markers, no eval/exec/loadstring, no secrets
 version sync       ok    product=0.1.0 protocol=1.1 schema=1.0 mod=0.1.0
 schema validity    ok    6 schema(s) valid
 playbook in sync   ok    docs/LIVE_TEST_PLAYBOOK.md matches its 20 scenarios
-pytest             ok    3656 passed, 2 skipped
+pytest             ok    3674 passed, 2 skipped
 luacheck           ok    0 warnings / 0 errors in 62 files
 lua tests          ok    2875 assertions across 26 suites, 0 failed
 ```
@@ -437,9 +466,9 @@ document does not cover.
 
 ```
 dist/pz-agent-windows-v1.0.0-rc1.zip
-  sha256   504bcf7bb2cb5e3c06e9425fa55f6a0eb744099f270d00f7b35b7263974b12fd
-  size     276 107 bytes
-  entries  68 (67 files plus BUILD-MANIFEST.json)
+  sha256   fa8253459bef96e11b89c2f588acba17f110dd6df31ceb08ae333367997f084e
+  size     284 427 bytes
+  entries  69 (68 files plus BUILD-MANIFEST.json)
 ```
 
 **It is marked INCOMPLETE and it is not a release candidate by this project's
@@ -450,9 +479,9 @@ own gate.** `BUILD-MANIFEST.json` records `complete: false`, `build_rc.py` exits
 [FAIL] archive.complete: the archive declares 2 missing file(s): bin/pz-agent.exe, bin/pz-agent-mcp.exe
 [FAIL] archive.bin:      missing from bin/: pz-agent.exe, pz-agent-mcp.exe
 [ok  ] archive.bat:      all 11 wrappers are at the root
-[ok  ] archive.digests:  67 file(s) match the digests recorded for them
+[ok  ] archive.digests:  68 file(s) match the digests recorded for them
 [ok  ] archive.claims:   the archive claims no live-test evidence
-[ok  ] tests:            3656 of 3658 passed, 2 skipped
+[ok  ] tests:            3674 of 3676 passed, 2 skipped
 ```
 
 Both executables need PyInstaller on Windows. `.github/workflows/windows.yml`
@@ -543,8 +572,8 @@ Project Zomboid Build 42.20 on Windows, and on nothing else.
 It does not say the architecture is ready and only needs testing. It does not
 say a user can take it from here.
 
-It says: twenty-eight tasks are implemented and covered by 3656 Python tests and
-2875 Lua assertions; twenty-six defects were found by seam tests and closed, one
+It says: twenty-eight tasks are implemented and covered by 3674 Python tests and
+2875 Lua assertions; thirty-two defects were found by seam tests and closed, one
 of them a safety gate that had been documented for weeks and never written; two
 tasks are blocked on a game that does not exist in this environment; and §9 is
 the complete list of what closing them requires.

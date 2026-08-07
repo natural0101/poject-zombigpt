@@ -22,10 +22,13 @@ from typing import Any, Final
 
 import pytest
 
+from pz_agent_cli.app import _mcp_snippet
+from pz_agent_cli.context import resolve_workspace
 from pz_agent_mcp.__main__ import build_parser
 from pz_agent_mcp.catalog import RESOURCES_BY_URI, TOOLS_BY_NAME
 from pz_agent_mcp.router import ToolRouter
 from pz_agent_mcp.server import SERVER_NAME
+from tests.fixtures.cli_worlds import make_world
 from tests.fixtures.mcp_doubles import Doubles
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[2]
@@ -122,6 +125,55 @@ def test_configuration_sets_no_environment_variable(name: str) -> None:
     which is worse than an empty object that says exactly what is needed.
     """
     assert _entry(name).get("env") == {}
+
+
+def test_the_configuration_the_cli_prints_sets_no_variable_either(tmp_path: Path) -> None:
+    """The one a user actually pastes, which the pin above never saw.
+
+    ``pz-agent start`` prints this block with real interpreter and state paths
+    so it can be copied into a client, and it set ``PZ_AGENT_STATE_DIR`` — a
+    name that occurred exactly once in the repository, in the literal that
+    printed it. Nothing read it, and the three files checked above, their
+    README's "Why ``env`` is empty" section and the test above all said the
+    server reads none. The guard covered the checked-in files and stopped
+    exactly where the product started handing one out.
+
+    Parsed as JSON rather than matched as text: the block is what a client will
+    parse, so a change that keeps the words and breaks the shape is a change
+    this has to catch.
+    """
+    world = make_world(tmp_path)
+    workspace = resolve_workspace(world.ctx)
+
+    block = "\n".join(_mcp_snippet(workspace, redacted=False))
+
+    entry = json.loads("{" + block + "}")["pz-agent"]
+    assert entry["env"] == {}, "the printed configuration names a variable nothing reads"
+    assert entry["args"] == ["-m", "pz_agent_mcp"]
+    assert entry["command"], "the block names no interpreter to launch"
+
+
+def test_the_printed_configuration_agrees_with_the_shipped_ones(tmp_path: Path) -> None:
+    """Two sources for one answer is how they drift; this is the comparison.
+
+    The *launch form* is allowed to differ and does: two shipped files use the
+    ``pz-agent-mcp`` console script, the third and the printed block use
+    ``<interpreter> -m pz_agent_mcp``. Both reach the same module, which is what
+    the checks above establish per file. What may not differ is ``env``, because
+    that is a claim about what the server reads, and there is one answer to that.
+    """
+    world = make_world(tmp_path)
+    printed = json.loads(
+        "{" + "\n".join(_mcp_snippet(resolve_workspace(world.ctx), redacted=False)) + "}"
+    )["pz-agent"]
+
+    assert printed["args"][:2] == ["-m", "pz_agent_mcp"], (
+        "the printed block launches something else"
+    )
+    for name in CONFIG_NAMES:
+        assert _entry(name).get("env") == printed["env"], (
+            f"{name} and the block pz-agent prints disagree about what the server reads"
+        )
 
 
 @pytest.mark.parametrize("name", (*CONFIG_NAMES, "README.md"))

@@ -58,6 +58,7 @@ from pathlib import Path
 from typing import Any, Final
 
 from pz_agent_core.capabilities import MAX_NOTES
+from pz_agent_core.diagnostics import DiagnosticLog, LogLevel
 from pz_agent_core.ipc.atomic import guard_managed
 from pz_agent_core.ipc.clocks import Clock
 from pz_agent_core.ipc.layout import IpcLayout
@@ -896,10 +897,13 @@ def run_voice_run(ctx: CliContext, *, as_json: bool, client: TeamONClient | None
             notes=(GOALS_UNROUTED,),
         ),
     )
+    log = _companion_log(ctx, workspace)
+    _log_safely(log, LogLevel.INFO, "voice.start", adapter=name, goals_routed=False)
     if not as_json:
         printer.line(f"listening on {name}. Say «стоп» to stop the agent; Ctrl-C to stop this.")
         printer.field("goals", GOALS_UNROUTED)
     ended, code = _serve(companion)
+    _log_session(log, companion, adapter=name, ended=workspace.redactor.text(ended))
     publish_voice_record(
         record_path,
         VoiceRecord(
@@ -927,6 +931,76 @@ def run_voice_run(ctx: CliContext, *, as_json: bool, client: TeamONClient | None
     else:
         printer.error(message)
     return code
+
+
+def _companion_log(ctx: CliContext, workspace: Workspace) -> DiagnosticLog | None:
+    """The companion's own log, or None when the directory will not take one.
+
+    ``docs/LOCAL_DEBUG_MAP.md`` sends an operator to ``logs/`` for both voice
+    symptoms it lists — a Russian phrase not recognised, and «стоп» heard while
+    the character kept going — and the companion had never written a byte there.
+    Its turn history and its synthesiser failures live in two bounded rings
+    inside a process that then exits, and :attr:`VoiceCompanion.speech_failures`
+    says in its own docstring that they are kept because "the companion went
+    quiet" with nothing recorded is what a support bundle cannot explain. The
+    bundle never saw them.
+
+    Written under the same name as the sidecar's log, in the same directory, so
+    ``pz-agent logs`` and the support bundle pick it up with no second path to
+    know about. The two processes append to one rotating file, which is what an
+    operator wants when the question is "did the stop I said reach the sidecar":
+    both halves of that are then in one place, in order.
+    """
+    try:
+        workspace.logs_dir.mkdir(parents=True, exist_ok=True)
+        return DiagnosticLog(workspace.logs_dir, redactor=workspace.redactor, clock=ctx.clock_ms)
+    except OSError:
+        return None
+
+
+def _log_safely(log: DiagnosticLog | None, level: LogLevel, event: str, **fields: object) -> None:
+    """Write one record, and never let logging be why the companion stopped."""
+    if log is None:
+        return
+    try:
+        log.log(level, event, **fields)
+    except OSError:
+        return
+
+
+def _log_session(
+    log: DiagnosticLog | None, companion: VoiceCompanion, *, adapter: str, ended: str
+) -> None:
+    """Everything the companion retained, written once at the end.
+
+    Intents and outcomes, never transcripts. :class:`VoiceTurn` carries the
+    *understood* intent and what it caused, and that is the half worth keeping:
+    it answers "was «стоп» recognised" and "did the stop reach the sidecar"
+    without putting a microphone's contents into a file designed to be attached
+    to a public issue.
+    """
+    if log is None:
+        return
+    for turn in companion.turns:
+        _log_safely(
+            log,
+            LogLevel.INFO,
+            "voice.turn",
+            intent=turn.intent.value if hasattr(turn.intent, "value") else str(turn.intent),
+            state=turn.state.value if hasattr(turn.state, "value") else str(turn.state),
+            detail=turn.detail,
+            stopped=turn.stop is not None,
+        )
+    for failure in companion.speech_failures:
+        _log_safely(log, LogLevel.WARNING, "voice.speech_failed", detail=failure)
+    _log_safely(
+        log,
+        LogLevel.INFO,
+        "voice.finished",
+        adapter=adapter,
+        detail=ended,
+        turns=len(companion.turns),
+    )
 
 
 def _serve(companion: VoiceCompanion) -> tuple[str, int]:

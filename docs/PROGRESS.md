@@ -9,8 +9,8 @@ green · `wip` in progress · `todo` not started · `live` blocked on a step tha
 physically requires a running game.
 
 Last updated: 28 of 30 tasks closed; T029 and T030 are blocked on a live game,
-not deferred. 3656 Python tests and 2875 Lua assertions across 26 suites,
-mypy strict over 269 files, `scripts/check.sh` green — measured under Python
+not deferred. 3674 Python tests and 2875 Lua assertions across 26 suites,
+mypy strict over 271 files, `scripts/check.sh` green — measured under Python
 3.11.15, which is the only interpreter with the suite installed here. CI
 declares a 3.11/3.12 matrix; that is configuration, not a result observed in
 this container.
@@ -24,7 +24,7 @@ with them. See [the playable-agent section](#the-playable-agent-branch) below,
 and [`LOCAL_GAME_HANDOFF.md`](LOCAL_GAME_HANDOFF.md) for what still needs a
 machine with the game on it.
 
-**Twenty-seven defects that branch found are worth reading before any further work**,
+**Thirty-two defects that branch found are worth reading before any further work**,
 because they are one family and the family is not closed. Every subsystem was
 written, tested and green; what nothing tested was whether the subsystems were
 *connected*.
@@ -40,6 +40,11 @@ written, tested and green; what nothing tested was whether the subsystems were
 | 7 | The memory store was complete and connected to nothing | `reserves_item` always answered False, so §7.9 rested on tag rules alone, and no home point could exist |
 | 8 | `pz_agent_voice` was imported by nothing and had no entry point | Russian voice control was complete, tested, and impossible to start |
 | 9 | The mod could drink from a sink; the sidecar had no argument for it, and the path it did have ran under the wrong capability | Two faults in one place: a working mod feature unreachable from Python, *and* `drink_world_source` — which §12.4 caps at `experimental` — reachable through `drink_carried`, which a scan verifies |
+| 32 | **AGENTS.md and CONTRIBUTING.md both said CI rejects an empty exception handler; no such check existed** | The rule AGENTS.md declares binding and CONTRIBUTING lists first, unenforced for exactly the handler style this codebase writes — so nobody reviews for one. It cannot be scanned honestly either: the tree has an `except (OSError, UnicodeDecodeError): pass` that falls through to a second lookup and several `except OSError: return` that deliberately trade a diagnostic for a session in flight. The untyped `except:` *can* be scanned and now is; the swallow is stated as a review rule with the reason. `check_forbidden.py` had no tests at all — it does now, including both directions of what the documents promise |
+| 31 | **The standalone installer in `installer/` is reachable from nothing** | 927 tested lines plus a guide whose title reads as the install instructions, in no shipped artefact, run by nothing, and read as *the* install instructions by anyone who opens the directory. The shipped path is `install.bat` → `pz-agent install-mod`. Kept — it is the only path that works before anything is installed — and both the guide and the module now open by saying which of the three cases they are for |
+| 30 | **`voice run` wrote nothing to `logs/`** | Defect 18's shape, one package over. `docs/LOCAL_DEBUG_MAP.md` names `logs/` for both voice symptoms it lists, including «стоп» heard while the character kept going, and the companion had never written a byte there: its turn history and synthesiser failures sat in two bounded rings in a process that then exited, with `speech_failures` saying in its own docstring that they are kept because "the companion went quiet" is what a bundle cannot explain. It writes intents and outcomes, never transcripts |
+| 29 | **`docs/QUICKSTART.md` told a new user to command the agent by voice** | Section 7 named two routes and one of them is refused: this build carries arm, disarm and stop from a second process and no channel carries a goal, so a spoken "eat something" gets «Не получилось.» The CLI's own `voice check` says so for any phrase; the quickstart did not |
+| 28 | **`pz-agent start` printed an MCP config setting `PZ_AGENT_STATE_DIR`, which nothing reads** | The name occurred exactly once in the repository — in the literal that printed it. Meanwhile `configs/mcp/README.md` carries a section titled "Why `env` is empty" saying that naming an unread variable "would look like configuration and be decoration, and the first person to change it would spend an evening finding out that it does nothing", all three shipped configs carry `"env": {}`, and a test pinned that — over the checked-in files only, stopping exactly where the product started handing one out |
 | 27 | **Seven links in the archive's own README resolved to nothing** | Defect 13's general case, left open by fixing the two instances. An operator on Windows has no repository, so a relative link is a file beside the one they are reading or nothing. `ARCHITECTURE.md` and `PROTOCOL.md` ship now; the links about building the project became absolute. `tests/contract/test_archive_documents_resolve.py` builds the archive and follows every link in it |
 | 26 | **`safety.panic_hotkey` had a validator, an error message and no consumer** | The mod binds DirectInput scancode 88 directly and reads no configuration, so any other value bound nothing — and this is the stop button. A user rebinding away from F12 (Steam's screenshot key, so there is a real reason to) was told "configuration is valid" and had bound nothing. Any value but `F12` is a hard error now, naming the two routes that do work; rebinding for real needs the mod to read a published keycode *and* a live run to prove the new key reaches the stop |
 | 25 | **`game.install_dir` and `game.user_dir` were read by nothing** | `doctor`'s own remediation for `PZD001`, `TROUBLESHOOTING.md` for `PZD001` and `PZD003`, and `configs/mcp/README.md` all send a blocked user to set them. Those two failures brick every other command — a GOG or manual copy Steam does not list, a profile moved by OneDrive or `-cachedir` — and the escape hatch did nothing: the user got "configuration is valid" and the identical failure telling them to do what they had just done |

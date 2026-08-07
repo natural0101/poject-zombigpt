@@ -103,10 +103,17 @@ save is open — `pz-agent doctor` distinguishes those.
 `ASSISTED` executes what you ask and nothing on its own. This is the right mode
 for the first session.
 
-Now ask for something — through the MCP client you have configured, or the
-voice adapter if you enabled one:
+Now ask for something, through the MCP client you have configured:
 
 > "Eat something safe from my backpack."
+
+**Not through voice.** The companion in this build carries `arm`, `disarm` and
+`stop` into a running sidecar and nothing else: there is no channel that carries
+a *goal* from a second process, so a spoken "eat something" is refused and the
+companion answers «Не получилось.» `pz-agent voice check <phrase>` says so for
+any phrase, before you are in a game and wondering. See
+[`VOICE.md`](VOICE.md) for what voice does carry — which is the half that
+matters most, because "стоп" is a stop.
 
 What happens:
 

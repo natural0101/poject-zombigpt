@@ -19,8 +19,11 @@ A red local check will be a red CI run.
 ## The rules that are not negotiable
 
 1. **No stubs on the critical path.** No `TODO`, no bare `pass` as a function
-   body, no `NotImplementedError`, no empty handler. `scripts/check_forbidden.py`
-   fails the build on all of them.
+   body, no `NotImplementedError`, no `except:` without an exception type.
+   `scripts/check_forbidden.py` fails the build on all four. A handler that
+   *swallows* an exception is a review rule rather than a scanned one — see
+   AGENTS.md for why it cannot honestly be scanned here — and it must carry a
+   comment saying what is being discarded and why that is the smaller loss.
 2. **Never report success you did not verify.** If an action was queued, say
    `accepted`. `succeeded` requires observed postcondition evidence, and the
    type system will not let you build one without it.

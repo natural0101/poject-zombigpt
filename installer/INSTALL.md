@@ -1,4 +1,24 @@
-# Installing pz-agent on Windows
+# Installing pz-agent on Windows — the standalone installer
+
+> **This is not the normal path, and it is not what the release archive
+> contains.** Two installers exist in this repository and they are not
+> interchangeable:
+>
+> | You have | Use | It gives you |
+> | --- | --- | --- |
+> | `pz-agent-windows-*.zip` | `install.bat` inside it | the bundled executables, the mod, the configs |
+> | a Python 3.11+ checkout | [`docs/QUICKSTART.md`](../docs/QUICKSTART.md) — `pip install -e .` then `pz-agent install-mod` | the whole CLI |
+> | neither, and no pip | **this document** | the mod, a configuration and a launcher, and nothing else |
+>
+> This installer deliberately imports nothing from `packages/`: it runs on a
+> bare CPython with only the standard library, which is what makes it usable
+> before anything is installed and also what limits it. It places the bridge
+> mod, a `config.toml` and `Start-PZ-Agent.cmd`. It does **not** install the
+> `pz-agent` command — `Start-PZ-Agent.cmd` expects one already on the machine —
+> so on a machine with no `pz-agent` at all this gets the mod in place and
+> nothing more.
+>
+> Nothing in the release archive runs this, and no shipped artefact contains it.
 
 Everything here runs as your own user. Nothing needs administrator rights,
 nothing is written to `Program Files`, and the Project Zomboid installation is

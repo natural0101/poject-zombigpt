@@ -188,6 +188,17 @@ def check_python(path: Path) -> list[Finding]:
             if reason is not None:
                 findings.append(Finding(path, node.lineno, "stub-body", f"{node.name}: {reason}"))
 
+        if isinstance(node, ast.ExceptHandler) and node.type is None:
+            findings.append(
+                Finding(
+                    path,
+                    node.lineno,
+                    "bare-except",
+                    "`except:` with no exception type also catches KeyboardInterrupt and "
+                    "SystemExit; name the exceptions this handler is for",
+                )
+            )
+
         if isinstance(node, ast.Call):
             func = node.func
             if isinstance(func, ast.Name) and func.id in BANNED_CALLS:

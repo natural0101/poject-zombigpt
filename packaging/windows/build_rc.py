@@ -115,6 +115,9 @@ DOC_NAMES: Final[tuple[str, ...]] = (
     # recovery, and ARCHITECTURE is what a reader needs before either.
     "ARCHITECTURE.md",
     "PROTOCOL.md",
+    # QUICKSTART sends a reader here for what voice does and does not carry, and
+    # voice is a shipped feature with a stop word in it.
+    "VOICE.md",
 )
 
 #: Legal and safety text belongs at the root, where nobody has to go looking.

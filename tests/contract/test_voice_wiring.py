@@ -30,6 +30,7 @@ up until the user said «стоп» to a test double.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import uuid
 from dataclasses import dataclass, field
@@ -671,6 +672,77 @@ def test_a_supplied_teamon_client_is_what_gets_constructed(tmp_path: Path) -> No
     assert record.adapter == ADAPTER_TEAMON
     assert record.running is False, "the record still says listening after the stream ended"
     assert record.goals_routed is False
+
+
+def test_the_companion_writes_the_log_the_debug_map_sends_an_operator_to(
+    tmp_path: Path,
+) -> None:
+    """``docs/LOCAL_DEBUG_MAP.md`` names ``logs/`` for both voice symptoms.
+
+    Both of them — a Russian phrase not recognised, and «стоп» heard while the
+    character kept going — and the companion had never written a byte there. Its
+    turn history and its synthesiser failures sat in two bounded rings inside a
+    process that then exited, with :attr:`VoiceCompanion.speech_failures` saying
+    in its own docstring that they are kept because "the companion went quiet"
+    with nothing recorded is what a support bundle cannot explain. The bundle
+    never saw them. Same shape as the sidecar's own log, one package over.
+    """
+    world = make_world(tmp_path)
+    write_config(world)
+    world.ctx.env[DEFAULT_TEAMON_KEY_ENV] = FAKE_KEY  # type: ignore[index]
+    workspace = resolve_workspace(world.ctx)
+
+    assert run_voice_run(world.ctx, as_json=False, client=FakeTeamONClient()) == EXIT_OK
+
+    structured = workspace.logs_dir / "pz-agent.jsonl"
+    assert structured.is_file(), "the companion left no log for the operator sent to logs/"
+    events = {
+        json.loads(line)["event"]
+        for line in structured.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    }
+    assert "voice.start" in events, "nothing records that a companion started listening"
+    assert "voice.finished" in events, "nothing records why it stopped"
+
+
+def test_the_companion_log_records_intents_and_never_transcripts(tmp_path: Path) -> None:
+    """The privacy line this artefact has to hold.
+
+    A support bundle is designed to be attached to a public issue, and a
+    microphone's contents are not something to put in one. ``VoiceTurn`` carries
+    the *understood* intent and what it caused rather than the words heard, so
+    what is written answers "was «стоп» recognised" and "did the stop reach the
+    sidecar" without carrying the speech itself.
+    """
+    world = make_world(tmp_path)
+    write_config(world)
+    world.ctx.env[DEFAULT_TEAMON_KEY_ENV] = FAKE_KEY  # type: ignore[index]
+    workspace = resolve_workspace(world.ctx)
+    spoken = FakeTeamONClient()
+
+    run_voice_run(world.ctx, as_json=False, client=spoken)
+
+    written = (workspace.logs_dir / "pz-agent.jsonl").read_text(encoding="utf-8")
+    for record in (json.loads(line) for line in written.splitlines() if line.strip()):
+        assert "transcript" not in record["fields"], record
+        assert "words" not in record["fields"], record
+
+
+def test_a_log_directory_that_will_not_take_a_file_does_not_stop_the_companion(
+    tmp_path: Path,
+) -> None:
+    """The companion carries the stop word. A diagnostic is never worth it."""
+    world = make_world(tmp_path)
+    write_config(world)
+    world.ctx.env[DEFAULT_TEAMON_KEY_ENV] = FAKE_KEY  # type: ignore[index]
+    logs = resolve_workspace(world.ctx).logs_dir
+    logs.parent.mkdir(parents=True, exist_ok=True)
+    # A file where the directory should be: mkdir and every write below it fail.
+    logs.write_text("not a directory", encoding="utf-8")
+
+    code = run_voice_run(world.ctx, as_json=False, client=FakeTeamONClient())
+
+    assert code == EXIT_OK, "an unwritable log directory stopped the companion"
 
 
 # ---------------------------------------------------------------------------
