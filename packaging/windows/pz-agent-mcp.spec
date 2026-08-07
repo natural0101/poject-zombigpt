@@ -14,13 +14,17 @@
 # real entry point, ``pz_agent_mcp.__main__:main``, is a package member with
 # relative imports and cannot be run as a top-level script.
 
+import sys
 from pathlib import Path
-
-from PyInstaller.utils.hooks import collect_submodules
 
 # SPECPATH is injected by PyInstaller when it executes this file.
 SPEC_DIR = Path(SPECPATH).resolve()  # noqa: F821  (PyInstaller global)
 REPO_ROOT = SPEC_DIR.parents[1]
+
+# A spec is exec'd rather than imported, so its own directory is not on the
+# path and `import specutil` beside it would fail.
+sys.path.insert(0, str(SPEC_DIR))
+from specutil import submodules_on_disk  # noqa: E402
 
 PACKAGES = ("pz_agent_core", "pz_agent_mcp")
 SRC_DIRS = [str(REPO_ROOT / "packages" / name / "src") for name in PACKAGES]
@@ -38,11 +42,19 @@ ENTRY.write_text(
     encoding="utf-8",
 )
 
+#: The SDK's own command-line tool. It needs `typer`, which arrives only with
+#: the `mcp[cli]` extra, and without it the module calls `sys.exit` at import
+#: time rather than raising ImportError — so PyInstaller's importing collector
+#: cannot skip it and the build dies packaging a program that never runs it.
+#: Nothing in `pz_agent_mcp` reaches it: the server speaks the protocol over
+#: stdio through `mcp.server`, and a client launches this executable directly.
+SDK_CLI = "mcp.cli"
+
 #: The SDK is imported inside functions (it is an optional extra, and every
 #: other module in the package must import without it), so nothing static points
 #: at it. Collected whole: the server touches three of its submodules by name
 #: and the SDK resolves more of its own at import time.
-HIDDEN = ["mcp", *collect_submodules("mcp")]
+HIDDEN = submodules_on_disk("mcp", exclude=[SDK_CLI])
 
 a = Analysis(  # noqa: F821  (PyInstaller global)
     [str(ENTRY)],
@@ -52,7 +64,9 @@ a = Analysis(  # noqa: F821  (PyInstaller global)
     hiddenimports=HIDDEN,
     hookspath=[],
     runtime_hooks=[],
-    excludes=["tkinter", "unittest", "pytest", "mypy", "ruff"],
+    # `mcp.cli` again, this time so nothing pulls it in transitively: leaving it
+    # out of the hidden imports only stops it being added deliberately.
+    excludes=["tkinter", "unittest", "pytest", "mypy", "ruff", SDK_CLI, "typer"],
     noarchive=False,
 )
 

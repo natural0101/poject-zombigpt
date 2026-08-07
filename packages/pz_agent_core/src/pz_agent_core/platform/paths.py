@@ -38,6 +38,26 @@ class PathNotUnderRoot(ValueError):
     """
 
 
+def _matched(path: PurePath | str, root: PurePath | str) -> tuple[PurePath, PurePath]:
+    """*path* and *root* as :class:`PurePath` objects of the same flavour.
+
+    Deliberately not ``PurePath(path)`` on both. ``PurePath`` builds the
+    *running platform's* flavour, so on Linux it turns a
+    :class:`PureWindowsPath` into a :class:`PurePosixPath` whose first part is
+    still ``C:\\`` — the separators are already normalised, and the drive keeps
+    a trailing backslash it should not have. That coercion is what made this
+    module untestable: with the flavour thrown away before ``as_posix`` runs,
+    ``as_posix()`` and ``str()`` return the same thing on Linux, so removing the
+    one that matters left every Linux test green and broke Windows only.
+    Preserving the flavour is what lets a Windows shape be checked anywhere.
+    """
+    if isinstance(path, PurePath):
+        return path, (root if isinstance(root, PurePath) else type(path)(root))
+    if isinstance(root, PurePath):
+        return type(root)(path), root
+    return PurePath(path), PurePath(root)
+
+
 def portable_relative_path(path: PurePath | str, root: PurePath | str) -> str:
     """*path* relative to *root*, with ``/`` separators, for recording.
 
@@ -48,8 +68,7 @@ def portable_relative_path(path: PurePath | str, root: PurePath | str) -> str:
     Raises:
         PathNotUnderRoot: when *path* is not inside *root*.
     """
-    candidate = PurePath(path)
-    base = PurePath(root)
+    candidate, base = _matched(path, root)
     try:
         return candidate.relative_to(base).as_posix()
     except ValueError as exc:
@@ -64,4 +83,4 @@ def portable_posix(path: PurePath | str) -> str:
     there is nothing to make it relative to; prefer
     :func:`portable_relative_path` whenever there is.
     """
-    return PurePath(path).as_posix()
+    return (path if isinstance(path, PurePath) else PurePath(path)).as_posix()
