@@ -50,6 +50,26 @@ drift out of sync with `pz_agent_core.version`.
   postcondition accepts only thirst — a refill raises the vessel's volume and
   the drink lowers it again, so the vessel witnesses nothing in either
   direction. Published as `pz_action_drink_source`.
+- **`pz-agent start` confirms the sidecar is still there before reporting one.**
+  It returned success as soon as `Popen` returned, which reports that a *fork*
+  succeeded and nothing about whether the program ran. A sidecar that died on
+  its first import left `start` printing "sidecar started as pid N" and exiting
+  0; `arm` then failed for reasons that named nothing, and `stop` said "the
+  signal could not be delivered (No such process)" and exited 0 as well. The
+  spawner now watches the child for `SPAWN_GRACE_S` and, if it is already gone,
+  raises with the exit code and the tail of the spawn log — the child's own
+  words, which are the whole diagnosis. No pid is claimed, so `status` still
+  says NEVER_STARTED rather than STOPPED, because "it crashed" and "it never
+  ran" are different things to tell someone. Every other test of the supervisor
+  injects a fake spawner, which is exactly why nothing caught this; the new
+  ones use a real subprocess.
+- **A first-run remedy that pointed at the wrong document.** `start` without a
+  configuration said to "copy the sample in docs/QUICKSTART.md". That page
+  shows a TOML fragment and never names `config.toml` or
+  `config.example.toml`, so an operator whose first command failed was sent
+  somewhere that did not contain the thing they were told to copy. It names
+  `configs/agent/config.example.toml` now, and the test asserts the file it
+  names exists rather than asserting the wording.
 - **The operator's loop is driven end to end.** `backup-save` → `prepare` →
   `run`, through the real CLI over a synthetic Zomboid directory. Every step had
   a unit test; the sequence did not, and the sequence is what a person performs.

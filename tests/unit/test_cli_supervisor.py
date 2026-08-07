@@ -6,6 +6,7 @@ import json
 import os
 import signal
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -22,8 +23,10 @@ from pz_agent_cli.supervisor import (
     PidRecord,
     ProcessListing,
     SidecarSupervisor,
+    SpawnDiedError,
     SupervisorError,
     SupervisorState,
+    _default_spawner,
     game_running_for_restore,
     list_processes,
     probe_game_running,
@@ -507,3 +510,63 @@ def test_a_listing_longer_than_the_cap_is_marked_truncated(
 
     assert listing.truncated is True
     assert len(listing.names) == 4096
+
+
+# ---------------------------------------------------------------------------
+# the default spawner: a fork that succeeded is not a start
+# ---------------------------------------------------------------------------
+
+
+class TestTheChildIsConfirmedAlive:
+    """``start`` reported success on the strength of ``Popen`` returning.
+
+    That means a fork succeeded. It says nothing about whether the program ran,
+    and a sidecar that died on its first import left ``start`` printing
+    "sidecar started as pid N" and exiting 0 — after which ``arm`` failed for
+    reasons that named nothing and ``stop`` reported "no such process", also
+    exiting 0.
+
+    These use a real subprocess rather than a fake spawner, because the
+    behaviour under test *is* the spawner: every other test in this file injects
+    a recorder, which is exactly why nothing caught this.
+    """
+
+    def test_a_child_that_exits_at_once_is_not_reported_as_started(self, tmp_path: Path) -> None:
+        log = tmp_path / "sidecar.out"
+
+        with pytest.raises(SpawnDiedError) as died:
+            _default_spawner(
+                [sys.executable, "-c", "import sys; sys.stderr.write('boom'); sys.exit(3)"],
+                tmp_path,
+                log,
+            )
+
+        assert died.value.exit_code == 3
+        assert "boom" in died.value.log_tail, "the child's own words are the diagnosis"
+        assert "exited immediately" in str(died.value)
+
+    def test_a_child_that_keeps_running_is_reported_as_started(self, tmp_path: Path) -> None:
+        """The other direction, without which a gate that always refuses passes."""
+        log = tmp_path / "sidecar.out"
+
+        pid = _default_spawner([sys.executable, "-c", "import time; time.sleep(30)"], tmp_path, log)
+
+        assert pid > 0
+        try:
+            os.kill(pid, 0)
+        finally:
+            os.kill(pid, signal.SIGKILL)
+
+    def test_start_surfaces_the_death_and_claims_no_pid(self, tmp_path: Path) -> None:
+        """A record for a process already gone would make status say STOPPED.
+
+        "It crashed" and "it never ran" are different things to tell someone,
+        and keeping them apart is the whole reason status has three outcomes.
+        """
+        supervisor = SidecarSupervisor(state_dir=tmp_path / "state")
+
+        outcome = supervisor.start([sys.executable, "-c", "raise SystemExit(4)"])
+
+        assert not outcome.started
+        assert "exit code 4" in outcome.detail
+        assert supervisor.status().state is SupervisorState.NEVER_STARTED

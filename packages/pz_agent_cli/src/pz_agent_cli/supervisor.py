@@ -103,6 +103,24 @@ class SupervisorError(ValueError):
     """A supervisor record is malformed, or an operation was made out of order."""
 
 
+class SpawnDiedError(SupervisorError):
+    """The child was started and was gone again before anyone could use it.
+
+    Carries the exit code and the tail of the spawn log because those two are
+    the whole diagnosis, and the operator would otherwise be told that a start
+    failed with nothing to act on.
+    """
+
+    def __init__(self, *, pid: int, exit_code: int, log_tail: str) -> None:
+        detail = f"the sidecar exited immediately (pid {pid}, exit code {exit_code})"
+        if log_tail:
+            detail += f". It wrote: {log_tail}"
+        super().__init__(detail)
+        self.pid = pid
+        self.exit_code = exit_code
+        self.log_tail = log_tail
+
+
 def _write_json(path: Path, document: Mapping[str, Any]) -> None:
     """Whole-document write with a scratch file, for the state directory.
 
@@ -443,12 +461,44 @@ _DETACHED_FLAGS: Final[int] = int(getattr(subprocess, "DETACHED_PROCESS", 0)) | 
 )
 
 
+#: Handles for children this process deliberately outlives. See the note in
+#: :func:`_default_spawner`; nothing reads this list.
+_DETACHED_CHILDREN: Final[list[subprocess.Popen[bytes]]] = []
+
+#: How long to watch a freshly spawned sidecar before calling it started.
+#: Short enough to be imperceptible, long enough to catch the failures that
+#: happen at once — a bad interpreter, a missing module, an unreadable config.
+SPAWN_GRACE_S: Final = 0.3
+
+#: Bytes of the spawn log quoted back when a child dies immediately. Enough for
+#: a Python traceback's last line, which is the part that names the cause.
+SPAWN_LOG_TAIL: Final = 400
+
+
 def _default_spawner(argv: Sequence[str], cwd: Path, log_path: Path) -> int:
-    """Start a detached child and return its pid.
+    """Start a detached child, confirm it is still there, and return its pid.
 
     Detached rather than backgrounded: the sidecar must survive the terminal
     that launched it closing, which is the normal way a user starts it before
     launching the game.
+
+    The confirmation is here rather than in :meth:`SidecarSupervisor.start`
+    because this is the only place that still holds the process handle — once
+    the pid is returned the child is detached and there is no portable way to
+    ask after it. ``os.kill(pid, 0)`` is not that way: on Windows CPython maps
+    it to ``TerminateProcess``, so the liveness check would kill the thing it
+    was checking.
+
+    Reporting a start on the strength of ``Popen`` returning is reporting that
+    a *fork* succeeded. It says nothing about whether the program ran, and this
+    project's own rule is that success means an observed postcondition. A
+    sidecar that died on its first import used to leave ``start`` printing
+    "sidecar started as pid N" and exiting 0, after which ``arm`` failed for
+    reasons that named nothing.
+
+    What is observed is bounded and stated plainly: the process is still alive
+    ``SPAWN_GRACE_S`` after it was spawned. A child that dies later is a
+    different failure, and ``status`` is what reports that one.
     """
     log_path.parent.mkdir(parents=True, exist_ok=True)
     extra: dict[str, Any] = {}
@@ -469,7 +519,36 @@ def _default_spawner(argv: Sequence[str], cwd: Path, log_path: Path) -> int:
             close_fds=True,
             **extra,
         )
-    return process.pid
+    try:
+        exited = process.wait(timeout=SPAWN_GRACE_S)
+    except subprocess.TimeoutExpired:
+        # Still running after the grace, which is what "started" means here.
+        #
+        # The handle is kept because abandoning it makes Python emit a
+        # ResourceWarning at collection — correctly, since a child that was
+        # never waited on is a child nobody reaped. Abandoning it is the
+        # intent: this process exits moments later and the sidecar must outlive
+        # it. Holding the reference until then says so, rather than leaving a
+        # warning for someone to explain away.
+        _DETACHED_CHILDREN.append(process)
+        return process.pid
+    raise SpawnDiedError(pid=process.pid, exit_code=exited, log_tail=_log_tail(log_path))
+
+
+def _log_tail(log_path: Path) -> str:
+    """The end of the spawn log, for a child that had something to say.
+
+    Read on the failure path only. A child that died on an import wrote the
+    reason here and nowhere else, and an operator told "it did not start" with
+    no further detail has to go looking for a file they do not know about.
+    """
+    try:
+        with log_path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            handle.seek(max(0, handle.tell() - SPAWN_LOG_TAIL))
+            return handle.read().decode("utf-8", "replace").strip()
+    except OSError:
+        return ""
 
 
 def _default_signaller(pid: int, signal_number: int) -> None:
@@ -571,7 +650,14 @@ class SidecarSupervisor:
         # new loop reads. It would be refused for being older than the attach,
         # but clearing it here keeps that refusal off the happy path.
         self._control.clear()
-        pid = self.spawn(list(argv), cwd or self.state_dir, self.spawn_log)
+        try:
+            pid = self.spawn(list(argv), cwd or self.state_dir, self.spawn_log)
+        except SpawnDiedError as died:
+            # No pid is claimed. A record for a process that is already gone
+            # would make `status` report STOPPED rather than NEVER_STARTED, and
+            # "it crashed" is a different thing to tell someone than "it never
+            # ran" — which is the distinction status exists to make.
+            return StartOutcome(started=False, detail=str(died))
         record = self._pid_file.claim(pid)
         return StartOutcome(
             started=True,
