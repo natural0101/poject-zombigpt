@@ -21,6 +21,7 @@ from pathlib import Path
 
 import pytest
 
+from pz_agent_core.rpc import token as token_module
 from pz_agent_core.rpc.descriptor import (
     DESCRIPTOR_FILENAME,
     DESCRIPTOR_FORMAT,
@@ -35,7 +36,6 @@ from pz_agent_core.rpc.descriptor import (
     runtime_dir,
     write_descriptor,
 )
-from pz_agent_core.rpc import token as token_module
 from pz_agent_core.rpc.token import (
     MIN_TOKEN_BYTES,
     TOKEN_FILENAME,
@@ -147,7 +147,7 @@ class TestTheToken:
 
     def test_the_binary_flag_is_the_platform_s_own(self) -> None:
         """And it must still be whatever the running platform says it is."""
-        assert token_module._BINARY == getattr(os, "O_BINARY", 0)
+        assert getattr(os, "O_BINARY", 0) == token_module._BINARY
 
     def test_two_tokens_are_never_the_same(self, state: Path) -> None:
         """Cheap, but it is the assertion that fails if the CSPRNG is swapped out."""
