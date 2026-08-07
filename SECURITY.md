@@ -20,10 +20,13 @@ therefore local ones.
 
 Open a private security advisory on the repository, or an issue that describes
 the impact without a working exploit. Please include the build, the mode the
-agent was in, and the relevant lines from `pz-agent logs --redact`.
+agent was in, and the relevant lines from `pz-agent logs`, which prints the
+redacted view — paths under your profile and the install become placeholders.
 
 Do **not** attach a raw support bundle to a public issue until you have checked
-it with `pz-agent logs --redact --verify`.
+it with `pz-agent logs --bundle --verify`. That prints the archive's contents
+after redaction and exits non-zero if anything still looks like a secret, so
+what you read is what a reader would get.
 
 ## Scope
 

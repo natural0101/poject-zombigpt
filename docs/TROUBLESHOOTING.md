@@ -113,9 +113,17 @@ lost — raw, rotten, burnt past the threshold, poisonous, tainted, needs a tool
 you do not have, marked as your reserve, or the last strategic item while hunger
 is not yet critical.
 
-`pz-agent status --explain` prints the rejection list. If you disagree with a
-rule, the thresholds are in configuration; the reserve rules in particular are
-meant to be tuned.
+The rejection list travels with the refusal itself: the planner returns one
+line per candidate it turned down, so it reaches you through whatever asked —
+the MCP `plan` tool's response, or the voice adapter's answer. `pz-agent status`
+reports the session, not a decision it did not make, and has no flag for this.
+
+If you disagree with a rule, the one you can change without editing code is the
+reserve: `pz-agent remember list` shows what is currently held back and
+`pz-agent remember release <item>` stops reserving it. The freshness and
+rot thresholds are policy in `pz_agent_core/policy/food.py` and are not exposed
+in `config.toml` — `[safety]` holds `allow_multiplayer`, `manual_takeover`,
+`max_autonomous_radius` and `panic_hotkey`, and nothing else.
 
 ## "INVALID_REF"
 

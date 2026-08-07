@@ -389,6 +389,7 @@ SleepAdapter = toolkit().declare({
   -- so a panic stop cannot reach them. Naming the capability is what puts that
   -- ceiling into the document a person reads when the action is refused.
   capability = toolkit().CAPABILITY.SURVIVAL_SLEEP,
+  experimental = true,
   requires = REQUIRES,
   timeout_ms = Sleep.TIMEOUT_MS,
   poll_interval_ms = Sleep.POLL_MS,

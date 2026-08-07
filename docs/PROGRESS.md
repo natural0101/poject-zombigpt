@@ -9,8 +9,8 @@ green · `wip` in progress · `todo` not started · `live` blocked on a step tha
 physically requires a running game.
 
 Last updated: 28 of 30 tasks closed; T029 and T030 are blocked on a live game,
-not deferred. 3542 Python tests and 2864 Lua assertions across 26 suites,
-mypy strict over 266 files, `scripts/check.sh` green — measured under Python
+not deferred. 3653 Python tests and 2875 Lua assertions across 26 suites,
+mypy strict over 269 files, `scripts/check.sh` green — measured under Python
 3.11.15, which is the only interpreter with the suite installed here. CI
 declares a 3.11/3.12 matrix; that is configuration, not a result observed in
 this container.
@@ -24,7 +24,7 @@ with them. See [the playable-agent section](#the-playable-agent-branch) below,
 and [`LOCAL_GAME_HANDOFF.md`](LOCAL_GAME_HANDOFF.md) for what still needs a
 machine with the game on it.
 
-**Nineteen defects that branch found are worth reading before any further work**,
+**Twenty-six defects that branch found are worth reading before any further work**,
 because they are one family and the family is not closed. Every subsystem was
 written, tested and green; what nothing tested was whether the subsystems were
 *connected*.
@@ -40,6 +40,13 @@ written, tested and green; what nothing tested was whether the subsystems were
 | 7 | The memory store was complete and connected to nothing | `reserves_item` always answered False, so §7.9 rested on tag rules alone, and no home point could exist |
 | 8 | `pz_agent_voice` was imported by nothing and had no entry point | Russian voice control was complete, tested, and impossible to start |
 | 9 | The mod could drink from a sink; the sidecar had no argument for it, and the path it did have ran under the wrong capability | Two faults in one place: a working mod feature unreachable from Python, *and* `drink_world_source` — which §12.4 caps at `experimental` — reachable through `drink_carried`, which a scan verifies |
+| 26 | **`safety.panic_hotkey` had a validator, an error message and no consumer** | The mod binds DirectInput scancode 88 directly and reads no configuration, so any other value bound nothing — and this is the stop button. A user rebinding away from F12 (Steam's screenshot key, so there is a real reason to) was told "configuration is valid" and had bound nothing. Any value but `F12` is a hard error now, naming the two routes that do work; rebinding for real needs the mod to read a published keycode *and* a live run to prove the new key reaches the stop |
+| 25 | **`game.install_dir` and `game.user_dir` were read by nothing** | `doctor`'s own remediation for `PZD001`, `TROUBLESHOOTING.md` for `PZD001` and `PZD003`, and `configs/mcp/README.md` all send a blocked user to set them. Those two failures brick every other command — a GOG or manual copy Steam does not list, a profile moved by OneDrive or `-cachedir` — and the escape hatch did nothing: the user got "configuration is valid" and the identical failure telling them to do what they had just done |
+| 24 | **No configuration could produce `disabled_by_policy`** | The state existed, the mod guarded on it, `PermissionEngine` refused on it with a message written for a user, and `docs/COMPATIBILITY.md` — which ships in the Windows archive — listed it as "available, but configuration forbids it" three rows above its own warning that a panic stop cannot reach a sleeping character. There was no key to write, and unknown keys are hard errors. Closed by implementing the switch, the way defect 10 was |
+| 23 | **The mod could never publish `experimental`** | `CapabilityRuntime` reads `adapter.experimental`; `Toolkit.declare` never carried the field, so it was read in one place and written in none. Two adapters carried comments saying "the probe caps this at experimental" and both published as ordinary unverified, while `docs/PROTOCOL.md` documents `capabilities.json` with an example showing a state its own writer could not emit |
+| 22 | **`docs/TROUBLESHOOTING.md` sent a user to `pz-agent status --explain`** | No such flag. The paragraph also said the food thresholds are "in configuration" — `[safety]` holds four keys and none of them is one. Found by the new guard rather than by review |
+| 21 | **`PRIVACY.md` documented data deletion under a command the CLI does not have** | It named a `memory` subcommand with a `--forget` flag. There is no such command; it is `remember forget`, which appeared in no document at all. A user reading the privacy policy to erase what the agent keeps about their save got exit 2 and a usage error |
+| 20 | **`SECURITY.md` told a vulnerability reporter to redact with a flag that does not exist** | "Do **not** attach a raw support bundle to a public issue until you have checked it with `pz-agent logs --redact --verify`" — there is no `--redact`. The single gate between a reporter and an unredacted archive on a public issue was an instruction that exits 2 |
 | 19 | **`TraceWriter` was constructed nowhere, so `pz-agent replay` had nothing to replay** | The same shape as 18, one layer in. `docs/QUICKSTART.md` printed `pz-agent replay <trace>` under "When something goes wrong", `logs --bundle` packed `traces/*.jsonl`, and `replay` was a shipped, parsed, documented command reading a format the product never produced. Closing it needed a seam rather than a call: the engine returns a *result* and never lets go of the command it sent, so `ActionEngine.on_dispatch` was added and the loop pairs the two. Writing the trace then exposed a second fault in the format itself — a rotation could leave an observation *diff* as the first line of the new file, and `replay_observations` refuses a diff with no baseline, so every long run's trace would have read back as unreplayable. Found by a test that rotates for real |
 | 18 | **`DiagnosticLog` was constructed nowhere, so `logs/pz-agent.log` could not exist** | Written, tested, rotated, redacted, level-filtered — and never built outside the test suite. Nineteen of the twenty live scenarios name that file among the logs to collect and three name `pz-agent.jsonl`; `LOCAL_DEBUG_MAP.md` sends an operator to it; `pz-agent logs` reads it; the support bundle packs its directory. `live-test collect` reported "copied 0 file(s), skipped 15" — the honest answer, and the line read past twice before anyone asked why the sidecar's own log was among the missing |
 | 17 | The support bundle's verifier flagged its own successful redaction | `credential_assignment` matched `api_key=<REDACTED>`, so `logs --bundle --verify` printed "REVIEW BEFORE SHARING" and exited 1 over a line whose secret had been correctly removed. Not a leak — the training of a habit that would let one through, in the one artefact designed to be attached to a public issue |
@@ -64,8 +71,14 @@ and each of those tests now exists: `tests/lua/test_adapter_registry.lua`,
 `tests/contract/test_capability_declaration_agreement.py`,
 `tests/contract/test_game_api_inventory.py`,
 `tests/contract/test_doctor_codes_documented.py`,
-`tests/contract/test_sidecar_writes_its_log.py` and
-`tests/contract/test_sidecar_writes_a_replayable_trace.py`.
+`tests/contract/test_sidecar_writes_its_log.py`,
+`tests/contract/test_sidecar_writes_a_replayable_trace.py`,
+`tests/contract/test_configured_game_paths.py`,
+`tests/contract/test_disabled_capabilities.py` and
+`tests/contract/test_documented_commands_parse.py` — the last of which is a
+general guard rather than one defect's test: it puts every `pz-agent` command
+line any shipped document prints through the real parser, and it found number 22
+by itself.
 
 Number ten is the one to read first, because it is not a wiring defect at all —
 it is a documented safety guarantee that was never implemented. It is closed by

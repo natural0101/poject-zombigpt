@@ -44,9 +44,27 @@ default_mode = "observe"
 require_backup = true
 
 [safety]
-# A single key name, not a combination. Pressing it clears the mod-owned queue
-# and disarms; work you queued by hand is deliberately left alone.
+# Pressing it clears the mod-owned queue and disarms; work you queued by hand is
+# deliberately left alone.
+#
+# Fixed at F12 in this build, and any other value is refused rather than
+# accepted quietly: the mod binds the scancode directly and reads no
+# configuration, so a rebind here would bind nothing — and this is the stop
+# button. To stop by another route, run 'pz-agent stop', or create the file
+# panic.stop in the exchange directory; the mod obeys it while it is present.
 panic_hotkey = "F12"
+
+# Capabilities to switch off by name, whatever the probes found. This is the
+# only setting that subtracts from what the agent may do without also changing
+# how much authority it has, and it is the one docs/COMPATIBILITY.md means by
+# the `disabled_by_policy` state. `pz-agent doctor` lists every name and the
+# state it is in; an unknown name here is an error, not an ignored line.
+#
+# The obvious candidate is survival_sleep: once the character is asleep there is
+# no timed action to interrupt and no queue entry to cancel, so a panic stop
+# cannot reach them. Empty by default — nothing is switched off for you.
+#     disabled_capabilities = ["survival_sleep"]
+disabled_capabilities = []
 
 # Detect that you took control — moving, or queueing your own action — and end
 # the action in flight as USER_TAKEOVER.

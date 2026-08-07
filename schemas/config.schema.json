@@ -74,6 +74,15 @@
         "max_autonomous_radius": {
           "type": "number",
           "minimum": 0
+        },
+        "disabled_capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true,
+          "maxItems": 64
         }
       },
       "required": [

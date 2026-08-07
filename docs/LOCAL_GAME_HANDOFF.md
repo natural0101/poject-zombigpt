@@ -444,8 +444,11 @@ still has no `logs/`, that is a finding worth reporting on its own.
 `pz-agent replay <state>\traces\session.jsonl` steps through what the sidecar
 saw and did: each observation as a snapshot or a diff, each action beside the
 result that closed it. The trace is bounded and rotates, so a long scenario
-keeps its recent past rather than the whole run — copy it out at the end of a
-scenario rather than at the end of the day.
+keeps its recent past rather than the whole run — run `live-test collect` at the
+end of each scenario rather than at the end of the day. `collect` takes the
+current file and every rotated generation into that scenario's `logs/`, without
+being asked: the twenty scenarios' `logs` lists were written when nothing
+produced a trace, so none of them names one.
 
 Send the archive together with:
 

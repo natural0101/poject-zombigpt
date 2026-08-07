@@ -20,7 +20,13 @@ gitignored — it describes *your* installation, not the project's.
 | `available_unverified` | The symbol exists in the local files; nothing has exercised it | Yes, with a caveat |
 | `experimental` | Works, but not reliably enough for unattended use | No |
 | `unsupported` | No verified API. The reason is recorded | No |
-| `disabled_by_policy` | Available, but configuration forbids it | No |
+| `disabled_by_policy` | Available, and you switched it off in `config.toml` | No |
+
+To switch one off, list it under `safety.disabled_capabilities` in
+`config.toml`. `pz-agent doctor` prints every name and the state it is in;
+`pz-agent status` reports a switched-off capability with that reason rather than
+dropping it from the list, so a decision made months ago is still visible. An
+unknown name there is a configuration error, not an ignored line.
 
 The state ladder is one-directional in an important way: **a static scan can
 never produce `verified`.** Reading the game's Lua files tells you a symbol

@@ -25,6 +25,10 @@ from pz_agent_core.diagnostics import Redactor, build_redactor
 from pz_agent_core.ipc.clocks import Clock, system_clock_ms
 from pz_agent_core.platform.discovery import Discovery, DiscoveryContext, discover
 
+# No cycle: config.py imports nothing from this package — it is a pure reader of
+# one TOML document, which is why it can be consulted this early.
+from .config import load_config
+
 #: Exit code for a command that did what it was asked.
 EXIT_OK: Final = 0
 
@@ -163,14 +167,70 @@ class Workspace:
         return "" if path is None else self.redactor.path(path)
 
 
+def _configured(ctx: CliContext, found: Discovery) -> CliContext:
+    """Re-apply ``[game]`` from ``config.toml`` as a discovery override.
+
+    ``game.install_dir`` and ``game.user_dir`` were parsed, validated, typed and
+    read by nothing. Meanwhile ``doctor``'s own remediation for ``PZD001`` says
+    "set install_dir under [game] in config.toml", ``docs/TROUBLESHOOTING.md``
+    says it for ``PZD001`` and ``PZD003``, and ``configs/mcp/README.md`` names
+    both keys — so the documented escape hatch for the two failures that brick
+    every other command (a GOG or manual copy Steam does not list, a profile
+    moved by OneDrive or ``-cachedir``) did nothing at all. A user who followed
+    it got "configuration is valid" and the identical failure.
+
+    Precedence is command line, then configuration, then discovery: a flag is
+    the more specific statement and is passed for this one invocation, so it
+    must not be silently replaced by a file.
+
+    **The boundary, which is real and is documented in TROUBLESHOOTING.md.**
+    This runs after a first discovery pass, because the configuration lives
+    inside the state directory, which hangs off the Zomboid directory this
+    function is resolving. ``install_dir`` has no such circularity and always
+    applies. ``user_dir`` applies whenever the configuration was reachable
+    without it — which includes the case that matters, since a failed discovery
+    falls back to a state directory beside the working directory — and
+    ``--config`` names the file directly when it does not.
+
+    A configuration that does not parse is ignored here rather than raised:
+    ``doctor`` and ``validate-config`` exist to report that, and neither can run
+    if resolving a workspace throws first.
+    """
+    configured = load_config(ctx.config_override or _provisional_config_path(ctx, found)).config
+    if configured is None:
+        return ctx
+    install = None if ctx.discovery.install_override else configured.install_dir
+    zomboid = None if ctx.discovery.zomboid_dir_override else configured.user_dir
+    if install is None and zomboid is None:
+        return ctx
+    return ctx.with_overrides(install_dir=install, zomboid_dir=zomboid)
+
+
+def _provisional_config_path(ctx: CliContext, found: Discovery) -> Path:
+    """Where the configuration would be, given what discovery found so far."""
+    user_dir = found.user_dir.path
+    state_dir = ctx.state_dir_override or (
+        user_dir / STATE_DIR_NAME if user_dir is not None else ctx.fallback_dir / STATE_DIR_NAME
+    )
+    return state_dir / CONFIG_NAME
+
+
 def resolve_workspace(ctx: CliContext) -> Workspace:
-    """Run discovery once and derive every directory the commands use.
+    """Run discovery and derive every directory the commands use.
 
     The redactor is built here rather than per command, so a path printed by
     ``doctor`` and the same path written into a support bundle are redacted by
     the same rules.
+
+    Discovery runs a second time when ``[game]`` in ``config.toml`` names a path
+    — see :func:`_configured`, which is where the documented escape hatch for an
+    unfindable install or profile became something other than a comment.
     """
     found = discover(ctx.discovery)
+    reconfigured = _configured(ctx, found)
+    if reconfigured is not ctx:
+        ctx = reconfigured
+        found = discover(ctx.discovery)
     user_dir = found.user_dir.path
     state_dir = ctx.state_dir_override or (
         user_dir / STATE_DIR_NAME if user_dir is not None else ctx.fallback_dir / STATE_DIR_NAME

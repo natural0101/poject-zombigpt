@@ -486,6 +486,10 @@ def build_capabilities(workspace: Workspace) -> CapabilityLedger:
         report=report,
         detail=detail,
         report_path=workspace.capability_report_path,
+        # The one user decision that reaches the ledger. Read here rather than
+        # threaded through, because this is where the ledger is built and the
+        # alternative is a second place that has to remember to apply it.
+        disabled=_disabled_capabilities(workspace),
         protected_roots=(install,) if install is not None else (),
         notes=tuple(redact(note) for note in notes),
     )
@@ -555,6 +559,23 @@ def build_loop(
     memory.wired = _planner_memory(loop) is memory
     memory.publish()
     return loop
+
+
+def _disabled_capabilities(workspace: Workspace) -> frozenset[str]:
+    """What ``safety.disabled_capabilities`` switches off, or nothing.
+
+    A configuration that does not validate switches nothing off, deliberately.
+    The alternative — reading the raw table anyway — would let a document with a
+    typo elsewhere in it decide what the agent may do, and a user who cannot see
+    their own file's errors is exactly the one who should not be silently
+    obeyed. ``validate-config`` and ``doctor`` report the document; this
+    function does not act on one it could not trust.
+    """
+    validated = load_config(workspace.config_path).config
+    if validated is None:
+        return frozenset()
+    names = validated.get("safety", "disabled_capabilities")
+    return frozenset(str(name) for name in names) if isinstance(names, list) else frozenset()
 
 
 def _planner_memory(loop: SidecarLoop) -> object | None:

@@ -31,7 +31,14 @@ from typing import Final
 from pz_agent_core.platform.backup import BackupError, BackupManager
 from pz_agent_core.protocol import JsonDict
 
-from ..context import EXIT_FAILURE, EXIT_OK, CliContext, Workspace, resolve_workspace
+from ..context import (
+    EXIT_FAILURE,
+    EXIT_OK,
+    TRACE_NAME,
+    CliContext,
+    Workspace,
+    resolve_workspace,
+)
 from ..output import Printer
 from .evidence import (
     COLLECTED_NAME,
@@ -646,6 +653,16 @@ def _collection_sources(
             pairs.append((ipc_root / name, layout.journals_dir(scenario.id) / name))
         for name in (*_SNAPSHOT_NAMES, *_HEARTBEAT_NAMES):
             pairs.append((ipc_root / name, layout.snapshots_dir(scenario.id) / name))
+    # The trace, unconditionally: it is what ``pz-agent replay`` reads, and no
+    # scenario declares it because none existed when the lists were written.
+    # The current file is named rather than globbed, so its absence is reported
+    # like any other declared file; the rotated generations are globbed, because
+    # a scenario short enough not to rotate is not missing anything.
+    pairs.append((workspace.trace_dir / TRACE_NAME, logs_dir / TRACE_NAME))
+    pairs.extend(
+        (rotated, logs_dir / rotated.name)
+        for rotated in sorted(workspace.trace_dir.glob(f"{TRACE_NAME}.*"))
+    )
     return pairs
 
 

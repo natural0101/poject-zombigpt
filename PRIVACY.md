@@ -44,4 +44,5 @@ before you share it.
 Memory is bounded and scoped to a single save. Raw observation history is not
 kept indefinitely — the store keeps a rolling window and derived facts
 (known containers, home point, failed paths), with an explicit retention policy
-and schema migrations. `pz-agent memory --forget` clears it.
+and schema migrations. `pz-agent remember forget` clears it for the attached
+save; `pz-agent remember list` shows what is held first.

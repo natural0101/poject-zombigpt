@@ -128,11 +128,22 @@ class ReflexConfig:
     #: Danger at or above this interrupts a vulnerable activity.
     interrupt_at: DangerLevel = DangerLevel.MEDIUM
     #: Danger at or above this starts nothing new, whether or not there is
-    #: anything to interrupt. It matches
-    #: :attr:`~pz_agent_core.actions.engine.ActionEngine.threat_threshold`,
-    #: because the engine's copy of the rule compares against the level the *mod*
-    #: reports and this one against the zombies actually observed — and only one
-    #: of those two inputs is filled in by anything.
+    #: anything to interrupt.
+    #:
+    #: Kept equal to :attr:`~pz_agent_core.actions.engine.ActionEngine.threat_threshold`
+    #: on purpose, and both are live. The engine's copy compares against
+    #: ``safety.danger_level`` as the mod reports it; this one takes the higher
+    #: of that and the zombies this process assessed for itself
+    #: (:meth:`ReflexGuard.evaluate`). Two readers rather than one because the
+    #: guard cannot run while the engine holds the tick, and the engine's
+    #: threshold is what interrupts a two-minute ``literature.read`` when
+    #: something closes in — so a change here that is not made there re-opens
+    #: exactly that window.
+    #:
+    #: (An earlier comment here said only one of the two inputs was filled in by
+    #: anything. That was true when it was written and stopped being true the
+    #: same week: ``Observe.lua`` sets the floor from the squares around the
+    #: player before it takes the safety snapshot.)
     block_at: DangerLevel = DangerLevel.HIGH
     #: Danger at or above this interrupts whatever is running, including
     #: nothing: at this point the only correct plan is to deal with the threat.
