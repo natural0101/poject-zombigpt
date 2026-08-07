@@ -24,6 +24,14 @@ can be lied to:
   :mod:`pz_agent_core.observation.compact`; everything else goes through
   :mod:`.scrub`, which applies the same rule.
 
+The three ``pz_goal_*`` tools follow the same shape one layer up: they translate
+into :mod:`pz_agent_core.goals` and decide nothing about goals. Admission,
+exclusivity, budgets and expiry are the channel's; what is decided here is only
+that a goal cannot be *submitted* on a disarmed session — ``pz_goal_submit`` is
+a write, so the gate below refuses it with the core's own ``NOT_ARMED`` — while
+``pz_goal_status`` and ``pz_goal_cancel`` are never gated, because reading the
+channel and stopping it are how a disarmed session is understood and driven.
+
 The action tools map their arguments straight onto the adapter's argument names.
 That is deliberate: the schema field is the adapter field, so an argument this
 layer accepts is one the adapter understands, and there is no translation table
@@ -41,6 +49,14 @@ from pz_agent_core.capabilities.model import (
     MAX_EVIDENCE_PER_CAPABILITY,
     Capability,
     CapabilityReport,
+)
+from pz_agent_core.goals import (
+    DEFAULT_MAX_OPEN,
+    GoalKind,
+    GoalParams,
+    GoalRecord,
+    GoalRequest,
+    TrainableSkill,
 )
 from pz_agent_core.observation.compact import (
     CONTENT_MARKER,
@@ -84,6 +100,7 @@ from .idempotency import CachedCall, IdempotencyCache
 from .ports import (
     ActionRecord,
     CoreServices,
+    GoalPort,
     PlanRecord,
     PlanRequest,
     evidence_payload,
@@ -94,6 +111,7 @@ from .validation import validate_arguments
 __all__ = [
     "MAX_DOCTOR_CHECKS",
     "MAX_EVIDENCE_ENTRIES",
+    "MAX_PENDING_GOALS_REPORTED",
     "MAX_PLAN_STEPS_REPORTED",
     "MAX_REFS_PER_RECORD",
     "ToolRouter",
@@ -137,6 +155,12 @@ MAX_REFS_PER_RECORD: Final = 8
 MAX_EVIDENCE_ENTRIES: Final = MAX_EVIDENCE_PER_CAPABILITY
 
 MAX_PLAN_STEPS_REPORTED: Final = 16
+
+#: Backlog entries ``pz_goal_status`` will list. Taken from the channel's own cap
+#: rather than restated: a queue holding at most that many open goals cannot have
+#: more waiting, so a port that offers more is a port disagreeing with the queue,
+#: and the answer says it was cut off instead of presenting a short list as whole.
+MAX_PENDING_GOALS_REPORTED: Final = DEFAULT_MAX_OPEN
 
 #: ``pz_debug_doctor`` takes no arguments, so it has no caller-supplied limit to
 #: bound its answer with. The check list is short and fixed in the core, but a
@@ -226,6 +250,9 @@ class ToolRouter:
             "pz_action_cancel": self._submit,
             "pz_plan_execute": self._plan_execute,
             "pz_plan_status": self._plan_status,
+            "pz_goal_submit": self._goal_submit,
+            "pz_goal_status": self._goal_status,
+            "pz_goal_cancel": self._goal_cancel,
             "pz_safety_stop": self._safety_stop,
             "pz_memory_query": self._memory_query,
             "pz_debug_doctor": self._debug_doctor,
@@ -714,6 +741,222 @@ class ToolRouter:
                 for step in record.steps[:MAX_PLAN_STEPS_REPORTED]
             ],
         }
+
+    # -- goals -------------------------------------------------------------
+
+    def _goal_channel(self, spec: ToolSpec) -> GoalPort:
+        """The goal port, or a refusal that names the leg which is missing.
+
+        A bundle without one is not a bug here; it is a build whose Core RPC
+        link carries no ``goal.*`` method (see
+        :class:`~.ports.CoreServices`). ``CAPABILITY_UNAVAILABLE`` is the code
+        this boundary already uses for "this install cannot do that", and the
+        message says which half is absent so a user is not sent to look at the
+        game.
+        """
+        goals = self._services.goals
+        if goals is None:
+            raise ToolFailure(
+                ReasonCode.CAPABILITY_UNAVAILABLE,
+                f"{spec.name} needs the typed goal channel and this build's core "
+                "link exposes none; the channel is not reachable from here",
+            )
+        return goals
+
+    def _goal_submit(self, spec: ToolSpec, args: JsonDict) -> ToolOutcome:
+        """Admit one goal to the channel and report the id it came back with.
+
+        Never claims the goal is being served: the channel's own answer is
+        ``pending`` until its activation loop promotes it, and that word is
+        carried through rather than smoothed into "ok, working on it".
+        """
+        goals = self._goal_channel(spec)
+        admission = goals.submit(self._goal_request(spec, args))
+        refusal = admission.refusal
+        if refusal is not None:
+            # Relayed, not reclassified: the channel decided the code, and this
+            # side knows strictly less about why it said no. Its messages are
+            # assembled from constants and ids it minted — never from a caller's
+            # bytes — which is what makes relaying one safe.
+            raise ToolFailure(refusal.reason_code, refusal.message)
+        goal = admission.goal
+        if goal is None:
+            raise ToolFailure(
+                ReasonCode.INTERNAL_ERROR,
+                f"{spec.name}: the channel accepted a goal and named none",
+            )
+        data = self._goal_payload(goal)
+        data["duplicate"] = admission.duplicate
+        return ToolOutcome(
+            data=data,
+            message=(
+                f"this key already created a goal; it is {goal.state.value}"
+                if admission.duplicate
+                else f"goal admitted; it is {goal.state.value}"
+            ),
+        )
+
+    def _goal_status(self, spec: ToolSpec, args: JsonDict) -> ToolOutcome:
+        goals = self._goal_channel(spec)
+        wanted = args.get("goal_id")
+        goal_id = None if wanted is None else str(wanted)
+        status = goals.status(goal_id)
+        named = status.named
+        if goal_id is not None and named is None:
+            # Answering "goal: null" would read as "that goal is not running",
+            # which is a fact nothing here established: the id may name a goal
+            # the channel finished and forgot, or no goal that ever existed.
+            raise ToolFailure(
+                ReasonCode.INVALID_ARGUMENT,
+                f"{spec.name}: this channel holds no goal with that id; it may "
+                "have been forgotten after finishing",
+            )
+        # One past the ceiling, so a port offering more than this tool reports
+        # can be *said* to have done so rather than quietly cut off.
+        pending = list(islice(status.pending, MAX_PENDING_GOALS_REPORTED + 1))
+        truncated = len(pending) > MAX_PENDING_GOALS_REPORTED
+        data: JsonDict = {
+            "goal": None if named is None else self._goal_payload(named),
+            "active": None if status.active is None else self._goal_payload(status.active),
+            "pending": [
+                self._goal_payload(record) for record in pending[:MAX_PENDING_GOALS_REPORTED]
+            ],
+            "pending_truncated": truncated,
+        }
+        warnings = (
+            (
+                f"the backlog was cut off at {MAX_PENDING_GOALS_REPORTED} goal(s); "
+                "this answer is not the whole channel",
+            )
+            if truncated
+            else ()
+        )
+        if named is not None:
+            return ToolOutcome(data=data, message=f"goal is {named.state.value}", warnings=warnings)
+        return ToolOutcome(
+            data=data,
+            message=(
+                f"{'one' if status.active is not None else 'no'} active goal, "
+                f"{len(pending[:MAX_PENDING_GOALS_REPORTED])} pending"
+            ),
+            warnings=warnings,
+        )
+
+    def _goal_cancel(self, spec: ToolSpec, args: JsonDict) -> ToolOutcome:
+        goals = self._goal_channel(spec)
+        cancellation = goals.cancel(str(args["goal_id"]))
+        goal = cancellation.goal
+        if goal is None:
+            raise ToolFailure(
+                ReasonCode.INVALID_ARGUMENT,
+                f"{spec.name}: this channel holds no goal with that id; it may "
+                "have been forgotten after finishing",
+            )
+        data = self._goal_payload(goal)
+        # Not "cancelled". The channel applies a cancellation on its next tick,
+        # so an accepted request is routinely reported against a goal that is
+        # still running; naming this field for the outcome would be the same
+        # early claim ActionRecord refuses to make about a postcondition. What
+        # the goal *is* stays in `state`, where it came from the record.
+        data["cancel_requested"] = cancellation.requested
+        return ToolOutcome(
+            data=data,
+            message=(
+                f"cancellation requested; goal is {goal.state.value}"
+                if cancellation.requested
+                else f"nothing to cancel; the goal had already ended as {goal.state.value}"
+            ),
+        )
+
+    @staticmethod
+    def _goal_request(spec: ToolSpec, args: JsonDict) -> GoalRequest:
+        """The channel's own request object, built from validated arguments.
+
+        The schema pins the closed sets and every numeric range, so what is left
+        for these constructors to refuse is the one rule the validated schema
+        subset cannot state: which parameters each kind requires and which it
+        forbids — ``train_skill`` without a skill, ``satisfy_to`` on a reading
+        goal. The channel refuses those with a ``ValueError``, which
+        :func:`~.envelope.failure_from` would report as ``INTERNAL_ERROR``,
+        blaming this process for the caller's argument. It is translated here
+        instead, and the channel's wording is safe to carry because
+        :mod:`pz_agent_core.goals.model` never quotes a byte the caller sent.
+        """
+        skill = args.get("skill")
+        try:
+            return GoalRequest(
+                kind=GoalKind(str(args["kind"])),
+                idempotency_key=str(args["idempotency_key"]),
+                params=GoalParams(
+                    skill=None if skill is None else TrainableSkill(str(skill)),
+                    target_level=args.get("target_level"),
+                    satisfy_to=args.get("satisfy_to"),
+                    pages=args.get("pages"),
+                ),
+            )
+        except ValueError as rejected:
+            raise ToolFailure(ReasonCode.INVALID_ARGUMENT, f"{spec.name}: {rejected}") from rejected
+
+    @staticmethod
+    def _goal_payload(record: GoalRecord) -> JsonDict:
+        """One goal, in the vocabulary a client branches on.
+
+        The state is reported as ``data.state`` and never as the envelope's
+        ``status``, for the reason :func:`_plan_envelope_status` spells out one
+        section up: ``ToolSuccess`` reserves ``succeeded`` for a result carrying
+        the observed postcondition under ``data.evidence``, and a goal record
+        carries only the *names* of the fields that were observed — the channel
+        drops their values deliberately, because they are forwarded from the
+        game. Borrowing the word would refuse a perfectly good answer about a
+        goal that finished.
+
+        ``key_digest`` is not published. It is value-free by construction, but
+        it is a fingerprint of a caller's key and it buys a client nothing it
+        cannot get from the goal id.
+        """
+        params = record.params
+        param_payload: JsonDict = {}
+        if params.skill is not None:
+            param_payload["skill"] = params.skill.value
+        if params.target_level is not None:
+            param_payload["target_level"] = params.target_level
+        if params.satisfy_to is not None:
+            param_payload["satisfy_to"] = params.satisfy_to
+        if params.pages is not None:
+            param_payload["pages"] = params.pages
+        data: JsonDict = {
+            "goal_id": as_token(record.goal_id),
+            "kind": record.kind.value,
+            "state": record.state.value,
+            "terminal": record.state.is_terminal,
+            "reason_code": (None if record.reason_code is None else record.reason_code.value),
+            "retryable": (
+                False if record.reason_code is None else is_retryable(record.reason_code)
+            ),
+            "params": param_payload,
+            "budget": {
+                "max_wall_ms": record.budget.max_wall_ms,
+                "max_steps": record.budget.max_steps,
+                "pending_ttl_ms": record.budget.pending_ttl_ms,
+            },
+            "steps_used": record.steps_used,
+            "steps_left": record.steps_left,
+            "submitted_at_ms": record.submitted_at_ms,
+            "started_at_ms": record.started_at_ms,
+            "finished_at_ms": record.finished_at_ms,
+            "deadline_ms": record.deadline_ms,
+            # Field *names* only, and each one dropped unless it is a token: the
+            # record's own bound caps how many there are, and the shape check is
+            # what stops a port putting a sentence where a field name belongs.
+            "evidence_keys": [key for key in map(as_token, record.evidence_keys) if key],
+        }
+        if record.detail:
+            # The channel assembles `detail` from its own constants, so this is
+            # belt and braces — but it is the one string on a goal that a future
+            # producer could widen, and quarantining costs a key.
+            data[UNTRUSTED_TEXT_KEY] = {"detail": scrub_text(record.detail)}
+            data["content_marker"] = CONTENT_MARKER
+        return data
 
     # -- memory and diagnostics -------------------------------------------
 

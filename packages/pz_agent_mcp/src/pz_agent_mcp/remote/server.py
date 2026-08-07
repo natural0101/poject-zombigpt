@@ -1,14 +1,33 @@
 """The server half of the Local Core RPC link: one name, one port call.
 
 The sidecar owns the session, the observation store, the action engine, the
-capability report and the memory. The MCP executable owns none of it — an MCP
-client launches it as a subprocess, so the two are separate processes by the
-protocol's design. :class:`CoreRouter` is what stands in front of the real
-:class:`~pz_agent_mcp.ports.CoreServices` on the owning side: it takes a decoded
-:class:`~pz_agent_core.rpc.RpcRequest`, calls exactly one port method, and hands
-back an :class:`~pz_agent_core.rpc.RpcResponse`. It is a
-:data:`~pz_agent_core.rpc.transport.Handler`, so it is passed to
+capability report, the memory and the typed goal channel. The MCP executable
+owns none of it — an MCP client launches it as a subprocess, so the two are
+separate processes by the protocol's design. :class:`CoreRouter` is what stands
+in front of the real :class:`~pz_agent_mcp.ports.CoreServices` on the owning
+side: it takes a decoded :class:`~pz_agent_core.rpc.RpcRequest`, calls exactly
+one port method, and hands back an :class:`~pz_agent_core.rpc.RpcResponse`. It is
+a :data:`~pz_agent_core.rpc.transport.Handler`, so it is passed to
 :class:`~pz_agent_core.rpc.transport.RpcServer` as-is.
+
+The goal channel arrives beside the bundle
+------------------------------------------
+
+:attr:`~pz_agent_mcp.ports.CoreServices.goals` is the one member of the bundle
+declared ``| None``, because a build whose Core RPC link carried no ``goal.*``
+method had nothing to put there. This module is that leg, so on this side the
+channel is not optional: :class:`CoreRouter` takes a
+:class:`~pz_agent_mcp.ports.GoalPort` as a keyword argument and defaults it to
+:data:`NO_GOAL_CHANNEL`, whose every method raises, so the three goal routes
+answer ``CORE_REFUSED`` naming the missing wiring.
+
+The resolution of "the bundle's ``goals`` is ``None``" into that default happens
+at the sidecar's call site and not here, and the reason is the section below: it
+is a decision, it needs a comparison, and this module contains none. A sidecar
+writes ``CoreRouter(services, goals=services.goals or NO_GOAL_CHANNEL)`` and the
+choice is visible where the wiring is. What must not happen is the alternative —
+a route answering an empty status or a minted refusal — because a caller cannot
+tell that from a channel that considered its goal and said no.
 
 The router decides nothing
 --------------------------
@@ -77,6 +96,12 @@ have no codec module, so their JSON shape is defined here — once, as an
 time. That is the same rule the codec package states for records, applied to the
 two bodies that are not records: a key written in both halves is a key that can
 drift, and the drift arrives on a user's machine as a refusal nobody can read.
+
+``goal.status`` and ``goal.cancel`` take a third such body — one goal id — and
+it does *not* live here: both halves read
+:func:`~pz_agent_mcp.remote.codec.goals.encode_goal_id` from the codec module
+that owns every other goal shape, because the two methods share the body and a
+third spelling would be a third thing to keep in step.
 """
 
 from __future__ import annotations
@@ -86,9 +111,16 @@ from dataclasses import dataclass
 from typing import Any, Final, Generic, TypeVar
 
 from pz_agent_core.actions import ActionRequest
+from pz_agent_core.goals import GoalAdmission, GoalRequest
 from pz_agent_core.protocol import JsonDict, SessionMode
 from pz_agent_core.rpc import ErrorCode, RpcRequest, RpcResponse
-from pz_agent_mcp.ports import CoreServices, PlanRequest
+from pz_agent_mcp.ports import (
+    CoreServices,
+    GoalCancellation,
+    GoalChannelStatus,
+    GoalPort,
+    PlanRequest,
+)
 from pz_agent_mcp.remote.codec import CodecError, require_bool, require_enum, require_str
 from pz_agent_mcp.remote.codec.actions import (
     decode_action_request,
@@ -101,6 +133,14 @@ from pz_agent_mcp.remote.codec.diagnostics import (
     decode_tail_query,
     encode_doctor_checks,
     encode_log_records,
+)
+from pz_agent_mcp.remote.codec.goals import (
+    decode_goal_id,
+    decode_goal_query,
+    decode_goal_request,
+    encode_goal_admission,
+    encode_goal_cancellation,
+    encode_goal_channel_status,
 )
 from pz_agent_mcp.remote.codec.memory import (
     MemoryQuery,
@@ -117,6 +157,8 @@ from pz_agent_mcp.remote.codec.session import encode_session_snapshot, encode_st
 from pz_agent_mcp.remote.methods import Method
 
 __all__ = [
+    "NO_GOAL_CHANNEL",
+    "NO_GOAL_CHANNEL_REASON",
     "ROUTED_METHODS",
     "ArmParams",
     "CoreRouter",
@@ -132,6 +174,43 @@ _ACTION_STATUS: Final = "action.status params"
 #: The key an action id travels under. Named once so both halves read it from
 #: here; see this module's docstring.
 _ACTION_ID_FIELD: Final = "action_id"
+
+#: What a core without a goal channel says when one is asked for. Named so a
+#: caller can look for it: this is a wiring fault in the sidecar, not a refusal
+#: the channel made and not a link that dropped.
+NO_GOAL_CHANNEL_REASON: Final = (
+    "this core was built with no typed goal channel, so it can neither admit a goal "
+    "nor report on one; the sidecar must pass one to CoreRouter"
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _AbsentGoalChannel:
+    """The :class:`~pz_agent_mcp.ports.GoalPort` a router built without one gets.
+
+    Every method raises, so the three goal routes reach the ``CORE_REFUSED``
+    branch carrying :data:`NO_GOAL_CHANNEL_REASON`. That is the whole design:
+    the router must not decide anything, including whether a goal channel is
+    present, and an answer invented here — an empty status, a refusal minted
+    locally — would be indistinguishable from a channel that had actually
+    considered the goal.
+    """
+
+    def submit(self, request: GoalRequest) -> GoalAdmission:
+        raise RuntimeError(NO_GOAL_CHANNEL_REASON)
+
+    def status(self, goal_id: str | None = None) -> GoalChannelStatus:
+        raise RuntimeError(NO_GOAL_CHANNEL_REASON)
+
+    def cancel(self, goal_id: str) -> GoalCancellation:
+        raise RuntimeError(NO_GOAL_CHANNEL_REASON)
+
+
+#: The default :class:`~pz_agent_mcp.ports.GoalPort`. One instance rather than
+#: one per router: it
+#: holds no state, and a shared constant is what makes ``goals=NO_GOAL_CHANNEL``
+#: a thing a caller can write on purpose.
+NO_GOAL_CHANNEL: Final[GoalPort] = _AbsentGoalChannel()
 
 
 @dataclass(frozen=True, slots=True)
@@ -204,55 +283,102 @@ def _no_params(_payload: Mapping[str, Any]) -> None:
     return None
 
 
-def _session_status(services: CoreServices, _params: None) -> JsonDict:
-    return encode_session_snapshot(services.session.status())
+@dataclass(frozen=True, slots=True)
+class _Backends:
+    """Everything a handler may reach: the seven ports, and the goal channel.
+
+    One object rather than two parameters so that every handler has the same
+    signature and the dispatch table stays one mapping of the same type. The
+    goal channel is beside the bundle rather than inside it because
+    :class:`~pz_agent_mcp.ports.CoreServices` declares the seven ports the
+    boundary reads through and a goal queue is not one of them; see this
+    module's docstring.
+    """
+
+    services: CoreServices
+    goals: GoalPort
 
 
-def _session_arm(services: CoreServices, params: ArmParams) -> JsonDict:
+def _session_status(core: _Backends, _params: None) -> JsonDict:
+    return encode_session_snapshot(core.services.session.status())
+
+
+def _session_arm(core: _Backends, params: ArmParams) -> JsonDict:
     return encode_session_snapshot(
-        services.session.arm(params.mode, confirm_backup=params.confirm_backup)
+        core.services.session.arm(params.mode, confirm_backup=params.confirm_backup)
     )
 
 
-def _session_disarm(services: CoreServices, _params: None) -> JsonDict:
-    return encode_session_snapshot(services.session.disarm())
+def _session_disarm(core: _Backends, _params: None) -> JsonDict:
+    return encode_session_snapshot(core.services.session.disarm())
 
 
-def _session_stop(services: CoreServices, _params: None) -> JsonDict:
-    return encode_stop_report(services.session.stop())
+def _session_stop(core: _Backends, _params: None) -> JsonDict:
+    return encode_stop_report(core.services.session.stop())
 
 
-def _observation_latest(services: CoreServices, _params: None) -> JsonDict:
-    return encode_latest_observation(services.observations.latest())
+def _observation_latest(core: _Backends, _params: None) -> JsonDict:
+    return encode_latest_observation(core.services.observations.latest())
 
 
-def _capabilities_report(services: CoreServices, _params: None) -> JsonDict:
-    return encode_capability_report(services.capabilities.report())
+def _capabilities_report(core: _Backends, _params: None) -> JsonDict:
+    return encode_capability_report(core.services.capabilities.report())
 
 
-def _action_submit(services: CoreServices, params: ActionRequest) -> JsonDict:
+def _action_submit(core: _Backends, params: ActionRequest) -> JsonDict:
     """Submit and answer with the record the port returned.
 
     ``ActionPort.submit`` returns as soon as the action has an id and does not
     wait for the postcondition, which is what keeps a long action from holding
     this connection — and the stop lever needs a connection exactly then.
     """
-    return encode_action_record(services.actions.submit(params))
+    return encode_action_record(core.services.actions.submit(params))
 
 
-def _action_status(services: CoreServices, params: str) -> JsonDict:
-    return encode_action_status(services.actions.status(params))
+def _action_status(core: _Backends, params: str) -> JsonDict:
+    return encode_action_status(core.services.actions.status(params))
 
 
-def _plan_execute(services: CoreServices, params: PlanRequest) -> JsonDict:
-    return encode_plan_record(services.plans.execute(params))
+def _plan_execute(core: _Backends, params: PlanRequest) -> JsonDict:
+    return encode_plan_record(core.services.plans.execute(params))
 
 
-def _plan_current(services: CoreServices, _params: None) -> JsonDict:
-    return encode_plan_current(services.plans.current())
+def _plan_current(core: _Backends, _params: None) -> JsonDict:
+    return encode_plan_current(core.services.plans.current())
 
 
-def _memory_query(services: CoreServices, params: MemoryQuery) -> JsonDict:
+def _goal_submit(core: _Backends, params: GoalRequest) -> JsonDict:
+    """Hand a goal to the channel and answer with its admission.
+
+    The admission carries either the record the channel minted or the refusal it
+    wrote, and it is encoded whole. Nothing here decides which: a cap reached, a
+    key reused for different parameters and a disarmed session are the channel's
+    own answers, and each of them names what to do about it.
+    """
+    return encode_goal_admission(core.goals.submit(params))
+
+
+def _goal_status(core: _Backends, params: str | None) -> JsonDict:
+    """Answer with the channel as it stands, plus the goal the caller named.
+
+    ``None`` is passed through as ``None`` rather than turned into an empty
+    string: the port reads that as "tell me about the channel", and an empty
+    string would ask about the goal whose id is ``""``.
+    """
+    return encode_goal_channel_status(core.goals.status(params))
+
+
+def _goal_cancel(core: _Backends, params: str) -> JsonDict:
+    """Ask the channel to end a goal, and report what it did with the request.
+
+    ``requested=False`` is an answer, not a failure: nothing open was found
+    under that id. It is carried as a value rather than as a refusal so a caller
+    can tell "it will stop" from "it already had".
+    """
+    return encode_goal_cancellation(core.goals.cancel(params))
+
+
+def _memory_query(core: _Backends, params: MemoryQuery) -> JsonDict:
     """Answer a memory query with the limit the caller sent.
 
     The limit is passed through, not clamped. ``MAX_MEMORY_RESULTS`` is the
@@ -260,14 +386,14 @@ def _memory_query(services: CoreServices, params: MemoryQuery) -> JsonDict:
     made; a second ceiling here would be a second policy, and the two would
     disagree the moment one of them moved.
     """
-    return encode_memory_records(services.memory.query(kinds=params.kinds, limit=params.limit))
+    return encode_memory_records(core.services.memory.query(kinds=params.kinds, limit=params.limit))
 
 
-def _diagnostics_doctor(services: CoreServices, _params: None) -> JsonDict:
-    return encode_doctor_checks(services.diagnostics.doctor())
+def _diagnostics_doctor(core: _Backends, _params: None) -> JsonDict:
+    return encode_doctor_checks(core.services.diagnostics.doctor())
 
 
-def _diagnostics_tail(services: CoreServices, params: TailQuery) -> JsonDict:
+def _diagnostics_tail(core: _Backends, params: TailQuery) -> JsonDict:
     """Answer a tail with the filters the caller sent, and no others.
 
     Like the memory limit, ``limit`` is carried rather than clamped, and a
@@ -276,7 +402,7 @@ def _diagnostics_tail(services: CoreServices, params: TailQuery) -> JsonDict:
     ask for the records whose level is ``""``.
     """
     return encode_log_records(
-        services.diagnostics.tail(
+        core.services.diagnostics.tail(
             limit=params.limit,
             level=params.level,
             component=params.component,
@@ -299,7 +425,7 @@ class _Route(Generic[_ParamsT]):
     """
 
     decode: Callable[[Mapping[str, Any]], _ParamsT]
-    invoke: Callable[[CoreServices, _ParamsT], JsonDict]
+    invoke: Callable[[_Backends, _ParamsT], JsonDict]
 
 
 #: The whole dispatch table. Keys are the constants from
@@ -317,6 +443,9 @@ _ROUTES: Final[Mapping[str, _Route[Any]]] = {
     Method.ACTION_STATUS: _Route(decode_action_status_params, _action_status),
     Method.PLAN_EXECUTE: _Route(decode_plan_request, _plan_execute),
     Method.PLAN_CURRENT: _Route(_no_params, _plan_current),
+    Method.GOAL_SUBMIT: _Route(decode_goal_request, _goal_submit),
+    Method.GOAL_STATUS: _Route(decode_goal_query, _goal_status),
+    Method.GOAL_CANCEL: _Route(decode_goal_id, _goal_cancel),
     Method.MEMORY_QUERY: _Route(decode_memory_query, _memory_query),
     Method.DIAGNOSTICS_DOCTOR: _Route(_no_params, _diagnostics_doctor),
     Method.DIAGNOSTICS_TAIL: _Route(decode_tail_query, _diagnostics_tail),
@@ -350,15 +479,28 @@ class CoreRouter:
 
         server = RpcServer(address, authkey=token, handler=CoreRouter(services))
 
+    *goals* is the typed goal channel, which the bundle declares ``| None``
+    because a build without this leg had nothing to put there::
+
+        CoreRouter(services, goals=services.goals or NO_GOAL_CHANNEL)
+
+    A sidecar that owns one passes it; one that does not gets
+    :data:`NO_GOAL_CHANNEL`, whose methods raise so the three goal routes answer
+    ``CORE_REFUSED`` naming the missing wiring. The ``or`` belongs to the caller
+    and not to this module — it is a decision, and this module makes none. It is
+    keyword-only because a second positional argument beside the bundle is
+    exactly the kind of thing that gets passed in the wrong order once and then
+    carried.
+
     It holds no state of its own — no cache, no counter, no last-seen id. Two
     calls with the same parameters reach the ports twice, because deciding that
     they should not is the idempotency rule and the core owns it.
     """
 
-    __slots__ = ("_services",)
+    __slots__ = ("_core",)
 
-    def __init__(self, services: CoreServices) -> None:
-        self._services = services
+    def __init__(self, services: CoreServices, *, goals: GoalPort = NO_GOAL_CHANNEL) -> None:
+        self._core = _Backends(services=services, goals=goals)
 
     def __call__(self, request: RpcRequest) -> RpcResponse:
         """Answer *request*. Never raises, whatever the ports do.
@@ -398,7 +540,7 @@ class CoreRouter:
             )
 
         try:
-            result = route.invoke(self._services, params)
+            result = route.invoke(self._core, params)
         except Exception as exc:
             # The core's own refusal, carried with its message: a missing
             # backup, a failed doctor, an absent player. Also where an answer
