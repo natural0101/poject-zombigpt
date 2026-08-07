@@ -222,8 +222,8 @@ epics:
       status: IN_PROGRESS
       commit: 1a2592cf3e9731bf5590fcf4eb6099891a0c033b
       ci_url: null
-      reason: the behaviour is covered by tests/contract/test_evidence_bytes_are_portable.py and it passes,
-        but E01-M02-T002 is not done; a task cannot be complete over an unfinished dependency
+      reason: covered by tests/contract/test_evidence_bytes_are_portable.py and it passes, but E01-M02-T002
+        is not done
     - id: E01-M02-T004
       subsystem: control
       action: Inventory every manifest field recorded with a native separator
@@ -239,8 +239,8 @@ epics:
       status: IN_PROGRESS
       commit: 1a2592cf3e9731bf5590fcf4eb6099891a0c033b
       ci_url: null
-      reason: the behaviour is covered by tests/contract/test_portable_paths.py and it passes, but E01-M02-T003
-        is not done; a task cannot be complete over an unfinished dependency
+      reason: covered by tests/contract/test_portable_paths.py and it passes, but E01-M02-T003 is not
+        done
     - id: E01-M02-T005
       subsystem: control
       action: Inventory POSIX-only process calls on Windows-executable paths
@@ -256,8 +256,7 @@ epics:
       status: IN_PROGRESS
       commit: 1a2592cf3e9731bf5590fcf4eb6099891a0c033b
       ci_url: null
-      reason: the behaviour is covered by tests/unit/test_cli_supervisor.py and it passes, but E01-M02-T004
-        is not done; a task cannot be complete over an unfinished dependency
+      reason: covered by tests/unit/test_cli_supervisor.py and it passes, but E01-M02-T004 is not done
     - id: E01-M02-T006
       subsystem: control
       action: Inventory chmod-based permission tests
@@ -273,8 +272,8 @@ epics:
       status: IN_PROGRESS
       commit: 1a2592cf3e9731bf5590fcf4eb6099891a0c033b
       ci_url: null
-      reason: the behaviour is covered by tests/unit/test_capabilities_scanner.py and it passes, but E01-M02-T005
-        is not done; a task cannot be complete over an unfinished dependency
+      reason: covered by tests/unit/test_capabilities_scanner.py and it passes, but E01-M02-T005 is not
+        done
     - id: E01-M02-T007
       subsystem: control
       action: Inventory JSON assembled from f-strings rather than json.dumps
@@ -290,8 +289,8 @@ epics:
       status: IN_PROGRESS
       commit: 1a2592cf3e9731bf5590fcf4eb6099891a0c033b
       ci_url: null
-      reason: the behaviour is covered by tests/contract/test_mcp_snippet_is_json.py and it passes, but
-        E01-M02-T006 is not done; a task cannot be complete over an unfinished dependency
+      reason: covered by tests/contract/test_mcp_snippet_is_json.py and it passes, but E01-M02-T006 is
+        not done
     - id: E01-M02-T008
       subsystem: control
       action: Inventory ports declared with no concrete implementation
@@ -1084,8 +1083,8 @@ epics:
       status: IN_PROGRESS
       commit: 33128464ae4d8285a03a4832b84ba9f76e8fdeb9
       ci_url: null
-      reason: the behaviour is covered by tests/unit/test_rpc_transport.py::TestAddresses::test_a_posix_address_is_inside_the_runtime_directory
-        and it passes, but E02-M05-T005 is not done; a task cannot be complete over an unfinished dependency
+      reason: covered by tests/unit/test_rpc_transport.py::TestAddresses::test_a_posix_address_is_inside_the_runtime_directory
+        and it passes, but E02-M05-T005 is not done
     - id: E02-M05-T007
       subsystem: ci
       action: Confirm the RPC suite itself passes on windows-latest
@@ -2255,8 +2254,8 @@ epics:
       status: IN_PROGRESS
       commit: fceb4162fdfafd4e63467a4010bcf6ec5405a704
       ci_url: null
-      reason: the behaviour is covered by tests/contract/test_core_rpc_schema_conformance.py and it passes,
-        but E05-M01-T004 is not done; a task cannot be complete over an unfinished dependency
+      reason: covered by tests/contract/test_core_rpc_schema_conformance.py and it passes, but E05-M01-T004
+        is not done
     - id: E05-M01-T006
       subsystem: rpc
       action: Publish the response JSON schema
@@ -2273,8 +2272,8 @@ epics:
       status: IN_PROGRESS
       commit: fceb4162fdfafd4e63467a4010bcf6ec5405a704
       ci_url: null
-      reason: the behaviour is covered by tests/contract/test_core_rpc_schema_conformance.py and it passes,
-        but E05-M01-T005 is not done; a task cannot be complete over an unfinished dependency
+      reason: covered by tests/contract/test_core_rpc_schema_conformance.py and it passes, but E05-M01-T005
+        is not done
     checks:
     - id: E05-M01-C01
       statement: The schemas and the encoder agree in both directions.
@@ -3246,8 +3245,8 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_remote_core_services.py -q
       regression_test: tests/unit/test_remote_core_services.py
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/remote/client.py
-      status: NOT_STARTED
-      commit: null
+      status: PASS
+      commit: 7234a176bc301a7c8de19cdcfc3cdaf51d11b790
       ci_url: null
       reason: ''
     - id: E06-M02-T004
@@ -3263,8 +3262,8 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_remote_core_services.py -q
       regression_test: tests/unit/test_remote_core_services.py
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/remote/client.py
-      status: NOT_STARTED
-      commit: null
+      status: PASS
+      commit: 7234a176bc301a7c8de19cdcfc3cdaf51d11b790
       ci_url: null
       reason: ''
     - id: E06-M02-T005
@@ -3279,8 +3278,8 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_remote_core_services.py -q
       regression_test: tests/unit/test_remote_core_services.py
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/remote/client.py
-      status: NOT_STARTED
-      commit: null
+      status: PASS
+      commit: 7234a176bc301a7c8de19cdcfc3cdaf51d11b790
       ci_url: null
       reason: ''
     - id: E06-M02-T006
@@ -3295,8 +3294,8 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_remote_core_services.py -q
       regression_test: tests/unit/test_remote_core_services.py
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/remote/client.py
-      status: NOT_STARTED
-      commit: null
+      status: PASS
+      commit: 7234a176bc301a7c8de19cdcfc3cdaf51d11b790
       ci_url: null
       reason: ''
     - id: E06-M02-T007
@@ -3311,8 +3310,8 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_remote_core_services.py -q
       regression_test: tests/unit/test_remote_core_services.py
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/remote/client.py
-      status: NOT_STARTED
-      commit: null
+      status: PASS
+      commit: 7234a176bc301a7c8de19cdcfc3cdaf51d11b790
       ci_url: null
       reason: ''
     - id: E06-M02-T008
@@ -3327,8 +3326,8 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_remote_core_services.py -q
       regression_test: tests/unit/test_remote_core_services.py
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/remote/client.py
-      status: NOT_STARTED
-      commit: null
+      status: PASS
+      commit: 7234a176bc301a7c8de19cdcfc3cdaf51d11b790
       ci_url: null
       reason: ''
     - id: E06-M02-T009
@@ -3343,8 +3342,8 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_remote_core_services.py -q
       regression_test: tests/unit/test_remote_core_services.py
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/remote/client.py
-      status: NOT_STARTED
-      commit: null
+      status: PASS
+      commit: 7234a176bc301a7c8de19cdcfc3cdaf51d11b790
       ci_url: null
       reason: ''
     - id: E06-M02-T010
@@ -3359,8 +3358,8 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_remote_core_services.py -q
       regression_test: tests/unit/test_remote_core_services.py
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/remote/client.py
-      status: NOT_STARTED
-      commit: null
+      status: PASS
+      commit: 7234a176bc301a7c8de19cdcfc3cdaf51d11b790
       ci_url: null
       reason: ''
     - id: E06-M02-T011
@@ -3375,8 +3374,8 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_remote_core_services.py -q
       regression_test: tests/unit/test_remote_core_services.py
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/remote/client.py
-      status: NOT_STARTED
-      commit: null
+      status: PASS
+      commit: 7234a176bc301a7c8de19cdcfc3cdaf51d11b790
       ci_url: null
       reason: ''
     - id: E06-M02-T012
@@ -3389,10 +3388,10 @@ epics:
       - E06-M02-T011
       pass_criterion: a static check asserts RemoteCoreServices is assignable to CoreServices
       verify_command: .venv/bin/pytest tests/unit/test_remote_core_services.py -q
-      regression_test: tests/unit/test_remote_core_services.py::test_remote_core_services_satisfies_the_protocol
+      regression_test: tests/contract/test_remote_core_round_trip.py::test_remote_core_services_is_a_core_services
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/remote/client.py
-      status: NOT_STARTED
-      commit: null
+      status: PASS
+      commit: 7234a176bc301a7c8de19cdcfc3cdaf51d11b790
       ci_url: null
       reason: ''
     checks:
@@ -3413,10 +3412,10 @@ epics:
       depends_on: []
       pass_criterion: the router answers exactly the methods in ALL_METHODS, no more and no fewer
       verify_command: .venv/bin/pytest tests/unit/test_remote_router.py -q
-      regression_test: tests/unit/test_remote_router.py::test_the_router_answers_exactly_the_declared_methods
+      regression_test: tests/unit/test_remote_router.py::TestTheRoutedSet::test_the_routed_set_equals_the_declared_set
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/remote/server.py
-      status: NOT_STARTED
-      commit: null
+      status: PASS
+      commit: 7234a176bc301a7c8de19cdcfc3cdaf51d11b790
       ci_url: null
       reason: ''
     - id: E06-M03-T002
@@ -3431,8 +3430,8 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_remote_router.py -q
       regression_test: tests/unit/test_remote_router.py
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/remote/server.py
-      status: NOT_STARTED
-      commit: null
+      status: PASS
+      commit: 7234a176bc301a7c8de19cdcfc3cdaf51d11b790
       ci_url: null
       reason: ''
     - id: E06-M03-T003
@@ -3447,8 +3446,8 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_remote_router.py -q
       regression_test: tests/unit/test_remote_router.py
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/remote/server.py
-      status: NOT_STARTED
-      commit: null
+      status: PASS
+      commit: 7234a176bc301a7c8de19cdcfc3cdaf51d11b790
       ci_url: null
       reason: ''
     - id: E06-M03-T004
@@ -3463,8 +3462,8 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_remote_router.py -q
       regression_test: tests/unit/test_remote_router.py
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/remote/server.py
-      status: NOT_STARTED
-      commit: null
+      status: PASS
+      commit: 7234a176bc301a7c8de19cdcfc3cdaf51d11b790
       ci_url: null
       reason: ''
     - id: E06-M03-T005
@@ -3479,8 +3478,8 @@ epics:
       verify_command: read the router source
       regression_test: tests/unit/test_remote_router.py
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/remote/server.py
-      status: NOT_STARTED
-      commit: null
+      status: PASS
+      commit: 7234a176bc301a7c8de19cdcfc3cdaf51d11b790
       ci_url: null
       reason: ''
     - id: E06-M03-T006
@@ -3495,8 +3494,8 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_remote_router.py -q
       regression_test: tests/unit/test_remote_router.py
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/remote/methods.py
-      status: NOT_STARTED
-      commit: null
+      status: PASS
+      commit: f95fac6ddcd68a9b132a7f3cc7a058a1d9d912b2
       ci_url: null
       reason: ''
     - id: E06-M03-T007
@@ -3511,8 +3510,8 @@ epics:
       verify_command: .venv/bin/pytest tests/contract/test_remote_core_round_trip.py -q
       regression_test: tests/contract/test_remote_core_round_trip.py
       evidence: tests/contract/test_remote_core_round_trip.py
-      status: NOT_STARTED
-      commit: null
+      status: PASS
+      commit: 7234a176bc301a7c8de19cdcfc3cdaf51d11b790
       ci_url: null
       reason: ''
     - id: E06-M03-T008
@@ -3527,8 +3526,8 @@ epics:
       verify_command: .venv/bin/pytest tests/contract/test_remote_core_round_trip.py -q
       regression_test: tests/contract/test_remote_core_round_trip.py
       evidence: tests/contract/test_remote_core_round_trip.py
-      status: NOT_STARTED
-      commit: null
+      status: PASS
+      commit: 7234a176bc301a7c8de19cdcfc3cdaf51d11b790
       ci_url: null
       reason: ''
     checks:
@@ -3551,8 +3550,8 @@ epics:
       verify_command: .venv/bin/pytest tests/contract/test_remote_core_round_trip.py -q
       regression_test: tests/contract/test_remote_core_round_trip.py
       evidence: packages/pz_agent_cli/src/pz_agent_cli/supervisor.py
-      status: NOT_STARTED
-      commit: null
+      status: PASS
+      commit: 935437ef88eb257a590b2bda930cce85de88632c
       ci_url: null
       reason: ''
     - id: E06-M04-T002
@@ -3567,8 +3566,8 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_remote_core_services.py -q
       regression_test: tests/unit/test_remote_core_services.py
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/remote/client.py
-      status: NOT_STARTED
-      commit: null
+      status: PASS
+      commit: 7234a176bc301a7c8de19cdcfc3cdaf51d11b790
       ci_url: null
       reason: ''
     - id: E06-M04-T003
@@ -3583,8 +3582,8 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_remote_core_services.py -q
       regression_test: tests/unit/test_remote_core_services.py
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/remote/client.py
-      status: NOT_STARTED
-      commit: null
+      status: PASS
+      commit: 7234a176bc301a7c8de19cdcfc3cdaf51d11b790
       ci_url: null
       reason: ''
     - id: E06-M04-T004
@@ -3599,8 +3598,8 @@ epics:
       verify_command: grep -rn 'Unrouted' packages
       regression_test: tests/unit/test_remote_core_services.py
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/remote/client.py
-      status: NOT_STARTED
-      commit: null
+      status: PASS
+      commit: 7234a176bc301a7c8de19cdcfc3cdaf51d11b790
       ci_url: null
       reason: ''
     - id: E06-M04-T005
@@ -3615,8 +3614,8 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_remote_core_services.py -q
       regression_test: tests/unit/test_remote_core_services.py
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/remote/client.py
-      status: NOT_STARTED
-      commit: null
+      status: PASS
+      commit: 7234a176bc301a7c8de19cdcfc3cdaf51d11b790
       ci_url: null
       reason: ''
     checks:
@@ -3762,8 +3761,8 @@ epics:
       status: IN_PROGRESS
       commit: 367124b6f517a3b78d4ace50bb26ab72d17bfc2b
       ci_url: null
-      reason: the behaviour is covered by tests/contract/test_mcp_snippet_is_json.py and it passes, but
-        E07-M01-T007 is not done; a task cannot be complete over an unfinished dependency
+      reason: covered by tests/contract/test_mcp_snippet_is_json.py and it passes, but E07-M01-T007 is
+        not done
     checks:
     - id: E07-M01-C01
       statement: No invocation of pz-agent-mcp refuses by construction any more.
@@ -4488,8 +4487,8 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_remote_router.py -q
       regression_test: tests/unit/test_remote_router.py
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/remote/methods.py
-      status: NOT_STARTED
-      commit: null
+      status: PASS
+      commit: f95fac6ddcd68a9b132a7f3cc7a058a1d9d912b2
       ci_url: null
       reason: ''
     - id: E08-M03-T002
@@ -4504,8 +4503,8 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_remote_router.py -q
       regression_test: tests/unit/test_remote_router.py
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/remote/methods.py
-      status: NOT_STARTED
-      commit: null
+      status: PASS
+      commit: f95fac6ddcd68a9b132a7f3cc7a058a1d9d912b2
       ci_url: null
       reason: ''
     - id: E08-M03-T003
@@ -4520,8 +4519,8 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_remote_router.py -q
       regression_test: tests/unit/test_remote_router.py
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/remote/methods.py
-      status: NOT_STARTED
-      commit: null
+      status: PASS
+      commit: f95fac6ddcd68a9b132a7f3cc7a058a1d9d912b2
       ci_url: null
       reason: ''
     - id: E08-M03-T004
@@ -5066,8 +5065,8 @@ epics:
       status: IN_PROGRESS
       commit: 6f73bc0c52135965cd67605b8002618bcf2282d6
       ci_url: null
-      reason: the behaviour is covered by tests/contract/test_documented_commands_parse.py and it passes,
-        but E09-M03-T004 is not done; a task cannot be complete over an unfinished dependency
+      reason: covered by tests/contract/test_documented_commands_parse.py and it passes, but E09-M03-T004
+        is not done
     - id: E09-M03-T006
       subsystem: voice
       action: Prove a fake voice adapter is not counted as a real integration
@@ -5426,8 +5425,8 @@ epics:
       status: IN_PROGRESS
       commit: cfecfa75c2e2b98a1eac49fd03e39560ffcca729
       ci_url: null
-      reason: the behaviour is covered by tests/contract/test_archive_documents_resolve.py and it passes,
-        but E10-M02-T009 is not done; a task cannot be complete over an unfinished dependency
+      reason: covered by tests/contract/test_archive_documents_resolve.py and it passes, but E10-M02-T009
+        is not done
     checks:
     - id: E10-M02-C01
       statement: The documented contract and the implementation agree.
@@ -5884,8 +5883,7 @@ epics:
       status: IN_PROGRESS
       commit: 081414cdcc9dbdf246bb029319f8f2d8cbc53ce7
       ci_url: null
-      reason: the behaviour is covered by tests/unit/test_check_release.py and it passes, but E11-M03-T001
-        is not done; a task cannot be complete over an unfinished dependency
+      reason: covered by tests/unit/test_check_release.py and it passes, but E11-M03-T001 is not done
     - id: E11-M03-T003
       subsystem: packaging
       action: Verify each member's digest independently of the index
@@ -5901,8 +5899,7 @@ epics:
       status: IN_PROGRESS
       commit: 081414cdcc9dbdf246bb029319f8f2d8cbc53ce7
       ci_url: null
-      reason: the behaviour is covered by tests/unit/test_check_release.py and it passes, but E11-M03-T002
-        is not done; a task cannot be complete over an unfinished dependency
+      reason: covered by tests/unit/test_check_release.py and it passes, but E11-M03-T002 is not done
     - id: E11-M03-T004
       subsystem: packaging
       action: Include both executables in the archive
@@ -5918,8 +5915,7 @@ epics:
       status: IN_PROGRESS
       commit: 6f73bc0c52135965cd67605b8002618bcf2282d6
       ci_url: null
-      reason: the behaviour is covered by tests/unit/test_check_release.py and it passes, but E11-M03-T003
-        is not done; a task cannot be complete over an unfinished dependency
+      reason: covered by tests/unit/test_check_release.py and it passes, but E11-M03-T003 is not done
     - id: E11-M03-T005
       subsystem: packaging
       action: Include the mod payload
@@ -5935,8 +5931,7 @@ epics:
       status: IN_PROGRESS
       commit: 6f73bc0c52135965cd67605b8002618bcf2282d6
       ci_url: null
-      reason: the behaviour is covered by tests/unit/test_check_release.py and it passes, but E11-M03-T004
-        is not done; a task cannot be complete over an unfinished dependency
+      reason: covered by tests/unit/test_check_release.py and it passes, but E11-M03-T004 is not done
     - id: E11-M03-T006
       subsystem: packaging
       action: Include the installer and the launcher
@@ -5952,8 +5947,7 @@ epics:
       status: IN_PROGRESS
       commit: 6f73bc0c52135965cd67605b8002618bcf2282d6
       ci_url: null
-      reason: the behaviour is covered by tests/unit/test_check_release.py and it passes, but E11-M03-T005
-        is not done; a task cannot be complete over an unfinished dependency
+      reason: covered by tests/unit/test_check_release.py and it passes, but E11-M03-T005 is not done
     - id: E11-M03-T007
       subsystem: packaging
       action: Include every document an operator needs, and no dangling link
@@ -5969,8 +5963,8 @@ epics:
       status: IN_PROGRESS
       commit: 6f73bc0c52135965cd67605b8002618bcf2282d6
       ci_url: null
-      reason: the behaviour is covered by tests/contract/test_archive_documents_resolve.py and it passes,
-        but E11-M03-T006 is not done; a task cannot be complete over an unfinished dependency
+      reason: covered by tests/contract/test_archive_documents_resolve.py and it passes, but E11-M03-T006
+        is not done
     - id: E11-M03-T008
       subsystem: packaging
       action: Refuse to publish an archive whose gate did not pass
@@ -6442,8 +6436,7 @@ epics:
       status: IN_PROGRESS
       commit: 6bab61ecce6797287a7dbaf79fb154016da8b92e
       ci_url: null
-      reason: the behaviour is covered by tests/unit/test_actions_engine.py and it passes, but E12-M03-T001
-        is not done; a task cannot be complete over an unfinished dependency
+      reason: covered by tests/unit/test_actions_engine.py and it passes, but E12-M03-T001 is not done
     - id: E12-M03-T003
       subsystem: safety
       action: Recover when the RPC link drops mid-call
@@ -6459,8 +6452,7 @@ epics:
       status: IN_PROGRESS
       commit: fceb4162fdfafd4e63467a4010bcf6ec5405a704
       ci_url: null
-      reason: the behaviour is covered by tests/unit/test_rpc_transport.py and it passes, but E12-M03-T002
-        is not done; a task cannot be complete over an unfinished dependency
+      reason: covered by tests/unit/test_rpc_transport.py and it passes, but E12-M03-T002 is not done
     - id: E12-M03-T004
       subsystem: safety
       action: Recover when the state directory becomes unwritable
@@ -6476,8 +6468,7 @@ epics:
       status: IN_PROGRESS
       commit: 935437ef88eb257a590b2bda930cce85de88632c
       ci_url: null
-      reason: the behaviour is covered by tests/unit/test_cli_supervisor.py and it passes, but E12-M03-T003
-        is not done; a task cannot be complete over an unfinished dependency
+      reason: covered by tests/unit/test_cli_supervisor.py and it passes, but E12-M03-T003 is not done
     - id: E12-M03-T005
       subsystem: safety
       action: Recover from a corrupt journal
@@ -6493,8 +6484,7 @@ epics:
       status: IN_PROGRESS
       commit: 0c9cb9342bf61dfa6fd1fa5454ebb73211ee97c8
       ci_url: null
-      reason: the behaviour is covered by tests/unit/test_ipc_journal.py and it passes, but E12-M03-T004
-        is not done; a task cannot be complete over an unfinished dependency
+      reason: covered by tests/unit/test_ipc_journal.py and it passes, but E12-M03-T004 is not done
     - id: E12-M03-T006
       subsystem: safety
       action: Recover from a corrupt snapshot
@@ -6510,8 +6500,7 @@ epics:
       status: IN_PROGRESS
       commit: ba0de316262a8d8fbe469c7f40140de0ba6ebd08
       ci_url: null
-      reason: the behaviour is covered by tests/unit/test_ipc_snapshot.py and it passes, but E12-M03-T005
-        is not done; a task cannot be complete over an unfinished dependency
+      reason: covered by tests/unit/test_ipc_snapshot.py and it passes, but E12-M03-T005 is not done
     - id: E12-M03-T007
       subsystem: safety
       action: Keep a panic stop working when every other subsystem is down
@@ -6559,8 +6548,8 @@ epics:
       status: IN_PROGRESS
       commit: 6bab61ecce6797287a7dbaf79fb154016da8b92e
       ci_url: null
-      reason: the behaviour is covered by tests/unit/test_actions_engine.py::test_manual_takeover_before_the_send_refuses_rather_than_cancels
-        and it passes, but E12-M03-T008 is not done; a task cannot be complete over an unfinished dependency
+      reason: covered by tests/unit/test_actions_engine.py::test_manual_takeover_before_the_send_refuses_rather_than_cancels
+        and it passes, but E12-M03-T008 is not done
     - id: E12-M03-T010
       subsystem: safety
       action: Cancel in flight when a takeover arrives mid-action
@@ -6576,8 +6565,7 @@ epics:
       status: IN_PROGRESS
       commit: 6bab61ecce6797287a7dbaf79fb154016da8b92e
       ci_url: null
-      reason: the behaviour is covered by tests/unit/test_actions_engine.py and it passes, but E12-M03-T009
-        is not done; a task cannot be complete over an unfinished dependency
+      reason: covered by tests/unit/test_actions_engine.py and it passes, but E12-M03-T009 is not done
     - id: E12-M03-T011
       subsystem: safety
       action: Require a confirmed backup before arming
@@ -6625,8 +6613,7 @@ epics:
       status: IN_PROGRESS
       commit: 6bab61ecce6797287a7dbaf79fb154016da8b92e
       ci_url: null
-      reason: the behaviour is covered by tests/unit/test_actions_engine.py and it passes, but E12-M03-T012
-        is not done; a task cannot be complete over an unfinished dependency
+      reason: covered by tests/unit/test_actions_engine.py and it passes, but E12-M03-T012 is not done
     - id: E12-M03-T014
       subsystem: safety
       action: Document every refusal an operator can hit
@@ -6642,8 +6629,8 @@ epics:
       status: IN_PROGRESS
       commit: b2a4eeae15db366e665fcf116808f66d7bc47aee
       ci_url: null
-      reason: the behaviour is covered by tests/contract/test_documented_commands_parse.py and it passes,
-        but E12-M03-T013 is not done; a task cannot be complete over an unfinished dependency
+      reason: covered by tests/contract/test_documented_commands_parse.py and it passes, but E12-M03-T013
+        is not done
     checks:
     - id: E12-M03-C01
       statement: A panic stop is honoured under every failure here.
@@ -6706,8 +6693,8 @@ epics:
       status: IN_PROGRESS
       commit: cfecfa75c2e2b98a1eac49fd03e39560ffcca729
       ci_url: null
-      reason: the behaviour is covered by tests/contract/test_documented_commands_parse.py and it passes,
-        but E13-M01-T002 is not done; a task cannot be complete over an unfinished dependency
+      reason: covered by tests/contract/test_documented_commands_parse.py and it passes, but E13-M01-T002
+        is not done
     - id: E13-M01-T004
       subsystem: docs
       action: Keep QUICKSTART honest about what works
@@ -6723,8 +6710,8 @@ epics:
       status: IN_PROGRESS
       commit: 6f73bc0c52135965cd67605b8002618bcf2282d6
       ci_url: null
-      reason: the behaviour is covered by tests/contract/test_documented_commands_parse.py and it passes,
-        but E13-M01-T003 is not done; a task cannot be complete over an unfinished dependency
+      reason: covered by tests/contract/test_documented_commands_parse.py and it passes, but E13-M01-T003
+        is not done
     - id: E13-M01-T005
       subsystem: docs
       action: Keep every relative link in a shipped document resolvable

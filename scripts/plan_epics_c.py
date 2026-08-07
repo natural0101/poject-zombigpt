@@ -195,7 +195,7 @@ _E06_CLIENT = [
         8,
         "a static check asserts RemoteCoreServices is assignable to CoreServices",
         f".venv/bin/pytest {T}/test_remote_core_services.py -q",
-        f"{T}/test_remote_core_services.py::test_remote_core_services_satisfies_the_protocol",
+        f"{C}/test_remote_core_round_trip.py::test_remote_core_services_is_a_core_services",
         f"{REM}/client.py",
     ),
 ]
@@ -206,7 +206,7 @@ _E06_ROUTER = [
         8,
         "the router answers exactly the methods in ALL_METHODS, no more and no fewer",
         f".venv/bin/pytest {T}/test_remote_router.py -q",
-        f"{T}/test_remote_router.py::test_the_router_answers_exactly_the_declared_methods",
+        f"{T}/test_remote_router.py::TestTheRoutedSet::test_the_routed_set_equals_the_declared_set",
         f"{REM}/server.py",
     ),
     (
