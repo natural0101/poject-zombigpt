@@ -3,21 +3,21 @@
   "blockers_document": "docs/control/BLOCKERS.md",
   "branch": "main",
   "checks": {
-    "pass": 0,
+    "pass": 48,
     "total": 54
   },
   "counts": {
     "BLOCKED": 0,
     "FAIL": 0,
-    "IN_PROGRESS": 3,
+    "IN_PROGRESS": 0,
     "NOT_STARTED": 80,
-    "PASS": 397
+    "PASS": 400
   },
-  "head_commit": "7d4a110d2019e2fbadc2ebb064985cc26c5f822a",
+  "head_commit": "be28770b8b1d04b29b47a00e818b8a2d682acc6f",
   "linux_ci": {
-    "commit": "40d528ca2652f3c371a730e76e0f0c2c04d08c4b",
-    "describes_current_head": false,
-    "status": "STALE:GREEN"
+    "commit": "be28770b8b1d04b29b47a00e818b8a2d682acc6f",
+    "describes_current_head": true,
+    "status": "GREEN"
   },
   "live_scenarios": {
     "failed": 0,
@@ -46,8 +46,8 @@
       "total_weight": 264
     },
     "RC_PACKAGING": {
-      "pass_weight": 181,
-      "percent": 89.6,
+      "pass_weight": 202,
+      "percent": 100.0,
       "total_weight": 202
     },
     "VOICE_OPERABILITY": {
@@ -61,22 +61,22 @@
       "total_weight": 290
     }
   },
-  "pass_weight": 2284,
+  "pass_weight": 2305,
   "plan_of_record": "docs/control/MASTER_PLAN.yaml",
   "release_candidate": {
-    "archive_sha256": "d034013923106e5ff6fef1d6c6363e29a4c852fa10eca1f7e46c22c4d1f71f64",
+    "archive_sha256": "3640e38ce880a033dc5485133568e9e43cd9d863dee81d2cfa6e5b916a6e91bc",
     "live_game": "NOT_RUN",
-    "source_commit": "40d528ca2652f3c371a730e76e0f0c2c04d08c4b",
-    "status": "STALE",
-    "workflow_run": "https://github.com/natural0101/poject-zombigpt/actions/runs/31223693322"
+    "source_commit": "be28770b8b1d04b29b47a00e818b8a2d682acc6f",
+    "status": "CURRENT",
+    "workflow_run": "https://github.com/natural0101/poject-zombigpt/actions/runs/31225901032"
   },
   "repository": "https://github.com/natural0101/poject-zombigpt",
   "total_tasks": 480,
   "total_weight": 3104,
-  "weighted_progress_percent": 73.58,
+  "weighted_progress_percent": 74.26,
   "windows_ci": {
-    "commit": "40d528ca2652f3c371a730e76e0f0c2c04d08c4b",
-    "describes_current_head": false,
-    "status": "STALE:GREEN"
+    "commit": "be28770b8b1d04b29b47a00e818b8a2d682acc6f",
+    "describes_current_head": true,
+    "status": "GREEN"
   }
 }

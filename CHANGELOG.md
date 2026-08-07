@@ -10,7 +10,26 @@ drift out of sync with `pz_agent_core.version`.
 
 ## [Unreleased]
 
+### Changed
+
+- **The remote stage is complete: every remote-owned task and 48 of 54
+  integration checks PASS; thirteen of fifteen epics close.** Each runnable
+  check's command was executed and its outcome recorded with the observation
+  it rests on; the CI-observed checks cite the green runs (31223693322,
+  31225901032 — the latter answering both executables with PATH reduced to
+  the system directories, so "the bundle needs no Python" is an observation).
+  The six open checks and the two open epics are E14 and E15 — the live-game
+  claims only a machine with the game can establish, and the plan's own skip
+  message now reads "every remote task is closed; there is no next one to
+  check". RB-003 superseded accordingly.
+
 ### Fixed
+
+- **A plan regeneration wiped every check's evidence.** The generator carried
+  a check's status but not its evidence, so the first rebuild after the
+  checks were established left 48 PASS checks evidence-free and the gate
+  refused the plan. Status and evidence now travel together, pinned by a
+  regression test over the real plan.
 
 - **R-007: the voice intent resolver existed twice, and the tested copy was
   not the shipped one.** `pz_agent_voice/intents.py` — 600+ lines production

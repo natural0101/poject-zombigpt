@@ -57,7 +57,13 @@ def _existing() -> dict[str, dict[str, Any]]:
             for task in milestone.get("tasks", []):
                 recorded[task["id"]] = {key: task.get(key) for key in _CARRIED}
             for check in milestone.get("checks", []):
-                recorded[check["id"]] = {"status": check.get("status")}
+                # Evidence is decided by a run, exactly like status — the first
+                # regeneration after the checks were established wiped it, and
+                # the gate then refused every PASS check as evidence-free.
+                recorded[check["id"]] = {
+                    "status": check.get("status"),
+                    "evidence": check.get("evidence"),
+                }
     return recorded
 
 
@@ -72,9 +78,10 @@ def build() -> dict[str, Any]:
                     if value is not None:
                         task[key] = value
             for check in milestone["checks"]:
-                carried = (recorded.get(check["id"]) or {}).get("status")
-                if carried is not None:
-                    check["status"] = carried
+                for key in ("status", "evidence"):
+                    carried = (recorded.get(check["id"]) or {}).get(key)
+                    if carried:
+                        check[key] = carried
         epics.append(as_dict)
     return {
         "format": "pz-agent-master-plan/1",

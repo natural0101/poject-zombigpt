@@ -48,7 +48,7 @@ SCRIPTS: Final = REPO_ROOT / "scripts"
 if str(REPO_ROOT) not in sys.path:  # pragma: no cover - import plumbing
     sys.path.insert(0, str(REPO_ROOT))
 
-from scripts import check_master_plan, master_report  # noqa: E402
+from scripts import build_master_plan, check_master_plan, master_report  # noqa: E402
 from scripts.plan_model import (  # noqa: E402  # noqa: E402
     BANDS,
     METRICS,
@@ -360,6 +360,24 @@ class TestTheGateAsACommand:
             timeout=300,
         )
         assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
+
+    def test_a_regeneration_keeps_the_checks_evidence(self) -> None:
+        """Check evidence is decided by a run, and a rebuild must not unsay it.
+
+        The generator carried task statuses but only a check's *status*: the
+        first regeneration after the 48 checks were established wiped every
+        check's evidence, and the gate then refused each PASS check as
+        evidence-free. Status and evidence travel together or not at all.
+        """
+        rebuilt = build_master_plan.build()
+        stripped = [
+            check["id"]
+            for epic in rebuilt["epics"]
+            for milestone in epic["milestones"]
+            for check in milestone["checks"]
+            if check["status"] == "PASS" and not check.get("evidence")
+        ]
+        assert stripped == [], "these PASS checks lost their evidence in regeneration"
 
     def test_the_plan_has_not_drifted_from_the_definitions_that_generate_it(self) -> None:
         """A hand-edited plan is a plan the generator will silently overwrite."""

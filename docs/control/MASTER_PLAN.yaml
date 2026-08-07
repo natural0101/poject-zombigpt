@@ -182,8 +182,9 @@ epics:
       statement: Every recorded SHA resolves in this repository, so the baseline describes a state that
         existed rather than one that was typed.
       command: git cat-file -e <each recorded SHA>
-      status: NOT_STARTED
-      evidence: ''
+      status: PASS
+      evidence: every SHA recorded in docs/control/evidence/step-01-10/branches.txt resolves via git cat-file
+        -e at be28770b
   - id: E01-M02
     title: Defect inventory
     tasks:
@@ -342,8 +343,9 @@ epics:
       statement: 'The inventory accounts for every Windows failure in the baseline run: the count of failures
         mapped equals the count observed.'
       command: compare the grouped causes against the baseline failure list
-      status: NOT_STARTED
-      evidence: ''
+      status: PASS
+      evidence: the D-002 cause table sums 10+3+1+3+2+3+2 = 24, the baseline evidence lists 24 failing
+        tests, and the run reported 24 failed — all three counts agree
   - id: E01-M03
     title: Control instrumentation
     tasks:
@@ -463,13 +465,15 @@ epics:
       statement: 'The weighted percent cannot be raised by adding tasks: inserting a NOT_STARTED task
         lowers it, and inserting a PASS one raises it by exactly its weight share.'
       command: .venv/bin/pytest tests/unit/test_master_plan.py -k weight -q
-      status: NOT_STARTED
-      evidence: ''
+      status: PASS
+      evidence: 'ran `.venv/bin/pytest tests/unit/test_master_plan.py -k weight -q` at be28770b: exit
+        0, ............                                                '
     - id: E01-M03-C02
       statement: No metric can be reported above zero while every epic behind it is untouched.
       command: .venv/bin/pytest tests/unit/test_master_plan.py -k metric -q
-      status: NOT_STARTED
-      evidence: ''
+      status: PASS
+      evidence: 'ran `.venv/bin/pytest tests/unit/test_master_plan.py -k metric -q` at be28770b: exit
+        0, ..                                                          '
 - id: E02
   title: Windows portability
   subsystem: platform
@@ -631,8 +635,8 @@ epics:
       statement: A manifest written on one platform and read on the other compares equal, end to end through
         a real install.
       command: .venv/bin/pytest tests/unit/test_installer_windows.py -q
-      status: NOT_STARTED
-      evidence: ''
+      status: PASS
+      evidence: 'ran `.venv/bin/pytest tests/unit/test_installer_windows.py -q` at be28770b: exit 0, ................................................            '
   - id: E02-M02
     title: Redaction on Windows shapes
     tasks:
@@ -820,8 +824,9 @@ epics:
       statement: A support bundle built from a Cyrillic Windows profile contains no account name, no absolute
         path and no credential, and verify_bundle agrees.
       command: .venv/bin/pytest tests/unit/test_diagnostics_bundle.py -q
-      status: NOT_STARTED
-      evidence: ''
+      status: PASS
+      evidence: 'ran `.venv/bin/pytest tests/unit/test_diagnostics_bundle.py -q` at be28770b: exit 0,
+        ..................                                          '
   - id: E02-M03
     title: Process and permission primitives
     tasks:
@@ -973,8 +978,8 @@ epics:
     - id: E02-M03-C01
       statement: A child process is started, observed alive, and stopped, using no POSIX-only call.
       command: .venv/bin/pytest tests/unit/test_cli_supervisor.py -q
-      status: NOT_STARTED
-      evidence: ''
+      status: PASS
+      evidence: 'ran `.venv/bin/pytest tests/unit/test_cli_supervisor.py -q` at be28770b: exit 0, .........................................                   '
   - id: E02-M04
     title: Text mode and newline translation
     tasks:
@@ -1091,8 +1096,9 @@ epics:
       statement: A digest taken before a write equals the digest of the bytes on disk, on a platform that
         translates newlines.
       command: pytest tests/contract/test_evidence_bytes_are_portable.py -q
-      status: NOT_STARTED
-      evidence: ''
+      status: PASS
+      evidence: 'ran `.venv/bin/pytest tests/contract/test_evidence_bytes_are_portable.py -q` at be28770b:
+        exit 0, ...........                                                 '
   - id: E02-M05
     title: The Windows suite green
     tasks:
@@ -1251,8 +1257,10 @@ epics:
       statement: 'Zero Windows failures was reached by fixing causes, not by removing assertions: the
         test count at HEAD exceeds the count at the branch point.'
       command: compare collected test counts between the two runs
-      status: NOT_STARTED
-      evidence: ''
+      status: PASS
+      evidence: collected tests grew from 3679 at the 24-failure baseline (run 31156087690) to 6581 at
+        the green runs; zero was reached while the suite doubled, and check_forbidden.py refuses removed-assertion
+        shortcuts structurally
 - id: E03
   title: Evidence and hashing
   subsystem: evidence
@@ -1410,8 +1418,9 @@ epics:
     - id: E03-M01-C01
       statement: Two machines encoding one document produce identical bytes.
       command: .venv/bin/pytest tests/contract/test_evidence_bytes_are_portable.py -q
-      status: NOT_STARTED
-      evidence: ''
+      status: PASS
+      evidence: 'ran `.venv/bin/pytest tests/contract/test_evidence_bytes_are_portable.py -q` at be28770b:
+        exit 0, ...........                                                 '
   - id: E03-M02
     title: Atomic writes
     tasks:
@@ -1526,8 +1535,9 @@ epics:
     - id: E03-M02-C01
       statement: No reader can observe a half-written evidence document.
       command: .venv/bin/pytest tests/contract/test_evidence_bytes_are_portable.py -q
-      status: NOT_STARTED
-      evidence: ''
+      status: PASS
+      evidence: 'ran `.venv/bin/pytest tests/contract/test_evidence_bytes_are_portable.py -q` at be28770b:
+        exit 0, ...........                                                 '
   - id: E03-M03
     title: Digest over the bytes on disk
     tasks:
@@ -1679,8 +1689,9 @@ epics:
       statement: A digest recorded at write time equals one taken later by a different process on a platform
         that translates newlines.
       command: read the Windows workflow run for the evidence suites
-      status: NOT_STARTED
-      evidence: ''
+      status: PASS
+      evidence: the evidence suites ran green on windows-latest in runs 31214158408 and 31223693322 —
+        digests taken at write time verified by a different process on the platform that translates newlines
   - id: E03-M04
     title: Manifest and verification
     tasks:
@@ -1832,8 +1843,8 @@ epics:
       statement: The release gate refuses a tampered evidence tree, and refuses one where nothing was
         ever run.
       command: .venv/bin/pytest tests/unit/test_check_release.py -q
-      status: NOT_STARTED
-      evidence: ''
+      status: PASS
+      evidence: 'ran `.venv/bin/pytest tests/unit/test_check_release.py -q` at be28770b: exit 0, ...................                                         '
 - id: E04
   title: Installer and BAT
   subsystem: installer
@@ -1992,8 +2003,8 @@ epics:
     - id: E04-M01-C01
       statement: The rendered launcher is valid for cmd.exe under every profile shape tested.
       command: .venv/bin/pytest tests/unit/test_installer_windows.py -q
-      status: NOT_STARTED
-      evidence: ''
+      status: PASS
+      evidence: 'ran `.venv/bin/pytest tests/unit/test_installer_windows.py -q` at be28770b: exit 0, ................................................            '
   - id: E04-M02
     title: Install
     tasks:
@@ -2144,8 +2155,8 @@ epics:
     - id: E04-M02-C01
       statement: An install that refuses writes nothing at all.
       command: .venv/bin/pytest tests/unit/test_installer_windows.py -q
-      status: NOT_STARTED
-      evidence: ''
+      status: PASS
+      evidence: 'ran `.venv/bin/pytest tests/unit/test_installer_windows.py -q` at be28770b: exit 0, ................................................            '
   - id: E04-M03
     title: Uninstall
     tasks:
@@ -2296,8 +2307,8 @@ epics:
     - id: E04-M03-C01
       statement: An uninstall removes only what the manifest says it placed.
       command: .venv/bin/pytest tests/unit/test_installer_windows.py -q
-      status: NOT_STARTED
-      evidence: ''
+      status: PASS
+      evidence: 'ran `.venv/bin/pytest tests/unit/test_installer_windows.py -q` at be28770b: exit 0, ................................................            '
   - id: E04-M04
     title: Round trip on Windows
     tasks:
@@ -2412,8 +2423,9 @@ epics:
     - id: E04-M04-C01
       statement: The round trip is observed on windows-latest, not inferred.
       command: read the windows workflow run
-      status: NOT_STARTED
-      evidence: ''
+      status: PASS
+      evidence: test_installer_windows.py ran green inside the windows-latest Tests step of run 31223693322
+        — the round trip observed, not inferred
 - id: E05
   title: Local Core RPC
   subsystem: rpc
@@ -2540,8 +2552,9 @@ epics:
     - id: E05-M01-C01
       statement: The schemas and the encoder agree in both directions.
       command: pytest tests/contract/test_core_rpc_schema_conformance.py -q
-      status: NOT_STARTED
-      evidence: ''
+      status: PASS
+      evidence: 'ran `.venv/bin/pytest tests/contract/test_core_rpc_schema_conformance.py -q` at be28770b:
+        exit 0, ......................                                      '
   - id: E05-M02
     title: The envelope
     tasks:
@@ -2764,8 +2777,10 @@ epics:
     - id: E05-M02-C01
       statement: No code path in the rpc package unpickles.
       command: grep -rn 'pickle\|\.recv()\|\.send(' packages/pz_agent_core/src/pz_agent_core/rpc
-      status: NOT_STARTED
-      evidence: ''
+      status: PASS
+      evidence: every grep match at be28770b is the docstring stating the ban; no call to pickle, .send(
+        or .recv() exists in the rpc package, and check_forbidden.py bans pickle.load/loads structurally
+        in CI
   - id: E05-M03
     title: The token
     tasks:
@@ -2916,8 +2931,9 @@ epics:
     - id: E05-M03-C01
       statement: The token appears in no log, no bundle and no exception.
       command: .venv/bin/pytest tests/unit/test_rpc_token_and_descriptor.py -q
-      status: NOT_STARTED
-      evidence: ''
+      status: PASS
+      evidence: 'ran `.venv/bin/pytest tests/unit/test_rpc_token_and_descriptor.py -q` at be28770b: exit
+        0, ......................................                      '
   - id: E05-M04
     title: The descriptor
     tasks:
@@ -3068,8 +3084,9 @@ epics:
     - id: E05-M04-C01
       statement: A stale descriptor never reaches another process.
       command: .venv/bin/pytest tests/unit/test_rpc_token_and_descriptor.py -q
-      status: NOT_STARTED
-      evidence: ''
+      status: PASS
+      evidence: 'ran `.venv/bin/pytest tests/unit/test_rpc_token_and_descriptor.py -q` at be28770b: exit
+        0, ......................................                      '
   - id: E05-M05
     title: The transport
     tasks:
@@ -3256,8 +3273,9 @@ epics:
     - id: E05-M05-C01
       statement: The named pipe is bound for real on windows-latest.
       command: read the windows workflow run
-      status: NOT_STARTED
-      evidence: ''
+      status: PASS
+      evidence: the RPC transport suite (named-pipe path included) ran green on windows-latest in run
+        31223693322
   - id: E05-M06
     title: The server in the sidecar
     tasks:
@@ -3372,8 +3390,9 @@ epics:
     - id: E05-M06-C01
       statement: Starting and stopping the sidecar leaves no descriptor and no token behind.
       command: .venv/bin/pytest tests/unit/test_rpc_sidecar_lifecycle.py -q
-      status: NOT_STARTED
-      evidence: ''
+      status: PASS
+      evidence: 'ran `.venv/bin/pytest tests/unit/test_rpc_sidecar_lifecycle.py -q` at be28770b: exit
+        0, ...................                                         '
 - id: E06
   title: RemoteCoreServices
   subsystem: rpc-client
@@ -3567,8 +3586,8 @@ epics:
     - id: E06-M01-C01
       statement: Every codec is a matched pair; nothing encodes that cannot decode.
       command: .venv/bin/pytest tests/unit -k rpc_codec -q
-      status: NOT_STARTED
-      evidence: ''
+      status: PASS
+      evidence: 'ran `.venv/bin/pytest tests/unit -k rpc_codec -q` at be28770b: exit 0, ........................                                    '
   - id: E06-M02
     title: The client ports
     tasks:
@@ -3792,8 +3811,9 @@ epics:
     - id: E06-M02-C01
       statement: RemoteCoreServices is structurally a CoreServices, checked by mypy.
       command: .venv/bin/mypy packages/pz_agent_mcp/src
-      status: NOT_STARTED
-      evidence: ''
+      status: PASS
+      evidence: 'ran `.venv/bin/mypy packages/pz_agent_mcp/src` at be28770b: exit 0, Success: no issues
+        found in 24 source files'
   - id: E06-M03
     title: The router
     tasks:
@@ -3944,8 +3964,8 @@ epics:
     - id: E06-M03-C01
       statement: Client and router implement the same method set, proven by a test over both.
       command: .venv/bin/pytest tests/unit/test_remote_router.py -q
-      status: NOT_STARTED
-      evidence: ''
+      status: PASS
+      evidence: 'ran `.venv/bin/pytest tests/unit/test_remote_router.py -q` at be28770b: exit 0, ..................................                          '
   - id: E06-M04
     title: Wiring into the sidecar
     tasks:
@@ -4042,8 +4062,9 @@ epics:
     - id: E06-M04-C01
       statement: No port in the shipped wiring is a stub or an Unrouted placeholder.
       command: grep -rn 'Unrouted\|NotImplementedError' packages/*/src
-      status: NOT_STARTED
-      evidence: ''
+      status: PASS
+      evidence: 'the grep exits 1 (zero matches) at be28770b: no Unrouted port and no NotImplementedError
+        anywhere under packages/*/src'
 - id: E07
   title: MCP transport and end to end
   subsystem: mcp
@@ -4202,8 +4223,8 @@ epics:
     - id: E07-M01-C01
       statement: No invocation of pz-agent-mcp refuses by construction any more.
       command: .venv/bin/pytest tests/unit/test_mcp_entry.py -q
-      status: NOT_STARTED
-      evidence: ''
+      status: PASS
+      evidence: 'ran `.venv/bin/pytest tests/unit/test_mcp_entry.py -q` at be28770b: exit 0, ............................................................'
   - id: E07-M02
     title: Discovery
     tasks:
@@ -4318,8 +4339,8 @@ epics:
     - id: E07-M02-C01
       statement: Every discovery failure has its own message and remedy.
       command: .venv/bin/pytest tests/unit/test_mcp_entry.py -q
-      status: NOT_STARTED
-      evidence: ''
+      status: PASS
+      evidence: 'ran `.venv/bin/pytest tests/unit/test_mcp_entry.py -q` at be28770b: exit 0, ............................................................'
   - id: E07-M03
     title: Launching a real subprocess
     tasks:
@@ -4452,8 +4473,9 @@ epics:
     - id: E07-M03-C01
       statement: stdout carries JSON-RPC and nothing else, on both platforms.
       command: read the windows workflow run
-      status: NOT_STARTED
-      evidence: ''
+      status: PASS
+      evidence: test_mcp_subprocess_e2e.py ran green on both platforms (Linux CI and windows-latest run
+        31223693322); the stdout-purity tests are part of that file
   - id: E07-M04
     title: The protocol end to end
     tasks:
@@ -4713,8 +4735,9 @@ epics:
       statement: A tool call travels client -> MCP -> RPC -> core and back, and a reported success carries
         the core's evidence.
       command: .venv/bin/pytest tests/contract/test_mcp_subprocess_e2e.py -q
-      status: NOT_STARTED
-      evidence: ''
+      status: PASS
+      evidence: 'ran `.venv/bin/pytest tests/contract/test_mcp_subprocess_e2e.py -q` at be28770b: exit
+        0, ............................                                '
 - id: E08
   title: Typed goal channel
   subsystem: goals
@@ -4836,8 +4859,8 @@ epics:
     - id: E08-M01-C01
       statement: No goal can carry free text into the core.
       command: .venv/bin/pytest tests/unit/test_goal_channel.py -q
-      status: NOT_STARTED
-      evidence: ''
+      status: PASS
+      evidence: 'ran `.venv/bin/pytest tests/unit/test_goal_channel.py -q` at be28770b: exit 0, ..................................................          '
   - id: E08-M02
     title: The bounded queue
     tasks:
@@ -4988,8 +5011,8 @@ epics:
     - id: E08-M02-C01
       statement: Disarm and panic stop both leave no goal in flight.
       command: .venv/bin/pytest tests/unit/test_goal_channel.py -q
-      status: NOT_STARTED
-      evidence: ''
+      status: PASS
+      evidence: 'ran `.venv/bin/pytest tests/unit/test_goal_channel.py -q` at be28770b: exit 0, ..................................................          '
   - id: E08-M03
     title: Goals over RPC and MCP
     tasks:
@@ -5194,8 +5217,9 @@ epics:
     - id: E08-M03-C01
       statement: A goal submitted by a client is the plan the core runs.
       command: .venv/bin/pytest tests/contract/test_goal_reaches_the_planner.py -q
-      status: NOT_STARTED
-      evidence: ''
+      status: PASS
+      evidence: 'ran `.venv/bin/pytest tests/contract/test_goal_reaches_the_planner.py -q` at be28770b:
+        exit 0, ..............                                              '
 - id: E09
   title: Voice goal routing
   subsystem: voice
@@ -5299,8 +5323,8 @@ epics:
     - id: E09-M01-C01
       statement: A stop is honoured with the RPC link down.
       command: .venv/bin/pytest tests/unit/test_voice_plan_port.py -q
-      status: NOT_STARTED
-      evidence: ''
+      status: PASS
+      evidence: 'ran `.venv/bin/pytest tests/unit/test_voice_plan_port.py -q` at be28770b: exit 0, ....................................                        '
   - id: E09-M02
     title: Intents to goals
     tasks:
@@ -5559,8 +5583,8 @@ epics:
     - id: E09-M02-C01
       statement: No transcript text leaves the voice process.
       command: .venv/bin/pytest tests/unit/test_voice_privacy.py -q
-      status: NOT_STARTED
-      evidence: ''
+      status: PASS
+      evidence: 'ran `.venv/bin/pytest tests/unit/test_voice_privacy.py -q` at be28770b: exit 0, ..........................................................  '
   - id: E09-M03
     title: Voice end to end
     tasks:
@@ -5675,8 +5699,9 @@ epics:
     - id: E09-M03-C01
       statement: A spoken goal is one the core actually ran.
       command: .venv/bin/pytest tests/contract/test_voice_goal_e2e.py -q
-      status: NOT_STARTED
-      evidence: ''
+      status: PASS
+      evidence: 'ran `.venv/bin/pytest tests/contract/test_voice_goal_e2e.py -q` at be28770b: exit 0,
+        ...............                                             '
 - id: E10
   title: TeamON bridge
   subsystem: voice-bridge
@@ -5870,8 +5895,8 @@ epics:
     - id: E10-M01-C01
       statement: Nothing about the bridge can block a panic stop.
       command: .venv/bin/pytest tests/unit/test_teamon_bridge.py -q
-      status: NOT_STARTED
-      evidence: ''
+      status: PASS
+      evidence: 'ran `.venv/bin/pytest tests/unit/test_teamon_bridge.py -q` at be28770b: exit 0, .............................                               '
   - id: E10-M02
     title: The bridge protocol
     tasks:
@@ -6058,8 +6083,9 @@ epics:
     - id: E10-M02-C01
       statement: The documented contract and the implementation agree.
       command: .venv/bin/pytest tests/contract/test_teamon_schema_conformance.py -q
-      status: NOT_STARTED
-      evidence: ''
+      status: PASS
+      evidence: 'ran `.venv/bin/pytest tests/contract/test_teamon_schema_conformance.py -q` at be28770b:
+        exit 0, ..........................                                  '
   - id: E10-M03
     title: Bridge end to end
     tasks:
@@ -6247,8 +6273,9 @@ epics:
       statement: The bridge is exercised by a real subprocess, and the plan records that this is a contract
         test rather than a live TeamON integration.
       command: .venv/bin/pytest tests/contract/test_teamon_bridge_e2e.py -q
-      status: NOT_STARTED
-      evidence: ''
+      status: PASS
+      evidence: 'ran `.venv/bin/pytest tests/contract/test_teamon_bridge_e2e.py -q` at be28770b: exit
+        0, ........................                                    '
 - id: E11
   title: PyInstaller and the Windows RC
   subsystem: packaging
@@ -6373,8 +6400,9 @@ epics:
     - id: E11-M01-C01
       statement: Submodule collection imports nothing, proven against a package that exits on import.
       command: .venv/bin/pytest tests/unit/test_packaging_specutil.py -q
-      status: NOT_STARTED
-      evidence: ''
+      status: PASS
+      evidence: 'ran `.venv/bin/pytest tests/unit/test_packaging_specutil.py -q` at be28770b: exit 0,
+        .......                                                     '
   - id: E11-M02
     title: Building and running the executables
     tasks:
@@ -6481,13 +6509,13 @@ epics:
       verify_command: read the windows workflow run
       regression_test: ''
       evidence: docs/control/evidence/step-30-40/windows-suite.txt
-      status: IN_PROGRESS
-      implementation_commit: null
-      verification_commit: null
-      commit: null
-      ci_url: null
-      reason: the answer-check step now runs both executables with PATH reduced to the system directories;
-        the claim becomes observable on the next windows-latest run
+      status: PASS
+      implementation_commit: 7d4a110d2019e2fbadc2ebb064985cc26c5f822a
+      verification_commit: be28770b8b1d04b29b47a00e818b8a2d682acc6f
+      commit: 7d4a110d2019e2fbadc2ebb064985cc26c5f822a
+      ci_url: https://github.com/natural0101/poject-zombigpt/actions/runs/31225901032
+      reason: 'run 31225901032: both executables answered with PATH reduced to C:\Windows\system32;C:\Windows
+        — no Python reachable, the bundle is self-contained'
     - id: E11-M02-T007
       subsystem: packaging
       action: Keep the console attached so a client can read stdio
@@ -6500,13 +6528,13 @@ epics:
       verify_command: read the specs
       regression_test: ''
       evidence: packaging/windows/pz-agent-mcp.spec
-      status: IN_PROGRESS
-      implementation_commit: 15296e507958501b7c2737c4676813c30d6a9d15
-      verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
-      commit: 15296e507958501b7c2737c4676813c30d6a9d15
-      ci_url: https://github.com/natural0101/poject-zombigpt/actions/runs/31214158408
-      reason: the fact holds in the specs, but the milestone orders it after E11-M02-T006, whose proof
-        (the PATH-stripped answer check) lands with the next windows run
+      status: PASS
+      implementation_commit: 7d4a110d2019e2fbadc2ebb064985cc26c5f822a
+      verification_commit: be28770b8b1d04b29b47a00e818b8a2d682acc6f
+      commit: 7d4a110d2019e2fbadc2ebb064985cc26c5f822a
+      ci_url: https://github.com/natural0101/poject-zombigpt/actions/runs/31225901032
+      reason: console=True in both specs; run 31225901032 read --describe over stdout with the reduced
+        PATH
     - id: E11-M02-T008
       subsystem: packaging
       action: Leave both executables unpacked and unsigned rather than UPX-compressed
@@ -6519,19 +6547,20 @@ epics:
       verify_command: read the specs
       regression_test: ''
       evidence: packaging/windows/pz-agent.spec
-      status: IN_PROGRESS
-      implementation_commit: 63cca87f42d5c0851425f055a2e9a8fcb09e3757
-      verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
-      commit: 63cca87f42d5c0851425f055a2e9a8fcb09e3757
-      ci_url: https://github.com/natural0101/poject-zombigpt/actions/runs/31214158408
-      reason: the fact holds in the specs, but the milestone orders it after E11-M02-T006, whose proof
-        (the PATH-stripped answer check) lands with the next windows run
+      status: PASS
+      implementation_commit: 7d4a110d2019e2fbadc2ebb064985cc26c5f822a
+      verification_commit: be28770b8b1d04b29b47a00e818b8a2d682acc6f
+      commit: 7d4a110d2019e2fbadc2ebb064985cc26c5f822a
+      ci_url: https://github.com/natural0101/poject-zombigpt/actions/runs/31225901032
+      reason: upx=False in both specs with the rationale inline; no signing step exists; confirmed unchanged
+        through run 31225901032
     checks:
     - id: E11-M02-C01
       statement: Both executables run on a machine with no project Python.
       command: read the windows workflow run
-      status: NOT_STARTED
-      evidence: ''
+      status: PASS
+      evidence: 'run 31225901032: both executables answered with PATH reduced to the system directories
+        — no project Python reachable'
   - id: E11-M03
     title: The archive
     tasks:
@@ -6703,8 +6732,9 @@ epics:
     - id: E11-M03-C01
       statement: Every archive member is verified independently of the index.
       command: .venv/bin/python scripts/check_release.py
-      status: NOT_STARTED
-      evidence: ''
+      status: PASS
+      evidence: scripts/check_release.py --rc runs as the Release gate step of every windows run; green
+        in 31223693322 and 31225901032, verifying each member digest independently of the index
   - id: E11-M04
     title: The release gate
     tasks:
@@ -6839,8 +6869,9 @@ epics:
     - id: E11-M04-C01
       statement: No artefact can be published from a red gate or a red Windows run.
       command: read .github/workflows/windows.yml
-      status: NOT_STARTED
-      evidence: ''
+      status: PASS
+      evidence: 'in .github/workflows/windows.yml the Release gate step precedes the upload and the upload
+        sets if-no-files-found: error; a red gate or red suite fails the job before any artefact exists'
 - id: E12
   title: Security and failure recovery
   subsystem: safety
@@ -6999,8 +7030,9 @@ epics:
     - id: E12-M01-C01
       statement: A bundle built from a real session contains no credential, path or account name.
       command: .venv/bin/pytest tests/unit/test_diagnostics_bundle.py -q
-      status: NOT_STARTED
-      evidence: ''
+      status: PASS
+      evidence: 'ran `.venv/bin/pytest tests/unit/test_diagnostics_bundle.py -q` at be28770b: exit 0,
+        ..................                                          '
   - id: E12-M02
     title: The trust boundary
     tasks:
@@ -7157,8 +7189,9 @@ epics:
     - id: E12-M02-C01
       statement: Nothing in the shipped tree reads memory, injects code or deserialises executables.
       command: grep -rn 'pickle\|CreateRemoteThread\|ReadProcessMemory' packages installer
-      status: NOT_STARTED
-      evidence: ''
+      status: PASS
+      evidence: every grep match at be28770b is prose stating the ban; BANNED_PROCESS_TAMPERING and the
+        pickle rules in scripts/check_forbidden.py refuse the primitives as identifiers on every push
   - id: E12-M03
     title: Failure recovery
     tasks:
@@ -7417,8 +7450,8 @@ epics:
     - id: E12-M03-C01
       statement: A panic stop is honoured under every failure here.
       command: .venv/bin/pytest tests/unit/test_safety_stop.py -q
-      status: NOT_STARTED
-      evidence: ''
+      status: PASS
+      evidence: 'ran `.venv/bin/pytest tests/unit/test_safety_stop.py -q` at be28770b: exit 0, ...........................................                 '
 - id: E13
   title: Documentation and handoff
   subsystem: docs
@@ -7811,8 +7844,9 @@ epics:
     - id: E13-M01-C01
       statement: No document asserts something the code does not do.
       command: .venv/bin/pytest tests/contract/test_documented_commands_parse.py -q
-      status: NOT_STARTED
-      evidence: ''
+      status: PASS
+      evidence: 'ran `.venv/bin/pytest tests/contract/test_documented_commands_parse.py -q` at be28770b:
+        exit 0, ....................................                        '
 - id: E14
   title: Project Zomboid live validation
   subsystem: live

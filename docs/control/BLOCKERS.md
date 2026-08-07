@@ -226,10 +226,15 @@ source commit makes it STALE again until the workflow rebuilds it.
 Not while LIVE GAME VALIDATION is at zero. A version number is a claim about a
 program that runs; nothing here has watched this one run.
 
-### RB-003 — 0 of 54 integration checks pass
+### RB-003 — 0 of 54 integration checks pass — **SUPERSEDED: 48 of 54 pass**
 
 An epic does not close on its task count. Every `CHECK` in the plan — the
-statements about a milestone that no single task establishes — is open.
+statements about a milestone that no single task establishes — was open when
+this was written. At `be28770` each runnable check's command was executed and
+its outcome recorded in the plan: 48 pass. The six still open are E14's and
+E15's — the live-game claims, which only a machine with the game can
+establish. Thirteen of fifteen epics close under `epic_closed`'s five
+conditions; E14 and E15 stay open, and with them RB-002.
 
 ---
 
