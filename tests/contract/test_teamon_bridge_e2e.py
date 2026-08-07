@@ -338,6 +338,30 @@ for msg in lines():
 """
 )
 
+#: Answers the first handshake correctly, dies on the first goal, and comes back
+#: from the future: the *relaunch* declares a MAJOR this build cannot read. That
+#: is the ordinary shape of an upgrade landing on disk between a crash and the
+#: restart that follows it, and it is the one path on which `ProtocolMismatch`
+#: is raised by a call that is documented never to fail.
+REPLACED_BY_A_FUTURE_BUILD = (
+    PREAMBLE
+    + """
+FLAG = BEAT + ".launched"
+first = not os.path.exists(FLAG)
+open(FLAG, "wb").close()
+for msg in lines():
+    kind = msg.get("type")
+    if kind == "hello":
+        if first:
+            send(type="ready")
+        else:
+            send(type="ready", v="9.0")
+            time.sleep(120)
+    elif kind == "goal":
+        os._exit(3)
+"""
+)
+
 #: Reads a goal and reports back *every byte of the message it received*, as a
 #: transcript. That is what makes "the goal the core got is the goal that was
 #: asked for" a claim about the wire rather than about this process's memory,
@@ -941,6 +965,71 @@ async def test_the_bridge_program_is_reported_before_anything_waits_on_it(
     assert SECRET not in missing.detail
 
 
+@pytest.mark.asyncio
+async def test_a_stop_word_survives_a_replacement_that_speaks_another_protocol(
+    bridges: Bridges,
+) -> None:
+    """`interrupt` promises never to fail, and this is where it used to.
+
+    The restart is inside `send`, the handshake is inside the restart, and a
+    handshake can raise `ProtocolMismatch` — which is a `ValueError` and not a
+    `BridgeError`, so the `except BridgeError` that made this call safe did not
+    catch it. A user saying «стоп» to a bridge that crashed and came back as a
+    newer build got a traceback instead of silence.
+
+    Nothing else is polling this bridge, so the restart is driven by the
+    interrupt itself and the path is the one under test rather than a race.
+    """
+    recorder = Recorder()
+    client = bridges.client(REPLACED_BY_A_FUTURE_BUILD, listener=recorder)
+    await asyncio.wait_for(client.start(), PATIENCE)
+    bridges.note_pid(client.bridge)
+
+    with pytest.raises(BridgeUnavailable):
+        await asyncio.wait_for(
+            client.submit_goal(request_id="teamon-1", goal=VoiceGoal.EAT), PATIENCE
+        )
+
+    started = time.monotonic()
+    await asyncio.wait_for(client.interrupt("teamon-1"), PATIENCE)
+    assert time.monotonic() - started < 5.0
+    bridges.note_pid(client.bridge)
+
+    # It failed quietly, and it failed *loudly enough*: the bridge is dead, the
+    # log knows why, and the user is told once in a sentence they can act on.
+    assert client.state is BridgeState.DEAD
+    assert BridgeReason.VERSION_MISMATCH in recorder.reasons()
+    assert BRIDGE_UNAVAILABLE_PHRASE in recorder.spoken()
+    assert SECRET not in recorder.details
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_the_transcript_stream_ends_when_the_replacement_is_from_the_future(
+    bridges: Bridges,
+) -> None:
+    """The other half of the same defect, on the iterator's own poll.
+
+    `transcripts()` documents that ending the iterator ends the session. Raising
+    `ProtocolMismatch` through an `async for` is not ending it — it is ending
+    the caller's loop as well, from a thread the caller never started.
+    """
+    client = bridges.client(REPLACED_BY_A_FUTURE_BUILD)
+    stream = await asyncio.wait_for(client.transcripts(), PATIENCE)
+    bridges.note_pid(client.bridge)
+
+    with pytest.raises(BridgeUnavailable):
+        await asyncio.wait_for(
+            client.submit_goal(request_id="teamon-1", goal=VoiceGoal.EAT), PATIENCE
+        )
+
+    # The stream's own poll is what relaunches the bridge and meets the 9.0.
+    assert await _drain(stream, PATIENCE) == []
+    bridges.note_pid(client.bridge)
+    assert client.state is BridgeState.DEAD
+    await client.aclose()
+
+
 def test_this_file_is_a_contract_test_and_not_a_teamon_integration() -> None:
     """The claim in the module docstring, made executable.
 
@@ -1154,6 +1243,7 @@ CHILD_SOURCES = (
     ("DIES_MIDWAY", DIES_MIDWAY),
     ("CRASH_LOOP", CRASH_LOOP),
     ("ECHOES_WHAT_IT_RECEIVED", ECHOES_WHAT_IT_RECEIVED),
+    ("REPLACED_BY_A_FUTURE_BUILD", REPLACED_BY_A_FUTURE_BUILD),
     ("MISNAMES_ITS_OUTCOME", MISNAMES_ITS_OUTCOME),
     ("ENVIRONMENT_REPORTER", ENVIRONMENT_REPORTER),
 )

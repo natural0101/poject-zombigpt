@@ -28,10 +28,14 @@ something puts it in a queue and returns, so a bridge that has stopped reading
 its stdin cannot wedge the companion: the pipe fills, the writer thread blocks,
 and :meth:`JsonlBridge.send` refuses instead of growing.
 
-**Every wait has a deadline.** Every ``get`` on a queue carries the remaining
-time to an explicit deadline, every ``wait`` on the child carries a timeout, and
-every thread join carries one. A silent bridge produces :class:`BridgeTimeout`,
-never a hang.
+**Every wait a caller can reach has a deadline.** Every ``get`` a caller's
+thread performs carries the remaining time to an explicit deadline, every
+``wait`` on the child carries a timeout, and every thread join carries one. A
+silent bridge produces :class:`BridgeTimeout`, never a hang. The one wait
+without a deadline is the writer thread's ``get`` on the outbox, which is
+deliberate and is not on any caller's path: it is a daemon thread parked on a
+queue, woken either by work or by the sentinel :meth:`JsonlBridge._drain` puts
+there, and a timeout on it would only make it spin.
 
 **The stop path never waits for agreement.** :meth:`JsonlBridge.stop` signals,
 waits ``stop_timeout``, kills, waits ``stop_timeout`` again and gives up — at
@@ -1736,10 +1740,19 @@ class TeamONBridgeClient:
                 item = await asyncio.to_thread(
                     self._bridge.next_transcript, _TRANSCRIPT_POLL_SECONDS
                 )
-            except BridgeError:
+            except (BridgeError, BridgeProtocolError):
                 # The bridge is gone and has already been reported — with a
                 # sentence for the user, if it died rather than being stopped.
                 # Ending the iterator ends the session, which is the contract.
+                #
+                # `BridgeProtocolError` is caught for the same reason and is not
+                # a `BridgeError`: a relaunch on this path can meet a *different*
+                # program — the one on disk was replaced between the crash and
+                # the restart — and `ProtocolMismatch` then comes out of
+                # `next_transcript` by way of the handshake. Letting it out would
+                # end the session by raising through an `async for`, which is not
+                # the same thing as ending it, and the bridge has already been
+                # declared dead and announced by the time it arrives.
                 return
             if item is None:
                 continue
@@ -1780,10 +1793,18 @@ class TeamONBridgeClient:
         here would put a transport failure on the one path that must not have
         one; the utterance is abandoned on this side either way. The send itself
         is a queue put that refuses when full, so this never waits on the pipe.
+
+        *Never* means every failure this call has, not only the ones that are
+        :class:`BridgeError`. :class:`BridgeProtocolError` is not one — it is a
+        ``ValueError`` — and two of them reach here: a ``utterance_id`` that is
+        not a handle, and a :class:`ProtocolMismatch` raised by the handshake
+        when the send restarts a crashed bridge and the replacement turns out to
+        speak another MAJOR. Both are caught, because a stop word that raises is
+        a stop word that did not happen.
         """
         try:
             await asyncio.to_thread(self._bridge.send, interrupt_message(utterance_id))
-        except BridgeError:
+        except (BridgeError, BridgeProtocolError):
             return
 
     async def submit_goal(self, *, request_id: str, goal: VoiceGoal) -> BridgeOutcome:

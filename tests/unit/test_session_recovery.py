@@ -184,9 +184,7 @@ BRANCH_END: Final = "\n  end"
 
 def _stale_sidecar_branch(body: str, function: str) -> str:
     """The body of *function*'s ``sidecarStale`` branch, and nothing else."""
-    assert STALE_GUARD in body, (
-        f"{function} no longer checks whether the sidecar is still there"
-    )
+    assert STALE_GUARD in body, f"{function} no longer checks whether the sidecar is still there"
     after = body.split(STALE_GUARD, 1)[1]
     assert BRANCH_END in after, (
         f"{function}'s sidecar check is not a closed branch, so there is no "

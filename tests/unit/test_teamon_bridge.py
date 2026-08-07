@@ -42,7 +42,9 @@ from __future__ import annotations
 # mistyped ASCII; taking its suggestion would leave the tests asserting against
 # strings this build never says.
 # ruff: noqa: RUF001
+import queue
 import subprocess
+import threading
 import time
 from pathlib import Path, PureWindowsPath
 
@@ -83,6 +85,9 @@ from pz_agent_voice.teamon import (
     ProtocolMismatch,
     TeamONBridgeClient,
     UnknownMessageType,
+    # Private: the clamp it applies is not reachable through any public call
+    # that does not also wait for the result of it.
+    _deadline,
     check_bridge,
     check_protocol_version,
     creation_flags,
@@ -1006,3 +1011,169 @@ def test_the_client_exposes_the_supervisor_it_wraps() -> None:
     client = TeamONBridgeClient(config)
     assert client.bridge.state is BridgeState.STOPPED
     assert client.bridge._config is config
+
+
+# ---------------------------------------------------------------------------
+# the bounds that were computed and never observed
+# ---------------------------------------------------------------------------
+#
+# Each test below was written because deleting the line it is about left the
+# whole suite green. `min(timeout, MAX_TIMEOUT_SECONDS)` in `next_transcript`,
+# the same clamp in `_deadline`, and the `timeout=` on the joins in `stop` were
+# all unobserved: the arguments those calls are handed are not visible from
+# outside, and the tests that named them asserted something else — the stopped
+# bridge refuses before the wait, so a `next_transcript` that clamped nothing
+# passed that test exactly as well.
+
+
+class _RecordsTheTimeoutItWasGiven:
+    """A transcript queue that answers nothing and remembers what it was asked.
+
+    The clamp is an argument to `queue.get`, and an argument is not observable
+    from a return value. Waiting the un-clamped hour to find out is not an
+    option in a suite, so the argument itself is what gets asserted.
+    """
+
+    def __init__(self) -> None:
+        self.timeouts: list[float | None] = []
+
+    def get(self, timeout: float | None = None) -> BridgeTranscript:
+        self.timeouts.append(timeout)
+        raise queue.Empty
+
+
+class _AlwaysAlive:
+    """A child that exists and has not exited. Nothing here launches one."""
+
+    pid = 4242
+
+    def poll(self) -> int | None:
+        return None
+
+
+def _running(bridge: JsonlBridge, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Put *bridge* in the one state where a wait is actually reached."""
+    monkeypatch.setattr(bridge, "_state", BridgeState.RUNNING)
+    monkeypatch.setattr(bridge, "_process", _AlwaysAlive())
+
+
+def test_next_transcript_hands_the_queue_a_wait_no_longer_than_the_ceiling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bridge = JsonlBridge(a_config())
+    _running(bridge, monkeypatch)
+    recorder = _RecordsTheTimeoutItWasGiven()
+    monkeypatch.setattr(bridge, "_transcripts", recorder)
+
+    assert bridge.next_transcript(3600.0) is None
+    assert bridge.next_transcript(0.25) is None
+    assert bridge.next_transcript(-5.0) is None
+
+    # An hour becomes the ceiling, a sane wait is passed through untouched, and
+    # a negative one becomes zero rather than an immediate exception.
+    assert recorder.timeouts == [MAX_TIMEOUT_SECONDS, 0.25, 0.0]
+
+
+def test_a_deadline_is_capped_at_the_ceiling_however_long_it_is_asked_for() -> None:
+    started = time.monotonic()
+    far = _deadline(3600.0)
+    near = _deadline(0.25)
+    # The ceiling is what makes a configured timeout a bound rather than a
+    # number: `exchange` and `_await_ready` are reachable with a timeout that
+    # `BridgeConfig` never validated, because neither takes it from a config.
+    assert far - started <= MAX_TIMEOUT_SECONDS + 1.0
+    assert near - started <= 1.5
+
+
+class _RecordsHowItWasJoined(threading.Thread):
+    """A thread that never ends, and remembers the bound it was joined with."""
+
+    def __init__(self) -> None:
+        super().__init__(target=lambda: None, daemon=True)
+        self.joined_with: list[float | None] = []
+
+    def join(self, timeout: float | None = None) -> None:
+        self.joined_with.append(timeout)
+
+
+def test_the_stop_path_joins_every_thread_with_a_bound_and_not_forever() -> None:
+    # Asserted on the argument rather than on elapsed time: a `join()` with no
+    # timeout against a thread that never ends does not make this test fail, it
+    # makes the suite hang, and a hung suite reports nothing at all.
+    bridge = JsonlBridge(a_config(stop_timeout=0.25))
+    first, second = _RecordsHowItWasJoined(), _RecordsHowItWasJoined()
+    bridge._threads = [first, second]
+    bridge.stop()
+    assert first.joined_with == [0.25]
+    assert second.joined_with == [0.25]
+
+
+def test_an_outcome_naming_a_request_that_is_not_a_handle_is_refused() -> None:
+    line = f'{{"v":"1.0","type":"outcome","request_id":"{SECRET}","status":"ended"}}'
+    with pytest.raises(MalformedMessage) as caught:
+        read_outcome(decode(line.encode("utf-8")))
+    assert SECRET not in str(caught.value)
+
+
+# ---------------------------------------------------------------------------
+# the two calls that promise never to fail, against the errors that are not
+# BridgeError
+# ---------------------------------------------------------------------------
+#
+# `BridgeProtocolError` is a `ValueError`, not a `BridgeError`, so `except
+# BridgeError` does not catch it. Both calls below reach it: `send` restarts a
+# crashed bridge, and the restart runs a handshake, and a handshake can meet a
+# program that speaks another MAJOR. Before this was fixed, a spoken «стоп»
+# raised `ProtocolMismatch` out of `interrupt`, and the transcript stream raised
+# it through an `async for` instead of ending.
+
+
+@pytest.mark.asyncio
+async def test_an_interrupt_that_cannot_be_queued_is_still_not_a_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorder = Recorder()
+    client = TeamONBridgeClient(a_config(max_pending=1), listener=recorder)
+    _running(client.bridge, monkeypatch)
+    # Full, and nothing is draining it: no writer thread exists, because no
+    # child was ever launched. The e2e test that fills a real outbox races the
+    # real writer emptying a slot, so it does not establish this.
+    client.bridge._outbox.put_nowait(b"{}\n")
+
+    await client.interrupt("teamon-1")
+
+    assert BridgeReason.DROPPED in recorder.reasons()
+
+
+@pytest.mark.asyncio
+async def test_an_interrupt_swallows_a_protocol_error_as_well_as_a_bridge_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = TeamONBridgeClient(a_config())
+
+    def refuse(message: BridgeMessage) -> None:
+        raise ProtocolMismatch("the bridge speaks protocol 9.0 and this build speaks 1.0")
+
+    monkeypatch.setattr(client.bridge, "send", refuse)
+    await client.interrupt("teamon-1")
+
+    # And the other one that is not a BridgeError: a handle that is not a
+    # handle is a bug on this side, and a stop word is not where it may surface.
+    await client.interrupt("Not A Handle")
+
+
+@pytest.mark.asyncio
+async def test_the_transcript_stream_ends_on_a_protocol_error_rather_than_raising(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = TeamONBridgeClient(a_config())
+
+    def refuse(timeout: float) -> BridgeTranscript | None:
+        raise ProtocolMismatch("the bridge speaks protocol 9.0 and this build speaks 1.0")
+
+    monkeypatch.setattr(client.bridge, "next_transcript", refuse)
+    stream = client._stream()
+    # Ending is the contract. Raising through an `async for` is a companion that
+    # stops listening *and* takes the caller's loop with it.
+    with pytest.raises(StopAsyncIteration):
+        await anext(stream)
