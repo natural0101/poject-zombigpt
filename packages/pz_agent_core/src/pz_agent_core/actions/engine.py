@@ -110,6 +110,13 @@ PanicSwitch: TypeAlias = Callable[[], bool]
 #: True when a probed game capability is usable right now.
 CapabilityCheck: TypeAlias = Callable[[str], bool]
 
+#: Told about each command the moment it reaches the mod, with the arguments the
+#: adapter actually built. The engine's return value is a result, not a command,
+#: so without this seam nothing above the engine ever sees what was sent — only
+#: what came back. A diagnostic recorder is the intended subscriber, which is
+#: why the engine never lets one of these raise into an action in flight.
+CommandObserver: TypeAlias = Callable[[Command], None]
+
 
 def no_panic() -> bool:
     """Default :data:`PanicSwitch`: nobody has pulled the stop lever."""
@@ -249,6 +256,8 @@ class ActionEngine:
     #: change means the player loaded a different world and every reference the
     #: engine holds is meaningless.
     expected_save_id: str | None = None
+    #: Optional recorder for dispatched commands. See :data:`CommandObserver`.
+    on_dispatch: CommandObserver | None = None
     _local_seq: int = field(default=0, init=False)
 
     # -- public API --------------------------------------------------------
@@ -292,6 +301,25 @@ class ActionEngine:
         return result
 
     # -- one attempt -------------------------------------------------------
+
+    def _announce(self, command: Command) -> None:
+        """Tell the observer what was sent, and never let it affect the send.
+
+        The command is already with the mod by the time this runs. A recorder
+        that raises — a full disk, a directory removed underneath it — must
+        therefore not become an exception on the action's path, because the
+        action is happening either way and the caller has to be told how it
+        ended. Losing a trace entry is the smaller loss by a wide margin.
+        """
+        if self.on_dispatch is None:
+            return
+        try:
+            self.on_dispatch(command)
+        except Exception:
+            # Deliberately every exception: this runs after the command has been
+            # sent, and no failure of a recorder is worth turning into one of the
+            # action.
+            return
 
     def _run_attempt(
         self, adapter: ActionAdapter, request: ActionRequest, attempt: int
@@ -380,6 +408,7 @@ class ActionEngine:
             return self._sink_refusal(request, dispatch.rejection, command_id, attempt)
 
         shipped = dispatch.command
+        self._announce(shipped)
         try:
             return self._observe(adapter, request, shipped, before, attempt)
         except Exception as exc:

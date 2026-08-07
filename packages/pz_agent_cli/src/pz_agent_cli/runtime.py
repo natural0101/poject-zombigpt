@@ -44,7 +44,7 @@ lifecycle, and the five properties below are what it is responsible for:
 from __future__ import annotations
 
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
@@ -71,11 +71,13 @@ from pz_agent_core.capabilities import (
     probe_for,
     save_report,
 )
+from pz_agent_core.diagnostics import DiagnosticsError, TraceError, TraceWriter
 from pz_agent_core.ipc.clocks import Clock, system_clock_ms
 from pz_agent_core.ipc.journal import JournalReader
 from pz_agent_core.ipc.layout import IpcLayout
 from pz_agent_core.ipc.queue import CommandQueue
 from pz_agent_core.ipc.snapshot import SnapshotMiss, SnapshotReader
+from pz_agent_core.observation.diff import DiffError
 from pz_agent_core.observation.store import DEFAULT_WINDOW, ObservationStore
 from pz_agent_core.protocol import (
     ActionName,
@@ -128,6 +130,11 @@ DEFAULT_TICK_BUDGET: Final = 230_400
 #: Hard ceiling on the tick budget, so a configured one cannot make the loop the
 #: unbounded thing this project forbids.
 MAX_TICK_BUDGET: Final = 5_000_000
+
+#: Dispatched commands held for pairing with their terminal result in the trace.
+#: One is the working set — the engine drives each command to a terminal result
+#: before returning — and the rest is slack for results that never arrive.
+MAX_TRACED_COMMANDS: Final = 8
 
 #: Window the action rate cap is measured over.
 DEFAULT_ACTION_WINDOW_MS: Final = 60_000
@@ -833,6 +840,9 @@ class SidecarLoop:
     lock: SidecarLock | None = None
     pid_file: PidFile | None = None
     control: ControlChannel | None = None
+    #: Where this run is recorded for ``pz-agent replay``. Optional, because the
+    #: loop drives a character and a diagnostic is never a reason not to.
+    trace: TraceWriter | None = None
     _attached: _Attached | None = field(default=None, init=False)
     _mode: SessionMode = field(default=SessionMode.OBSERVE, init=False)
     _armed: bool = field(default=False, init=False)
@@ -840,6 +850,8 @@ class SidecarLoop:
     _budget: ActionBudget = field(init=False)
     _store: ObservationStore = field(init=False)
     _events: deque[SafetyEvent] = field(init=False)
+    _shipped: OrderedDict[str, Command] = field(init=False)
+    _traced: Observation | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         if self.capabilities is not None:
@@ -854,6 +866,7 @@ class SidecarLoop:
         )
         self._store = ObservationStore(capacity=self.limits.observation_window)
         self._events = deque(maxlen=MAX_RETAINED_EVENTS)
+        self._shipped = OrderedDict()
         if self.monitor is None:
             self.monitor = HeartbeatMonitor(self.layout, clock=self.clock)
         if self.sessions is None:
@@ -995,6 +1008,7 @@ class SidecarLoop:
             panic_stop=self.panic_engaged,
             capability_check=self.capability_check,
             expected_save_id=session.save_id,
+            on_dispatch=self._note_dispatch,
         )
         return _Attached(
             session=session,
@@ -1150,13 +1164,17 @@ class SidecarLoop:
         # command nobody is driving any more still frees the backpressure slot.
         attached.sink.poll_acks()
 
+        self._trace_observation()
+
         events = self._run_guard(attached, now, panic=panic, game_alive=liveness.alive)
         lost = self._apply_events(attached, events, now, panic=panic, game_alive=liveness.alive)
+        self._trace_results(lost)
         disarmed_by_guard = any(event.forces_disarm for event in events) or panic
 
         control = self._consume_control(now, attached.attached_at_ms)
         stop = self._apply_control(control, events)
         results = self._act(attached, now, events=events, panic=panic, game_alive=liveness.alive)
+        self._trace_results(results)
 
         self._publish_heartbeat()
         if self.pid_file is not None:
@@ -1371,6 +1389,68 @@ class SidecarLoop:
         if capability is None:
             return None
         return ledger.confirm_capability(capability, action, result)
+
+    # -- the trace ``pz-agent replay`` reads -------------------------------
+
+    def _note_dispatch(self, command: Command) -> None:
+        """Hold a shipped command until its terminal result arrives.
+
+        The engine returns a result, not a command, so this is the only place
+        the arguments the adapter actually built are visible from here. The ring
+        is tiny because the pairing window is one action: the engine drives each
+        command to a terminal result before it returns, and the cap exists so a
+        result that never arrives cannot grow this without bound.
+        """
+        if self.trace is None:
+            return
+        self._shipped[command.command_id] = command
+        while len(self._shipped) > MAX_TRACED_COMMANDS:
+            self._shipped.popitem(last=False)
+
+    def _trace_results(self, results: Sequence[ActionResult]) -> None:
+        """Record each terminal result against the command that produced it."""
+        trace = self.trace
+        if trace is None:
+            return
+        for result in results:
+            command = self._shipped.pop(result.command_id, None)
+            try:
+                if command is None:
+                    trace.record_refusal(result)
+                else:
+                    trace.record_action(command, result)
+            except (OSError, DiagnosticsError, TraceError):
+                # Losing an entry is not a reason to abandon a tick that is
+                # driving a character. The next write attempts again.
+                return
+
+    def _trace_observation(self) -> None:
+        """Record the world as this tick found it, if it moved.
+
+        Which of a snapshot and a diff gets written is the trace format's
+        decision rather than this loop's — :meth:`TraceWriter.record_world`
+        owns it, next to the reader whose refusals it exists to avoid. What the
+        loop owns is the baseline and the one case worth skipping entirely: a
+        tick that ingested nothing has no news, and an empty diff per tick would
+        fill the file with the fact that nothing happened.
+        """
+        trace = self.trace
+        current = self._store.latest()
+        if trace is None or current is None:
+            return
+        baseline = self._traced
+        unchanged = (
+            baseline is not None
+            and baseline.session_id == current.session_id
+            and baseline.seq == current.seq
+        )
+        if unchanged:
+            return
+        try:
+            trace.record_world(current, baseline)
+        except (OSError, DiagnosticsError, DiffError, TraceError):
+            return
+        self._traced = current
 
     def _publish_heartbeat(self) -> None:
         attached = self._attached

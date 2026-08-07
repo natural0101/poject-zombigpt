@@ -10,6 +10,41 @@ drift out of sync with `pz_agent_core.version`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The sidecar now writes the log nineteen live scenarios tell an operator to
+  collect.** `DiagnosticLog` was complete — rotating, redacting, level-filtered,
+  well tested — and constructed nowhere outside the test suite, so
+  `logs/pz-agent.log` and `logs/pz-agent.jsonl` did not exist and could not.
+  Nineteen of the twenty scenarios name the first among the files to collect and
+  three name the second; `docs/LOCAL_DEBUG_MAP.md` sends an operator to it by
+  name; `pz-agent logs` reads it; `logs --bundle` packs its directory into the
+  archive `docs/TROUBLESHOOTING.md` asks a user to attach to a report. Four
+  documents and twenty scenarios rested on a file the product never produced,
+  and `live-test collect` had been reporting "copied 0 file(s), skipped 15" the
+  whole time. `pz-agent start --foreground` now records the attach, the run's
+  end, every retained safety event and the shutdown. Writing is at the run's
+  edges rather than in the tick, and every write is optional and guarded: a log
+  directory that will not take a file costs the log, never the session.
+- **`pz-agent replay` has something to replay.** `TraceWriter` had the same
+  defect and one more document on top of it: `docs/QUICKSTART.md` printed
+  `pz-agent replay <trace>` under "When something goes wrong", `logs --bundle`
+  packed `traces/*.jsonl`, and nothing had ever written a trace. The sidecar now
+  records each observation — a full snapshot first, then diffs against it — and
+  each action next to the terminal result that closed it, at
+  `<state>/traces/session.jsonl`. Closing it needed a seam rather than a call:
+  `ActionEngine` returns a result and never let go of the command it sent, so it
+  gained an optional `on_dispatch` observer and the loop pairs the two. An
+  action refused before dispatch is recorded with its reason and no command,
+  because that is the case an operator is most likely to be reading a trace for.
+- **A rotated trace stays replayable from its first line.** Found by writing the
+  first one: `replay_observations` refuses an observation diff it has no
+  baseline for, and a rotation that fell on a diff put one at the top of the new
+  file — so every run long enough to rotate would have produced a trace that
+  read back as a refusal. `TraceWriter.record_world` now asks whether a diff
+  would rotate the file and writes the snapshot instead, letting the *snapshot*
+  trigger the rotation and open the new file with what a replay needs.
+
 ### Changed
 
 - **`docs/RELEASE.md` asks for the evidence the executable gate checks.** Its

@@ -11,6 +11,7 @@ hundreds of ticks in no time at all.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -41,16 +42,26 @@ TEST_LIMITS = LoopLimits(
 
 
 class RecordingSleeper:
-    """Advances the fake clock instead of sleeping, and remembers every request."""
+    """Advances the fake clock instead of sleeping, and remembers every request.
+
+    ``while_waiting`` is what the game does while the sidecar is blocked. It is
+    the only way to model the mod acting *during* a call: the engine waits for a
+    fresh observation inside ``execute``, and a test that writes one before or
+    after the tick is describing a world that stood still exactly when the
+    sidecar was watching it.
+    """
 
     def __init__(self, clock: FakeClock) -> None:
         self._clock = clock
         self.requests: list[int] = []
+        self.while_waiting: Callable[[], object] | None = None
 
     def __call__(self, milliseconds: int) -> None:
         self.requests.append(milliseconds)
         if milliseconds > 0:
             self._clock.advance(milliseconds)
+        if self.while_waiting is not None:
+            self.while_waiting()
 
 
 def _make_loop(

@@ -9,8 +9,8 @@ green · `wip` in progress · `todo` not started · `live` blocked on a step tha
 physically requires a running game.
 
 Last updated: 28 of 30 tasks closed; T029 and T030 are blocked on a live game,
-not deferred. 3471 Python tests and 2864 Lua assertions across 26 suites,
-mypy strict over 264 files, `scripts/check.sh` green — measured under Python
+not deferred. 3542 Python tests and 2864 Lua assertions across 26 suites,
+mypy strict over 266 files, `scripts/check.sh` green — measured under Python
 3.11.15, which is the only interpreter with the suite installed here. CI
 declares a 3.11/3.12 matrix; that is configuration, not a result observed in
 this container.
@@ -24,7 +24,7 @@ with them. See [the playable-agent section](#the-playable-agent-branch) below,
 and [`LOCAL_GAME_HANDOFF.md`](LOCAL_GAME_HANDOFF.md) for what still needs a
 machine with the game on it.
 
-**Seventeen defects that branch found are worth reading before any further work**,
+**Nineteen defects that branch found are worth reading before any further work**,
 because they are one family and the family is not closed. Every subsystem was
 written, tested and green; what nothing tested was whether the subsystems were
 *connected*.
@@ -40,6 +40,8 @@ written, tested and green; what nothing tested was whether the subsystems were
 | 7 | The memory store was complete and connected to nothing | `reserves_item` always answered False, so §7.9 rested on tag rules alone, and no home point could exist |
 | 8 | `pz_agent_voice` was imported by nothing and had no entry point | Russian voice control was complete, tested, and impossible to start |
 | 9 | The mod could drink from a sink; the sidecar had no argument for it, and the path it did have ran under the wrong capability | Two faults in one place: a working mod feature unreachable from Python, *and* `drink_world_source` — which §12.4 caps at `experimental` — reachable through `drink_carried`, which a scan verifies |
+| 19 | **`TraceWriter` was constructed nowhere, so `pz-agent replay` had nothing to replay** | The same shape as 18, one layer in. `docs/QUICKSTART.md` printed `pz-agent replay <trace>` under "When something goes wrong", `logs --bundle` packed `traces/*.jsonl`, and `replay` was a shipped, parsed, documented command reading a format the product never produced. Closing it needed a seam rather than a call: the engine returns a *result* and never lets go of the command it sent, so `ActionEngine.on_dispatch` was added and the loop pairs the two. Writing the trace then exposed a second fault in the format itself — a rotation could leave an observation *diff* as the first line of the new file, and `replay_observations` refuses a diff with no baseline, so every long run's trace would have read back as unreplayable. Found by a test that rotates for real |
+| 18 | **`DiagnosticLog` was constructed nowhere, so `logs/pz-agent.log` could not exist** | Written, tested, rotated, redacted, level-filtered — and never built outside the test suite. Nineteen of the twenty live scenarios name that file among the logs to collect and three name `pz-agent.jsonl`; `LOCAL_DEBUG_MAP.md` sends an operator to it; `pz-agent logs` reads it; the support bundle packs its directory. `live-test collect` reported "copied 0 file(s), skipped 15" — the honest answer, and the line read past twice before anyone asked why the sidecar's own log was among the missing |
 | 17 | The support bundle's verifier flagged its own successful redaction | `credential_assignment` matched `api_key=<REDACTED>`, so `logs --bundle --verify` printed "REVIEW BEFORE SHARING" and exited 1 over a line whose secret had been correctly removed. Not a leak — the training of a habit that would let one through, in the one artefact designed to be attached to a public issue |
 | 16 | `configs/mcp/README.md` documented one of the two refusals a client meets | It said `pz-agent-mcp` "exits with status 1" for missing services. On a plain install the SDK gate fires first and returns 3, with a message about a missing package rather than a missing sidecar — so a client author would have gone looking for the wrong cause on their first launch |
 | 15 | **`pz-agent start` reported success on the strength of `Popen` returning** | A fork succeeding says nothing about whether the program ran. A sidecar that died on its first import left `start` printing "sidecar started as pid N" and exiting 0, `arm` then failing for reasons that named nothing, and `stop` reporting "no such process" — also exiting 0. Found by running the lifecycle, not by reading it |
@@ -60,8 +62,10 @@ and each of those tests now exists: `tests/lua/test_adapter_registry.lua`,
 `tests/contract/test_voice_wiring.py` and
 `tests/contract/test_multiplayer_refusal.py` and
 `tests/contract/test_capability_declaration_agreement.py`,
-`tests/contract/test_game_api_inventory.py` and
-`tests/contract/test_doctor_codes_documented.py`.
+`tests/contract/test_game_api_inventory.py`,
+`tests/contract/test_doctor_codes_documented.py`,
+`tests/contract/test_sidecar_writes_its_log.py` and
+`tests/contract/test_sidecar_writes_a_replayable_trace.py`.
 
 Number ten is the one to read first, because it is not a wiring defect at all —
 it is a documented safety guarantee that was never implemented. It is closed by

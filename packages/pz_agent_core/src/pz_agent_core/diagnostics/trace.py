@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any, Final
 
 from ..ipc.clocks import Clock, system_clock_ms
-from ..observation.diff import DiffError, ObservationDiff, apply_diff
+from ..observation.diff import DiffError, ObservationDiff, apply_diff, diff_observations
 from ..protocol import ActionResult, Command, JsonDict, Observation
 from ..protocol.messages import ProtocolError
 from .log import DiagnosticsError, LogLimits, RotatingWriter
@@ -194,6 +194,26 @@ class TraceWriter:
             payload["result"] = result.to_dict()
         return self._append(TraceKind.ACTION, payload)
 
+    def record_refusal(self, result: ActionResult) -> TraceEntry:
+        """Record a terminal result for a command that never reached the mod.
+
+        A gate that fires before dispatch — an unusable capability, a denied
+        policy, an unknown action — produces a result and no command. Recording
+        only the pairs would make the trace lie by omission in exactly the case
+        an operator is most likely to be reading it for: they asked for
+        something and nothing happened in the world.
+        """
+        return self._append(
+            TraceKind.ACTION,
+            {
+                "action": result.action,
+                "command_id": result.command_id,
+                "status": result.status.value,
+                "reason_code": result.reason_code.value,
+                "result": result.to_dict(),
+            },
+        )
+
     def record_observation(self, observation: Observation) -> TraceEntry:
         """Record a full snapshot. A replay needs one of these before any diff."""
         return self._append(
@@ -210,7 +230,52 @@ class TraceWriter:
             {"from_seq": from_seq, "to_seq": to_seq, "diff": diff.to_dict()},
         )
 
+    def record_world(self, observation: Observation, baseline: Observation | None) -> TraceEntry:
+        """Record the world as one entry, keeping every file replayable.
+
+        A diff whenever one applies, because a snapshot is an order of magnitude
+        larger and a long run would otherwise rotate its own history away within
+        minutes. A full snapshot in three cases: there is no baseline, the
+        baseline belongs to another session or a later moment, or **writing the
+        diff would rotate the file**.
+
+        That last one is not an optimisation. :func:`replay_observations`
+        refuses a diff it has no baseline for — rightly, since applying one to
+        the wrong snapshot is the only way this module can produce a plausible
+        lie — so a rotation that put a diff at the top of the new file would
+        make every long run's trace unreplayable from its first line. Letting
+        the *snapshot* trigger the rotation instead means the fresh file opens
+        with exactly what a replay needs.
+        """
+        divergent = (
+            baseline is None
+            or baseline.session_id != observation.session_id
+            or observation.seq < baseline.seq
+        )
+        if divergent or baseline is None:
+            return self.record_observation(observation)
+        entry, line = self._render(
+            TraceKind.OBSERVATION_DIFF,
+            {
+                "from_seq": baseline.seq,
+                "to_seq": observation.seq,
+                "diff": diff_observations(baseline, observation).to_dict(),
+            },
+        )
+        if self._writer.would_rotate(line):
+            return self.record_observation(observation)
+        return self._commit(entry, line)
+
     def _append(self, kind: TraceKind, payload: JsonDict) -> TraceEntry:
+        entry, line = self._render(kind, payload)
+        return self._commit(entry, line)
+
+    def _render(self, kind: TraceKind, payload: JsonDict) -> tuple[TraceEntry, str]:
+        """Build the entry and the line it will be written as, without writing.
+
+        Split from the write so :meth:`record_world` can ask what a line would
+        cost before committing to it.
+        """
         redacted = self._redactor.value(payload)
         entry = TraceEntry(
             seq=self._seq,
@@ -239,6 +304,9 @@ class TraceWriter:
             line = json.dumps(
                 entry.to_dict(), ensure_ascii=True, separators=(",", ":"), sort_keys=True
             )
+        return entry, line
+
+    def _commit(self, entry: TraceEntry, line: str) -> TraceEntry:
         self._writer.write(line)
         self._seq += 1
         return entry

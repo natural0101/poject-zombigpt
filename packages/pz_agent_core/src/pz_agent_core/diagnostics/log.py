@@ -227,6 +227,22 @@ class RotatingWriter:
     def total_bytes(self) -> int:
         return sum(path.stat().st_size for path in self.files())
 
+    def would_rotate(self, line: str) -> bool:
+        """Whether appending *line* would rotate the file first.
+
+        Exposed because one caller has to know *before* it commits: a trace file
+        whose first line is an observation diff cannot be replayed, so the trace
+        writer asks this and writes a full snapshot instead.
+        """
+        return self._rotates(self._encode(line))
+
+    @staticmethod
+    def _encode(line: str) -> bytes:
+        return (line if line.endswith("\n") else line + "\n").encode("utf-8")
+
+    def _rotates(self, encoded: bytes) -> bool:
+        return self._size > 0 and self._size + len(encoded) > self._limits.max_bytes
+
     def write(self, line: str) -> int:
         """Append one line, rotating first if it would not fit. Returns bytes written.
 
@@ -235,14 +251,13 @@ class RotatingWriter:
                 Callers hold the policy for oversize records; the writer refuses
                 rather than silently truncating a record into a malformed one.
         """
-        payload = line if line.endswith("\n") else line + "\n"
-        encoded = payload.encode("utf-8")
+        encoded = self._encode(line)
         if len(encoded) > self._limits.max_record_bytes:
             raise DiagnosticsError(
                 f"line of {len(encoded)} bytes exceeds max_record_bytes "
                 f"{self._limits.max_record_bytes}"
             )
-        if self._size > 0 and self._size + len(encoded) > self._limits.max_bytes:
+        if self._rotates(encoded):
             self.rotate()
         with self._path.open("ab") as handle:
             handle.write(encoded)
