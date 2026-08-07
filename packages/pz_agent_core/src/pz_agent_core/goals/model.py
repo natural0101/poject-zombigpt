@@ -63,6 +63,7 @@ __all__ = [
     "MAX_IDEMPOTENCY_KEY_LEN",
     "MAX_PARSED_TOKEN_CHARS",
     "MAX_PENDING_TTL_MS",
+    "MAX_RENDERED_VALUE_CHARS",
     "MAX_SKILL_LEVEL",
     "MIN_GOAL_WALL_MS",
     "NUMERIC_RANGES",
@@ -161,6 +162,40 @@ _DIGEST_SHAPE: Final = re.compile(r"^[0-9a-f]{16}\Z")
 #: over-long or multi-line detail is refused rather than truncated: truncating
 #: would leave a caller believing a log line said something it did not.
 MAX_DETAIL_CHARS: Final = 200
+
+#: Longest rendering of a *caller-supplied number* any refusal in this module
+#: will carry. Quoting the offending value is what makes a range refusal useful,
+#: but a Python ``int`` has no width: ``f"{value}"`` is a message whose length
+#: the caller chooses, and past CPython's 4300-digit conversion limit it is not
+#: this module's message at all — ``str(int)`` raises, and what the caller
+#: receives is the interpreter advising them to raise
+#: ``sys.set_int_max_str_digits``. Both outcomes break the rule every refusal
+#: here is built to keep: say what failed and what to do, in one bounded line.
+MAX_RENDERED_VALUE_CHARS: Final = 26
+
+#: Magnitude past which an ``int`` is described rather than quoted. *Compared*
+#: against, never converted, so an arbitrarily large value costs nothing and
+#: never reaches ``str``. Nineteen digits is as wide as an ``int`` below it can
+#: print, which is what keeps the rendering inside its bound.
+_MAX_RENDERED_MAGNITUDE: Final = 10**18
+
+_UNQUOTABLE_VALUE: Final = "a value too large to quote"
+
+
+def _render_value(value: float) -> str:
+    """Render *value* for a refusal, without letting the caller pick its length.
+
+    Bounded by :data:`MAX_RENDERED_VALUE_CHARS`, and bounded by *construction*
+    rather than by a truncation nobody could reach: an ``int`` outside
+    ±10\\ :sup:`18` is described instead of quoted, and everything still
+    admissible is either a shorter ``int`` (at most 19 digits and a sign) or a
+    ``float``, whose widest repr — ``-1.7976931348623157e+308`` — is 24
+    characters. A length check after the fact would be a branch no input can
+    take; the bound is pinned by a test that walks the extremes instead.
+    """
+    if isinstance(value, int) and not -_MAX_RENDERED_MAGNITUDE < value < _MAX_RENDERED_MAGNITUDE:
+        return _UNQUOTABLE_VALUE
+    return f"{value}"
 
 
 # --------------------------------------------------------------------------
@@ -284,7 +319,9 @@ class NumericRange:
     def check(self, value: float, *, name: str) -> None:
         """Raise unless *value* is inside the range."""
         if not self.minimum <= value <= self.maximum:
-            raise ValueError(f"{name} must be within {self.minimum}..{self.maximum}, got {value}")
+            raise ValueError(
+                f"{name} must be within {self.minimum}..{self.maximum}, got {_render_value(value)}"
+            )
 
 
 #: Every numeric parameter the channel accepts, with the range it is checked
@@ -311,9 +348,21 @@ def _require_whole(value: object, *, name: str) -> int:
 
 
 def _require_number(value: object, *, name: str) -> float:
+    """Narrow *value* to a ``float``, rejecting ``bool`` and the unconvertible.
+
+    An ``int`` is unbounded and a ``float`` is not, so ``float(10**400)`` raises
+    ``OverflowError`` — which is not a ``ValueError``, so a caller catching the
+    refusal this module documents would not catch it, and the channel would
+    report a Python conversion failure instead of "that parameter is out of
+    range". The size of the value is the refusal's own business, so it is caught
+    here and answered in the module's own vocabulary.
+    """
     if isinstance(value, bool) or not isinstance(value, int | float):
         raise ValueError(f"{name} must be a number")
-    return float(value)
+    try:
+        return float(value)
+    except OverflowError:
+        raise ValueError(f"{name} must be a number of ordinary size") from None
 
 
 def _require_line(detail: str, *, name: str) -> None:
@@ -396,13 +445,16 @@ class GoalBudget:
         if not MIN_GOAL_WALL_MS <= self.max_wall_ms <= MAX_GOAL_WALL_MS:
             raise ValueError(
                 f"max_wall_ms must be within {MIN_GOAL_WALL_MS}..{MAX_GOAL_WALL_MS}, "
-                f"got {self.max_wall_ms}"
+                f"got {_render_value(self.max_wall_ms)}"
             )
         if not 1 <= self.max_steps <= MAX_GOAL_STEPS:
-            raise ValueError(f"max_steps must be within 1..{MAX_GOAL_STEPS}, got {self.max_steps}")
+            raise ValueError(
+                f"max_steps must be within 1..{MAX_GOAL_STEPS}, got {_render_value(self.max_steps)}"
+            )
         if not 1 <= self.pending_ttl_ms <= MAX_PENDING_TTL_MS:
             raise ValueError(
-                f"pending_ttl_ms must be within 1..{MAX_PENDING_TTL_MS}, got {self.pending_ttl_ms}"
+                f"pending_ttl_ms must be within 1..{MAX_PENDING_TTL_MS}, "
+                f"got {_render_value(self.pending_ttl_ms)}"
             )
 
 
@@ -590,7 +642,8 @@ class GoalRecord:
         _require_line(self.detail, name="detail")
         if not 0 <= self.steps_used <= self.budget.max_steps:
             raise ValueError(
-                f"steps_used must be within 0..{self.budget.max_steps}, got {self.steps_used}"
+                f"steps_used must be within 0..{self.budget.max_steps}, "
+                f"got {_render_value(self.steps_used)}"
             )
         if self.state is GoalState.ACTIVE and self.started_at_ms is None:
             raise ValueError("an active goal must record when it started")

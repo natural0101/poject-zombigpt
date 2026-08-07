@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import math
 import re
+import sys
 from collections.abc import Callable, Iterator
 from dataclasses import FrozenInstanceError, fields, replace
 from enum import Enum
@@ -47,6 +48,7 @@ from pz_agent_core.goals import (
     MAX_IDEMPOTENCY_KEY_LEN,
     MAX_PARSED_TOKEN_CHARS,
     MAX_PENDING_TTL_MS,
+    MAX_RENDERED_VALUE_CHARS,
     MAX_SKILL_LEVEL,
     MIN_GOAL_WALL_MS,
     NUMERIC_RANGES,
@@ -773,6 +775,7 @@ class TestTheDeclaredBoundsThemselves:
         assert MAX_IDEMPOTENCY_KEY_LEN == 64
         assert MAX_PARSED_TOKEN_CHARS == 64
         assert MAX_DETAIL_CHARS == 200
+        assert MAX_RENDERED_VALUE_CHARS == 26
         assert MAX_EVIDENCE_KEYS == 8
         assert MAX_SKILL_LEVEL == 10
         assert MAX_GOAL_STEPS == 12
@@ -1041,20 +1044,56 @@ class TestBoundedQueue:
         assert queue.submit(eat("b")).accepted
 
     def test_the_history_is_bounded_and_never_evicts_an_open_goal(self) -> None:
+        # The churn has to be *admitted* and then finished, not refused. An
+        # earlier version of this test asserted that every churn submission hit
+        # the cap, which meant no record beyond the two open ones was ever
+        # created, the history never exceeded ``max_remembered``, and the
+        # eviction loop this test is named after never ran once: deleting the
+        # "skip open goals" guard from ``_evict`` left it green.
         queue = make_queue(FakeClock(), max_open=2, max_remembered=3)
-        open_ids = [
-            queue.submit(eat("keep-1")).goal,
-            queue.submit(eat("keep-2")).goal,
-        ]
-        assert all(record is not None for record in open_ids)
+        keep = queue.submit(eat("keep")).goal
+        assert keep is not None
+        churn: list[str] = []
         for index in range(10):
-            # Each of these needs a free slot, so make one, use it and give it
-            # back — the two "keep" goals stay open throughout.
-            assert queue.open_count == 2
-            assert queue.submit(eat(f"churn-{index}")).refusal is not None
-        for record in open_ids:
-            assert record is not None
-            assert queue.record(record.goal_id) is not None
+            admitted = queue.submit(eat(f"churn-{index}")).goal
+            assert admitted is not None, f"churn-{index} needed the free slot beside keep"
+            churn.append(admitted.goal_id)
+            # Ended without activating it, so "keep" never loses its place at
+            # the front of the history — which is exactly where an eviction
+            # that ignored ``is_open`` would take its victim from.
+            assert queue.request_cancel(admitted.goal_id) is True
+            assert [t.state for t in queue.tick()] == [GoalState.CANCELLED]
+
+        # Bounded: the oldest finished goals really were dropped.
+        assert queue.record(churn[0]) is None
+        assert queue.record(churn[-1]) is not None
+        # And the open goal survived every one of those evictions.
+        survivor = queue.record(keep.goal_id)
+        assert survivor is not None
+        assert survivor.state is GoalState.PENDING
+        assert queue.open_count == 1
+
+    def test_a_still_open_goal_keeps_its_place_in_the_resubmission_index(self) -> None:
+        # ``_trim_digests`` bounds the digest index the same way ``_evict``
+        # bounds the history, and it has the same rule: only a digest whose goal
+        # has finished may be dropped. Losing an *open* goal's digest is the one
+        # failure an idempotency key exists to prevent — the retry that follows
+        # would be admitted as a second goal for work already running.
+        queue = make_queue(FakeClock(), max_open=2, max_remembered=3)
+        keep = queue.submit(eat("keep")).goal
+        assert keep is not None
+        for index in range(10):
+            admitted = queue.submit(eat(f"churn-{index}")).goal
+            assert admitted is not None
+            queue.request_cancel(admitted.goal_id)
+            queue.tick()
+
+        # Eleven digests have passed through an index capped at three.
+        again = queue.submit(eat("keep"))
+        assert again.duplicate is True, "the open goal's key was trimmed and would run twice"
+        assert again.goal is not None
+        assert again.goal.goal_id == keep.goal_id
+        assert queue.open_count == 1
 
     def test_the_history_forgets_the_oldest_finished_goal(self) -> None:
         queue = make_queue(FakeClock(), max_open=1, max_remembered=2)
@@ -1613,6 +1652,76 @@ class TestCancel:
         assert transitions[0].state is GoalState.CANCELLED
         assert transitions[0].reason_code is ReasonCode.CANCELLED_BY_REQUEST
 
+    def test_a_cancelled_goal_is_not_started_while_the_cancel_waits_for_a_tick(self) -> None:
+        # ``activate_next`` skips a goal whose cancellation is outstanding.
+        # "Applied on the next tick" is a bound on when the goal *ends*, not a
+        # licence to start it in the meantime: promoting a withdrawn goal is how
+        # the executor comes to dispatch a step for work the user already
+        # stopped. Nothing asserted this, and deleting the skip stayed green.
+        queue = make_queue(FakeClock())
+        first = queue.submit(eat("a")).goal
+        second = queue.submit(eat("b")).goal
+        assert first is not None
+        assert second is not None
+        assert queue.request_cancel(first.goal_id) is True
+
+        started = queue.activate_next()
+        assert started.goal is not None, started.refusal
+        assert started.goal.goal_id == second.goal_id, "the cancelled goal was started anyway"
+        withdrawn = queue.record(first.goal_id)
+        assert withdrawn is not None
+        assert withdrawn.state is GoalState.PENDING
+        assert withdrawn.started_at_ms is None
+
+        assert [(t.goal_id, t.state) for t in queue.tick()] == [
+            (first.goal_id, GoalState.CANCELLED)
+        ]
+
+    def test_activation_is_refused_when_every_waiting_goal_has_been_cancelled(self) -> None:
+        # The other side of the skip: with nothing startable left, the refusal
+        # has to say so rather than report the backlog as empty, because the
+        # backlog is not empty and the caller can see that.
+        queue = make_queue(FakeClock())
+        admitted = queue.submit(eat("a")).goal
+        assert admitted is not None
+        assert queue.request_cancel(admitted.goal_id) is True
+
+        blocked = queue.activate_next()
+        assert blocked.goal is None
+        assert blocked.refusal is not None
+        assert blocked.refusal.reason_code is ReasonCode.CANCELLED_BY_REQUEST
+        assert "submit a new goal" in blocked.refusal.message.lower()
+        assert queue.active is None
+        assert len(queue.pending) == 1
+        assert [t.state for t in queue.tick()] == [GoalState.CANCELLED]
+
+    def test_a_step_landing_against_a_cancelled_goal_ends_it_as_cancelled(self) -> None:
+        # The step is charged, because it was spent — but the goal ends as
+        # cancelled rather than as whatever its budget would have said. Naming
+        # budget exhaustion here would report the wrong cause to the one person
+        # who knows better, and would swallow the cancellation without any tick
+        # ever reporting it.
+        queue = make_queue(FakeClock())
+        budget = GoalBudget(max_wall_ms=600_000, max_steps=4, pending_ttl_ms=600_000)
+        started = start_one(
+            queue, GoalRequest(kind=GoalKind.SATISFY_HUNGER, idempotency_key="k", budget=budget)
+        )
+        assert queue.request_cancel(started.goal_id) is True
+
+        transition = queue.note_step(started.goal_id)
+        assert transition is not None, "the step budget swallowed the cancellation"
+        assert transition.previous is GoalState.ACTIVE
+        assert transition.state is GoalState.CANCELLED
+        assert transition.reason_code is ReasonCode.CANCELLED_BY_REQUEST
+
+        ended = queue.record(started.goal_id)
+        assert ended is not None
+        assert ended.steps_used == 1, "the step was spent and has to be charged"
+        assert ended.reason_code is ReasonCode.CANCELLED_BY_REQUEST
+        # Consumed, not left over: the tick has nothing further to report.
+        assert queue.tick() == ()
+        assert queue.open_count == 0
+
     def test_cancelling_an_unknown_goal_does_not_echo_the_id(self) -> None:
         queue = make_queue(FakeClock())
         poison = "C:/Users/bob/AppData/token"
@@ -1803,6 +1912,90 @@ class TestRefusalHygiene:
     def test_a_refusal_cannot_claim_the_postcondition_was_met(self) -> None:
         with pytest.raises(ValueError, match="not a refusal"):
             GoalRefusal(reason_code=ReasonCode.POSTCONDITION_MET, message="nope")
+
+    @pytest.mark.parametrize(
+        # Exponents rather than the numbers themselves: pytest builds a
+        # parameter id with ``str(val)``, which hits the very 4300-digit limit
+        # this test is about.
+        ("field_name", "digits", "sign"),
+        [
+            ("target_level", 4_000, 1),
+            ("target_level", 5_000, -1),
+            ("pages", 4_301, 1),
+            ("satisfy_to", 4_000, 1),
+        ],
+    )
+    def test_a_range_refusal_does_not_quote_a_number_the_caller_sized(
+        self, field_name: str, digits: int, sign: int
+    ) -> None:
+        value = sign * 10**digits
+        # A Python ``int`` has no width, so ``f"{value}"`` inside a refusal is a
+        # message whose length the *caller* picks. Past CPython's 4300-digit
+        # conversion limit it stops being this module's message at all:
+        # ``str(int)`` raises, and what comes back is the interpreter advising
+        # the caller to raise ``sys.set_int_max_str_digits`` — a refusal that no
+        # longer says what failed, what to do, or which parameter it was about.
+        #
+        # A ``ValueError`` specifically, and that is the second half: converting
+        # such an int to a float for the ``satisfy_to`` check raises
+        # ``OverflowError``, which is not a ``ValueError``, so a caller catching
+        # the refusal this module documents would not have caught that one at all.
+        with pytest.raises(ValueError) as caught:
+            GoalParams(**{field_name: value})
+        message = str(caught.value)
+        assert field_name in message
+        assert "set_int_max_str_digits" not in message
+        assert len(message) <= MAX_DETAIL_CHARS, len(message)
+
+    def test_a_budget_refusal_is_bounded_the_same_way(self) -> None:
+        huge = 10**4_400
+        for kwargs in (
+            {"max_wall_ms": huge, "max_steps": 1, "pending_ttl_ms": 1_000},
+            {"max_wall_ms": 5_000, "max_steps": huge, "pending_ttl_ms": 1_000},
+            {"max_wall_ms": 5_000, "max_steps": 1, "pending_ttl_ms": huge},
+        ):
+            with pytest.raises(ValueError) as caught:
+                GoalBudget(**kwargs)
+            message = str(caught.value)
+            assert "must be within" in message
+            assert "set_int_max_str_digits" not in message
+            assert len(message) <= MAX_DETAIL_CHARS
+
+    def test_the_rendering_bound_holds_at_every_extreme_a_value_can_reach(self) -> None:
+        # ``MAX_RENDERED_VALUE_CHARS`` is held by construction rather than by a
+        # truncation, so the claim is that *no admissible value* renders longer
+        # — which is a claim about the extremes, and they are walked here.
+        extremes: list[float] = [
+            0,
+            -1,
+            10**18 - 1,
+            -(10**18) + 1,
+            10**18,
+            -(10**18),
+            10**4_400,
+            sys.float_info.max,
+            -sys.float_info.max,
+            sys.float_info.min,
+            -sys.float_info.min,
+            5e-324,
+            math.inf,
+            -math.inf,
+            math.nan,
+            -0.0,
+        ]
+        for value in extremes:
+            rendered = goal_model._render_value(value)
+            assert len(rendered) <= MAX_RENDERED_VALUE_CHARS, (len(rendered), rendered)
+            assert "\n" not in rendered
+
+    def test_a_value_small_enough_to_read_is_still_quoted(self) -> None:
+        # The cap must not cost the diagnostic its point: a range refusal that
+        # named no value would send the caller back to guess which of their
+        # numbers was wrong.
+        with pytest.raises(ValueError, match=r"target_level must be within 1\.\.10, got 11$"):
+            GoalParams(target_level=11)
+        with pytest.raises(ValueError, match=r"pages must be within 1\.\.200, got 100000$"):
+            GoalParams(pages=100_000)
 
     def test_a_record_repr_cannot_leak_the_idempotency_key(self) -> None:
         queue = make_queue(FakeClock())
@@ -2006,6 +2199,26 @@ class TestValueObjects:
                 started_at_ms=500,
                 finished_at_ms=400,
                 reason_code=ReasonCode.NO_SAFE_FOOD,
+            )
+
+    def test_a_goal_cannot_finish_before_it_was_submitted(self) -> None:
+        # The third of the three timestamp invariants, and the only one that
+        # covers a goal terminated while it was still pending — it has no
+        # ``started_at_ms``, so neither of the other two checks looks at it.
+        # Nothing exercised this one, and replacing it with ``if False`` was
+        # green.
+        with pytest.raises(ValueError, match="cannot finish before it was submitted"):
+            GoalRecord(
+                goal_id="g",
+                kind=GoalKind.SATISFY_HUNGER,
+                params=GoalParams(),
+                budget=GOAL_SPECS[GoalKind.SATISFY_HUNGER].budget,
+                key_digest="0" * 16,
+                sequence=1,
+                state=GoalState.CANCELLED,
+                submitted_at_ms=900,
+                finished_at_ms=100,
+                reason_code=ReasonCode.CANCELLED_BY_REQUEST,
             )
 
     def test_a_goal_cannot_start_before_it_was_submitted(self) -> None:

@@ -16,12 +16,17 @@ named would, at best, hang; at worst it would reach a *different* process that
 had since been given the same pid, and report that process's silence as the
 core's state. So a descriptor is checked before it is used:
 
+* the file must be small enough to be a descriptor at all;
 * the format and protocol major must match this build;
 * the recorded process must still be alive;
 * the token file must still exist.
 
 :func:`load_descriptor` refuses on any of those and says which. "The sidecar is
 not running" is a good answer; connecting to something else is not.
+
+The size check comes first and is made on the bytes, before any parse: a file
+that large is not a truncated descriptor, it is something else living where this
+one belongs, and finding that out by decoding it costs the whole file.
 """
 
 from __future__ import annotations
@@ -38,8 +43,10 @@ from pz_agent_core.version import RPC_PROTOCOL_VERSION, protocol_major
 __all__ = [
     "DESCRIPTOR_FILENAME",
     "DESCRIPTOR_FORMAT",
+    "MAX_DESCRIPTOR_BYTES",
     "RUNTIME_DIRNAME",
     "DescriptorError",
+    "OversizeDescriptor",
     "RpcDescriptor",
     "StaleDescriptor",
     "load_descriptor",
@@ -58,9 +65,44 @@ DESCRIPTOR_FORMAT: Final = "pz-agent-core-rpc-descriptor/1"
 FAMILY_PIPE: Final = "AF_PIPE"
 FAMILY_UNIX: Final = "AF_UNIX"
 
+#: The most this file can be and still be a descriptor.
+#:
+#: A descriptor is six fields, five of them fixed in shape and short: the format
+#: string (30 bytes), a protocol version, a family name, the token file's name,
+#: and a process id — ten digits at the widest, since a Windows pid is 32 bits.
+#: Only the address varies, and the operating system bounds that too: a Windows
+#: pipe name is at most 256 characters after ``\\.\pipe\``, which is 269 bytes
+#: once JSON doubles the backslashes, and an ``AF_UNIX`` path is limited to 108
+#: bytes by ``sun_path``. Indented and with every key, the whole document comes
+#: to under half a kilobyte in the worst case either platform allows.
+#:
+#: 8 KiB is that with a sixteen-fold margin, and it is deliberately the same
+#: number ``pz_agent_mcp.__main__.MAX_DESCRIPTOR_BYTES`` uses for its own prefix
+#: read of this file. Equal caps mean the two readers refuse the same set of
+#: files: a smaller cap here would refuse a file that the classifier there still
+#: parses whole, and the user would be sent hunting for a second install over a
+#: file neither half wrote.
+MAX_DESCRIPTOR_BYTES: Final = 8 * 1024
+
 
 class DescriptorError(RuntimeError):
     """The descriptor is missing, unreadable, or not one of ours."""
+
+
+class OversizeDescriptor(DescriptorError):
+    """The file where the descriptor belongs is bigger than one can be.
+
+    Separate from a malformed descriptor because the remedy is different. A
+    malformed descriptor is a *descriptor* — truncated by a crash, or written by
+    another build — and restarting the sidecar replaces it. A file past this cap
+    was never a descriptor: something else is writing where this file lives, and
+    ``RpcSupervisor`` clears an unusable descriptor on the way up, so a sidecar
+    started on top of it destroys the evidence of what. The refusal says to take
+    a copy first for that reason.
+
+    Not a :class:`StaleDescriptor` for the same reason: nothing here says the
+    sidecar stopped, so "start it again" is the wrong thing to tell anyone.
+    """
 
 
 class StaleDescriptor(DescriptorError):
@@ -181,17 +223,41 @@ def load_descriptor(state_dir: Path, *, check_alive: bool = True) -> RpcDescript
 
     Raises:
         StaleDescriptor: the process is gone, or the token file is not there.
+        OversizeDescriptor: the file is past :data:`MAX_DESCRIPTOR_BYTES`.
         DescriptorError: missing, malformed, foreign, or an incompatible major.
     """
     path = descriptor_path(state_dir)
     try:
-        raw = path.read_bytes()
+        # Binary, because the cap counts bytes and Windows text mode would fold
+        # every CRLF into one byte before the count ever saw it — a file crafted
+        # out of line endings would then read as small and be parsed.
+        with path.open("rb") as handle:
+            # One byte past the cap: a file of exactly the cap is legal, and a
+            # read that stopped at the cap could not tell it from a longer one.
+            raw = handle.read(MAX_DESCRIPTOR_BYTES + 1)
+            oversize = len(raw) > MAX_DESCRIPTOR_BYTES
+            # The true size, for the refusal to quote. The read stopped early by
+            # design, so its own length would only ever say "one past the cap",
+            # which tells the reader nothing about what is actually there. The
+            # floor keeps the number honest if the file shrinks under us.
+            size = max(os.fstat(handle.fileno()).st_size, len(raw)) if oversize else len(raw)
     except FileNotFoundError:
         raise StaleDescriptor(f"{path.name}: no descriptor; the sidecar is not running") from None
     except OSError as exc:
         raise DescriptorError(
             f"{path.name}: cannot be read ({exc.strerror or 'unknown error'})"
         ) from None
+
+    if oversize:
+        # The filename and two numbers, and nothing else: this path runs through
+        # the user's profile directory and so carries their account name, and
+        # this string reaches a traceback before any redactor does.
+        raise OversizeDescriptor(
+            f"{DESCRIPTOR_FILENAME}: is {size} bytes and the limit is "
+            f"{MAX_DESCRIPTOR_BYTES}; nothing this build writes there is that large, so that "
+            "file is not a descriptor and something else is writing where it goes — take a "
+            "copy of it before starting the sidecar, which replaces it"
+        )
 
     try:
         document: Any = json.loads(raw.decode("utf-8"))

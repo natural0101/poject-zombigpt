@@ -238,11 +238,39 @@ def _status_problems(document: dict[str, Any]) -> list[str]:
         )
 
     current = _head()
-    if current and status.get("head_commit") != current:
-        found.append(
-            f"STATUS.json describes {str(status.get('head_commit'))[:8]} and HEAD is "
-            f"{current[:8]}; a status about another commit is not a status"
-        )
+    described = str(status.get("head_commit") or "")
+    if current and described != current:
+        # Not simply "must equal HEAD". STATUS.json names the commit it
+        # describes, and the commit that CONTAINS it is necessarily a later one —
+        # writing the file changes the tree, which changes the SHA. A rule of
+        # strict equality is therefore unsatisfiable, and an unsatisfiable rule
+        # gets switched off rather than obeyed.
+        #
+        # What actually makes it stale is something it describes having moved. So
+        # it must name an ancestor of HEAD, and nothing outside docs/control/ may
+        # have changed since: a commit that only rewrites the control plane
+        # leaves every claim in this file true.
+        if not described or not _is_ancestor(described, "HEAD"):
+            found.append(
+                f"STATUS.json describes {described[:8] or 'nothing'}, which is not an "
+                f"ancestor of HEAD ({current[:8]}); it is about another history"
+            )
+        else:
+            moved = subprocess.run(
+                ["git", "diff", "--name-only", described, "HEAD"],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=120,
+            ).stdout.split()
+            outside = [path for path in moved if not path.startswith("docs/control/")]
+            if outside:
+                found.append(
+                    f"STATUS.json describes {described[:8]} and {len(outside)} file(s) have "
+                    f"changed since, first {outside[0]}; regenerate with "
+                    f"scripts/reconcile_status.py"
+                )
 
     for field in ("linux_ci", "windows_ci"):
         entry = status.get(field) or {}

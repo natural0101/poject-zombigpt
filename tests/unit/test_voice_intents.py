@@ -8,12 +8,16 @@ of the grammar passes whatever the grammar says — including "nothing".
 
 from __future__ import annotations
 
+import importlib.util
+import sys
+from types import ModuleType
+
 import pytest
 
 from pz_agent_core import goals as core_goals
 from pz_agent_core.goals import GoalKind, GoalRequest, TrainableSkill, parse_kind, parse_skill
 from pz_agent_core.protocol import ReasonCode
-from pz_agent_voice import intents, phrases
+from pz_agent_voice import intents, messages, phrases
 from pz_agent_voice.intent import (
     ALL_VOICE_CAPABILITIES,
     GoalResolution,
@@ -1302,3 +1306,160 @@ def test_intents_a_goal_request_carries_the_resolved_parameters() -> None:
 def test_intents_only_a_goal_becomes_a_request(utterance: str) -> None:
     with pytest.raises(ValueError, match="only a goal resolution"):
         intents.to_goal_request(intents.resolve(utterance), sequence=1)
+
+
+# --- the bounds, as literals rather than as symbols -------------------------
+#
+# Every test above that touches a bound reads it out of the module. That is the
+# right way to write "the bound is applied consistently" and the wrong way to
+# write "the bound is 160": a test that imports the constant agrees with
+# whatever the constant becomes. The three below are the numbers themselves.
+
+
+def test_intents_the_declared_bounds_are_the_numbers_this_grammar_was_written_against() -> None:
+    """Hand-written literals. Widening a bound arrives here as a failure.
+
+    ``MAX_UTTERANCE_CHARS`` is the one that matters most: it is the whole of
+    what makes the matcher's work bounded, and the module's only defence
+    against a recogniser that emits an accumulated paragraph. Read as a symbol
+    it is satisfied by any number at all.
+    """
+    assert intents.MAX_UTTERANCE_CHARS == 160
+    assert intents.MAX_NUMBER_DIGITS == 3
+    assert intents.MAX_VOICE_SEQUENCE == 999_999
+
+    # And the behaviour at the literal, not at the symbol: 160 characters of
+    # speech is one command, 161 is a paragraph and is refused as one.
+    head = "почитай "
+    assert intents.resolve(head + PAD * (160 - len(head))).outcome is intents.VoiceOutcome.GOAL
+    over = intents.resolve(head + PAD * (161 - len(head)))
+    assert over.truncated is True
+    assert over.refusal is not None
+    assert over.refusal.code is intents.VoiceRefusalCode.TOO_LONG
+
+
+def test_intents_a_digit_run_past_the_bound_is_refused_even_when_its_value_would_fit() -> None:
+    """The digit bound is judged on the run, before ``int`` ever sees it.
+
+    ``0007`` is four digits and spells seven, which is well inside 1..200. It is
+    refused anyway, and that is the observable difference the bound makes: a
+    matcher that converted first and checked the range afterwards would accept
+    it, and would be doing work proportional to a digit run the speaker chose
+    for a value it could have rejected by length.
+    """
+    fits = intents.resolve("почитай 007 страниц")
+    assert fits.outcome is intents.VoiceOutcome.GOAL
+    assert fits.params.pages == 7
+
+    refused = intents.resolve("почитай 0007 страниц")
+    assert refused.outcome is intents.VoiceOutcome.REFUSED
+    assert refused.refusal is not None
+    assert refused.refusal.code is intents.VoiceRefusalCode.OUT_OF_RANGE
+    assert refused.refusal.parameter == "pages"
+
+
+# --- the import-time check, and that it is actually reached -----------------
+
+_PROBE_NAME = "pz_agent_voice._intents_executed_afresh"
+
+
+def _executed_afresh() -> ModuleType:
+    """Run ``intents.py`` again as a new module, exactly as an import would.
+
+    A fresh module object rather than :func:`importlib.reload`, which executes
+    the file in the *live* module's namespace: a failure part-way through would
+    leave the module every other test in this file imported half-rebuilt.
+    """
+    spec = importlib.util.spec_from_file_location(_PROBE_NAME, intents.__file__)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    module.__package__ = "pz_agent_voice"
+    sys.modules[_PROBE_NAME] = module
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.modules.pop(_PROBE_NAME, None)
+    return module
+
+
+def test_intents_the_table_check_runs_at_import_and_not_only_when_it_is_called(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every check above calls ``_check_tables`` by hand; this one never does.
+
+    A module whose self-check is written correctly and never invoked passes all
+    of them and still ships a grammar that disagrees with itself. So the import
+    is made to fail instead: the transcript bound is narrowed underneath the
+    module, and a fresh execution of the same file has to refuse to finish.
+    """
+    assert _executed_afresh().MAX_UTTERANCE_CHARS == intents.MAX_UTTERANCE_CHARS
+
+    monkeypatch.setattr(messages, "MAX_TRANSCRIPT_CHARS", 10)
+    with pytest.raises(RuntimeError, match="must not exceed"):
+        _executed_afresh()
+
+
+def test_intents_import_check_rejects_a_refusal_too_long_to_speak(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A sentence past ``MAX_TEXT_CHARS`` is truncated on the way to the queue.
+
+    Truncated, the user hears half of what went wrong and none of what to say
+    instead, which is worse than the refusal not existing.
+    """
+    monkeypatch.setattr(
+        intents,
+        "REFUSAL_MESSAGES",
+        {
+            **intents.REFUSAL_MESSAGES,
+            intents.VoiceRefusalCode.EMPTY: PAD * (messages.MAX_TEXT_CHARS + 1),
+        },
+    )
+    with pytest.raises(RuntimeError, match="too long to speak"):
+        intents._check_tables()
+
+
+def test_intents_import_check_rejects_a_refusal_with_no_reason_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A code with no wire reason is a refusal nothing downstream can report."""
+    monkeypatch.setattr(
+        intents,
+        "REFUSAL_REASONS",
+        {
+            code: reason
+            for code, reason in intents.REFUSAL_REASONS.items()
+            if code is not intents.VoiceRefusalCode.OUT_OF_RANGE
+        },
+    )
+    with pytest.raises(RuntimeError, match="has no reason code"):
+        intents._check_tables()
+
+
+def test_intents_import_check_rejects_a_key_shape_the_channel_would_reject(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A minted key longer than the channel accepts is a goal that cannot be sent.
+
+    ``GoalRequest`` refuses it at construction, so the failure would land on the
+    first voice-submitted goal of whichever kind has the longest name rather
+    than at import.
+    """
+    monkeypatch.setattr(intents, "_KEY_PREFIX", "v" * core_goals.MAX_IDEMPOTENCY_KEY_LEN)
+    with pytest.raises(RuntimeError, match="exceed the channel's bound"):
+        intents._check_tables()
+
+
+def test_intents_import_check_rejects_a_bare_number_the_kind_does_not_accept(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A bare-number meaning the kind has no field for refuses nothing usefully.
+
+    ``satisfy_hunger`` takes ``satisfy_to`` and no page count, so declaring
+    pages as its bare-number parameter would turn "поешь 5" into a refusal the
+    speaker cannot act on rather than into the goal they asked for.
+    """
+    monkeypatch.setattr(intents, "BARE_NUMBER_PARAM", {GoalKind.SATISFY_HUNGER: "pages"})
+    with pytest.raises(RuntimeError, match="satisfy_hunger does not accept pages"):
+        intents._check_tables()

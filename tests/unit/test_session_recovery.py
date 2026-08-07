@@ -104,6 +104,24 @@ SAFETY_LUA: Final = (
 #: read its own source.
 EXPECTED_TIMEOUT_MS: Final = 5_000
 
+#: The two evidence shapes, written out. ``ActionEngine._world_evidence``
+#: explains a refusal; ``Evidence.to_payload`` proves a postcondition. They
+#: overlap on ``observation_seq``, which is exactly why the presence of that one
+#: key distinguishes nothing and both sets are pinned here instead.
+WORLD_EVIDENCE_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "observation_seq",
+        "observation_seq_before",
+        "danger_level",
+        "manual_takeover",
+        "action_ownership",
+        "action_busy",
+        "action_type",
+        "save_id",
+    }
+)
+SUCCESS_EVIDENCE_KEYS: Final[frozenset[str]] = frozenset({"kind", "observed"})
+
 
 def _obs(**overrides: Any) -> Observation:
     base: dict[str, Any] = {"seq": 1, "timestamp_ms": NOW_MS}
@@ -154,14 +172,48 @@ def test_the_sidecar_timeout_is_the_one_the_mod_uses() -> None:
     assert lua_timeout == EXPECTED_TIMEOUT_MS
 
 
-@pytest.mark.parametrize("function", ["Safety.arm", "Safety.mayStart"])
-def test_the_mod_refuses_to_start_anything_while_the_sidecar_is_stale(function: str) -> None:
-    """The mod's two gates both consult the heartbeat and both name the code."""
-    body = _lua_function(SAFETY_LUA.read_text(encoding="utf-8"), function)
-    assert "Safety.sidecarStale(state, nowMs)" in body, (
+#: The line both gates open their sidecar check with, and the ``end`` that
+#: closes that branch. The reason code has to be read out of the branch itself:
+#: both gates *also* refuse a missing session with ``STALE_SESSION`` a few lines
+#: later, so a substring search over the whole function body is satisfied by
+#: that unrelated refusal and stays green while the stale-sidecar branch quietly
+#: starts answering something else.
+STALE_GUARD: Final = "if Safety.sidecarStale(state, nowMs) then"
+BRANCH_END: Final = "\n  end"
+
+
+def _stale_sidecar_branch(body: str, function: str) -> str:
+    """The body of *function*'s ``sidecarStale`` branch, and nothing else."""
+    assert STALE_GUARD in body, (
         f"{function} no longer checks whether the sidecar is still there"
     )
-    assert "STALE_SESSION" in body, f"{function} refuses without saying it is a stale session"
+    after = body.split(STALE_GUARD, 1)[1]
+    assert BRANCH_END in after, (
+        f"{function}'s sidecar check is not a closed branch, so there is no "
+        "refusal to read the reason code out of"
+    )
+    return after.split(BRANCH_END, 1)[0]
+
+
+@pytest.mark.parametrize("function", ["Safety.arm", "Safety.mayStart"])
+def test_the_mod_refuses_to_start_anything_while_the_sidecar_is_stale(function: str) -> None:
+    """The mod's two gates both consult the heartbeat and both name the code.
+
+    The code is taken from the ``sidecarStale`` branch rather than from anywhere
+    in the function, because that is the refusal the sidecar's ack has to be
+    able to explain: "the mod stopped seeing me" and "there is no session" are
+    different situations for whoever is reading the log, and only the first one
+    is what this test is about.
+    """
+    branch = _stale_sidecar_branch(
+        _lua_function(SAFETY_LUA.read_text(encoding="utf-8"), function), function
+    )
+
+    assert "return false" in branch, f"{function} no longer refuses on a stale sidecar"
+    assert "STALE_SESSION" in branch, (
+        f"{function} refuses a stale sidecar without saying it is a stale "
+        f"session; the branch reads: {branch.strip()!r}"
+    )
 
 
 def test_the_mod_starts_out_believing_the_sidecar_is_gone() -> None:
@@ -529,8 +581,16 @@ def test_a_success_ack_from_a_game_that_then_went_quiet_is_not_a_success() -> No
 
     assert result.status is not ActionStatus.SUCCEEDED
     assert result.reason_code is ReasonCode.POSTCONDITION_FAILED
-    assert result.evidence.get("observation_seq") is not None, (
-        "a refusal carries what was observed, never postcondition evidence"
+    # Pinned key for key. Asserting only that ``observation_seq`` is present
+    # would prove nothing about which *kind* of evidence this is: a success
+    # payload carries that key too (see SUCCESS_EVIDENCE_KEYS), so a refusal
+    # that had smuggled a claim of postcondition evidence onto itself would
+    # satisfy such a check exactly as happily as the honest answer does.
+    assert set(result.evidence) == WORLD_EVIDENCE_KEYS, (
+        f"the refusal is not carrying the world it refused on: {sorted(result.evidence)}"
+    )
+    assert not set(result.evidence) & SUCCESS_EVIDENCE_KEYS, (
+        "a refusal carries what was observed, never a claim that it worked"
     )
 
 
