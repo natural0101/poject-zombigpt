@@ -94,3 +94,23 @@ executable on that runner.
 Observed for E11-M03-T001: the "Assemble the archive" step produced the
 release zip and it was uploaded as pz-agent-windows-rc
 (sha256 3eb5ca63c4d113f3a3a48914a7cd206f77439a24a80f891fcea60b205733bbe2).
+
+--- The failure trend, per run, so the trajectory is auditable ---
+
+Counts are test failures in the windows-latest Tests step of the run named;
+"gate" marks a run red on a checking step rather than on tests. Only runs
+whose counts were read from their logs at the time are listed with a number —
+a run nobody read is listed as its conclusion, not as a guess.
+
+| run | commit | failures |
+| --- | --- | --- |
+| 31156087690 | 873037c0 | 24 (the baseline split into six root causes, D-002) |
+| (branch runs) | — | 24 -> 13 -> 1 -> 0 at a7c16ba2 — first green suite; then new work regressed it |
+| 31187551234 | df03dba7 | 0 (green; the merge of the branch into main) |
+| 31211673638 | f0fb8fb8 | 2 (both TeamON bridge death-detection cases, fixed at 370dc4b) |
+| 31214158408 | 276b9d90 | 0 (green; RC built and certified from this run) |
+| 31218129893 | 3c70712f | gate (the unsatisfiable GREEN rule refusing its own recording; fixed at 743115c) |
+| 31223693322 | 40d528ca | 0 (green; the fixed rule's first live validation — the STATUS recorded at this commit survived its own CI) |
+
+Every red run between 31127833879 and 31155356132 belongs to the descent from
+24: each fixed a subset of the six causes and the next run measured the rest.

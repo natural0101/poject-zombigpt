@@ -1,9 +1,10 @@
 """The absolute rule: no transcript text leaves the voice process.
 
-An adversarial utterance is fed to :func:`~pz_agent_voice.intents.resolve` and
-then followed to each of the four places text could escape to — the goal handed
-to the core, a diagnostic log, a support bundle, and an RPC call on the wire —
-and none of them is allowed to contain a byte of it.
+An adversarial utterance is fed to :func:`~pz_agent_voice.intent.resolve_goal`
+— the shipped resolver, named the survivor by ``docs/control/BLOCKERS.md``
+R-007 — and then followed to each of the four places text could escape to: the
+goal handed to the core, a diagnostic log, a support bundle, and an RPC call on
+the wire. None of them is allowed to contain a byte of it.
 
 Two things make this a test rather than a gesture:
 
@@ -142,17 +143,10 @@ from pz_agent_mcp.remote.codec.goals import (
 )
 from pz_agent_mcp.remote.codec.plans import encode_plan_current, encode_plan_record
 from pz_agent_mcp.remote.methods import Method
-from pz_agent_voice import intents, phrases
+from pz_agent_voice import intent, phrases
 from pz_agent_voice.adapters.teamon import TeamONTranscript
-from pz_agent_voice.intent import classify
-from pz_agent_voice.intents import (
-    REFUSAL_MESSAGES,
-    VoiceOutcome,
-    VoiceResolution,
-    resolve,
-    to_goal_request,
-)
-from pz_agent_voice.messages import VoiceGoal, VoiceInput, VoiceIntent
+from pz_agent_voice.intent import ALL_VOICE_CAPABILITIES, GoalResolution, classify, resolve_goal
+from pz_agent_voice.messages import IntentRefusal, VoiceGoal, VoiceInput, VoiceIntent
 from pz_agent_voice.plan_port import VOICE_PLAN_DEADLINE_SECONDS, core_goal_port, core_plan_port
 from pz_agent_voice.ports import VoiceServices
 from pz_agent_voice.session import VoiceSession
@@ -283,6 +277,40 @@ def _leaks(data: bytes) -> tuple[str, ...]:
     return _found(data, NEEDLES)
 
 
+def resolve(utterance: str) -> GoalResolution:
+    """The shipped resolver, as production wires it: every capability observed."""
+    return resolve_goal(VoiceInput(transcript=utterance, at_ms=0), available=ALL_VOICE_CAPABILITIES)
+
+
+def _spoken_refusal(resolution: GoalResolution) -> str:
+    """The sentence the companion would say about a refused resolution.
+
+    Built by :func:`~pz_agent_voice.phrases.intent_refusal` from closed tables
+    and the names the resolution minted — the same route the session takes.
+    """
+    assert resolution.refusal is not None
+    return phrases.intent_refusal(
+        resolution.refusal,
+        parameter=resolution.parameter,
+        capability=resolution.capability,
+    )
+
+
+def to_goal_request(resolution: GoalResolution, *, sequence: int) -> GoalRequest:
+    """A submission built the way :class:`~pz_agent_voice.session.VoiceSession` builds one.
+
+    The idempotency key — the goal channel's one caller-supplied string — is
+    minted from a counter, exactly as the session's ``IdFactory`` mints it, so
+    no transcript byte has a route into it.
+    """
+    assert resolution.resolved and resolution.kind is not None
+    return GoalRequest(
+        kind=resolution.kind,
+        idempotency_key=f"voice-{sequence:06d}",
+        params=resolution.params,
+    )
+
+
 # ---------------------------------------------------------------------------
 # sink one: the goal
 # ---------------------------------------------------------------------------
@@ -302,19 +330,26 @@ def test_no_transcript_reaches_the_goal_request(label: str, utterance: str) -> N
     produce no request at all, which is the same rule stated at its other end.
     """
     resolution = resolve(utterance)
-    if resolution.outcome is not VoiceOutcome.GOAL:
-        with pytest.raises(ValueError, match="only a goal resolution"):
-            to_goal_request(resolution, sequence=7)
+    if not resolution.resolved:
+        # A refusal carries no kind — GoalResolution's constructor enforces it —
+        # so there is nothing the session could submit. That is the same rule
+        # stated at its other end.
+        assert resolution.kind is None
         return
     request = to_goal_request(resolution, sequence=7)
     assert _leaks(repr(request).encode("utf-8")) == ()
-    assert re.fullmatch(r"voice\.[a-z_]+\.\d{6}", request.idempotency_key)
+    assert re.fullmatch(r"voice-\d{6}", request.idempotency_key)
 
 
-def test_both_goal_phrases_actually_produce_a_goal() -> None:
-    """Guards the branch above: a rule proved only on refusals proves nothing."""
-    produced = [label for label, u in ADVERSARIAL if resolve(u).outcome is VoiceOutcome.GOAL]
-    assert produced == ["goal", "goal_with_params"]
+def test_the_goal_phrases_actually_produce_a_goal() -> None:
+    """Guards the branch above: a rule proved only on refusals proves nothing.
+
+    ``too_long`` is in the list: the resolver truncates to the transcript bound
+    and matches the surviving prefix, so the goal word at the front of that
+    phrase still resolves — and the needles behind it still must go nowhere.
+    """
+    produced = [label for label, u in ADVERSARIAL if resolve(u).resolved]
+    assert produced == ["goal", "goal_with_params", "too_long"]
 
 
 def test_the_parameters_that_survive_are_numbers_inside_declared_ranges() -> None:
@@ -343,9 +378,9 @@ def test_every_string_in_a_resolution_is_a_constant_this_repository_wrote() -> N
     allowed = {
         *(kind.value for kind in GoalKind),
         *(skill.value for skill in TrainableSkill),
-        *(outcome.value for outcome in VoiceOutcome),
-        *REFUSAL_MESSAGES.values(),
-        *(code.value for code in REFUSAL_MESSAGES),
+        *(member.value for member in VoiceIntent),
+        *(code.value for code in IntentRefusal),
+        *ALL_VOICE_CAPABILITIES,
         *PARAM_NAMES,
         "",
     }
@@ -402,27 +437,29 @@ def test_the_field_walk_sees_a_field_nobody_told_it_about() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _log_a_resolution(directory: Path, resolution: VoiceResolution) -> DiagnosticLog:
+def _log_a_resolution(directory: Path, resolution: GoalResolution) -> DiagnosticLog:
     """Write the record a caller would write about *resolution*.
 
-    Deliberately verbose: it logs every public field, because the rule has to
-    hold for a caller that reports everything, not only for a careful one. The
-    log is built with the default null redactor so nothing is scrubbed for us.
+    Deliberately verbose: it logs every public field, and the sentence the
+    companion would speak, because the rule has to hold for a caller that
+    reports everything, not only for a careful one. The log is built with the
+    default null redactor so nothing is scrubbed for us.
     """
     log = DiagnosticLog(directory, name="voice")
     log.log(
         LogLevel.INFO,
         "voice.resolved",
-        outcome=resolution.outcome.value,
+        intent=resolution.intent.value,
         kind=None if resolution.kind is None else resolution.kind.value,
-        truncated=resolution.truncated,
         skill=None if resolution.params.skill is None else resolution.params.skill.value,
         target_level=resolution.params.target_level,
         pages=resolution.params.pages,
         satisfy_to=resolution.params.satisfy_to,
-        refusal=None if resolution.refusal is None else resolution.refusal.code.value,
-        parameter=None if resolution.refusal is None else resolution.refusal.parameter,
-        message=None if resolution.refusal is None else resolution.refusal.message,
+        refusal=None if resolution.refusal is None else resolution.refusal.value,
+        parameter=resolution.parameter,
+        capability=resolution.capability,
+        candidates=[kind.value for kind in resolution.candidates],
+        message=None if resolution.refusal is None else _spoken_refusal(resolution),
     )
     return log
 
@@ -443,7 +480,7 @@ def test_the_module_cannot_write_anywhere_on_its_own() -> None:
     version — "call resolve and see that nothing was written" — passes for a
     module that writes to a file the test does not know about.
     """
-    source = Path(intents.__file__).read_text(encoding="utf-8")
+    source = Path(intent.__file__).read_text(encoding="utf-8")
     for forbidden in ("import logging", "print(", "open(", "subprocess", "socket", "sys.std"):
         assert forbidden not in source, forbidden
 
@@ -453,21 +490,22 @@ def test_the_module_cannot_write_anywhere_on_its_own() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _bundle_a_resolution(destination: Path, resolution: VoiceResolution) -> Path:
+def _bundle_a_resolution(destination: Path, resolution: GoalResolution) -> Path:
     """Build a real archive holding everything a bundle would carry about it."""
     builder = BundleBuilder()
     builder.add_json(
         "voice/resolution.json",
         {
-            "outcome": resolution.outcome.value,
+            "intent": resolution.intent.value,
             "kind": None if resolution.kind is None else resolution.kind.value,
-            "truncated": resolution.truncated,
-            "refusal": None if resolution.refusal is None else resolution.refusal.code.value,
-            "message": None if resolution.refusal is None else resolution.refusal.message,
+            "refusal": None if resolution.refusal is None else resolution.refusal.value,
+            "parameter": resolution.parameter,
+            "capability": resolution.capability,
+            "message": None if resolution.refusal is None else _spoken_refusal(resolution),
         },
     )
     if resolution.refusal is not None:
-        builder.add_text("voice/refusal.txt", resolution.refusal.message + "\n")
+        builder.add_text("voice/refusal.txt", _spoken_refusal(resolution) + "\n")
     builder.build(destination)
     return destination
 
@@ -510,11 +548,11 @@ def _rpc_bytes(request: GoalRequest) -> bytes:
 @pytest.mark.parametrize(("label", "utterance"), ADVERSARIAL)
 def test_no_transcript_reaches_an_rpc_call(label: str, utterance: str) -> None:
     resolution = resolve(utterance)
-    if resolution.outcome is not VoiceOutcome.GOAL:
-        # A non-goal never reaches the link at all: there is no request to
-        # encode, and asserting that is the honest form of "nothing leaked".
-        with pytest.raises(ValueError, match="only a goal resolution"):
-            to_goal_request(resolution, sequence=1)
+    if not resolution.resolved:
+        # A non-goal never reaches the link at all: it carries no kind, so
+        # there is no request to encode, and asserting that is the honest form
+        # of "nothing leaked".
+        assert resolution.kind is None
         return
     assert _leaks(_rpc_bytes(to_goal_request(resolution, sequence=1))) == (), label
 
@@ -523,16 +561,17 @@ def test_a_refusal_crossing_the_link_carries_only_its_constant() -> None:
     """Even when a refusal *is* reported over RPC, it carries no transcript."""
     resolution = resolve(ADVERSARIAL[2][1])
     assert resolution.refusal is not None
-    core = resolution.refusal.to_goal_refusal()
+    message = _spoken_refusal(resolution)
     encoded = encode_request(
         RpcRequest(
             id="voice-0002",
             method="voice.refused",
-            params={"reason_code": core.reason_code.value, "message": core.message},
+            params={"refusal": resolution.refusal.value, "message": message},
         )
     )
     assert _leaks(encoded) == ()
-    assert core.message in set(REFUSAL_MESSAGES.values())
+    # The whole sentence is the closed table's constant for this refusal.
+    assert message == phrases.REFUSAL_SPEECH[IntentRefusal.NOT_A_GOAL]
 
 
 # ---------------------------------------------------------------------------

@@ -69,13 +69,19 @@ jobs:
           --distpath packaging/windows/dist --workpath packaging/windows/build
           packaging/windows/pz-agent-mcp.spec
 
-      - name: Both executables answer
+      - name: Both executables answer, without Python on PATH
         # A binary that was produced is not a binary that runs. --version and
         # --describe need no game, no sidecar and no session, so they are the
-        # cheapest proof that the bundle imports its own packages.
+        # cheapest proof that the bundle imports its own packages. PATH is
+        # reduced to the system directories first, so the run also proves the
+        # bundle needs no Python installation: with the hosted tool cache off
+        # the PATH, any import that escaped the bundle fails here instead of on
+        # a user's machine that never had Python.
+        shell: cmd
         run: |
-          packaging/windows/dist/pz-agent.exe --version
-          packaging/windows/dist/pz-agent-mcp.exe --describe > pz-agent-mcp-catalogue.json
+          set "PATH=C:\Windows\system32;C:\Windows"
+          packaging\windows\dist\pz-agent.exe --version
+          packaging\windows\dist\pz-agent-mcp.exe --describe > pz-agent-mcp-catalogue.json
 
       - name: Assemble the archive
         run: python packaging/windows/build_rc.py

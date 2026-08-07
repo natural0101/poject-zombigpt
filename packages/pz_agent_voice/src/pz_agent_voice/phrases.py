@@ -29,7 +29,7 @@ from pz_agent_core.protocol import DangerLevel, ReasonCode
 # refuse on always has a sentence, checked at import instead of at the
 # loudspeaker.
 from .intent import ALL_VOICE_CAPABILITIES
-from .messages import IntentRefusal, VoiceGoal
+from .messages import MAX_TEXT_CHARS, IntentRefusal, VoiceGoal
 
 __all__ = [
     "CAPABILITY_NOUNS",
@@ -186,6 +186,7 @@ REFUSAL_SPEECH: Final[dict[IntentRefusal, str]] = {
     IntentRefusal.SKILL_NOT_NAMED: (
         "Не понял, какой навык. Назови один навык, например плотницкое дело."
     ),
+    IntentRefusal.INTERNAL: "Не смог разобрать команду. Повтори её иначе.",
 }
 
 #: Refusals that cannot be spoken without being told what to name.
@@ -257,6 +258,40 @@ def _check_speech_tables() -> None:
     overlap = set(REFUSAL_SPEECH) & _NAMED_REFUSALS
     if overlap:
         raise RuntimeError(f"refusal(s) {sorted(overlap)} have two spoken forms")
+    # Every sentence a refusal can produce, enumerated — the named ones over
+    # every name they can be given — and held against the queue's own bound. A
+    # sentence past MAX_TEXT_CHARS is truncated on the way to the synthesiser,
+    # and the user then hears half of what went wrong and none of what to say
+    # instead, which is worse than the refusal not existing.
+    spoken_forms: list[tuple[str, str]] = [
+        (code.value, sentence) for code, sentence in REFUSAL_SPEECH.items()
+    ]
+    spoken_forms += [
+        (
+            f"parameter_out_of_range:{name}",
+            intent_refusal(IntentRefusal.PARAMETER_OUT_OF_RANGE, parameter=name),
+        )
+        for name in NUMERIC_RANGES
+    ]
+    spoken_forms += [
+        (
+            f"parameter_not_accepted:{name}",
+            intent_refusal(IntentRefusal.PARAMETER_NOT_ACCEPTED, parameter=name),
+        )
+        for name in PARAM_NOUNS
+    ]
+    spoken_forms += [
+        (
+            f"capability_unavailable:{name}",
+            intent_refusal(IntentRefusal.CAPABILITY_UNAVAILABLE, capability=name),
+        )
+        for name in CAPABILITY_NOUNS
+    ]
+    for owner, sentence in spoken_forms:
+        if not sentence.strip():
+            raise RuntimeError(f"{owner} has no refusal sentence")
+        if len(sentence) > MAX_TEXT_CHARS:
+            raise RuntimeError(f"the sentence for {owner} is too long to speak")
 
 
 _check_speech_tables()

@@ -10,6 +10,29 @@ drift out of sync with `pz_agent_core.version`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **R-007: the voice intent resolver existed twice, and the tested copy was
+  not the shipped one.** `pz_agent_voice/intents.py` — 600+ lines production
+  never imported — is deleted; `intent.py`, the module `session.py` actually
+  runs, survives and now carries what the dead copy alone had: the percent
+  sign as a spoken unit («поешь 80%»), the closed bare-number table that gives
+  «прокачай механику до 7» its one honest reading, a defensive
+  `IntentRefusal.INTERNAL` so a range-table drift becomes a spoken sentence
+  instead of a `ValueError` quoting the spoken number, and import-time checks
+  that every vocabulary word survives normalisation, no word is claimed by two
+  tables or shadows a stop word, and every trainable skill has a spoken form.
+  `test_voice_intents.py` is rewritten against the survivor; every behavioural
+  claim that applied was kept or replaced by the survivor's equivalent, each
+  fold recorded. An adversarial verifier mutation-tested the stop-first
+  ordering (the reordered scan fails the test) and restored one dropped pin —
+  a digit run past the length bound is refused before `int()` even when its
+  value would fit.
+- **The answer check now also proves the bundle needs no Python.** The
+  `windows package` step that runs both executables does so with PATH reduced
+  to the system directories, so an import that escaped the PyInstaller bundle
+  fails on the runner instead of on a user's machine that never had Python.
+
 ### Added
 
 - **The bridge protocol has a published schema.**

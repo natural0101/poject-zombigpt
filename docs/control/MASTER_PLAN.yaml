@@ -5310,7 +5310,7 @@ epics:
       pass_criterion: every intent in the grammar resolves to a kind or is refused explicitly
       verify_command: .venv/bin/pytest tests/unit/test_voice_intents.py -q
       regression_test: tests/unit/test_voice_intents.py
-      evidence: packages/pz_agent_voice/src/pz_agent_voice/intents.py
+      evidence: packages/pz_agent_voice/src/pz_agent_voice/intent.py
       status: PASS
       implementation_commit: 3944c0a727cde76df5d92925a9af3a969f575539
       verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
@@ -5328,7 +5328,7 @@ epics:
       pass_criterion: an unmapped phrase produces a named refusal
       verify_command: .venv/bin/pytest tests/unit/test_voice_intents.py -q
       regression_test: tests/unit/test_voice_intents.py
-      evidence: packages/pz_agent_voice/src/pz_agent_voice/intents.py
+      evidence: packages/pz_agent_voice/src/pz_agent_voice/intent.py
       status: PASS
       implementation_commit: 3944c0a727cde76df5d92925a9af3a969f575539
       verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
@@ -5346,7 +5346,7 @@ epics:
       pass_criterion: quantities and targets become typed fields
       verify_command: .venv/bin/pytest tests/unit/test_voice_intents.py -q
       regression_test: tests/unit/test_voice_intents.py
-      evidence: packages/pz_agent_voice/src/pz_agent_voice/intents.py
+      evidence: packages/pz_agent_voice/src/pz_agent_voice/intent.py
       status: PASS
       implementation_commit: 3944c0a727cde76df5d92925a9af3a969f575539
       verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
@@ -5364,7 +5364,7 @@ epics:
       pass_criterion: an out-of-range quantity is refused
       verify_command: .venv/bin/pytest tests/unit/test_voice_intents.py -q
       regression_test: tests/unit/test_voice_intents.py
-      evidence: packages/pz_agent_voice/src/pz_agent_voice/intents.py
+      evidence: packages/pz_agent_voice/src/pz_agent_voice/intent.py
       status: PASS
       implementation_commit: 3944c0a727cde76df5d92925a9af3a969f575539
       verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
@@ -5382,7 +5382,7 @@ epics:
       pass_criterion: each intent has several attested phrasings
       verify_command: .venv/bin/pytest tests/unit/test_voice_intents.py -q
       regression_test: tests/unit/test_voice_intents.py
-      evidence: packages/pz_agent_voice/src/pz_agent_voice/intents.py
+      evidence: packages/pz_agent_voice/src/pz_agent_voice/intent.py
       status: PASS
       implementation_commit: 3944c0a727cde76df5d92925a9af3a969f575539
       verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
@@ -5400,7 +5400,7 @@ epics:
       pass_criterion: no transcript text is carried into a GoalKind
       verify_command: .venv/bin/pytest tests/unit/test_voice_intents.py -q
       regression_test: tests/unit/test_voice_intents.py
-      evidence: packages/pz_agent_voice/src/pz_agent_voice/intents.py
+      evidence: packages/pz_agent_voice/src/pz_agent_voice/intent.py
       status: PASS
       implementation_commit: 3944c0a727cde76df5d92925a9af3a969f575539
       verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
@@ -5490,7 +5490,7 @@ epics:
       pass_criterion: the stop grammar is matched first, so a stop is never mistaken for a goal
       verify_command: .venv/bin/pytest tests/unit/test_voice_intents.py -q
       regression_test: tests/unit/test_voice_intents.py
-      evidence: packages/pz_agent_voice/src/pz_agent_voice/intents.py
+      evidence: packages/pz_agent_voice/src/pz_agent_voice/intent.py
       status: PASS
       implementation_commit: 3944c0a727cde76df5d92925a9af3a969f575539
       verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
@@ -5508,7 +5508,7 @@ epics:
       pass_criterion: an overlong transcript is truncated before matching, not buffered
       verify_command: .venv/bin/pytest tests/unit/test_voice_intents.py -q
       regression_test: tests/unit/test_voice_intents.py
-      evidence: packages/pz_agent_voice/src/pz_agent_voice/intents.py
+      evidence: packages/pz_agent_voice/src/pz_agent_voice/intent.py
       status: PASS
       implementation_commit: 3944c0a727cde76df5d92925a9af3a969f575539
       verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
@@ -5526,7 +5526,7 @@ epics:
       pass_criterion: an intent for an unverified capability is refused with the capability named
       verify_command: .venv/bin/pytest tests/unit/test_voice_intents.py -q
       regression_test: tests/unit/test_voice_intents.py
-      evidence: packages/pz_agent_voice/src/pz_agent_voice/intents.py
+      evidence: packages/pz_agent_voice/src/pz_agent_voice/intent.py
       status: PASS
       implementation_commit: 3944c0a727cde76df5d92925a9af3a969f575539
       verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
@@ -5544,7 +5544,7 @@ epics:
       pass_criterion: an intent naming a kind that does not exist fails a test
       verify_command: .venv/bin/pytest tests/unit/test_voice_intents.py -q
       regression_test: tests/unit/test_voice_intents.py
-      evidence: packages/pz_agent_voice/src/pz_agent_voice/intents.py
+      evidence: packages/pz_agent_voice/src/pz_agent_voice/intent.py
       status: PASS
       implementation_commit: 3944c0a727cde76df5d92925a9af3a969f575539
       verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
@@ -6339,12 +6339,13 @@ epics:
       verify_command: read the spec
       regression_test: ''
       evidence: packaging/windows/pz-agent.spec
-      status: NOT_STARTED
-      implementation_commit: null
-      verification_commit: null
-      commit: null
-      ci_url: null
-      reason: ''
+      status: PASS
+      implementation_commit: 63cca87f42d5c0851425f055a2e9a8fcb09e3757
+      verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
+      commit: 63cca87f42d5c0851425f055a2e9a8fcb09e3757
+      ci_url: https://github.com/natural0101/poject-zombigpt/actions/runs/31214158408
+      reason: the spec generates build/entry/pz-agent-entry.py on every build (ENTRY.write_text in pz-agent.spec),
+        importing the console-script target so pyproject stays the single definition of what runs
     - id: E11-M01-T006
       subsystem: packaging
       action: Generate the pz-agent-mcp entry script from the spec
@@ -6357,12 +6358,13 @@ epics:
       verify_command: read the spec
       regression_test: ''
       evidence: packaging/windows/pz-agent-mcp.spec
-      status: NOT_STARTED
-      implementation_commit: null
-      verification_commit: null
-      commit: null
-      ci_url: null
-      reason: ''
+      status: PASS
+      implementation_commit: 15296e507958501b7c2737c4676813c30d6a9d15
+      verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
+      commit: 15296e507958501b7c2737c4676813c30d6a9d15
+      ci_url: https://github.com/natural0101/poject-zombigpt/actions/runs/31214158408
+      reason: 'same mechanism in pz-agent-mcp.spec: the entry script is generated from the spec on every
+        build'
     checks:
     - id: E11-M01-C01
       statement: Submodule collection imports nothing, proven against a package that exits on import.
@@ -6475,12 +6477,13 @@ epics:
       verify_command: read the windows workflow run
       regression_test: ''
       evidence: docs/control/evidence/step-30-40/windows-suite.txt
-      status: NOT_STARTED
+      status: IN_PROGRESS
       implementation_commit: null
       verification_commit: null
       commit: null
       ci_url: null
-      reason: ''
+      reason: the answer-check step now runs both executables with PATH reduced to the system directories;
+        the claim becomes observable on the next windows-latest run
     - id: E11-M02-T007
       subsystem: packaging
       action: Keep the console attached so a client can read stdio
@@ -6493,12 +6496,13 @@ epics:
       verify_command: read the specs
       regression_test: ''
       evidence: packaging/windows/pz-agent-mcp.spec
-      status: NOT_STARTED
-      implementation_commit: null
-      verification_commit: null
-      commit: null
-      ci_url: null
-      reason: ''
+      status: IN_PROGRESS
+      implementation_commit: 15296e507958501b7c2737c4676813c30d6a9d15
+      verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
+      commit: 15296e507958501b7c2737c4676813c30d6a9d15
+      ci_url: https://github.com/natural0101/poject-zombigpt/actions/runs/31214158408
+      reason: the fact holds in the specs, but the milestone orders it after E11-M02-T006, whose proof
+        (the PATH-stripped answer check) lands with the next windows run
     - id: E11-M02-T008
       subsystem: packaging
       action: Leave both executables unpacked and unsigned rather than UPX-compressed
@@ -6511,12 +6515,13 @@ epics:
       verify_command: read the specs
       regression_test: ''
       evidence: packaging/windows/pz-agent.spec
-      status: NOT_STARTED
-      implementation_commit: null
-      verification_commit: null
-      commit: null
-      ci_url: null
-      reason: ''
+      status: IN_PROGRESS
+      implementation_commit: 63cca87f42d5c0851425f055a2e9a8fcb09e3757
+      verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
+      commit: 63cca87f42d5c0851425f055a2e9a8fcb09e3757
+      ci_url: https://github.com/natural0101/poject-zombigpt/actions/runs/31214158408
+      reason: the fact holds in the specs, but the milestone orders it after E11-M02-T006, whose proof
+        (the PATH-stripped answer check) lands with the next windows run
     checks:
     - id: E11-M02-C01
       statement: Both executables run on a machine with no project Python.
@@ -6664,12 +6669,13 @@ epics:
       verify_command: read the windows workflow
       regression_test: ''
       evidence: .github/workflows/windows.yml
-      status: NOT_STARTED
-      implementation_commit: null
-      verification_commit: null
-      commit: null
-      ci_url: null
-      reason: ''
+      status: PASS
+      implementation_commit: df79d65340c481028e0781632bda158232418794
+      verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
+      commit: df79d65340c481028e0781632bda158232418794
+      ci_url: https://github.com/natural0101/poject-zombigpt/actions/runs/31214158408
+      reason: 'the Release gate step precedes Upload the release candidate in windows.yml, and upload
+        sets if-no-files-found: error — a red gate fails the job before any artefact exists'
     - id: E11-M03-T009
       subsystem: packaging
       action: Record the archive digest in the plan when it is built
@@ -6682,12 +6688,13 @@ epics:
       verify_command: read the windows workflow run
       regression_test: ''
       evidence: docs/control/MASTER_PLAN.yaml
-      status: NOT_STARTED
-      implementation_commit: null
-      verification_commit: null
-      commit: null
-      ci_url: null
-      reason: ''
+      status: PASS
+      implementation_commit: cd1d21085671780a9c68441507c1887450c12737
+      verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
+      commit: cd1d21085671780a9c68441507c1887450c12737
+      ci_url: https://github.com/natural0101/poject-zombigpt/actions/runs/31214158408
+      reason: every reconcile records the built archive digest in STATUS.json release_candidate and docs/control/EVIDENCE_INDEX.md
+        carries the current one (3eb5ca63...)
     checks:
     - id: E11-M03-C01
       statement: Every archive member is verified independently of the index.

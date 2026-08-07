@@ -207,19 +207,33 @@ dropped. It is never forwarded, never stored and never spoken back: every
 sentence the companion can say lives in `pz_agent_voice.phrases`, and none of
 them has a slot for free text.
 
+`pz_agent_voice.intent` is the one module that maps speech onto those enums; it
+is the *only* place in the package that names a `GoalKind` from a transcript
+(BLOCKERS.md R-007 deleted the second, unwired resolver that once claimed the
+same thing). A number reaches a goal parameter through a unit word («страниц»,
+«процентов», «уровня»), through the percent sign — which is how a
+numeral-emitting recogniser spells «процентов» — or, for the one kind
+`BARE_NUMBER_PARAM` declares a meaning for (`train_skill`, whose bare number
+can only be a target level), on its own; every route ends at the same
+range check against the core's `NUMERIC_RANGES`.
+
 `IntentRefusal` is the closed set of ways a phrase can fail to become a goal —
 `not_a_goal`, `ambiguous_goal`, `skill_not_named`, `parameter_out_of_range`,
-`parameter_not_accepted`, `capability_unavailable` — and every member has a
-spoken form, in one of two shapes. The first three are fixed sentences in
-`phrases.REFUSAL_SPEECH`. The other three cannot be said without naming
+`parameter_not_accepted`, `capability_unavailable`, `internal` — and every
+member has a spoken form, in one of two shapes. Four are fixed sentences in
+`phrases.REFUSAL_SPEECH`; `internal` is the defensive one, spoken only if the
+resolver's own range check ever accepts a number the core's constructor then
+refuses, so that the constructor's message — which quotes the number the user
+said — never travels. The other three cannot be said without naming
 something, so they are assembled by `phrases.intent_refusal()` out of closed
 tables — `PARAM_NOUNS` and `NUMERIC_RANGES` for a parameter, `CAPABILITY_NOUNS`
 for a capability — and a name that is in none of them raises rather than being
 interpolated. Those three are listed in `_NAMED_REFUSALS`, and
 `_check_speech_tables()` runs at import: a member appearing in neither table, or
-in both, refuses the import. What the arrangement buys is that a refusal never
-quotes what the user said — the transcript's route out through the apology is
-the one the whole module is arranged to close.
+in both, or carrying a sentence too long to speak, refuses the import. What the
+arrangement buys is that a refusal never quotes what the user said — the
+transcript's route out through the apology is the one the whole module is
+arranged to close.
 
 Two goals matching is `ambiguous`, not "the first one in some arbitrary order".
 Guessing between «поесть» and «попить» is exactly the behaviour the blueprint

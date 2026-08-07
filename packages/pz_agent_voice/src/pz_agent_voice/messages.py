@@ -104,6 +104,11 @@ class IntentRefusal(StrEnum):
     PARAMETER_OUT_OF_RANGE = "parameter_out_of_range"
     PARAMETER_NOT_ACCEPTED = "parameter_not_accepted"
     CAPABILITY_UNAVAILABLE = "capability_unavailable"
+    #: The defensive member: the resolver's own range check accepted a number
+    #: the core's constructor then refused, which can only mean the two tables
+    #: stopped agreeing. The refusal is a constant so that the constructor's
+    #: message — which quotes the number the user spoke — never travels.
+    INTERNAL = "internal"
 
 
 class OutputKind(StrEnum):

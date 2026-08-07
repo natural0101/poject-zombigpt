@@ -170,3 +170,31 @@ not have to read the git log to know why the archive looks the way it does:
 * **No `v1.0.0` from any of this.** The RC is a certified build, not a
   release; LIVE GAME VALIDATION is 599 of 3104 weight and owned `local`, and
   RB-002 stands until scenarios run on a machine with the game.
+
+## D-013 — the inventory of ports declared with no concrete implementation
+
+Method: every `class X(Protocol)` in `packages/*/src` was listed and each was
+required to name a shipped, non-test implementation. As of `40d528c`:
+
+* **All eight MCP ports** (`SessionPort` … `GoalPort`) are implemented by
+  `pz_agent_mcp.remote.client` over the Core RPC link, decoded by their codecs
+  and served by `remote/server.py`. None is declaration-only.
+* **The core seams** (`CommandSink`, `ObservationSource`, `ActionAdapter`,
+  `PlanProvider`, `HttpTransport`, `CapabilityLookup`, the autonomy lookups)
+  each have their shipped implementation in the engine, the adapters, the
+  providers or the CLI runtime.
+
+The count of unimplemented ports today is **zero** — but it was not zero when
+this task was written, and the history is the finding:
+
+* `UnroutedPlanPort` answered "not routed" for every goal in the CLI (R-005,
+  closed: deleted, with a scan asserting the name never returns).
+* `NO_SERVICES_MESSAGE` was the MCP server's admission that no channel handed
+  it a core (R-001's neighbour, closed by the Core RPC link).
+* `pz_agent_voice/bridge/` and `intents.py` were implementations nothing
+  declared — the inverse defect, twins the tests exercised while production
+  imported the other copy (R-003 and R-007 both closed the same way: the twin deleted, the survivor keeping the better properties of each, the tests naming the survivor).
+
+The pattern both directions point at: a declaration and its implementation
+drift apart the moment nothing walks the seam. The walk above is the audit;
+re-run it whenever a port is added.

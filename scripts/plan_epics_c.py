@@ -1052,7 +1052,7 @@ _E09_INTENT = [
         "every intent in the grammar resolves to a kind or is refused explicitly",
         f".venv/bin/pytest {T}/test_voice_intents.py -q",
         f"{T}/test_voice_intents.py",
-        f"{VOICE}/intents.py",
+        f"{VOICE}/intent.py",
     ),
     (
         "Refuse an intent with no GoalKind rather than inventing one",
@@ -1060,7 +1060,7 @@ _E09_INTENT = [
         "an unmapped phrase produces a named refusal",
         f".venv/bin/pytest {T}/test_voice_intents.py -q",
         f"{T}/test_voice_intents.py",
-        f"{VOICE}/intents.py",
+        f"{VOICE}/intent.py",
     ),
     (
         "Extract typed parameters from the phrase",
@@ -1068,7 +1068,7 @@ _E09_INTENT = [
         "quantities and targets become typed fields",
         f".venv/bin/pytest {T}/test_voice_intents.py -q",
         f"{T}/test_voice_intents.py",
-        f"{VOICE}/intents.py",
+        f"{VOICE}/intent.py",
     ),
     (
         "Refuse a parameter outside its declared range",
@@ -1076,7 +1076,7 @@ _E09_INTENT = [
         "an out-of-range quantity is refused",
         f".venv/bin/pytest {T}/test_voice_intents.py -q",
         f"{T}/test_voice_intents.py",
-        f"{VOICE}/intents.py",
+        f"{VOICE}/intent.py",
     ),
     (
         "Cover the Russian phrasings for each intent",
@@ -1084,7 +1084,7 @@ _E09_INTENT = [
         "each intent has several attested phrasings",
         f".venv/bin/pytest {T}/test_voice_intents.py -q",
         f"{T}/test_voice_intents.py",
-        f"{VOICE}/intents.py",
+        f"{VOICE}/intent.py",
     ),
     (
         "Keep the transcript out of the goal",
@@ -1092,7 +1092,7 @@ _E09_INTENT = [
         "no transcript text is carried into a GoalKind",
         f".venv/bin/pytest {T}/test_voice_intents.py -q",
         f"{T}/test_voice_intents.py",
-        f"{VOICE}/intents.py",
+        f"{VOICE}/intent.py",
     ),
     (
         "Keep the transcript out of the sidecar entirely",
@@ -1132,7 +1132,7 @@ _E09_INTENT = [
         "the stop grammar is matched first, so a stop is never mistaken for a goal",
         f".venv/bin/pytest {T}/test_voice_intents.py -q",
         f"{T}/test_voice_intents.py",
-        f"{VOICE}/intents.py",
+        f"{VOICE}/intent.py",
     ),
     (
         "Bound how much text one utterance may carry",
@@ -1140,7 +1140,7 @@ _E09_INTENT = [
         "an overlong transcript is truncated before matching, not buffered",
         f".venv/bin/pytest {T}/test_voice_intents.py -q",
         f"{T}/test_voice_intents.py",
-        f"{VOICE}/intents.py",
+        f"{VOICE}/intent.py",
     ),
     (
         "Refuse an intent whose GoalKind is not usable on this build",
@@ -1148,7 +1148,7 @@ _E09_INTENT = [
         "an intent for an unverified capability is refused with the capability named",
         f".venv/bin/pytest {T}/test_voice_intents.py -q",
         f"{T}/test_voice_intents.py",
-        f"{VOICE}/intents.py",
+        f"{VOICE}/intent.py",
     ),
     (
         "Keep the intent grammar and the GoalKind set in step",
@@ -1156,7 +1156,7 @@ _E09_INTENT = [
         "an intent naming a kind that does not exist fails a test",
         f".venv/bin/pytest {T}/test_voice_intents.py -q",
         f"{T}/test_voice_intents.py",
-        f"{VOICE}/intents.py",
+        f"{VOICE}/intent.py",
     ),
 ]
 

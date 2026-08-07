@@ -120,7 +120,7 @@ gate. `saves.py`, `memory.py`, `modinstall.py`, `smoke.py`, `status.py`,
 
 `adapter.py` is the three-method `VoiceAdapter` protocol. `session.py` and
 `driver.py` are the loop and the speech pump; `queue.py`, `events.py`,
-`messages.py`, `phrases.py`, `intent.py`, `intents.py`, `state.py`, `config.py`
+`messages.py`, `phrases.py`, `intent.py`, `state.py`, `config.py`
 are its vocabulary and its bounds. `adapters/` holds the TeamON plugin and the
 fake; `teamon.py` holds the JSONL protocol and the supervised child process;
 `plan_port.py` puts the plan port on the Core RPC link; `ports.py` re-exports

@@ -139,7 +139,28 @@ Closed at `276b9d9`: both workflows completed green against that commit
 may only call a workflow GREEN for the commit it actually ran against, and the
 staleness check refuses a STATUS whose named commit has code changes after it.
 
-### R-007 — the voice intent resolver exists twice, and the tested copy is not the shipped one
+### R-007 — the voice intent resolver exists twice, and the tested copy is not the shipped one — **CLOSED**
+
+Closed: `pz_agent_voice/intents.py` is deleted. `intent.py` survives because it
+is what production runs — `session.py`, `config.py`, `phrases.py` and
+`__init__.py` all import from it — and it now carries the properties the dead
+copy had and it lacked: the percent sign as a spoken form of «процентов», a
+closed `BARE_NUMBER_PARAM` table giving «прокачай механику до 7» its one honest
+reading, an `IntentRefusal.INTERNAL` constant so a residual range-table drift
+becomes a spoken sentence rather than a `ValueError` quoting the number the
+user said, and import-time checks that every vocabulary word survives
+normalisation, that no word — a stop word included — is claimed by two tables,
+that every skill has a vocabulary, and that every refusal sentence fits the
+speech bound. Dropped with the dead module, deliberately: its `too_long`
+refusal (the survivor truncates at the transcript bound and matches the
+surviving prefix — pinned behaviour), its `ambiguous_skill`/`unitless_number`/
+`conflicting_parameters`/`missing_number`/`empty` codes (the survivor's folds
+are pinned instead), its `NumericRange`-in-refusal field (the range is spoken
+by `phrases.intent_refusal`), and its private idempotency-key mint and
+`to_goal_request` (the session's `IdFactory` is the shipped route for the
+channel's one caller-supplied string). `test_voice_intents.py` and
+`test_voice_privacy.py` now name the survivor; both stop-first orderings — the
+session's and the goal channel's — stay tested. The original record follows.
 
 The R-003 shape, one layer up. Two modules map an utterance onto the goal
 channel:

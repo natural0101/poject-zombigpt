@@ -56,11 +56,12 @@ from pz_agent_core.goals import (
     TrainableSkill,
 )
 
-from .messages import IntentRefusal, VoiceGoal, VoiceInput, VoiceIntent
+from .messages import IntentRefusal, VoiceGoal, VoiceInput, VoiceIntent, normalise_transcript
 
 __all__ = [
     "AFFIRM_WORDS",
     "ALL_VOICE_CAPABILITIES",
+    "BARE_NUMBER_PARAM",
     "CAPABILITY_FOR_KIND",
     "DEFAULT_WAKE_WORDS",
     "DENY_WORDS",
@@ -219,6 +220,20 @@ _ABOVE_EVERY_RANGE: Final = 10**MAX_NUMBER_CHARS
 
 _DIGITS: Final = re.compile(r"^[0-9]+$")
 
+#: Everything that is not a word character separates tokens, restated here for
+#: the import-time vocabulary check: a table entry that tokenisation would split
+#: is an entry no transcript can ever match, and it has to fail the import
+#: rather than sit in the grammar looking correct.
+_NON_WORD: Final = re.compile(r"[^\w]+", re.UNICODE)
+
+#: The percent sign survives no tokenisation — :meth:`~.messages.VoiceInput.
+#: words` drops it — so it is looked for in the normalised text instead. It
+#: means exactly what "процентов" means, and it binds exactly a digit run: a
+#: recogniser configured for numerals emits "80%", and a recogniser emitting
+#: words says the unit word. ASCII digits only, for the same reason
+#: :data:`_DIGITS` is ASCII-only.
+_PERCENT: Final = re.compile(r"([0-9]+)\s*%")
+
 #: The Russian phrasings for each kind. Built on top of :data:`GOAL_WORDS` where
 #: the two overlap, so the session's own vocabulary and the goal channel's
 #: cannot drift into disagreeing about what "поешь" means.
@@ -264,7 +279,16 @@ READING_KINDS: Final[frozenset[GoalKind]] = frozenset(
 #: to decide what "первая" means on its own, and there is no honest answer.
 SKILL_WORDS: Final[dict[TrainableSkill, frozenset[str]]] = {
     TrainableSkill.CARPENTRY: frozenset(
-        {"плотник", "плотника", "плотницкое", "плотницкому", "столярку", "столярка"}
+        {
+            "плотник",
+            "плотника",
+            "плотницкое",
+            "плотницкому",
+            "плотничество",
+            "плотничеству",
+            "столярку",
+            "столярка",
+        }
     ),
     TrainableSkill.COOKING: frozenset({"готовку", "готовка", "кулинарию", "кулинария", "повара"}),
     TrainableSkill.FARMING: frozenset(
@@ -293,6 +317,14 @@ UNIT_WORDS: Final[dict[str, frozenset[str]]] = {
 #: says "насыть меня до нуля целых восьми"; the conversion lives here, once, so
 #: the range check downstream still sees the core's own units.
 _SPOKEN_AS_PERCENT: Final[frozenset[str]] = frozenset({"satisfy_to"})
+
+#: The one kind for which a bare number has an unambiguous meaning: "прокачай
+#: механику до 7" is a target level and can be nothing else. Every other kind
+#: leaves an unbound number unassigned — deciding what it meant would be the
+#: invention this module exists to avoid. A closed table rather than a branch,
+#: so :func:`_check_channel_tables` can hold each entry against the kind's own
+#: spec at import.
+BARE_NUMBER_PARAM: Final[dict[GoalKind, str]] = {GoalKind.TRAIN_SKILL: "target_level"}
 
 #: Numerals a recogniser actually emits for these quantities. Deliberately
 #: single-token: "восемьдесят пять" is two tokens and is not recognised, which is
@@ -390,33 +422,59 @@ def check_grammar(vocabularies: Mapping[str, frozenset[str]]) -> None:
 
 
 def _check_channel_tables() -> None:
-    """Refuse to import a grammar that has drifted from the core's own tables."""
+    """Refuse to import a grammar that has drifted from the core's own tables.
+
+    Every failure below is silent at runtime if it is allowed through: a
+    vocabulary word that does not survive normalisation simply never matches, a
+    skill with no vocabulary is unreachable by speech, and a stop word that is
+    also a goal word is a safety defect that would only show up when somebody
+    shouted it.
+    """
     check_grammar({kind.value: words for kind, words in KIND_WORDS.items()})
+    missing_skills = set(TrainableSkill) - set(SKILL_WORDS)
+    if missing_skills:
+        raise RuntimeError(
+            f"no vocabulary for skill(s) {sorted(skill.value for skill in missing_skills)}"
+        )
+    # One namespace across every table a goal-channel matcher reads, the stop
+    # vocabulary included: a word two tables claim answers two questions at
+    # once, and a vocabulary word that is also a stop word could never be
+    # anything but a stop. Checked against the normalised form as well, because
+    # a table entry that tokenisation would rewrite or split is an entry no
+    # transcript can ever match.
+    groups: list[tuple[str, frozenset[str]]] = [
+        *((kind.value, words) for kind, words in KIND_WORDS.items()),
+        *((skill.value, words) for skill, words in SKILL_WORDS.items()),
+        *((f"unit:{name}", words) for name, words in UNIT_WORDS.items()),
+        ("numbers", frozenset(NUMBER_WORDS)),
+        ("stop", STOP_WORDS),
+    ]
+    seen: dict[str, str] = {}
+    for owner, words in groups:
+        for word in sorted(words):
+            if normalise_transcript(word) != word or _NON_WORD.search(word):
+                raise RuntimeError(f"{owner} declares {word!r}, which no transcript can match")
+            first = seen.setdefault(word, owner)
+            if first != owner:
+                raise RuntimeError(f"{word!r} is claimed by both {first} and {owner}")
     if set(UNIT_WORDS) != set(NUMERIC_RANGES):
         raise RuntimeError("UNIT_WORDS and NUMERIC_RANGES describe different parameters")
     if set(UNIT_WORDS) | {"skill"} != set(PARAM_NAMES):
         raise RuntimeError("a goal parameter has no unit word and cannot be spoken")
     if set(_SPOKEN_AS_PERCENT) - set(NUMERIC_RANGES):
         raise RuntimeError("a percentage parameter has no declared range")
+    for kind, parameter in BARE_NUMBER_PARAM.items():
+        spec = GOAL_SPECS[kind]
+        if parameter not in NUMERIC_RANGES:
+            raise RuntimeError(f"{parameter} has no declared range and cannot be a bare number")
+        if parameter not in spec.required | spec.optional:
+            raise RuntimeError(f"{kind.value} does not accept {parameter} as a bare number")
     if set(CAPABILITY_FOR_KIND) != set(GoalKind):
         raise RuntimeError("every goal kind must name the capability it needs")
     required = {name for spec in GOAL_SPECS.values() for name in spec.required}
     unspoken = required - set(_MISSING_PARAM_REFUSAL)
     if unspoken:
         raise RuntimeError(f"no refusal names the missing parameter(s) {sorted(unspoken)}")
-    duplicated = sorted(
-        word
-        for word in _UNIT_OWNER
-        if sum(word in vocabulary for vocabulary in UNIT_WORDS.values()) > 1
-    )
-    if duplicated:
-        raise RuntimeError(f"unit word(s) {duplicated} name more than one parameter")
-    claimed: dict[str, TrainableSkill] = {}
-    for skill, words in SKILL_WORDS.items():
-        for word in sorted(words):
-            owner = claimed.setdefault(word, skill)
-            if owner is not skill:
-                raise RuntimeError(f"{word!r} is claimed by both {owner.value} and {skill.value}")
 
 
 _check_channel_tables()
@@ -538,6 +596,32 @@ def extract_quantities(words: tuple[str, ...]) -> dict[str, int]:
     return found
 
 
+def _percent_quantity(text: str) -> int | None:
+    """The number the percent sign binds in *text*, or None when it binds none.
+
+    The sign is "процентов" for a recogniser that emits numerals, and it glues
+    to the digits it follows, so it is read from the normalised text rather than
+    from the word tokens that dropped it. The digit run is bounded exactly as
+    :func:`_as_number` bounds one: a run past :data:`MAX_NUMBER_CHARS` is
+    reported as above every range rather than parsed.
+    """
+    match = _PERCENT.search(text)
+    if match is None:
+        return None
+    return _as_number(match.group(1))
+
+
+def _bare_number(words: tuple[str, ...]) -> int | None:
+    """The one number *words* contain, or None when they contain none or several.
+
+    Several is folded into none deliberately, exactly as :func:`matched_skill`
+    folds two skills: with two numbers and no unit words there is no honest
+    answer to "which one did the kind's bare-number parameter mean".
+    """
+    found = [value for value in (_as_number(token) for token in words) if value is not None]
+    return found[0] if len(found) == 1 else None
+
+
 def _settle_reading(words: tuple[str, ...], reading: tuple[GoalKind, ...]) -> GoalKind:
     """Pick the most specific of the three kinds served by reading a book.
 
@@ -572,6 +656,10 @@ def resolve_goal(raw: VoiceInput, *, available: frozenset[str]) -> GoalResolutio
     3. The capability, before the parameters: validating a quantity for
        something the build cannot do would refuse the wrong thing.
     4. The parameters, each against the kind's own spec and its declared range.
+       A number reaches one through a unit word, through the percent sign —
+       which is the unit word "процентов" as a numeral-emitting recogniser
+       spells it — or, for the one kind :data:`BARE_NUMBER_PARAM` declares a
+       meaning for, on its own. Every route ends at the same range check.
     """
     words = raw.words()
     if not STOP_WORDS.isdisjoint(words):
@@ -596,6 +684,20 @@ def resolve_goal(raw: VoiceInput, *, available: frozenset[str]) -> GoalResolutio
     accepted = spec.required | spec.optional
     skill = matched_skill(words)
     quantities = extract_quantities(words)
+    percent = _percent_quantity(raw.normalised())
+    if percent is not None:
+        # The sign means what the unit word means; a sentence carrying both
+        # keeps the word's binding, which arrived through the same window every
+        # other quantity uses.
+        quantities.setdefault("satisfy_to", percent)
+    bare = BARE_NUMBER_PARAM.get(kind)
+    if bare is not None and not quantities:
+        # Only when no unit bound anything: a unit word in the sentence means
+        # the speaker names their quantities, and a leftover number next to a
+        # named one is not a second parameter.
+        spoken_alone = _bare_number(words)
+        if spoken_alone is not None:
+            quantities[bare] = spoken_alone
 
     if skill is not None and "skill" not in accepted:
         return _refuse(IntentRefusal.PARAMETER_NOT_ACCEPTED, parameter="skill")
@@ -626,12 +728,20 @@ def resolve_goal(raw: VoiceInput, *, available: frozenset[str]) -> GoalResolutio
         if name in spec.required and name not in present:
             return _refuse(_MISSING_PARAM_REFUSAL[name], parameter=name)
 
-    params = GoalParams(
-        skill=skill,
-        target_level=int(typed["target_level"]) if "target_level" in typed else None,
-        satisfy_to=typed.get("satisfy_to"),
-        pages=int(typed["pages"]) if "pages" in typed else None,
-    )
+    try:
+        params = GoalParams(
+            skill=skill,
+            target_level=int(typed["target_level"]) if "target_level" in typed else None,
+            satisfy_to=typed.get("satisfy_to"),
+            pages=int(typed["pages"]) if "pages" in typed else None,
+        )
+    except ValueError:
+        # Only reachable if the ranges this module checked against stop
+        # agreeing with the ones the core enforces in GoalParams. The exception
+        # text quotes the number the user spoke, which is right for a traceback
+        # and wrong for everything a refusal reaches, so only the fact of the
+        # failure survives.
+        return _refuse(IntentRefusal.INTERNAL)
     return GoalResolution(intent=VoiceIntent.GOAL, kind=kind, params=params)
 
 
