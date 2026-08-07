@@ -10,7 +10,7 @@ physically requires a running game.
 
 Last updated: 28 of 30 tasks closed; T029 and T030 are blocked on a live game,
 not deferred. 3471 Python tests and 2864 Lua assertions across 26 suites,
-mypy strict over 263 files, `scripts/check.sh` green — measured under Python
+mypy strict over 264 files, `scripts/check.sh` green — measured under Python
 3.11.15, which is the only interpreter with the suite installed here. CI
 declares a 3.11/3.12 matrix; that is configuration, not a result observed in
 this container.
@@ -24,7 +24,7 @@ with them. See [the playable-agent section](#the-playable-agent-branch) below,
 and [`LOCAL_GAME_HANDOFF.md`](LOCAL_GAME_HANDOFF.md) for what still needs a
 machine with the game on it.
 
-**Fifteen defects that branch found are worth reading before any further work**,
+**Sixteen defects that branch found are worth reading before any further work**,
 because they are one family and the family is not closed. Every subsystem was
 written, tested and green; what nothing tested was whether the subsystems were
 *connected*.
@@ -40,6 +40,7 @@ written, tested and green; what nothing tested was whether the subsystems were
 | 7 | The memory store was complete and connected to nothing | `reserves_item` always answered False, so §7.9 rested on tag rules alone, and no home point could exist |
 | 8 | `pz_agent_voice` was imported by nothing and had no entry point | Russian voice control was complete, tested, and impossible to start |
 | 9 | The mod could drink from a sink; the sidecar had no argument for it, and the path it did have ran under the wrong capability | Two faults in one place: a working mod feature unreachable from Python, *and* `drink_world_source` — which §12.4 caps at `experimental` — reachable through `drink_carried`, which a scan verifies |
+| 16 | `configs/mcp/README.md` documented one of the two refusals a client meets | It said `pz-agent-mcp` "exits with status 1" for missing services. On a plain install the SDK gate fires first and returns 3, with a message about a missing package rather than a missing sidecar — so a client author would have gone looking for the wrong cause on their first launch |
 | 15 | **`pz-agent start` reported success on the strength of `Popen` returning** | A fork succeeding says nothing about whether the program ran. A sidecar that died on its first import left `start` printing "sidecar started as pid N" and exiting 0, `arm` then failing for reasons that named nothing, and `stop` reporting "no such process" — also exiting 0. Found by running the lifecycle, not by reading it |
 | 14 | **`live-test run` never consulted the prepare record** | `prepare` verifies a test save is named and a backup *reads back*, then writes `prepare.json`. Nothing read it. The one check standing between twenty deliberately destructive scenarios and a main save produced a record nobody consulted |
 | 13 | The release archive omitted the two documents its own shipped documents told the operator to open | `GAME_API_VERIFICATION.md` and `LOCAL_AGENT_PROMPT.md` were not in `DOC_NAMES`. Introduced by fixing defect 12: the correction pointed five documents at a file the archive did not carry. Found only by opening the ZIP | It returns six lines against 52 `requires_live` rows — about an eighth. The sentence was in `LOCAL_AGENT_PROMPT.md`, the file the agent starts from, so it would have checked six places and believed the surface covered |

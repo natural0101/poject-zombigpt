@@ -50,6 +50,18 @@ drift out of sync with `pz_agent_core.version`.
   postcondition accepts only thirst — a refill raises the vessel's volume and
   the drink lowers it again, so the vessel witnesses nothing in either
   direction. Published as `pz_action_drink_source`.
+- **`configs/mcp/README.md` names both refusals a client can meet, not one.**
+  It said `pz-agent-mcp` "starts, finds no core services attached to its
+  process ... and exits with status 1". On a plain install you get **3**,
+  because the SDK gate fires first and its message is about a missing optional
+  extra rather than a missing sidecar. The exit codes are deliberately distinct
+  — `EXIT_NO_SDK` exists precisely "because the remedy is a single install
+  command" — and documenting only the second sent a client author after the
+  wrong cause on their very first launch. Both are described now, in the order
+  they fire. `tests/contract/test_mcp_exit_codes_documented.py` pins the stated
+  codes to the constants and to a real subprocess launch, and exercises
+  `--describe`, which is the one thing that document promises works with no
+  game, no sidecar and no SDK.
 - **`pz-agent start` confirms the sidecar is still there before reporting one.**
   It returned success as soon as `Popen` returned, which reports that a *fork*
   succeeded and nothing about whether the program ran. A sidecar that died on
