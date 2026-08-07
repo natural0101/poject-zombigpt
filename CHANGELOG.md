@@ -30,6 +30,69 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **`pz-agent start` no longer prints an MCP configuration naming a variable
+  nothing reads.** The block it prints for pasting into a client set
+  `PZ_AGENT_STATE_DIR`, a name that occurred exactly once in the repository — in
+  the literal that printed it. `pz_agent_mcp` reads no environment variable at
+  all, discovery reads `USERPROFILE`/`OneDrive`/`HOME`/`USERNAME`, and the
+  server's parser takes neither a path nor a variable, so there was never a
+  route for it. Meanwhile `configs/mcp/README.md` carries a section titled "Why
+  `env` is empty" arguing that naming an unread variable "would look like
+  configuration and be decoration", all three shipped client configurations
+  carry `"env": {}`, and a test pinned exactly that — over the checked-in files
+  only. The pin now covers the configuration the CLI hands a user, which is the
+  one anybody actually pastes.
+- **`docs/QUICKSTART.md` stopped telling a new user to command the agent by
+  voice.** Section 7 named two routes for a first command and one of them is
+  refused: this build carries `arm`, `disarm` and `stop` from a second process
+  and has no channel that carries a *goal*, so a spoken "eat something" is
+  refused and the companion answers «Не получилось.» The quickstart now says so
+  and points at `VOICE.md`, which the archive now ships.
+- **`voice run` writes the log the debug map sends an operator to.** Defect 18's
+  shape, one package over: `docs/LOCAL_DEBUG_MAP.md` names `logs/` for both
+  voice symptoms it lists — a phrase not recognised, and «стоп» heard while the
+  character kept going — and the companion had never written a byte there. Its
+  turn history and synthesiser failures sat in two bounded rings inside a
+  process that then exited, while `VoiceCompanion.speech_failures` says in its
+  own docstring that they are kept because "the companion went quiet" with
+  nothing recorded is what a support bundle cannot explain. Written at the run's
+  edges into the same rotating file the sidecar uses, so both halves of "did the
+  stop I said reach the sidecar" end up in one place in order. **Intents and
+  outcomes, never transcripts** — a bundle is designed to be attached to a
+  public issue and a microphone's contents do not belong in one.
+- **`installer/` says what it is.** A complete, tested, 927-line standalone
+  installer with a guide titled "Installing pz-agent on Windows", reachable from
+  nothing, in no shipped artefact, and read as *the* install instructions by
+  anyone who opens the directory. The shipped path is `install.bat` →
+  `pz-agent install-mod`; a checkout follows `docs/QUICKSTART.md`. It is kept —
+  it is the only path that works before anything is installed — and the guide
+  and the module now open by naming which of the three cases each is for.
+- **AGENTS.md and CONTRIBUTING.md claimed an enforcement that did not exist.**
+  Both said `scripts/check_forbidden.py` fails the build on an empty exception
+  handler. It had no such check, for exactly the handler style this codebase
+  writes, so a rule two governing documents declare binding was unenforced and
+  unreviewed. It cannot be scanned honestly either: the tree contains an
+  `except (OSError, UnicodeDecodeError): pass` that falls through to a second
+  lookup, and several `except OSError: return` that deliberately trade a
+  diagnostic for a session in flight. So the part that *can* be scanned now is —
+  an untyped `except:`, which also catches `KeyboardInterrupt` and `SystemExit`
+  and of which the tree has none — and the swallow is stated as a review rule
+  with the reason it is one. `check_forbidden.py` had no tests at all; it has
+  them now, including both directions of every rule the documents promise.
+- **Every link a shipped document makes now lands inside the archive.** Defect
+  13 was one instance of this — two documents the archive omitted while its own
+  shipped documents told an operator to open them — and the fix was two names in
+  a tuple, which left the general case untouched. Seven of the archive README's
+  links resolved to nothing: `CONTRIBUTING.md`, `AGENTS.md`,
+  `docs/ARCHITECTURE.md`, `docs/PROTOCOL.md`, `docs/TESTING.md`,
+  `docs/DEVELOPMENT.md` and the blueprint directory, plus `PROGRESS.md`'s link
+  to the task graph and `PROTOCOL.md`'s to `schemas/` and `tests/contract/`. An
+  operator on Windows has no repository, so a relative link is either a file
+  beside the one they are reading or nothing at all. `ARCHITECTURE.md` and
+  `PROTOCOL.md` now ship — the second is what `LOCAL_DEBUG_MAP.md` and
+  `LIVE_TEST_PLAYBOOK.md` assume when they discuss journals, refs and recovery —
+  and the links about *building* the project became absolute, so a GitHub reader
+  follows them and an operator gets a URL rather than a dead path.
 - **`game.install_dir` and `game.user_dir` now do something.** Both were parsed,
   validated, typed and read by nothing, while `doctor`'s own remediation for
   `PZD001`, `docs/TROUBLESHOOTING.md` for `PZD001` and `PZD003`, and

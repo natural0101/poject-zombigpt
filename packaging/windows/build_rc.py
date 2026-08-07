@@ -108,6 +108,16 @@ DOC_NAMES: Final[tuple[str, ...]] = (
     # to open a file the archive did not contain.
     "PROGRESS.md",
     "RELEASE.md",
+    # The archive's own README links to both, and a document in an archive that
+    # points at a file the archive does not contain is defect 13 again. These
+    # two earn their place beyond that: PROTOCOL is what LOCAL_DEBUG_MAP and
+    # LIVE_TEST_PLAYBOOK assume when they talk about journals, refs and
+    # recovery, and ARCHITECTURE is what a reader needs before either.
+    "ARCHITECTURE.md",
+    "PROTOCOL.md",
+    # QUICKSTART sends a reader here for what voice does and does not carry, and
+    # voice is a shipped feature with a stop word in it.
+    "VOICE.md",
 )
 
 #: Legal and safety text belongs at the root, where nobody has to go looking.

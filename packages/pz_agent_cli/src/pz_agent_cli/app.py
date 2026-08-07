@@ -890,14 +890,29 @@ def _mcp_snippet(workspace: Workspace, *, redacted: bool) -> tuple[str, ...]:
     Printed with real paths so it can be pasted into a client's configuration,
     and redacted in the ``--json`` form, which is the one that ends up in a bug
     report — an interpreter path carries the account name.
+
+    ``env`` is empty, and that is the whole point of it being here. This snippet
+    used to set ``PZ_AGENT_STATE_DIR``, a name that occurred exactly once in the
+    repository: in the literal that printed it. Nothing read it — not
+    ``pz_agent_mcp``, which reads no environment variable at all, not discovery,
+    which reads ``USERPROFILE``/``OneDrive``/``HOME``/``USERNAME``. Meanwhile
+    ``configs/mcp/README.md`` carries a section titled "Why ``env`` is empty"
+    saying that naming an unread variable "would look like configuration and be
+    decoration, and the first person to change it would spend an evening finding
+    out that it does nothing" — and the three shipped client configurations all
+    carry ``"env": {}``. The one configuration the product actually handed a
+    user was the one contradicting all four.
+
+    The state directory reaches the server the same way it reaches everything
+    else: discovery, or ``--state-dir``. The server's own parser takes neither a
+    path nor an environment variable, so there was never a route for this to be.
     """
     interpreter = workspace.redactor.text(sys.executable) if redacted else sys.executable
-    state_dir = workspace.redact(workspace.state_dir) if redacted else str(workspace.state_dir)
     return (
         '"pz-agent": {',
         f'  "command": "{interpreter}",',
         '  "args": ["-m", "pz_agent_mcp"],',
-        f'  "env": {{"PZ_AGENT_STATE_DIR": "{state_dir}"}}',
+        '  "env": {}',
         "}",
     )
 

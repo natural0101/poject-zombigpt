@@ -1,0 +1,179 @@
+"""The forbidden-pattern gate, and the claims two governing documents make about it.
+
+``AGENTS.md`` and ``CONTRIBUTING.md`` both list what ``scripts/check_forbidden.py``
+rejects, and both are binding — AGENTS.md says so in its first line. Neither had
+a test. One of the listed rules did not exist: both documents said an empty
+exception handler fails the build, and the scanner had no such check, for
+exactly the exception style this codebase writes.
+
+So this file does two things. It exercises each rule over a planted snippet,
+which is the only way to know a scanner still fires. And it pins the *documents*
+to the scanner, so the next rule that gets written into AGENTS.md without being
+implemented fails here instead of being believed for months.
+
+The handler rules are the interesting pair, and they are not symmetrical:
+
+* ``except:`` with no type is always wrong here — it swallows
+  ``KeyboardInterrupt`` and ``SystemExit`` — so the scanner rejects it.
+* ``except SomeError: pass`` is *not* always wrong. This tree has one that falls
+  through to a second lookup and several ``except OSError: return`` that
+  deliberately trade a diagnostic for a session in flight. A scanner cannot tell
+  those from a swallowed failure, so AGENTS.md states it as a review rule and
+  says why. This file asserts the scanner leaves them alone, which is the half
+  that would otherwise be quietly tightened into a checker nobody trusts.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import sys
+from pathlib import Path
+from typing import Any, Final
+
+import pytest
+
+REPO_ROOT: Final = Path(__file__).resolve().parents[2]
+SCRIPT: Final = REPO_ROOT / "scripts" / "check_forbidden.py"
+
+
+def _checker() -> Any:
+    """The script, imported as a module. It is not on the import path."""
+    spec = importlib.util.spec_from_file_location("check_forbidden", SCRIPT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["check_forbidden"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _scan(tmp_path: Path, source: str) -> list[str]:
+    """Rule names reported for one planted file."""
+    planted = tmp_path / "planted.py"
+    planted.write_text(source, encoding="utf-8")
+    return [finding.rule for finding in _checker().check_python(planted)]
+
+
+# ---------------------------------------------------------------------------
+# each rule the documents name
+# ---------------------------------------------------------------------------
+
+
+def test_an_untyped_except_is_rejected(tmp_path: Path) -> None:
+    """It catches KeyboardInterrupt and SystemExit, which is never intended."""
+    kinds = _scan(
+        tmp_path, "def read(p):\n    try:\n        return 1\n    except:\n        return 0\n"
+    )
+
+    assert "bare-except" in kinds
+
+
+def test_a_typed_handler_that_falls_through_is_left_alone(tmp_path: Path) -> None:
+    """The construct this tree uses on purpose, and the reason the rule is narrow.
+
+    ``read_commit`` tries a loose ref, passes on failure, and reads packed-refs
+    next. A scanner that rejected this would be rejecting correct code, and the
+    usual result is a check somebody switches off.
+    """
+    kinds = _scan(
+        tmp_path,
+        "def read(p):\n"
+        "    try:\n"
+        "        return loose(p)\n"
+        "    except OSError:\n"
+        "        pass\n"
+        "    return packed(p)\n",
+    )
+
+    assert kinds == [], kinds
+
+
+def test_a_guarded_swallow_with_its_reasoning_is_left_alone(tmp_path: Path) -> None:
+    """``except OSError: return`` in a diagnostic writer is deliberate here."""
+    kinds = _scan(
+        tmp_path,
+        "def log(record):\n"
+        "    try:\n"
+        "        write(record)\n"
+        "    except OSError:\n"
+        "        # Losing a log line is never a reason to end a session.\n"
+        "        return\n",
+    )
+
+    assert kinds == [], kinds
+
+
+def test_a_bare_pass_function_body_is_rejected(tmp_path: Path) -> None:
+    kinds = _scan(tmp_path, "def unfinished():\n    pass\n")
+
+    assert "stub-body" in kinds
+
+
+def test_a_not_implemented_error_is_rejected(tmp_path: Path) -> None:
+    kinds = _scan(tmp_path, "def unfinished():\n    raise NotImplementedError\n")
+
+    assert "stub-body" in kinds
+
+
+def test_a_protocol_method_may_be_empty(tmp_path: Path) -> None:
+    """The exemption that makes the rule usable: a Protocol body is the point."""
+    kinds = _scan(
+        tmp_path,
+        "from typing import Protocol\n\n\nclass Port(Protocol):\n    def read(self) -> int: ...\n",
+    )
+
+    assert kinds == [], kinds
+
+
+def test_a_todo_marker_is_rejected(tmp_path: Path) -> None:
+    kinds = _scan(tmp_path, "def done():\n    return 1  # TODO: finish this\n")
+
+    assert "stub-marker" in kinds
+
+
+# ---------------------------------------------------------------------------
+# the documents against the scanner
+# ---------------------------------------------------------------------------
+
+#: What each governing document promises, and the snippet that proves it. The
+#: point is the *pairing*: a rule added to a document without a snippet here has
+#: nothing standing behind it, which is the state "no empty except" was in.
+_PROMISED: Final[tuple[tuple[str, str], ...]] = (
+    ("`TODO`", "x = 1  # TODO: later\n"),
+    ("bare `pass`", "def f():\n    pass\n"),
+    ("`NotImplementedError`", "def f():\n    raise NotImplementedError\n"),
+    (
+        "`except:` without an exception type",
+        "def f():\n    try:\n        g()\n    except:\n        pass\n",
+    ),
+)
+
+
+@pytest.mark.parametrize(("phrase", "source"), _PROMISED, ids=[p for p, _ in _PROMISED])
+def test_what_the_documents_promise_is_what_the_scanner_does(
+    phrase: str, source: str, tmp_path: Path
+) -> None:
+    """Both directions: the documents name it, and the scanner rejects it."""
+    agents = (REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    contributing = (REPO_ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
+    naked = phrase.replace("`", "")
+
+    assert naked in agents.replace("`", ""), f"AGENTS.md no longer names {phrase}"
+    assert naked in contributing.replace("`", ""), f"CONTRIBUTING.md no longer names {phrase}"
+    assert _scan(tmp_path, source) != [], f"both documents promise {phrase} is rejected; it is not"
+
+
+def test_neither_document_claims_a_swallowed_handler_is_scanned() -> None:
+    """The claim that was false for months, asserted absent rather than assumed.
+
+    Both files said an "empty except" or "empty handler" fails the build. The
+    wording is what a contributor relies on, so the wording is what is checked:
+    if it comes back, this fails, and whoever brings it back has to implement it
+    or say why it cannot be implemented.
+    """
+    for name in ("AGENTS.md", "CONTRIBUTING.md"):
+        text = (REPO_ROOT / name).read_text(encoding="utf-8").lower()
+        for claim in ("no empty except", "no empty handler"):
+            assert claim not in text, (
+                f"{name} says {claim!r} again; check_forbidden.py does not do that, and "
+                "AGENTS.md explains why it cannot be done honestly"
+            )

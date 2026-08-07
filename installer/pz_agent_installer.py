@@ -1,5 +1,14 @@
 """Places the bridge mod, the configuration and the launcher on a Windows machine.
 
+**Not the shipped install path, and nothing in the product runs this.** The
+Windows archive carries ``install.bat``, which calls ``pz-agent install-mod``; a
+checkout follows ``docs/QUICKSTART.md``. This module is the third case — a
+machine with neither the archive nor pip — and ``installer/INSTALL.md`` opens by
+saying so. It is kept because it is the only path that works before anything is
+installed, and it is complete and tested rather than a sketch; it is *not* kept
+as an alternative anyone should be steered to, and a reader who arrives at it by
+opening this directory needs that said before the first heading.
+
 This module deliberately imports nothing from ``packages/``. An installer runs
 *before* the thing it installs exists, so it has to work on a bare CPython with
 nothing on ``sys.path`` but the standard library — which is also why the payload
