@@ -116,6 +116,12 @@ with them:
   `pz_action_unequip`, `pz_action_bandage`, `pz_action_rest`,
   `pz_action_sleep`, `pz_action_wait`, `pz_action_cancel`
 - **plan** — `pz_plan_execute`, `pz_plan_status`
+- **goal** — `pz_goal_submit`, `pz_goal_status`, `pz_goal_cancel`. The typed
+  goal channel: a closed set of kinds with per-kind typed, range-checked
+  parameters, one goal active at a time, and every goal bounded by wall clock
+  *and* step count. `pz_goal_submit` is a mutating tool and is gated on arming
+  like the rest of them. Submission is not service — it answers `pending` and
+  the sidecar's own loop activates it, which is why `pz_goal_status` exists.
 - **safety** — `pz_safety_stop`
 - **memory and diagnostics** — `pz_memory_query`, `pz_debug_doctor`,
   `pz_debug_tail`

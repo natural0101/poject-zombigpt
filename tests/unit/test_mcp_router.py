@@ -998,11 +998,40 @@ def every_payload(router: ToolRouter) -> Iterator[tuple[str, Any]]:
         ("pz_memory_query", {}),
         ("pz_debug_doctor", {}),
         ("pz_debug_tail", {}),
-        ("pz_session_disarm", {}),
-        ("pz_safety_stop", {}),
     ]
     for name, arguments in calls:
         yield name, router.call(name, arguments)
+
+    # The goal trio is swept separately because the cancel needs the id the
+    # submit minted, and a cancel of an id the channel never issued answers with
+    # a refusal — a thinner payload than the one a leak would hide in.
+    submitted = router.call(
+        "pz_goal_submit", {"kind": "satisfy_hunger", "idempotency_key": "goal-leak-1"}
+    )
+    yield "pz_goal_submit", submitted
+    yield "pz_goal_status", router.call("pz_goal_status", {})
+    minted = _goal_id_from(submitted)
+    yield (
+        "pz_goal_cancel",
+        router.call("pz_goal_cancel", {"goal_id": minted, "idempotency_key": "goal-leak-2"}),
+    )
+
+    # Last on purpose: see the docstring.
+    for name, arguments in (("pz_session_disarm", {}), ("pz_safety_stop", {})):
+        yield name, router.call(name, arguments)
+
+
+def _goal_id_from(payload: Any) -> str:
+    """The id ``pz_goal_submit`` minted, or a loud failure.
+
+    Falling back to a placeholder here would turn the cancel leg of the sweep
+    into a refusal without anybody noticing, and a refusal is exactly the payload
+    shape a leak does not appear in.
+    """
+    assert payload.get("ok") is True, f"the sweep's goal submit was refused: {payload}"
+    identifier = payload["data"]["goal_id"]
+    assert isinstance(identifier, str) and identifier, f"no goal id in {payload}"
+    return identifier
 
 
 def leaky_doubles() -> Doubles:

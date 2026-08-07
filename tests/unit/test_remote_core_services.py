@@ -39,6 +39,7 @@ from typing import Final
 import pytest
 
 from pz_agent_core.actions import ActionRequest, PreconditionFailed
+from pz_agent_core.goals import GoalKind, GoalParams, GoalRequest
 from pz_agent_core.protocol import (
     ActionName,
     ActionStatus,
@@ -66,6 +67,7 @@ from pz_agent_mcp.ports import (
     CoreServices,
     DiagnosticsPort,
     DoctorCheck,
+    GoalPort,
     LogRecord,
     MemoryPort,
     MemoryRecord,
@@ -98,6 +100,14 @@ from pz_agent_mcp.remote.codec.diagnostics import (
     decode_tail_query,
     encode_doctor_checks,
     encode_log_records,
+)
+from pz_agent_mcp.remote.codec.goals import (
+    decode_goal_id,
+    decode_goal_query,
+    decode_goal_request,
+    encode_goal_admission,
+    encode_goal_cancellation,
+    encode_goal_channel_status,
 )
 from pz_agent_mcp.remote.codec.memory import decode_memory_query, encode_memory_records
 from pz_agent_mcp.remote.codec.observations import encode_latest_observation
@@ -195,6 +205,31 @@ def _diagnostics_tail(services: CoreServices, params: JsonDict) -> JsonDict:
     )
 
 
+def _goal_submit(services: CoreServices, params: JsonDict) -> JsonDict:
+    return encode_goal_admission(_channel(services).submit(decode_goal_request(params)))
+
+
+def _goal_status(services: CoreServices, params: JsonDict) -> JsonDict:
+    return encode_goal_channel_status(_channel(services).status(decode_goal_query(params)))
+
+
+def _goal_cancel(services: CoreServices, params: JsonDict) -> JsonDict:
+    return encode_goal_cancellation(_channel(services).cancel(decode_goal_id(params)))
+
+
+def _channel(services: CoreServices) -> GoalPort:
+    """The goal channel, refusing rather than returning ``None``.
+
+    ``CoreServices.goals`` is optional, and a handler that silently answered an
+    empty status for a bundle without one would make "no channel" and "no goals"
+    the same wire body.
+    """
+    channel = services.goals
+    if channel is None:
+        raise RuntimeError("this core was assembled without a goal channel")
+    return channel
+
+
 #: Keyed by the shared constants, never by a literal string. The test below
 #: asserts this table is exactly ``ALL_METHODS``, so a method the client can
 #: call and this server cannot answer is a failure here rather than an
@@ -213,6 +248,9 @@ ANSWERS: Final[dict[str, Answer]] = {
     Method.MEMORY_QUERY: _memory_query,
     Method.DIAGNOSTICS_DOCTOR: _diagnostics_doctor,
     Method.DIAGNOSTICS_TAIL: _diagnostics_tail,
+    Method.GOAL_SUBMIT: _goal_submit,
+    Method.GOAL_STATUS: _goal_status,
+    Method.GOAL_CANCEL: _goal_cancel,
 }
 
 #: A handler that replaces the dispatch entirely, for the tests that need the
@@ -437,6 +475,14 @@ def an_action_request() -> ActionRequest:
     )
 
 
+def a_goal_request() -> GoalRequest:
+    return GoalRequest(
+        kind=GoalKind.READ_FOR_BOREDOM,
+        idempotency_key="key-3",
+        params=GoalParams(pages=7),
+    )
+
+
 def a_plan_request() -> PlanRequest:
     return PlanRequest(
         goal="eat something",
@@ -470,8 +516,9 @@ class TestItIsACoreServices:
         plans: PlanPort = services.plans
         memory: MemoryPort = services.memory
         diagnostics: DiagnosticsPort = services.diagnostics
+        goals: GoalPort | None = services.goals
 
-        bound = (session, observations, capabilities, actions, plans, memory, diagnostics)
+        bound = (session, observations, capabilities, actions, plans, memory, diagnostics, goals)
         assert len(bound) == len(fields(CoreServices))
         assert isinstance(services, CoreServices)
 
@@ -492,7 +539,7 @@ class TestItIsACoreServices:
 
 
 class TestEveryPortReachesTheCore:
-    """Seven ports, thirteen methods, none of them a stub."""
+    """Eight ports, sixteen methods, none of them a stub."""
 
     def test_the_test_server_answers_exactly_the_declared_method_set(self) -> None:
         """Neither less nor more than :data:`ALL_METHODS`.
@@ -523,6 +570,11 @@ class TestEveryPortReachesTheCore:
         services.memory.query(kinds=("home",), limit=5)
         services.diagnostics.doctor()
         services.diagnostics.tail(limit=3)
+        goals = services.goals
+        assert goals is not None, "the remote bundle carries no goal channel"
+        goals.submit(a_goal_request())
+        goals.status()
+        goals.cancel("no-such-goal")
 
         assert set(sidecar.methods) == ALL_METHODS
         assert len(sidecar.methods) == len(ALL_METHODS)

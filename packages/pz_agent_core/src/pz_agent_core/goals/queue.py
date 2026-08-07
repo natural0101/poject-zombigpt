@@ -45,6 +45,7 @@ that a millisecond-resolution Linux test would never show.
 from __future__ import annotations
 
 from collections import OrderedDict
+from collections.abc import Callable
 from dataclasses import replace
 from typing import Final
 
@@ -93,6 +94,7 @@ class GoalQueue:
         max_open: int = DEFAULT_MAX_OPEN,
         max_remembered: int = DEFAULT_MAX_REMEMBERED,
         armed: bool = True,
+        new_id: Callable[[], str] = mint_goal_id,
     ) -> None:
         if max_open < 1:
             raise ValueError(f"max_open must be positive, got {max_open}")
@@ -101,6 +103,14 @@ class GoalQueue:
                 f"max_remembered must be at least max_open ({max_open}), got {max_remembered}"
             )
         self._clock = clock
+        # Injected for the same reason the clock is: a goal id reaches a peer
+        # inside a result body, and a test that pins that body against a
+        # hand-written object cannot do it against a fresh uuid4. Still minted
+        # HERE rather than accepted from the submitter — the rule that matters
+        # is that a *caller* cannot choose an id, because an id a caller chose
+        # is an id a caller could fill with text, and it comes back in refusals.
+        # Wiring is not calling: nothing on the request path reaches this.
+        self._new_id = new_id
         self._max_open = max_open
         self._max_remembered = max_remembered
         self._armed = armed
@@ -196,7 +206,7 @@ class GoalQueue:
             )
 
         record = GoalRecord(
-            goal_id=mint_goal_id(),
+            goal_id=self._new_id(),
             kind=request.kind,
             params=request.params,
             budget=request.effective_budget,
