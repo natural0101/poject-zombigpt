@@ -134,3 +134,39 @@ retried utterance is not a second sandwich.
 from MCP and not from a microphone, and that asymmetry is recorded here rather
 than closed, because inventing Russian phrasings for them is a grammar decision
 and not a wiring one.
+
+## D-012 — the decisions that shaped the release candidate
+
+The RC named in `docs/control/EVIDENCE_INDEX.md` is the shape it is because of
+these, each recorded where it happened and gathered here so an operator does
+not have to read the git log to know why the archive looks the way it does:
+
+* **Two executables, both required to answer.** `pz-agent.exe` (sidecar + CLI)
+  and `pz-agent-mcp.exe` (the MCP client entry) are built separately, and the
+  workflow's "Both executables answer" step runs each one — building is not the
+  claim, answering is. A build that produces a binary that dies on startup
+  fails the workflow, not the user.
+* **The MCP SDK is bound, and its absence is a diagnosis.** `mcp>=2,<3` after
+  the 2.0 API break (R-001); the entry point exits with a distinct code for "no
+  SDK" (3) and "an SDK whose constructor no longer takes the four handlers" (9),
+  because a client author reading a traceback is the failure mode this whole
+  exit-code table exists to prevent.
+* **PyInstaller discovers the SDK by directory, not by import.** `mcp.cli`
+  calls `sys.exit` at import time without its optional `typer` extra, and
+  `SystemExit` is not an `Exception`, so import-driven discovery died inside
+  PyInstaller's `on_error` hook. `packaging/windows/specutil.py` reads the
+  package directory instead. Recorded in the step-30-40 evidence file at the
+  commit that fixed it (`15296e50`).
+* **The archive is verified member-by-member.** Digests are taken over each
+  member's bytes on disk, independently of the index that names them, and the
+  index itself is bounded before parsing (a bracket-count depth scan, not a
+  `RecursionError` catch, because the latter is a property of the interpreter,
+  not the input). A member name is classified by what is wrong with it —
+  absolute, drive-letter, traversal — and refused without quoting it.
+* **The release gate runs in the same workflow that built.** `check_release.py`
+  refuses an archive whose manifest, digests or required documents do not hold,
+  so an RC artifact existing at all means the gate passed on the runner that
+  made it.
+* **No `v1.0.0` from any of this.** The RC is a certified build, not a
+  release; LIVE GAME VALIDATION is 599 of 3104 weight and owned `local`, and
+  RB-002 stands until scenarios run on a machine with the game.

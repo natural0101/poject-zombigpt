@@ -27,3 +27,18 @@ construction.
 | `tests/contract/test_evidence_bytes_are_portable.py` | 11 cross-platform digest tests |
 | `tests/contract/test_windows_path_shapes.py` | Windows path shapes, asserted on Linux |
 | `tests/contract/test_mcp_snippet_is_json.py` | the printed MCP block parsed back, 5 interpreter paths |
+
+## The release candidate
+
+The digest is the identity: an RC is *this* archive, from *this* commit, by
+*this* run, and a claim about "the RC" that names none of the three is a claim
+about nothing.
+
+| Field | Value |
+| --- | --- |
+| archive | `pz-agent-windows-rc` (artifact 9008037774) |
+| archive sha256 | `3eb5ca63c4d113f3a3a48914a7cd206f77439a24a80f891fcea60b205733bbe2` |
+| source commit | `276b9d90797e6cfd9c79d107f007acee7d3770d9` |
+| workflow run | https://github.com/natural0101/poject-zombigpt/actions/runs/31214158408 |
+| certified by | every step of `windows package` green, both executables answering |
+| current? | `docs/control/STATUS.json` → `release_candidate.status`; any code commit after the source commit makes it STALE until the workflow rebuilds it |
