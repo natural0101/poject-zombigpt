@@ -72,21 +72,25 @@ reported as (a) tells them the core refused when nothing was ever asked; and
 either reported as (c) sends them looking for a version mismatch that is not
 there.
 
-The goal channel is an eighth thing, not an eighth port
-------------------------------------------------------
+The goal channel stops being optional here
+-----------------------------------------
 
-:class:`~pz_agent_mcp.ports.CoreServices` declares seven ports and the typed goal
-channel of :mod:`pz_agent_core.goals` is not one of them, so
-:attr:`RemoteCoreServices.goals` is an attribute this subclass adds rather than a
-field of the bundle. It is a :class:`~pz_agent_mcp.remote.server.GoalPort` like
-any other implementation of that protocol, reached over the same link and
-failing in the same three ways.
+:attr:`~pz_agent_mcp.ports.CoreServices.goals` is the one member of the bundle
+declared ``| None``, and its docstring says why: a build whose Core RPC link
+carried no ``goal.*`` method had nothing to put there, and
+:class:`~pz_agent_mcp.router.ToolRouter` answers the three goal tools with
+``CAPABILITY_UNAVAILABLE`` rather than pretending. This module is that link. So
+:class:`RemoteCoreServices` always fills the field: from here on, a goal tool
+that cannot reach the channel says the sidecar is not running, which is true,
+instead of saying this build cannot carry goals, which is no longer.
 
-Its ``cancel`` deserves a note. It answers a *boolean*, and the boolean is not
-"did it work": it is "was there an open goal to cancel". ``False`` means the goal
-had already reached a terminal state, which is an answer a user needs — "it
-already stopped" and "it will stop" call for different words — and it is never
-how a failure to reach the core is reported. That still raises.
+:meth:`RemoteGoalPort.cancel` deserves a note. Its
+:class:`~pz_agent_mcp.ports.GoalCancellation` says ``requested``, not
+"cancelled": the channel observes a cancellation on its next tick, so an
+accepted request routinely comes back naming a goal that is still running.
+``requested=False`` means the goal had already ended — an answer a user needs,
+since "it already stopped" and "it will stop" call for different words — and it
+is never how a failure to reach the core is reported. That still raises.
 
 ``observations.latest()`` deserves its own sentence, because it is the one port
 whose success value is ``None``: before the first observation arrives there is
@@ -106,7 +110,7 @@ from typing import Any, Final, TypeVar
 
 from pz_agent_core.actions import ActionRequest
 from pz_agent_core.capabilities.model import CapabilityReport
-from pz_agent_core.goals import GoalAdmission, GoalRecord, GoalRequest
+from pz_agent_core.goals import GoalAdmission, GoalRequest
 from pz_agent_core.protocol import JsonDict, Observation, SessionMode
 from pz_agent_core.rpc.descriptor import DescriptorError, load_descriptor, runtime_dir
 from pz_agent_core.rpc.token import TokenError, read_token
@@ -120,6 +124,8 @@ from pz_agent_mcp.ports import (
     ActionRecord,
     CoreServices,
     DoctorCheck,
+    GoalCancellation,
+    GoalChannelStatus,
     LogRecord,
     MemoryRecord,
     PlanRecord,
@@ -143,8 +149,9 @@ from pz_agent_mcp.remote.codec.diagnostics import (
 from pz_agent_mcp.remote.codec.goals import (
     decode_goal_admission,
     decode_goal_cancellation,
-    decode_goal_status,
+    decode_goal_channel_status,
     encode_goal_id,
+    encode_goal_query,
     encode_goal_request,
 )
 from pz_agent_mcp.remote.codec.memory import (
@@ -483,7 +490,7 @@ class RemotePlanPort:
 
 @dataclass(frozen=True, slots=True)
 class RemoteGoalPort:
-    """:class:`~pz_agent_mcp.remote.server.GoalPort` over the link."""
+    """:class:`~pz_agent_mcp.ports.GoalPort` over the link."""
 
     link: CoreLink
 
@@ -509,25 +516,31 @@ class RemoteGoalPort:
             Method.GOAL_SUBMIT, decode_goal_admission, encode_goal_request(request)
         )
 
-    def status(self, goal_id: str) -> GoalRecord | None:
-        """The record for *goal_id*, or ``None`` if the channel has none.
+    def status(self, goal_id: str | None = None) -> GoalChannelStatus:
+        """The channel as it stands, and the goal *goal_id* names.
 
-        ``None`` means the channel answered and had nothing under that id — a
-        goal it never minted, or one that finished long enough ago to have left
-        the bounded history. The codec spells that as an absent key, distinct
-        from an empty object, which would be a decode failure. A link that is
-        down raises.
+        ``None`` asks about the channel alone, and it travels as ``None``: an
+        empty string would ask about the goal whose id is ``""``.
+
+        A ``named`` of ``None`` in the answer is not resolved here. It means
+        either "no id was asked about" or "that id names nothing this channel
+        holds", and only the caller knows which — it knows whether it passed an
+        id. :class:`~pz_agent_mcp.router.ToolRouter` is where the second becomes
+        a refusal, and inventing an answer here would take that decision away
+        from the layer that can make it.
         """
-        return self.link.read(Method.GOAL_STATUS, decode_goal_status, encode_goal_id(goal_id))
+        return self.link.read(
+            Method.GOAL_STATUS, decode_goal_channel_status, encode_goal_query(goal_id)
+        )
 
-    def cancel(self, goal_id: str) -> bool:
-        """Ask the channel to end *goal_id*; ``True`` if there was one to end.
+    def cancel(self, goal_id: str) -> GoalCancellation:
+        """Ask the channel to end *goal_id*, and return what it did with the ask.
 
-        ``False`` is an answer, not a failure: the goal had already reached a
-        terminal state. Every way of failing to reach the channel raises, so a
-        dead link is never reported as "there was nothing to cancel" — which,
-        told about a goal that is still running, would be the opposite of the
-        truth.
+        ``requested=False`` is an answer, not a failure: the goal had already
+        reached a terminal state. Every way of failing to reach the channel
+        raises, so a dead link is never reported as "there was nothing to
+        cancel" — which, told about a goal that is still running, would be the
+        opposite of the truth.
         """
         return self.link.read(Method.GOAL_CANCEL, decode_goal_cancellation, encode_goal_id(goal_id))
 
@@ -610,16 +623,11 @@ class RemoteCoreServices(CoreServices):
     takes the bundle, and a remote implementation that only duck-typed would be
     accepted by mypy in some call sites and not others.
 
-    :attr:`goals` is carried alongside those seven rather than among them,
-    because the bundle declares seven ports and the typed goal channel is not
-    one of them. Everything else about it is the same: one link, the same three
-    failure kinds, the same codec.
+    ``goals`` is filled rather than left at its ``None`` default, and that is
+    the point of it being a default at all: the bundle allows ``None`` for a
+    build whose core link carries no ``goal.*`` method, and this module is the
+    link that does.
     """
-
-    #: The typed goal channel over the same link. Annotated rather than
-    #: assigned at class level: it is per-instance state, and the instance is
-    #: what holds the link.
-    goals: RemoteGoalPort
 
     def __init__(self, link: CoreLink) -> None:
         super().__init__(
@@ -630,13 +638,8 @@ class RemoteCoreServices(CoreServices):
             plans=RemotePlanPort(link),
             memory=RemoteMemoryPort(link),
             diagnostics=RemoteDiagnosticsPort(link),
+            goals=RemoteGoalPort(link),
         )
-        # `CoreServices` is a frozen dataclass, so plain assignment raises
-        # `FrozenInstanceError`; `object.__setattr__` is the same door the
-        # dataclass's own generated `__init__` uses to fill its fields, and it
-        # is used here for exactly that — filling an attribute once, during
-        # construction, on an object that is immutable from then on.
-        object.__setattr__(self, "goals", RemoteGoalPort(link))
 
     @classmethod
     def from_state_dir(

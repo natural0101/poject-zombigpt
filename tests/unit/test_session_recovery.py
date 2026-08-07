@@ -72,7 +72,9 @@ from tests.fixtures.safety_builders import NOW_MS
 GUARD: Final = ReflexGuard()
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[2]
-SAFETY_LUA: Final = REPO_ROOT / "pz-mod" / "42" / "media" / "lua" / "client" / "PZAgent" / "Safety.lua"
+SAFETY_LUA: Final = (
+    REPO_ROOT / "pz-mod" / "42" / "media" / "lua" / "client" / "PZAgent" / "Safety.lua"
+)
 
 #: The timeout written out again, independently of the constant under test: an
 #: assertion that imports the number it is checking proves only that Python can

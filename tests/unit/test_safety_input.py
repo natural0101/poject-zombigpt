@@ -207,7 +207,7 @@ def test_nothing_in_this_build_can_send_input() -> None:
 def test_no_session_can_be_armed_into_the_mode_that_would_use_it() -> None:
     """The loop grants ASSISTED and AUTONOMOUS and nothing else."""
     assert SessionMode.EXPERIMENTAL_INPUT not in ARMABLE_MODES
-    assert ARMABLE_MODES == frozenset({SessionMode.ASSISTED, SessionMode.AUTONOMOUS})
+    assert sorted(mode.value for mode in ARMABLE_MODES) == ["ASSISTED", "AUTONOMOUS"]
 
 
 @pytest.mark.parametrize("multiplayer", MULTIPLAYER_READINGS, ids=["multiplayer", "unknown"])

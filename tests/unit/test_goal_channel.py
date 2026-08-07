@@ -44,7 +44,10 @@ from pz_agent_core.goals import (
     MAX_EVIDENCE_KEYS,
     MAX_GOAL_STEPS,
     MAX_GOAL_WALL_MS,
+    MAX_IDEMPOTENCY_KEY_LEN,
     MAX_PARSED_TOKEN_CHARS,
+    MAX_PENDING_TTL_MS,
+    MAX_SKILL_LEVEL,
     MIN_GOAL_WALL_MS,
     NUMERIC_RANGES,
     PARAM_NAMES,
@@ -70,6 +73,7 @@ from pz_agent_core.goals import (
     to_planner_goal,
 )
 from pz_agent_core.goals import model as goal_model
+from pz_agent_core.planner.plan import MAX_PLAN_STEPS
 from pz_agent_core.protocol import ActionResult, ActionStatus, ReasonCode
 
 # --------------------------------------------------------------------------
@@ -749,6 +753,63 @@ class TestBudgetBounds:
                 optional=frozenset({"pages"}),
                 budget=GoalBudget(max_wall_ms=5_000, max_steps=1, pending_ttl_ms=1_000),
             )
+
+
+class TestTheDeclaredBoundsThemselves:
+    """The ceilings, against hand-written numbers.
+
+    Every other bounds test in this file is written *relative* to the constant it
+    checks — ``GoalParams(pages=MAX + 1)`` is refused, a ``detail`` of
+    ``MAX_DETAIL_CHARS + 1`` is refused — which proves a check exists and proves
+    nothing whatever about the size of the number. Raising ``MAX_DETAIL_CHARS``
+    to a million, ``MAX_GOAL_WALL_MS`` to eleven days, ``MAX_EVIDENCE_KEYS`` to
+    forty or ``MIN_GOAL_WALL_MS`` to one millisecond leaves every one of those
+    tests green, because each moves with the constant it is derived from.
+    "Bounded" is a claim about how large the bound is, so the sizes are spelled
+    out here and loosening one is a reviewed change rather than a silent one.
+    """
+
+    def test_the_declared_bounds_are_exactly_these(self) -> None:
+        assert MAX_IDEMPOTENCY_KEY_LEN == 64
+        assert MAX_PARSED_TOKEN_CHARS == 64
+        assert MAX_DETAIL_CHARS == 200
+        assert MAX_EVIDENCE_KEYS == 8
+        assert MAX_SKILL_LEVEL == 10
+        assert MAX_GOAL_STEPS == 12
+        assert MIN_GOAL_WALL_MS == 1_000
+        assert MAX_GOAL_WALL_MS == 900_000
+        assert MAX_PENDING_TTL_MS == 600_000
+
+    def test_a_goal_may_outlast_one_plan_but_not_many(self) -> None:
+        # The comment on MAX_GOAL_STEPS claimed for a while that it was *equal*
+        # to the planner's own ceiling, and it is 12 against the planner's 5.
+        # The relationship it really has — room for a goal to be re-planned, and
+        # not an open number of steps — is checked here so that the comment
+        # cannot quietly become wrong again.
+        assert MAX_PLAN_STEPS == 5
+        assert MAX_GOAL_STEPS > MAX_PLAN_STEPS
+        assert MAX_GOAL_STEPS <= 3 * MAX_PLAN_STEPS
+
+    def test_the_longest_detail_admitted_is_a_line_and_not_a_page(self) -> None:
+        # The behavioural half, with the literal written out rather than derived:
+        # 200 characters is a diagnostic somebody reads in one log line.
+        a_record(detail="x" * 200)
+        with pytest.raises(ValueError, match="at most"):
+            a_record(detail="x" * 201)
+
+    def test_the_wall_clock_ceiling_is_minutes_and_not_days(self) -> None:
+        # Fifteen minutes, with the arithmetic spelled out. A budget long enough
+        # that a user would have forgotten setting it is not a bound on anything.
+        assert MAX_GOAL_WALL_MS == 15 * 60 * 1_000
+        GoalBudget(max_wall_ms=15 * 60 * 1_000, max_steps=1, pending_ttl_ms=1_000)
+        with pytest.raises(ValueError, match="max_wall_ms"):
+            GoalBudget(max_wall_ms=15 * 60 * 1_000 + 1, max_steps=1, pending_ttl_ms=1_000)
+
+    def test_the_pending_time_to_live_ceiling_is_ten_minutes(self) -> None:
+        assert MAX_PENDING_TTL_MS == 10 * 60 * 1_000
+        GoalBudget(max_wall_ms=5_000, max_steps=1, pending_ttl_ms=10 * 60 * 1_000)
+        with pytest.raises(ValueError, match="pending_ttl_ms"):
+            GoalBudget(max_wall_ms=5_000, max_steps=1, pending_ttl_ms=10 * 60 * 1_000 + 1)
 
 
 # --------------------------------------------------------------------------

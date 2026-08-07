@@ -114,10 +114,14 @@ _KEY_SHAPE: Final = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:\-]{0,63}\Z")
 #: case fold in front of it is linear, so the input is bounded first.
 MAX_PARSED_TOKEN_CHARS: Final = 64
 
-#: Ceiling on a goal's step budget. Equal to
-#: :data:`pz_agent_core.planner.plan.MAX_PLAN_STEPS` on purpose: a goal that
-#: outlives every plan the planner may produce for it is not bounded by anything
-#: the executor will actually count.
+#: Ceiling on a goal's step budget. Larger than
+#: :data:`pz_agent_core.planner.plan.MAX_PLAN_STEPS` (5) and deliberately not
+#: equal to it: one goal may be served by more than one plan — a plan that runs
+#: out is re-planned against the world as it now is — so a ceiling of exactly one
+#: plan's length would end a goal that was making progress. It is a small
+#: multiple of that length rather than an open number, because the steps a goal
+#: may spend have to be countable by the executor that dispatches them; the
+#: relationship is pinned by a test rather than left to this comment.
 MAX_GOAL_STEPS: Final = 12
 
 #: Wall-clock ceiling on one goal, and the floor below which a budget is not a

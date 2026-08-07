@@ -13,15 +13,21 @@ a :data:`~pz_agent_core.rpc.transport.Handler`, so it is passed to
 The goal channel arrives beside the bundle
 ------------------------------------------
 
-:class:`~pz_agent_mcp.ports.CoreServices` is seven ports and the goal channel is
-not one of them: :mod:`pz_agent_core.goals` is a queue with its own admission,
-exclusivity and expiry rules, and it is reached through :class:`GoalPort`, which
-:class:`CoreRouter` takes as a keyword argument. A sidecar that has one passes
-it; one that does not gets :data:`NO_GOAL_CHANNEL`, whose every method raises,
-so the three goal routes answer ``CORE_REFUSED`` naming the missing wiring. That
-is the honest answer for "this core has no goal channel" and it is deliberately
-not the same as silence: a route that returned an empty record instead would
-tell a caller its goal was rejected by a channel that does not exist.
+:attr:`~pz_agent_mcp.ports.CoreServices.goals` is the one member of the bundle
+declared ``| None``, because a build whose Core RPC link carried no ``goal.*``
+method had nothing to put there. This module is that leg, so on this side the
+channel is not optional: :class:`CoreRouter` takes a
+:class:`~pz_agent_mcp.ports.GoalPort` as a keyword argument and defaults it to
+:data:`NO_GOAL_CHANNEL`, whose every method raises, so the three goal routes
+answer ``CORE_REFUSED`` naming the missing wiring.
+
+The resolution of "the bundle's ``goals`` is ``None``" into that default happens
+at the sidecar's call site and not here, and the reason is the section below: it
+is a decision, it needs a comparison, and this module contains none. A sidecar
+writes ``CoreRouter(services, goals=services.goals or NO_GOAL_CHANNEL)`` and the
+choice is visible where the wiring is. What must not happen is the alternative —
+a route answering an empty status or a minted refusal — because a caller cannot
+tell that from a channel that considered its goal and said no.
 
 The router decides nothing
 --------------------------
@@ -102,13 +108,19 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any, Final, Generic, Protocol, TypeVar
+from typing import Any, Final, Generic, TypeVar
 
 from pz_agent_core.actions import ActionRequest
-from pz_agent_core.goals import GoalAdmission, GoalRecord, GoalRequest
+from pz_agent_core.goals import GoalAdmission, GoalRequest
 from pz_agent_core.protocol import JsonDict, SessionMode
 from pz_agent_core.rpc import ErrorCode, RpcRequest, RpcResponse
-from pz_agent_mcp.ports import CoreServices, PlanRequest
+from pz_agent_mcp.ports import (
+    CoreServices,
+    GoalCancellation,
+    GoalChannelStatus,
+    GoalPort,
+    PlanRequest,
+)
 from pz_agent_mcp.remote.codec import CodecError, require_bool, require_enum, require_str
 from pz_agent_mcp.remote.codec.actions import (
     decode_action_request,
@@ -124,10 +136,11 @@ from pz_agent_mcp.remote.codec.diagnostics import (
 )
 from pz_agent_mcp.remote.codec.goals import (
     decode_goal_id,
+    decode_goal_query,
     decode_goal_request,
     encode_goal_admission,
     encode_goal_cancellation,
-    encode_goal_status,
+    encode_goal_channel_status,
 )
 from pz_agent_mcp.remote.codec.memory import (
     MemoryQuery,
@@ -149,7 +162,6 @@ __all__ = [
     "ROUTED_METHODS",
     "ArmParams",
     "CoreRouter",
-    "GoalPort",
     "decode_action_status_params",
     "decode_arm_params",
     "encode_action_status_params",
@@ -172,37 +184,14 @@ NO_GOAL_CHANNEL_REASON: Final = (
 )
 
 
-class GoalPort(Protocol):
-    """The typed goal channel of :mod:`pz_agent_core.goals`, as a router sees it.
-
-    Three methods and no more, matching the three declared methods. Stated as a
-    :class:`~typing.Protocol` rather than imported as a class because the queue
-    is a core type with a clock and a history, and the router needs none of
-    that: it needs somewhere to send a submission and somewhere to ask.
-
-    :meth:`submit` returns as soon as the channel has decided whether to admit
-    the goal. It does not wait for the goal to be served, for the same reason
-    :meth:`~pz_agent_mcp.ports.ActionPort.submit` does not wait for a
-    postcondition — the transport is one exchange per connection, so a submit
-    that waited would hold the link for the whole of a goal, and the stop lever
-    needs a connection exactly then.
-    """
-
-    def submit(self, request: GoalRequest) -> GoalAdmission: ...
-
-    def status(self, goal_id: str) -> GoalRecord | None: ...
-
-    def cancel(self, goal_id: str) -> bool: ...
-
-
 @dataclass(frozen=True, slots=True)
 class _AbsentGoalChannel:
-    """The channel a router built without one is given.
+    """The :class:`~pz_agent_mcp.ports.GoalPort` a router built without one gets.
 
     Every method raises, so the three goal routes reach the ``CORE_REFUSED``
     branch carrying :data:`NO_GOAL_CHANNEL_REASON`. That is the whole design:
     the router must not decide anything, including whether a goal channel is
-    present, and an answer invented here — an empty record, a refusal minted
+    present, and an answer invented here — an empty status, a refusal minted
     locally — would be indistinguishable from a channel that had actually
     considered the goal.
     """
@@ -210,14 +199,15 @@ class _AbsentGoalChannel:
     def submit(self, request: GoalRequest) -> GoalAdmission:
         raise RuntimeError(NO_GOAL_CHANNEL_REASON)
 
-    def status(self, goal_id: str) -> GoalRecord | None:
+    def status(self, goal_id: str | None = None) -> GoalChannelStatus:
         raise RuntimeError(NO_GOAL_CHANNEL_REASON)
 
-    def cancel(self, goal_id: str) -> bool:
+    def cancel(self, goal_id: str) -> GoalCancellation:
         raise RuntimeError(NO_GOAL_CHANNEL_REASON)
 
 
-#: The default :class:`GoalPort`. One instance rather than one per router: it
+#: The default :class:`~pz_agent_mcp.ports.GoalPort`. One instance rather than
+#: one per router: it
 #: holds no state, and a shared constant is what makes ``goals=NO_GOAL_CHANNEL``
 #: a thing a caller can write on purpose.
 NO_GOAL_CHANNEL: Final[GoalPort] = _AbsentGoalChannel()
@@ -368,16 +358,22 @@ def _goal_submit(core: _Backends, params: GoalRequest) -> JsonDict:
     return encode_goal_admission(core.goals.submit(params))
 
 
-def _goal_status(core: _Backends, params: str) -> JsonDict:
-    return encode_goal_status(core.goals.status(params))
+def _goal_status(core: _Backends, params: str | None) -> JsonDict:
+    """Answer with the channel as it stands, plus the goal the caller named.
+
+    ``None`` is passed through as ``None`` rather than turned into an empty
+    string: the port reads that as "tell me about the channel", and an empty
+    string would ask about the goal whose id is ``""``.
+    """
+    return encode_goal_channel_status(core.goals.status(params))
 
 
 def _goal_cancel(core: _Backends, params: str) -> JsonDict:
-    """Ask the channel to end a goal, and report whether it will.
+    """Ask the channel to end a goal, and report what it did with the request.
 
-    ``False`` is an answer, not a failure: it means nothing open was found under
-    that id. It is carried as a value rather than as a refusal so a caller can
-    tell "it will stop" from "it already had".
+    ``requested=False`` is an answer, not a failure: nothing open was found
+    under that id. It is carried as a value rather than as a refusal so a caller
+    can tell "it will stop" from "it already had".
     """
     return encode_goal_cancellation(core.goals.cancel(params))
 
@@ -448,7 +444,7 @@ _ROUTES: Final[Mapping[str, _Route[Any]]] = {
     Method.PLAN_EXECUTE: _Route(decode_plan_request, _plan_execute),
     Method.PLAN_CURRENT: _Route(_no_params, _plan_current),
     Method.GOAL_SUBMIT: _Route(decode_goal_request, _goal_submit),
-    Method.GOAL_STATUS: _Route(decode_goal_id, _goal_status),
+    Method.GOAL_STATUS: _Route(decode_goal_query, _goal_status),
     Method.GOAL_CANCEL: _Route(decode_goal_id, _goal_cancel),
     Method.MEMORY_QUERY: _Route(decode_memory_query, _memory_query),
     Method.DIAGNOSTICS_DOCTOR: _Route(_no_params, _diagnostics_doctor),
@@ -483,12 +479,18 @@ class CoreRouter:
 
         server = RpcServer(address, authkey=token, handler=CoreRouter(services))
 
-    *goals* is the typed goal channel, which is not one of the seven ports; a
-    sidecar that owns one passes it and one that does not gets
+    *goals* is the typed goal channel, which the bundle declares ``| None``
+    because a build without this leg had nothing to put there::
+
+        CoreRouter(services, goals=services.goals or NO_GOAL_CHANNEL)
+
+    A sidecar that owns one passes it; one that does not gets
     :data:`NO_GOAL_CHANNEL`, whose methods raise so the three goal routes answer
-    ``CORE_REFUSED`` naming the missing wiring. It is keyword-only because a
-    second positional argument beside the bundle is exactly the kind of thing
-    that gets passed in the wrong order once and then carried.
+    ``CORE_REFUSED`` naming the missing wiring. The ``or`` belongs to the caller
+    and not to this module — it is a decision, and this module makes none. It is
+    keyword-only because a second positional argument beside the bundle is
+    exactly the kind of thing that gets passed in the wrong order once and then
+    carried.
 
     It holds no state of its own — no cache, no counter, no last-seen id. Two
     calls with the same parameters reach the ports twice, because deciding that

@@ -53,7 +53,7 @@ sidecar died without cleaning up", "there are two installs on this machine" and
 | 2 | `EXIT_USAGE` | A malformed invocation. Passing both `--state-dir` and `--zomboid-dir` lands here — they are two answers to one question, and a precedence rule would leave you certain you had set the one that was ignored. So does passing either alongside embedder-supplied services, and so does a directory flag naming a directory that is not there. | Read `--help`. `pz-agent start` prints the client configuration block with `--state-dir` already filled in. |
 | 3 | `EXIT_NO_SDK` | The optional `mcp` extra is not installed. This gate fires **before** anything to do with the sidecar, so it is what you meet on a fresh install — not exit 1. | `pip install pz-agent[mcp]`. |
 | 4 | `EXIT_STALE_DESCRIPTOR` | `core-rpc.json` is there and the process it names is gone, or its token file went with it. The sidecar was killed rather than stopped. | `pz-agent start` again. If it keeps stopping, `pz-agent doctor` reports why. |
-| 5 | `EXIT_PROTOCOL_MISMATCH` | The descriptor says the sidecar speaks a different Core RPC major than this executable does. Both halves ship from one install, so two installs are present. | Run `pz-agent --version` and `pz-agent-mcp --version` and use the pair that match. Restarting the sidecar cannot fix this. |
+| 5 | `EXIT_PROTOCOL_MISMATCH` | The descriptor says the sidecar speaks a different Core RPC major than this executable does. Both halves ship from one install, so two installs are present. | Run each half with `--version` — the `pz-agent` command and the `pz-agent-mcp` command — and use the pair that match. Restarting the sidecar cannot fix this. |
 | 6 | `EXIT_DESCRIPTOR_UNREADABLE` | There is a file where the descriptor belongs and it is not one: truncated, foreign, or left by a start that did not finish. | `pz-agent stop` then `pz-agent start` rewrites it. Restarting a running sidecar will not. |
 | 7 | `EXIT_ANSWER_UNREADABLE` | Something answered on the sidecar's address and this build cannot read the answer. Never reported as a refusal: the core did not say no, this side could not tell what it said. | Check both versions match, then `pz-agent doctor`. |
 | 8 | `EXIT_NO_STATE_DIR` | Neither directory flag was given and the process cannot work out which state directory to use — either the CLI package that owns the layout is not importable (an incomplete install), or the machine's directories could not be read. | Name it with `--state-dir`. `pz-agent doctor` reports what is unreadable. |
@@ -67,12 +67,12 @@ Two invocations never reach any of that machinery and answer on a machine with
 no game, no sidecar and no SDK:
 
 ```
-pz-agent-mcp --describe    # the whole published surface, as JSON
-pz-agent-mcp --version
+pz-agent-mcp --describe
 ```
 
-If `--describe` works and nothing else does, the executable is fine and the
-problem is the link.
+That writes the whole published surface as JSON. `--version` answers the same
+way. If those work and nothing else does, the executable is fine and the problem
+is the link.
 
 **Nothing but protocol reaches stdout.** Once serving starts, stdout is the
 JSON-RPC stream your client is parsing. Every diagnostic goes to stderr, and the

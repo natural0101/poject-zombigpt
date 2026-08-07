@@ -449,12 +449,21 @@ class RpcEndpoint:
 class RpcShutdown:
     """What a shutdown observed, one field per thing it removed.
 
-    ``serving_ended`` is observed rather than assumed. A handler that never
-    returns keeps the serving thread alive past the join bound, and claiming
-    the server stopped while its thread is still inside a handler is precisely
-    the fabricated success this project refuses. The descriptor and the token
-    are gone either way, and it is their absence — not the thread's exit — that
-    makes the sidecar unreachable.
+    ``serving_ended`` is observed wherever there is a thread to observe. A
+    handler that never returns keeps the serving thread alive past the join
+    bound, and claiming the server stopped while its thread is still inside a
+    handler is precisely the fabricated success this project refuses, so
+    :meth:`SidecarRpc.close` reads ``is_alive`` and reports what it read.
+
+    Read it as *this caller has no serving thread left*, which is the widest
+    claim the value carries: :func:`unpublish_rpc` sets it True having started
+    no server, so a caller that never served says True while somebody else's
+    server may still be listening on that state directory. That case is a
+    second process cleaning up after a killed sidecar — where the claim is
+    true, because the process that served is gone — and it is why the field is
+    never the thing that makes a sidecar unreachable. The descriptor and the
+    token are gone either way, and it is their absence, not the thread's exit,
+    that does that.
     """
 
     descriptor_removed: bool
@@ -610,7 +619,7 @@ class SidecarRpc:
             # subclass, so one handler covers both readings, and none of them is
             # a running server this must stand aside for.
             live = None
-        if live is not None and False:  # MUTANT
+        if live is not None:
             raise SupervisorError(
                 f"pid {live.pid} is already serving Core RPC in this state directory; "
                 "stop that sidecar before starting a second one"

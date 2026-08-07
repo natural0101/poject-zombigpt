@@ -1017,18 +1017,27 @@ class TestTheFakeCannotBeMistakenForTheRealBridge:
         script somebody can point a configuration at. This one exits non-zero
         with an empty stdout, so a companion that launched it by accident gets
         a refusal it can report rather than a handshake it would believe.
-        """
-        refused = subprocess.run(
-            [sys.executable, str(fake_bridge), "exchange"],
-            capture_output=True,
-            timeout=REAP_GRACE,
-            stdin=subprocess.DEVNULL,
-            check=False,
-        )
 
-        assert refused.returncode != 0
-        assert refused.stdout == b"", "it spoke the protocol without acknowledging it is a fake"
-        assert ACKNOWLEDGE_FAKE.encode() in refused.stderr
+        Both shapes of accident are tried, and the second is the one that
+        matters: an invocation with the *right number* of arguments and the
+        wrong first one. Checking only the arity would pass the first case and
+        let anything through on the second, which is exactly the mistake a
+        launcher that already passes a mode makes.
+        """
+        for argv in (["exchange"], ["--adapter", "exchange"], ["", "exchange"]):
+            refused = subprocess.run(
+                [sys.executable, str(fake_bridge), *argv],
+                capture_output=True,
+                timeout=REAP_GRACE,
+                stdin=subprocess.DEVNULL,
+                check=False,
+            )
+
+            assert refused.returncode != 0, f"{argv} started the fake"
+            assert refused.stdout == b"", (
+                f"{argv} spoke the protocol without acknowledging it is a fake"
+            )
+            assert ACKNOWLEDGE_FAKE.encode() in refused.stderr
 
     def test_it_announces_itself_as_something_no_adapter_may_be(self, fake_bridge: Path) -> None:
         """The handshake says what it is, and the name is unusable as an adapter.

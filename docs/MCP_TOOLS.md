@@ -23,7 +23,7 @@ Transport: stdio. The server registers itself as `pz-agent`.
 | `product_version` | `0.1.0` |
 | `protocol_version` | `1.1` |
 | `capability_gated` | `true` |
-| tools | 31 |
+| tools | 34 |
 | resources | 7 |
 
 `--describe` reports the **whole** catalogue. A running server publishes a
@@ -34,9 +34,9 @@ See *Capability gating* below.
 
 ## Semantics that apply to every tool
 
-**Every input schema is closed.** `additionalProperties` is `false` on all 31
-tools, so an argument this document does not list is rejected rather than
-ignored.
+**Every input schema is closed.** `additionalProperties` is `false` on all
+34 tools, so an argument this document does not list is rejected rather
+than ignored.
 
 **The advertised bound is the enforced bound.** `catalog.py` imports its numbers
 from the adapters that will receive the arguments and validates each tool's own
@@ -52,10 +52,10 @@ the `write` tools and for nothing else:
 
 | Kind | Count | Arming | What it is |
 | --- | --- | --- | --- |
-| `read` | 8 | not required | Answered from state the sidecar already holds |
+| `read` | 9 | not required | Answered from state the sidecar already holds |
 | `query` | 3 | not required | Submits one of the protocol's `READ_ONLY_ACTIONS`; comes back with an action id, but the character neither moves nor touches anything |
-| `write` | 16 | **required** | Changes the world; refused with `NOT_ARMED` on a disarmed session |
-| `control` | 4 | not required | Arm, disarm, cancel, stop — how a disarmed or panicking session is driven |
+| `write` | 17 | **required** | Changes the world; refused with `NOT_ARMED` on a disarmed session |
+| `control` | 5 | not required | Arm, disarm, cancel, stop and the goal verbs — how a disarmed or panicking session is driven |
 
 `pz_action_open_container` is a `write` tool, whatever its name suggests: it
 walks the character across a room. `ToolSpec.__post_init__` refuses to construct
@@ -73,21 +73,22 @@ declares. Several adapters assess higher per call — `movement.move_to` becomes
 `inventory.transfer` becomes `P3` when the source is a world container — and
 neither is visible from the tool name, so neither is published.
 
-**Long-running tools return an action id.** `long_running` is `true` for 19
-tools. The call returns immediately with an `action_id`; you poll it by calling
-again with the same `idempotency_key`, which replays the call and refreshes it
-to the action's current state. It does not block the transport and it does not
-report success early.
+**Long-running tools return an action id.** `long_running` is `true` for
+19 tools. The call returns immediately with an `action_id`; you poll it by
+calling again with the same `idempotency_key`, which replays the call and
+refreshes it to the action's current state. It does not block the transport and
+it does not report success early.
 
-**Idempotency.** Every `write`, `query` and `control` tool that submits a command
-takes a required `idempotency_key` (1–120 characters); twenty tools do. Calling twice with the
+**Idempotency.** Every tool that submits a command takes a required
+`idempotency_key` (1–120 characters); 22 tools do. Calling twice with the
 same key does not perform the action twice — the original result is replayed
 with `replayed: true`.
 
 **`timeout_ms`** is that one command's lease: integer, 100–300000 ms, default
-15000. Nineteen tools take it — every one that submits a single command. `pz_plan_execute` does
-not, because a plan is bounded by `limits.max_real_seconds` instead, and
-publishing an argument no handler reads would be a lie shaped like an option.
+15000. Nineteen tools take it — every one that submits a single command.
+`pz_plan_execute` does not, because a plan is bounded by
+`limits.max_real_seconds` instead, and publishing an argument no handler reads
+would be a lie shaped like an option.
 
 **No free text.** `pz_plan_execute`'s `goal` (1–200 characters) is the only
 field in the whole surface a caller may write in their own words, and it comes
@@ -128,6 +129,9 @@ an enum member, or a lower-case token matching
 | `pz_action_cancel` | control | P1 | no | yes | — |
 | `pz_plan_execute` | write | P2 | yes | no | — |
 | `pz_plan_status` | read | P0 | no | no | — |
+| `pz_goal_submit` | write | P2 | yes | no | — |
+| `pz_goal_status` | read | P0 | no | no | — |
+| `pz_goal_cancel` | control | P1 | no | no | — |
 | `pz_safety_stop` | control | P0 | no | no | — |
 | `pz_memory_query` | read | P0 | no | no | — |
 | `pz_debug_doctor` | read | P0 | no | no | — |
@@ -424,6 +428,36 @@ Current step, the results so far, and why the plan stopped.
 
 No arguments.
 
+### `pz_goal_submit`
+
+Ask the typed goal channel for one of the things it carries. The kind set is closed and there is no free-text field at all: an invented kind is refused, never approximated. The channel admits the goal to a bounded backlog and answers with its id and state — 'pending' is the honest word for a goal nothing has started yet, and every goal carries a wall-clock, step and time-to-live budget so that it reaches a terminal state whether or not it is served. Which sandwich satisfies a hunger goal is never decided here.
+
+| Argument | Required | Schema |
+| --- | --- | --- |
+| `kind` | yes | one of `learn_recipe`, `read_for_boredom`, `satisfy_hunger`, `satisfy_thirst`, `train_skill` |
+| `skill` | no | one of `carpentry`, `cooking`, `electrical`, `farming`, `first_aid`, `fishing`, `foraging`, `mechanics`, `metalworking`, `tailoring`, `trapping` |
+| `target_level` | no | `integer`; minimum 1; maximum 10 |
+| `satisfy_to` | no | `number`; minimum 0.0; maximum 1.0 |
+| `pages` | no | `integer`; minimum 1; maximum 200 |
+| `idempotency_key` | yes | `string`; minLength 1; maxLength 64; pattern `^[A-Za-z0-9][A-Za-z0-9_.:\-]{0,63}$` |
+
+### `pz_goal_status`
+
+The goal channel: which goal is active, what is waiting behind it, and — when 'goal_id' names one — that goal's state, budget and how much of it is left. An id the channel has finished and forgotten is refused rather than answered as 'no such goal', because the two are not the same fact.
+
+| Argument | Required | Schema |
+| --- | --- | --- |
+| `goal_id` | no | `string`; maxLength 36; pattern `^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$` |
+
+### `pz_goal_cancel`
+
+Ask for one goal to end. Control, not write: a goal is cancelled *because* something has gone wrong, and gating that on an armed session would make the channel unstoppable by the lever meant to stop it. The channel applies a cancellation on its next tick, so the answer reports the request and the goal's state as it stands and does not claim the goal is already over.
+
+| Argument | Required | Schema |
+| --- | --- | --- |
+| `goal_id` | yes | `string`; maxLength 36; pattern `^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$` |
+| `idempotency_key` | yes | `string`; minLength 1; maxLength 64; pattern `^[A-Za-z0-9][A-Za-z0-9_.:\-]{0,63}$` |
+
 ### `pz_safety_stop`
 
 Always available. Clears mod-owned queue entries only, disarms, and works while unarmed, while the planner is absent and while the queue is backed up. Takes no arguments so nothing can make it fail.
@@ -460,9 +494,9 @@ Recent structured log records, redacted and bounded.
 
 ## Capability gating
 
-Fourteen of the 31 tools name a capability. `published_tools()` offers a tool
-only when `CapabilityReport.usable()` is true for its capability, which means
-`verified` or `available_unverified`; `experimental`, `unsupported` and
+Fourteen of the 34 tools name a capability. `published_tools()` offers a
+tool only when `CapabilityReport.usable()` is true for its capability, which
+means `verified` or `available_unverified`; `experimental`, `unsupported` and
 `disabled_by_policy` are all unusable. `withheld_tools()` returns the withheld
 names with their reasons, and `pz://capabilities` carries them, so a missing
 tool is an answer rather than an error.
@@ -481,8 +515,8 @@ tool is an answer rather than an error.
 | `survival_rest` | `pz_action_rest` |
 | `survival_sleep` | `pz_action_sleep` |
 
-The other seventeen tools name no capability at all. For the three query tools
-that is deliberate and documented in `capabilities/probes.py`: everything
+The other twenty tools name no capability at all. For the three query
+tools that is deliberate and documented in `capabilities/probes.py`: everything
 `world.inspect`, `container.inspect` and `inventory.search` read is reached
 through Java accessors that never appear in the game's Lua, so a probe over
 those names would report `unsupported` on a healthy install. They gate on the
@@ -513,12 +547,12 @@ Resources are read-only views over state core already holds. Each read carries
 the observation `seq` it was built from, which a client uses as an ETag: a
 resource that has not moved reports the same `seq`.
 
-**Subscriptions are not delivered.** `subscribable` is `false` on all seven
-because the server registers no subscribe handler and nothing in core publishes
-resource-change events. A client that could subscribe and was never notified
-would read the silence as "nothing has changed", which is the worst possible
-failure for the safety view. Poll `pz://safety/status` often; its own descriptor
-says so.
+**Subscriptions are not delivered.** `subscribable` is `false` on all
+seven because the server registers no subscribe handler and nothing in
+core publishes resource-change events. A client that could subscribe and was
+never notified would read the silence as "nothing has changed", which is the
+worst possible failure for the safety view. Poll `pz://safety/status` often;
+its own descriptor says so.
 
 ---
 
@@ -580,7 +614,9 @@ have to maintain its own table of which failures are worth another attempt.
 - Name a file. Every IPC filename is a hardcoded constant on both sides.
 - Act while disarmed, except through the four `control` tools.
 - Choose *what* to eat, drink or read. No tool takes a "pick something" form;
-  selection is deterministic policy in `pz_agent_core.policy`.
+  selection is deterministic policy in `pz_agent_core.policy`. `pz_goal_submit`
+  is the same rule one level up: a closed kind set, typed parameters, and no
+  free-text field at all — an invented kind is refused, never approximated.
 - Pass `allow_windows`. It is not published, because the movement adapter
   refuses it with `POLICY_DENIED`.
 - Name a destination for `pz_action_ensure_main`. The only container the adapter

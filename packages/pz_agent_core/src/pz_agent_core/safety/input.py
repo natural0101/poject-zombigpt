@@ -96,9 +96,13 @@ def evaluate_synthetic_input(request: SyntheticInputRequest) -> SyntheticInputDe
     condition can be the reason an unread session was allowed.
     """
     if request.multiplayer is not False:
-        seen = "this is a multiplayer session" if request.multiplayer else (
-            "the mod did not report whether this session is multiplayer, and an absent "
-            "reading is not a negative one"
+        seen = (
+            "this is a multiplayer session"
+            if request.multiplayer
+            else (
+                "the mod did not report whether this session is multiplayer, and an absent "
+                "reading is not a negative one"
+            )
         )
         return SyntheticInputDecision(
             allowed=False,
@@ -123,7 +127,6 @@ def evaluate_synthetic_input(request: SyntheticInputRequest) -> SyntheticInputDe
     return SyntheticInputDecision(
         allowed=True,
         detail=(
-            f"single player, {SessionMode.EXPERIMENTAL_INPUT.value}, and the adapter is "
-            "enabled"
+            f"single player, {SessionMode.EXPERIMENTAL_INPUT.value}, and the adapter is enabled"
         ),
     )

@@ -375,8 +375,9 @@ plan containing one fails validation because there is nowhere to put it.
 
 The MCP executable is a separate process — an MCP client launches it — so it
 reaches the sidecar's ports over a local link. Windows named pipe or Unix
-socket; never a network address. `docs/CORE_RPC.md` in the repository describes
-the transport; the two schemas describe the messages.
+socket; never a network address. `CORE_RPC.md`, in the repository's `docs/`
+directory but not in the release archive, describes the transport; the two
+schemas describe the messages.
 
 Request (`format` const `pz-agent-core-rpc/1`, `protocol` const `1.0`):
 

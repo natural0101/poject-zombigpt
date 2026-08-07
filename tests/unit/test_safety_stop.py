@@ -168,9 +168,7 @@ def test_the_stop_is_a_pure_decision_and_holds_without_signals_or_history() -> N
 # ---------------------------------------------------------------------------
 
 
-def _engine(
-    *, panic: bool, action: ActionName = MUTATING
-) -> tuple[ActionEngine, FakeCommandSink]:
+def _engine(*, panic: bool, action: ActionName = MUTATING) -> tuple[ActionEngine, FakeCommandSink]:
     """The production engine over doubles, with the stop lever in one position."""
     clock = FakeClock()
     sink = FakeCommandSink(clock)
@@ -209,8 +207,12 @@ def test_nothing_mutating_reaches_the_mod_while_the_latch_is_down() -> None:
     assert sink.sent == [], "a latched stop must reach the mod before the command does"
 
 
+#: Sorted so the parametrisation is stable whatever order the frozenset yields.
+STOPPING_ACTIONS: Final = tuple(sorted(ALWAYS_ALLOWED_ACTIONS, key=lambda name: name.value))
+
+
 @pytest.mark.parametrize(
-    "action", sorted(ALWAYS_ALLOWED_ACTIONS, key=lambda a: a.value), ids=lambda a: a.value
+    "action", STOPPING_ACTIONS, ids=[action.value for action in STOPPING_ACTIONS]
 )
 def test_stopping_disarming_and_cancelling_still_work_while_the_latch_is_down(
     action: ActionName,

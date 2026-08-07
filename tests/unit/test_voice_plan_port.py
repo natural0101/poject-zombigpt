@@ -349,13 +349,21 @@ def test_no_source_file_in_this_package_refuses_a_goal_unrouted() -> None:
 
     Scoped to :mod:`pz_agent_voice` because that is the package under test; the
     same names in the CLI's wiring are that module's to remove.
+
+    An empty ``offenders`` proves nothing on its own: a root that stopped
+    resolving — this file moved, the package moved — makes :meth:`Path.rglob`
+    yield nothing and the assertion below pass without reading a line. So the
+    scan is required to have found the module it is scanning *for* first.
     """
     root = Path(__file__).resolve().parents[2] / "packages" / "pz_agent_voice" / "src"
+    scanned = {path: path.read_text(encoding="utf-8") for path in sorted(root.rglob("*.py"))}
+
+    assert root / "pz_agent_voice" / "plan_port.py" in scanned, f"scanned nothing under {root}"
+
     offenders = [
         path.name
-        for path in sorted(root.rglob("*.py"))
-        if "Unrouted" in path.read_text(encoding="utf-8")
-        or "GoalUnroutable" in path.read_text(encoding="utf-8")
+        for path, source in scanned.items()
+        if "Unrouted" in source or "GoalUnroutable" in source
     ]
 
     assert offenders == []

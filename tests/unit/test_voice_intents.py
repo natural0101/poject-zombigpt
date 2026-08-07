@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import pytest
 
+from pz_agent_core import goals as core_goals
 from pz_agent_core.goals import GoalKind, GoalRequest, TrainableSkill, parse_kind, parse_skill
-from pz_agent_voice import phrases
+from pz_agent_core.protocol import ReasonCode
+from pz_agent_voice import intents, phrases
 from pz_agent_voice.intent import (
     ALL_VOICE_CAPABILITIES,
     GoalResolution,
@@ -21,6 +23,7 @@ from pz_agent_voice.intent import (
     matched_skills,
     resolve_goal,
 )
+from pz_agent_voice.intent import STOP_WORDS as VOICE_STOP_WORDS
 from pz_agent_voice.messages import MAX_TEXT_CHARS, IntentRefusal, VoiceInput, VoiceIntent
 
 # The capability names the probe table publishes, written out here rather than
@@ -592,3 +595,612 @@ def test_the_shipped_grammar_reaches_every_kind() -> None:
                 reached.add(resolution.kind.value)
         assert value in reached, f"no attested phrase reaches {value}"
     assert reached == KIND_VALUES
+
+
+# ===========================================================================
+# pz_agent_voice.intents — the utterance-to-GoalKind resolver
+# ===========================================================================
+#
+# Everything below tests :mod:`pz_agent_voice.intents`, which is a separate
+# module from the ``intent.resolve_goal`` grammar exercised above. The tables
+# here are hand-written on both sides: a resolver and a test that both read
+# ``intents.KIND_WORDS`` agree with each other no matter which kind each word
+# points at, so "поешь" wired to ``satisfy_thirst`` would round-trip perfectly
+# and still be wrong.
+
+# --- stop, first and from anywhere -----------------------------------------
+
+#: One Cyrillic letter, used only as padding to push a string past the bound.
+#: Named because the confusable-character rule reads a bare Cyrillic "a" as a
+#: mistyped Latin one, and rewriting it would change what is being measured.
+PAD = "\u0430"
+
+#: The Arabic-Indic digit five, written as an escape so this file carries no
+#: ambiguous character. ``int()`` reads it as 5; the matcher must not.
+ARABIC_INDIC_FIVE = "\u0665"
+
+#: Written out rather than taken from STOP_WORDS: this list is the claim that
+#: these particular sounds stop the agent, and it fails if one is dropped from
+#: the vocabulary the resolver reads.
+STOP_UTTERANCES: tuple[str, ...] = (
+    "стоп",
+    "стой",
+    "стойте",
+    "стоять",
+    "остановись",
+    "остановите",
+    "остановить",
+    "хватит",
+    "прекрати",
+    "прекратить",
+    "stop",
+    "halt",
+    "abort",
+)
+
+
+@pytest.mark.parametrize("utterance", STOP_UTTERANCES)
+def test_intents_each_stop_word_stops(utterance: str) -> None:
+    assert intents.resolve(utterance).outcome is intents.VoiceOutcome.STOP
+    assert intents.is_stop_utterance(utterance)
+
+
+@pytest.mark.parametrize("utterance", STOP_UTTERANCES)
+def test_intents_stop_wins_over_a_goal_in_the_same_breath(utterance: str) -> None:
+    """A stop next to a perfectly good goal is a stop, wherever it sits."""
+    for phrase in (
+        f"агент {utterance} поешь",
+        f"поешь {utterance}",
+        f"прокачай механику до 7 {utterance}",
+        f"{utterance}, почитай книгу",
+    ):
+        resolution = intents.resolve(phrase)
+        assert resolution.outcome is intents.VoiceOutcome.STOP, phrase
+        assert resolution.kind is None
+        assert resolution.refusal is None
+
+
+def test_intents_stop_is_case_and_punctuation_insensitive() -> None:
+    for phrase in ("СТОП", "Стоп!", "  стоп...  ", "АГЕНТ, СТОЙ!"):
+        assert intents.resolve(phrase).outcome is intents.VoiceOutcome.STOP, phrase
+
+
+def test_intents_stop_wins_over_the_length_bound() -> None:
+    """An over-long utterance is refused — unless it contains a stop."""
+    padding = PAD * (intents.MAX_UTTERANCE_CHARS * 2)
+    stopped = intents.resolve(f"стоп {padding}")
+    assert stopped.outcome is intents.VoiceOutcome.STOP
+    assert stopped.truncated is True
+    assert intents.resolve(f"поешь {padding}").refusal is not None
+
+
+def test_intents_a_stop_past_the_bound_is_not_seen() -> None:
+    """The documented limit of the bound, pinned so it cannot widen unnoticed.
+
+    Nothing is buffered to find it: the mitigation is upstream, where every
+    interim transcript is tested while the sentence is still short.
+    """
+    late = intents.resolve(PAD * intents.MAX_UTTERANCE_CHARS + " стоп")
+    assert late.outcome is intents.VoiceOutcome.REFUSED
+    assert late.refusal is not None
+    assert late.refusal.code is intents.VoiceRefusalCode.TOO_LONG
+
+
+def test_intents_a_word_containing_a_stop_word_is_not_a_stop() -> None:
+    assert intents.resolve("стопка").outcome is intents.VoiceOutcome.REFUSED
+    assert intents.resolve("остановка").outcome is intents.VoiceOutcome.REFUSED
+
+
+# --- the mapping itself ----------------------------------------------------
+
+#: (utterance, kind value, expected parameters). Literal on both sides.
+GOAL_UTTERANCES: tuple[tuple[str, str, dict[str, object]], ...] = (
+    ("поешь", "satisfy_hunger", {}),
+    ("покушай", "satisfy_hunger", {}),
+    ("я проголодался", "satisfy_hunger", {}),
+    ("съешь что-нибудь", "satisfy_hunger", {}),
+    ("поешь до 80 процентов", "satisfy_hunger", {"satisfy_to": 0.8}),
+    ("поешь 80%", "satisfy_hunger", {"satisfy_to": 0.8}),
+    ("попей", "satisfy_thirst", {}),
+    ("попей воды", "satisfy_thirst", {}),
+    ("выпей", "satisfy_thirst", {}),
+    ("напейся", "satisfy_thirst", {}),
+    ("попей до 50 процентов", "satisfy_thirst", {"satisfy_to": 0.5}),
+    ("почитай", "read_for_boredom", {}),
+    ("почитай книгу", "read_for_boredom", {}),
+    ("мне скучно", "read_for_boredom", {}),
+    ("почитай 20 страниц", "read_for_boredom", {"pages": 20}),
+    ("выучи рецепт", "learn_recipe", {}),
+    ("изучи рецепты 5 страниц", "learn_recipe", {"pages": 5}),
+    ("прокачай плотничество", "train_skill", {"skill": "carpentry"}),
+    ("прокачай механику до 7", "train_skill", {"skill": "mechanics", "target_level": 7}),
+    ("прокачай механику до уровня 7", "train_skill", {"skill": "mechanics", "target_level": 7}),
+    ("тренируй рыбалку 30 страниц", "train_skill", {"skill": "fishing", "pages": 30}),
+)
+
+
+@pytest.mark.parametrize(("utterance", "kind_value", "expected"), GOAL_UTTERANCES)
+def test_intents_utterance_resolves_to_its_kind(
+    utterance: str, kind_value: str, expected: dict[str, object]
+) -> None:
+    resolution = intents.resolve(utterance)
+    assert resolution.outcome is intents.VoiceOutcome.GOAL, utterance
+    assert resolution.kind is not None
+    assert resolution.kind.value == kind_value
+    assert resolution.accepted is True
+
+    params = resolution.params
+    skill_value = params.skill.value if params.skill is not None else None
+    assert skill_value == expected.get("skill")
+    assert params.target_level == expected.get("target_level")
+    assert params.satisfy_to == expected.get("satisfy_to")
+    assert params.pages == expected.get("pages")
+    assert params.present() == frozenset(expected)
+
+
+def test_intents_every_kind_is_reachable_by_some_hand_written_phrase() -> None:
+    """A kind nobody can say is a row in a table, not a feature."""
+    reached = {kind_value for _, kind_value, _ in GOAL_UTTERANCES}
+    assert reached == {kind.value for kind in GoalKind}
+
+
+#: One literal phrase per skill, so a skill whose vocabulary is wrong is named.
+SKILL_UTTERANCES: tuple[tuple[str, str], ...] = (
+    ("прокачай плотничество", "carpentry"),
+    ("прокачай готовку", "cooking"),
+    ("прокачай фермерство", "farming"),
+    ("прокачай электрику", "electrical"),
+    ("прокачай металлообработку", "metalworking"),
+    ("прокачай механику", "mechanics"),
+    ("прокачай шитье", "tailoring"),
+    ("прокачай собирательство", "foraging"),
+    ("прокачай рыбалку", "fishing"),
+    ("прокачай ловушки", "trapping"),
+    ("прокачай медицину", "first_aid"),
+)
+
+
+@pytest.mark.parametrize(("utterance", "skill_value"), SKILL_UTTERANCES)
+def test_intents_skill_utterance_resolves_to_its_skill(utterance: str, skill_value: str) -> None:
+    resolution = intents.resolve(utterance)
+    assert resolution.outcome is intents.VoiceOutcome.GOAL, utterance
+    assert resolution.kind is GoalKind.TRAIN_SKILL
+    assert resolution.params.skill is not None
+    assert resolution.params.skill.value == skill_value
+
+
+def test_intents_every_skill_is_reachable_by_some_hand_written_phrase() -> None:
+    reached = {skill_value for _, skill_value in SKILL_UTTERANCES}
+    assert reached == {skill.value for skill in TrainableSkill}
+
+
+def test_intents_each_skill_phrase_names_exactly_one_skill() -> None:
+    """Tokenisation is exact, so every inflection has to be in the table."""
+    for utterance, _ in SKILL_UTTERANCES:
+        words, _ = intents.bounded_words(utterance)
+        assert len(intents.matched_skills(words)) == 1, utterance
+
+
+# --- refusals --------------------------------------------------------------
+
+#: (utterance, refusal code value, parameter named). Literal on both sides.
+REFUSED_UTTERANCES: tuple[tuple[str, str, str], ...] = (
+    ("", "empty", ""),
+    ("   ...   ", "empty", ""),
+    ("бла бла бла", "unmapped", ""),
+    ("включи музыку", "unmapped", ""),
+    ("почитай попей", "ambiguous_kind", ""),
+    ("поешь и попей", "ambiguous_kind", ""),
+    ("прокачай", "unknown_skill", "skill"),
+    ("прокачай навык", "unknown_skill", "skill"),
+    ("прокачай механику готовку", "ambiguous_skill", "skill"),
+    ("почитай про механику", "parameter_not_allowed", "skill"),
+    ("поешь 5 страниц", "parameter_not_allowed", "pages"),
+    ("поешь 5", "unitless_number", ""),
+    ("почитай 10 страниц до 5 процентов", "conflicting_parameters", ""),
+    ("почитай 10 страниц 20 страниц", "ambiguous_number", ""),
+    ("почитай страниц", "missing_number", "pages"),
+    ("прокачай механику до 70", "out_of_range", "target_level"),
+    ("почитай 500 страниц", "out_of_range", "pages"),
+    ("почитай 1000 страниц", "out_of_range", "pages"),
+    ("поешь до 150 процентов", "out_of_range", "satisfy_to"),
+)
+
+
+@pytest.mark.parametrize(("utterance", "code_value", "parameter"), REFUSED_UTTERANCES)
+def test_intents_utterance_is_refused_with_its_reason(
+    utterance: str, code_value: str, parameter: str
+) -> None:
+    resolution = intents.resolve(utterance)
+    assert resolution.outcome is intents.VoiceOutcome.REFUSED, utterance
+    assert resolution.kind is None
+    assert resolution.accepted is False
+    assert resolution.refusal is not None
+    assert resolution.refusal.code.value == code_value
+    assert resolution.refusal.parameter == parameter
+
+
+def test_intents_every_refusal_code_is_reachable() -> None:
+    """No refusal code is decoration: each has an utterance that produces it.
+
+    Two are produced elsewhere because their utterances do not fit in a table —
+    ``too_long`` needs a string longer than the bound and ``internal`` needs the
+    module's range table to disagree with the core's.
+    """
+    reached = {code_value for _, code_value, _ in REFUSED_UTTERANCES}
+    assert reached == {code.value for code in intents.VoiceRefusalCode} - {
+        "internal",
+        "too_long",
+    }
+    assert intents.resolve(PAD * (intents.MAX_UTTERANCE_CHARS + 1)).refusal is not None
+
+
+def test_intents_an_unmapped_phrase_never_becomes_a_kind() -> None:
+    for utterance in ("сделай что-нибудь", "работай", "давай", "агент", "иди на север"):
+        resolution = intents.resolve(utterance)
+        assert resolution.kind is None, utterance
+        assert resolution.outcome is not intents.VoiceOutcome.GOAL
+
+
+def test_intents_out_of_range_names_the_declared_range() -> None:
+    resolution = intents.resolve("прокачай механику до 70")
+    assert resolution.refusal is not None
+    assert resolution.refusal.allowed == core_goals.NUMERIC_RANGES["target_level"]
+    assert resolution.refusal.allowed is not None
+    assert (resolution.refusal.allowed.minimum, resolution.refusal.allowed.maximum) == (1, 10)
+
+
+def test_intents_a_residual_range_failure_becomes_an_internal_refusal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The defensive branch: the module's range check disagreeing with the core.
+
+    Widening the range this module reads leaves ``GoalParams`` as the only thing
+    still enforcing it. The refusal that comes back must be the module's own
+    constant, not the ``ValueError`` — which quotes the value the user spoke.
+    """
+    monkeypatch.setattr(
+        intents,
+        "NUMERIC_RANGES",
+        {**core_goals.NUMERIC_RANGES, "target_level": core_goals.NumericRange(1, 999)},
+    )
+    resolution = intents.resolve("прокачай механику до 70")
+    assert resolution.refusal is not None
+    assert resolution.refusal.code is intents.VoiceRefusalCode.INTERNAL
+    assert resolution.refusal.message == intents.REFUSAL_MESSAGES[intents.VoiceRefusalCode.INTERNAL]
+    assert "70" not in resolution.refusal.message
+
+
+# --- ranges, at the edges --------------------------------------------------
+
+ACCEPTED_EDGES: tuple[tuple[str, str, object], ...] = (
+    ("прокачай механику до 1", "target_level", 1),
+    ("прокачай механику до 10", "target_level", 10),
+    ("почитай 1 страницу", "pages", 1),
+    ("почитай 200 страниц", "pages", 200),
+    ("поешь до 0 процентов", "satisfy_to", 0.0),
+    ("поешь до 100 процентов", "satisfy_to", 1.0),
+)
+
+REFUSED_EDGES: tuple[str, ...] = (
+    "прокачай механику до 0",
+    "прокачай механику до 11",
+    "почитай 0 страниц",
+    "почитай 201 страницу",
+    "поешь до 101 процента",
+)
+
+
+@pytest.mark.parametrize(("utterance", "parameter", "value"), ACCEPTED_EDGES)
+def test_intents_a_value_at_the_edge_of_the_range_is_accepted(
+    utterance: str, parameter: str, value: object
+) -> None:
+    resolution = intents.resolve(utterance)
+    assert resolution.outcome is intents.VoiceOutcome.GOAL, utterance
+    assert getattr(resolution.params, parameter) == value
+
+
+@pytest.mark.parametrize("utterance", REFUSED_EDGES)
+def test_intents_a_value_past_the_edge_of_the_range_is_refused(utterance: str) -> None:
+    resolution = intents.resolve(utterance)
+    assert resolution.outcome is intents.VoiceOutcome.REFUSED, utterance
+    assert resolution.refusal is not None
+    assert resolution.refusal.code is intents.VoiceRefusalCode.OUT_OF_RANGE
+
+
+def test_intents_a_non_ascii_digit_is_not_a_number() -> None:
+    """``int`` reads the Arabic-Indic five as five; the matcher must not."""
+    resolution = intents.resolve(f"прокачай механику {ARABIC_INDIC_FIVE}")
+    assert resolution.outcome is intents.VoiceOutcome.GOAL
+    assert resolution.params.target_level is None
+    assert resolution.params.skill is TrainableSkill.MECHANICS
+
+
+# --- the bound -------------------------------------------------------------
+
+
+def test_intents_the_bound_is_exact() -> None:
+    head = "почитай "
+    exact = head + PAD * (intents.MAX_UTTERANCE_CHARS - len(head))
+    assert len(exact) == intents.MAX_UTTERANCE_CHARS
+    accepted = intents.resolve(exact)
+    assert accepted.outcome is intents.VoiceOutcome.GOAL
+    assert accepted.truncated is False
+
+    refused = intents.resolve(exact + PAD)
+    assert refused.truncated is True
+    assert refused.refusal is not None
+    assert refused.refusal.code is intents.VoiceRefusalCode.TOO_LONG
+
+
+def test_intents_bounded_words_normalises_and_bounds() -> None:
+    assert intents.bounded_words("  ПОЕШЬ,  Ёлку!  ") == (("поешь", "елку"), False)
+    words, truncated = intents.bounded_words("я" * (intents.MAX_UTTERANCE_CHARS + 50))
+    assert truncated is True
+    assert words == ("я" * intents.MAX_UTTERANCE_CHARS,)
+
+
+def test_intents_nothing_is_carried_between_calls() -> None:
+    """Two halves of a split sentence do not add up to a goal."""
+    assert intents.resolve("прокачай").refusal is not None
+    second = intents.resolve("механику")
+    assert second.outcome is intents.VoiceOutcome.REFUSED
+    assert second.refusal is not None
+    assert second.refusal.code is intents.VoiceRefusalCode.UNMAPPED
+
+
+def test_intents_resolve_is_total_over_hostile_input() -> None:
+    hostile = (
+        "",
+        " ",
+        "\x00\x01\x02",
+        "\n\t\r",
+        "?" * 500,
+        "1234567890" * 40,
+        ARABIC_INDIC_FIVE * 3,
+        "поешь " * 60,
+        "🍖🍖🍖",
+        "<script>alert(1)</script>",
+        "поешь; rm -rf /",
+    )
+    for utterance in hostile:
+        assert isinstance(intents.resolve(utterance), intents.VoiceResolution), utterance
+
+
+# --- table invariants ------------------------------------------------------
+
+
+def test_intents_tables_cover_the_core_enums() -> None:
+    assert set(intents.KIND_WORDS) == set(GoalKind)
+    assert set(intents.SKILL_WORDS) == set(TrainableSkill)
+    assert set(intents.REFUSAL_MESSAGES) == set(intents.VoiceRefusalCode)
+    assert set(intents.REFUSAL_REASONS) == set(intents.VoiceRefusalCode)
+
+
+def test_intents_no_vocabulary_word_is_a_stop_word() -> None:
+    for words in (
+        *intents.KIND_WORDS.values(),
+        *intents.SKILL_WORDS.values(),
+        frozenset(intents.UNIT_WORDS),
+    ):
+        assert VOICE_STOP_WORDS.isdisjoint(words)
+
+
+def test_intents_no_word_belongs_to_two_vocabularies() -> None:
+    all_words = [
+        word
+        for words in (
+            *intents.KIND_WORDS.values(),
+            *intents.SKILL_WORDS.values(),
+            frozenset(intents.UNIT_WORDS),
+        )
+        for word in words
+    ]
+    assert len(all_words) == len(set(all_words))
+
+
+def test_intents_every_unit_names_a_parameter_the_channel_bounds() -> None:
+    for parameter in intents.UNIT_WORDS.values():
+        assert parameter in core_goals.NUMERIC_RANGES
+
+
+def test_intents_the_bare_number_kind_accepts_the_parameter_it_implies() -> None:
+    for kind, parameter in intents.BARE_NUMBER_PARAM.items():
+        spec = core_goals.GOAL_SPECS[kind]
+        assert parameter in spec.required | spec.optional
+
+
+def test_intents_import_check_rejects_a_stop_word_in_a_vocabulary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    poisoned = {**intents.KIND_WORDS, GoalKind.SATISFY_HUNGER: frozenset({"стоп"})}
+    monkeypatch.setattr(intents, "KIND_WORDS", poisoned)
+    with pytest.raises(RuntimeError, match="claim the same word"):
+        intents._check_tables()
+
+
+def test_intents_import_check_rejects_a_word_no_transcript_can_match(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for bad in ("ПОЕШЬ", "поёшь", "две слова"):
+        monkeypatch.setattr(
+            intents,
+            "KIND_WORDS",
+            {**intents.KIND_WORDS, GoalKind.SATISFY_HUNGER: frozenset({bad})},
+        )
+        with pytest.raises(RuntimeError, match="no transcript can match"):
+            intents._check_tables()
+
+
+def test_intents_import_check_rejects_a_kind_with_no_vocabulary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    thinned = {k: v for k, v in intents.KIND_WORDS.items() if k is not GoalKind.LEARN_RECIPE}
+    monkeypatch.setattr(intents, "KIND_WORDS", thinned)
+    with pytest.raises(RuntimeError, match="learn_recipe"):
+        intents._check_tables()
+
+
+def test_intents_import_check_rejects_a_skill_with_no_vocabulary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    thinned = {k: v for k, v in intents.SKILL_WORDS.items() if k is not TrainableSkill.FISHING}
+    monkeypatch.setattr(intents, "SKILL_WORDS", thinned)
+    with pytest.raises(RuntimeError, match="fishing"):
+        intents._check_tables()
+
+
+def test_intents_import_check_rejects_a_unit_with_no_range(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(intents, "UNIT_WORDS", {**intents.UNIT_WORDS, "дюймов": "inches"})
+    with pytest.raises(RuntimeError, match="no declared range"):
+        intents._check_tables()
+
+
+def test_intents_import_check_rejects_an_unspeakable_refusal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        intents,
+        "REFUSAL_MESSAGES",
+        {**intents.REFUSAL_MESSAGES, intents.VoiceRefusalCode.EMPTY: "   "},
+    )
+    with pytest.raises(RuntimeError, match="no refusal sentence"):
+        intents._check_tables()
+
+
+def test_intents_import_check_rejects_a_bound_above_the_transcript_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(intents, "MAX_UTTERANCE_CHARS", 10_000)
+    with pytest.raises(RuntimeError, match="must not exceed"):
+        intents._check_tables()
+
+
+# --- refusal shape ---------------------------------------------------------
+
+
+def test_intents_a_refusal_message_is_always_a_module_constant() -> None:
+    for code in intents.VoiceRefusalCode:
+        refusal = intents.VoiceRefusal(code=code)
+        assert refusal.message is intents.REFUSAL_MESSAGES[code]
+        assert refusal.message.strip()
+
+
+def test_intents_no_refusal_message_has_a_slot_to_fill() -> None:
+    """A template with a hole in it is how a transcript reaches a loudspeaker."""
+    for message in intents.REFUSAL_MESSAGES.values():
+        assert "{" not in message
+        assert "}" not in message
+        assert "%s" not in message
+        assert "%d" not in message
+
+
+def test_intents_refusal_reason_codes_are_pinned() -> None:
+    assert intents.REFUSAL_REASONS[intents.VoiceRefusalCode.INTERNAL] is ReasonCode.INTERNAL_ERROR
+    for code in intents.VoiceRefusalCode:
+        if code is not intents.VoiceRefusalCode.INTERNAL:
+            assert intents.REFUSAL_REASONS[code] is ReasonCode.INVALID_ARGUMENT
+
+
+def test_intents_a_refusal_converts_to_the_core_shape() -> None:
+    resolution = intents.resolve("бла бла")
+    assert resolution.refusal is not None
+    core = resolution.refusal.to_goal_refusal()
+    assert core.reason_code is ReasonCode.INVALID_ARGUMENT
+    assert core.message is intents.REFUSAL_MESSAGES[intents.VoiceRefusalCode.UNMAPPED]
+
+
+def test_intents_a_refusal_cannot_name_an_invented_parameter() -> None:
+    with pytest.raises(ValueError, match="declared goal parameter"):
+        intents.VoiceRefusal(code=intents.VoiceRefusalCode.OUT_OF_RANGE, parameter="transcript")
+
+
+def test_intents_a_range_without_a_parameter_is_refused() -> None:
+    with pytest.raises(ValueError, match="which parameter"):
+        intents.VoiceRefusal(
+            code=intents.VoiceRefusalCode.OUT_OF_RANGE,
+            allowed=core_goals.NUMERIC_RANGES["pages"],
+        )
+
+
+# --- resolution invariants -------------------------------------------------
+
+
+def test_intents_a_goal_resolution_must_carry_a_kind() -> None:
+    with pytest.raises(ValueError, match="a kind belongs to a goal resolution"):
+        intents.VoiceResolution(outcome=intents.VoiceOutcome.GOAL)
+
+
+def test_intents_a_stop_resolution_must_not_carry_a_kind() -> None:
+    with pytest.raises(ValueError, match="a kind belongs to a goal resolution"):
+        intents.VoiceResolution(outcome=intents.VoiceOutcome.STOP, kind=GoalKind.SATISFY_HUNGER)
+
+
+def test_intents_a_refused_resolution_must_carry_a_refusal() -> None:
+    with pytest.raises(ValueError, match="a refusal belongs to a refused resolution"):
+        intents.VoiceResolution(outcome=intents.VoiceOutcome.REFUSED)
+
+
+def test_intents_a_stop_resolution_must_not_carry_a_refusal() -> None:
+    with pytest.raises(ValueError, match="a refusal belongs to a refused resolution"):
+        intents.VoiceResolution(
+            outcome=intents.VoiceOutcome.STOP,
+            refusal=intents.VoiceRefusal(code=intents.VoiceRefusalCode.EMPTY),
+        )
+
+
+def test_intents_parameters_cannot_float_free_of_a_kind() -> None:
+    with pytest.raises(ValueError, match="parameters belong to a kind"):
+        intents.VoiceResolution(
+            outcome=intents.VoiceOutcome.STOP, params=core_goals.GoalParams(pages=3)
+        )
+
+
+# --- handing the resolution on ---------------------------------------------
+
+
+def test_intents_a_minted_key_is_built_from_a_kind_and_a_counter() -> None:
+    assert (
+        intents.mint_idempotency_key(GoalKind.TRAIN_SKILL, sequence=3) == "voice.train_skill.000003"
+    )
+    assert (
+        intents.mint_idempotency_key(GoalKind.SATISFY_HUNGER, sequence=0)
+        == "voice.satisfy_hunger.000000"
+    )
+
+
+def test_intents_a_key_counter_is_bounded() -> None:
+    for bad in (-1, intents.MAX_VOICE_SEQUENCE + 1):
+        with pytest.raises(ValueError, match="sequence must be within"):
+            intents.mint_idempotency_key(GoalKind.SATISFY_THIRST, sequence=bad)
+
+
+def test_intents_every_kind_mints_a_key_the_channel_accepts() -> None:
+    """The core shape-checks the key; a kind whose key it rejects is a dead end."""
+    params = {GoalKind.TRAIN_SKILL: core_goals.GoalParams(skill=TrainableSkill.COOKING)}
+    for kind in GoalKind:
+        resolution = intents.VoiceResolution(
+            outcome=intents.VoiceOutcome.GOAL,
+            kind=kind,
+            params=params.get(kind, core_goals.GoalParams()),
+        )
+        request = intents.to_goal_request(resolution, sequence=intents.MAX_VOICE_SEQUENCE)
+        assert isinstance(request, GoalRequest)
+        assert request.kind is kind
+        assert request.idempotency_key.startswith("voice.")
+
+
+def test_intents_a_goal_request_carries_the_resolved_parameters() -> None:
+    request = intents.to_goal_request(intents.resolve("прокачай механику до 7"), sequence=12)
+    assert request.kind is GoalKind.TRAIN_SKILL
+    assert request.params == core_goals.GoalParams(skill=TrainableSkill.MECHANICS, target_level=7)
+    assert request.idempotency_key == "voice.train_skill.000012"
+    assert request.effective_budget == core_goals.GOAL_SPECS[GoalKind.TRAIN_SKILL].budget
+
+
+@pytest.mark.parametrize("utterance", ["стоп", "бла бла", "поешь 5"])
+def test_intents_only_a_goal_becomes_a_request(utterance: str) -> None:
+    with pytest.raises(ValueError, match="only a goal resolution"):
+        intents.to_goal_request(intents.resolve(utterance), sequence=1)

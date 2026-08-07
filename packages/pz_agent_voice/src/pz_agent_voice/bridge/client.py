@@ -273,10 +273,17 @@ class BridgeConfig:
     """How to launch the bridge, and every bound it runs under.
 
     There is no credential field, and there is no way to add one: a name that
-    looks like a secret is refused wherever it can appear. That is a real
-    constraint on the bridge program rather than a gesture — whatever it needs
-    to authenticate, it reads itself, and this process stays a component that
-    holds no key and therefore cannot leak one.
+    looks like a secret is refused in the mapping this is loaded from, in the
+    environment it passes on, and in the option-shaped arguments it launches
+    (``--api-key=…`` and its neighbours). That is a real constraint on the
+    bridge program rather than a gesture — whatever it needs to authenticate, it
+    reads itself, and this process stays a component that holds no key and
+    therefore cannot leak one.
+
+    What is *not* claimed: a bare positional argument that happens to be a
+    secret cannot be recognised as one, by this or by anything else. The rule
+    the check enforces is that no credential is ever named here; the rule the
+    design enforces is that nothing in this package ever needs one.
     """
 
     command: tuple[str, ...]
@@ -303,10 +310,15 @@ class BridgeConfig:
         for token in self.command:
             if not token:
                 raise ValueError("a bridge command may not contain an empty argument")
-            if _is_credential_name(token):
+            # Only option-shaped arguments: a program *path* may legitimately
+            # contain "key" or "auth", and refusing to launch a bridge because
+            # it lives in a directory with an unlucky name is a check that gets
+            # switched off rather than obeyed.
+            option = token.split("=", 1)[0]
+            if token.startswith("-") and _is_credential_name(option):
                 raise ValueError(
                     "a bridge command line may not carry a credential; the bridge program "
-                    f"reads its own, and {token.split('=')[0]!r} looks like one"
+                    f"reads its own, and {option!r} looks like one"
                 )
         for name in self.env:
             if not _ENV_NAME.match(name):
@@ -510,8 +522,10 @@ class JsonlBridge:
         """Launch the bridge and complete the handshake.
 
         Raises:
-            BridgeUnavailable: the program is not there, it died during the
-                handshake, or it never answered within ``startup_timeout``.
+            BridgeUnavailable: the program is not there, or it died during the
+                handshake.
+            BridgeTimeout: it never said ``ready`` within ``startup_timeout``.
+            BridgeFailed: it answered the handshake with a fault.
             ProtocolMismatch: it answered in a MAJOR version this build cannot
                 read, which no amount of restarting fixes.
         """
@@ -541,6 +555,18 @@ class JsonlBridge:
             # blocked on a pipe that has just been closed, and a thread that has
             # not noticed yet must not hold up the caller's shutdown.
             thread.join(timeout=self._config.stop_timeout)
+        if process is not None:
+            # Only when there was something to stop, and never when the bridge
+            # had already died: `_die` takes the process with it, so a report
+            # from here is always about a shutdown somebody asked for — which is
+            # why it is a log line and says nothing out loud.
+            self._report(
+                BridgeReport(
+                    state=self._state,
+                    reason=BridgeReason.STOPPED,
+                    detail="the voice bridge was stopped",
+                )
+            )
 
     # -- sending ----------------------------------------------------------
 
@@ -611,6 +637,11 @@ class JsonlBridge:
         """The next recognition result, or ``None`` if none arrived in time.
 
         ``None`` is not an error: silence is the normal state of a microphone.
+
+        A call that finds the bridge crashed restarts it, and a restart clears
+        the queues — anything the dead process had said and nobody had read yet
+        is discarded rather than delivered late. A transcript is only worth
+        acting on while it is still what the user is saying.
         """
         self._ensure_running()
         try:
@@ -656,8 +687,13 @@ class JsonlBridge:
             self.send(hello_message())
             ready = self._await_ready()
         except BridgeError:
+            # A handshake that did not finish leaves nothing usable behind: the
+            # process goes, and the state says stopped rather than starting, so
+            # the next call reports "not running" instead of waiting on a child
+            # that was never going to answer.
             self._terminate(process)
             self._process = None
+            self._state = BridgeState.STOPPED
             raise
         read_ready(ready)
         self._state = BridgeState.RUNNING

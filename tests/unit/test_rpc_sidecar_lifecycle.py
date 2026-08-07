@@ -51,18 +51,34 @@ from pz_agent_cli.supervisor import (
 from pz_agent_cli.voice import ExchangeSessionPort
 from pz_agent_core.ipc.layout import IpcLayout
 from pz_agent_core.rpc.descriptor import (
-    DESCRIPTOR_FILENAME,
     FAMILY_PIPE,
     FAMILY_UNIX,
-    RUNTIME_DIRNAME,
     RpcDescriptor,
     StaleDescriptor,
     load_descriptor,
 )
-from pz_agent_core.rpc.token import MIN_TOKEN_BYTES, TOKEN_FILENAME, read_token
+from pz_agent_core.rpc.token import read_token
 from pz_agent_core.rpc.transport import RpcClient, RpcUnavailable, local_family, new_address
 from pz_agent_core.rpc.wire import RpcError, RpcRequest, RpcResponse
 from tests.fixtures.ipc_builders import FakeClock
+
+#: Where the two published files go, and how long the key is. Written out here
+#: rather than imported from :mod:`pz_agent_core.rpc`, and that is the point.
+#:
+#: ``docs/CORE_RPC.md`` promises ``<state-dir>/runtime/core-rpc.json`` and
+#: ``<state-dir>/runtime/core-rpc.key`` to a process that was handed a state
+#: directory and nothing else, and promises the key is 256 bits. Asserting the
+#: product's own ``RUNTIME_DIRNAME``/``DESCRIPTOR_FILENAME``/``TOKEN_FILENAME``/
+#: ``MIN_TOKEN_BYTES`` against themselves compares each constant with itself:
+#: rename the directory, rename either file, or cut the key to four bytes, and
+#: every such assertion still holds while the documented contract is broken and
+#: the shipped MCP executable looks in the wrong place. These literals are the
+#: independent statement of that contract, so a rename has to be made here too —
+#: deliberately, and next to the sentence saying what it breaks.
+PUBLISHED_RUNTIME_DIR: Final = "runtime"
+PUBLISHED_DESCRIPTOR: Final = "core-rpc.json"
+PUBLISHED_TOKEN: Final = "core-rpc.key"
+PUBLISHED_TOKEN_BYTES: Final = 32
 
 #: Long enough that a loaded runner does not fail a healthy call, short enough
 #: that a genuine hang ends the test rather than the suite's patience.
@@ -130,7 +146,7 @@ class Started:
         """
         return RpcClient(
             load_descriptor(self.state_dir),
-            authkey=read_token(self.state_dir / RUNTIME_DIRNAME),
+            authkey=read_token(self.state_dir / PUBLISHED_RUNTIME_DIR),
             deadline=deadline,
         )
 
@@ -221,9 +237,9 @@ class TestStart:
 
         assert started.endpoint.descriptor_file.is_file()
         assert started.endpoint.token_file.is_file()
-        assert started.endpoint.descriptor_file.name == DESCRIPTOR_FILENAME
-        assert started.endpoint.token_file.name == TOKEN_FILENAME
-        assert len(read_token(started.state_dir / RUNTIME_DIRNAME)) == MIN_TOKEN_BYTES
+        assert started.endpoint.descriptor_file.name == PUBLISHED_DESCRIPTOR
+        assert started.endpoint.token_file.name == PUBLISHED_TOKEN
+        assert len(read_token(started.state_dir / PUBLISHED_RUNTIME_DIR)) == PUBLISHED_TOKEN_BYTES
 
         response = started.client().call("session.status", {"n": 7})
 
@@ -249,21 +265,25 @@ class TestStart:
         started = start(echo)
 
         assert started.endpoint.descriptor_file == (
-            started.state_dir / RUNTIME_DIRNAME / DESCRIPTOR_FILENAME
+            started.state_dir / PUBLISHED_RUNTIME_DIR / PUBLISHED_DESCRIPTOR
         )
-        assert started.endpoint.token_file == started.state_dir / RUNTIME_DIRNAME / TOKEN_FILENAME
+        assert started.endpoint.token_file == (
+            started.state_dir / PUBLISHED_RUNTIME_DIR / PUBLISHED_TOKEN
+        )
+        assert started.endpoint.descriptor_file.is_file()
+        assert started.endpoint.token_file.is_file()
 
     def test_every_run_issues_a_new_token(self, start: Start, tmp_path: Path) -> None:
         """A token that outlived its run would let a stale client into the next one."""
         state_dir = tmp_path / "state"
         first = start(echo, state_dir=state_dir)
-        first_key = read_token(state_dir / RUNTIME_DIRNAME)
+        first_key = read_token(state_dir / PUBLISHED_RUNTIME_DIR)
         first.rpc.close()
 
         start(echo, state_dir=state_dir)
-        second_key = read_token(state_dir / RUNTIME_DIRNAME)
+        second_key = read_token(state_dir / PUBLISHED_RUNTIME_DIR)
 
-        assert len(first_key) == MIN_TOKEN_BYTES
+        assert len(first_key) == PUBLISHED_TOKEN_BYTES
         assert second_key != first_key
 
     def test_a_second_endpoint_does_not_steal_a_live_one(
@@ -299,7 +319,7 @@ class TestStart:
         have never heard of.
         """
         state_dir = tmp_path / "state"
-        runtime = state_dir / RUNTIME_DIRNAME
+        runtime = state_dir / PUBLISHED_RUNTIME_DIR
         runtime.mkdir(parents=True)
         leftover = Path(new_address(runtime, family=FAMILY_UNIX))
         leftover.write_bytes(b"")
@@ -313,7 +333,7 @@ class TestStart:
     def test_a_start_that_cannot_bind_leaves_no_token_behind(self, tmp_path: Path) -> None:
         """A key on disk for an address that never bound is a secret kept for nothing."""
         state_dir = tmp_path / "state"
-        runtime = state_dir / RUNTIME_DIRNAME
+        runtime = state_dir / PUBLISHED_RUNTIME_DIR
         runtime.mkdir(parents=True)
         # A directory where the socket goes: it cannot be unlinked and cannot be
         # bound, so the listener fails after the token has already been issued.
@@ -323,8 +343,8 @@ class TestStart:
         with pytest.raises(OSError):
             rpc.start()
 
-        assert not (runtime / TOKEN_FILENAME).exists(), "the token outlived the failed bind"
-        assert not (runtime / DESCRIPTOR_FILENAME).exists()
+        assert not (runtime / PUBLISHED_TOKEN).exists(), "the token outlived the failed bind"
+        assert not (runtime / PUBLISHED_DESCRIPTOR).exists()
         assert rpc.serving is False
 
 
@@ -369,7 +389,7 @@ class TestStop:
         """Removing the files while the socket still answers is half a shutdown."""
         started = start(echo)
         descriptor: RpcDescriptor = load_descriptor(started.state_dir)
-        key = read_token(started.state_dir / RUNTIME_DIRNAME)
+        key = read_token(started.state_dir / PUBLISHED_RUNTIME_DIR)
         assert started.client().call("session.status").ok is True
 
         started.rpc.close()

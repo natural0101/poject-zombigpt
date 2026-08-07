@@ -28,9 +28,11 @@ string fails whether or not anyone guessed at its contents.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 import zipfile
+from dataclasses import dataclass, fields, is_dataclass
 from pathlib import Path, PureWindowsPath
 from typing import Any
 
@@ -39,6 +41,7 @@ import pytest
 from pz_agent_core.diagnostics import BundleBuilder, DiagnosticLog, LogLevel
 from pz_agent_core.goals import PARAM_NAMES, GoalKind, GoalRequest, TrainableSkill
 from pz_agent_core.rpc import RpcRequest, encode_request
+from pz_agent_voice import intents
 from pz_agent_voice.intents import (
     REFUSAL_MESSAGES,
     VoiceOutcome,
@@ -113,12 +116,11 @@ def _haystacks(data: bytes) -> tuple[str, ...]:
         except (json.JSONDecodeError, ValueError):
             continue
         forms.extend(_strings(document))
-    try:
+    # A body that is not JSON — the human-readable log line, the raw refusal
+    # text — is already covered by the plain text form above; there is nothing
+    # to add and nothing lost by the failed parse.
+    with contextlib.suppress(json.JSONDecodeError, ValueError):
         forms.extend(_strings(json.loads(text)))
-    except (json.JSONDecodeError, ValueError):
-        # Not JSON. The raw text form above is the whole haystack, which is the
-        # normal case for a human-readable log line.
-        pass
     return tuple(forms)
 
 
@@ -223,22 +225,38 @@ def test_every_string_in_a_resolution_is_a_constant_this_repository_wrote() -> N
             assert found in allowed, (utterance, found)
 
 
-def _resolution_strings(resolution: VoiceResolution) -> list[str]:
-    """Every string a resolution carries, including inside its refusal."""
-    found = [resolution.outcome.value]
-    if resolution.kind is not None:
-        found.append(resolution.kind.value)
-    if resolution.params.skill is not None:
-        found.append(resolution.params.skill.value)
-    if resolution.refusal is not None:
-        found.extend(
-            [
-                resolution.refusal.code.value,
-                resolution.refusal.message,
-                resolution.refusal.parameter,
-            ]
-        )
-    return found
+def _resolution_strings(value: Any, *, depth: int = 0) -> list[str]:
+    """Every string reachable from *value*, walked by field rather than by name.
+
+    Generic on purpose. A version that listed the fields it knew about would
+    keep passing the day somebody adds ``heard: str`` to the resolution "just
+    for debugging", which is precisely the edit this rule exists to stop.
+    """
+    assert depth < 8, "a resolution should not be this deep"
+    if isinstance(value, str):
+        return [str(value)]
+    if isinstance(value, bool | int | float) or value is None:
+        return []
+    if is_dataclass(value) and not isinstance(value, type):
+        return [
+            found
+            for item in fields(value)
+            for found in _resolution_strings(getattr(value, item.name), depth=depth + 1)
+        ]
+    if isinstance(value, list | tuple | set | frozenset):
+        return [found for item in value for found in _resolution_strings(item, depth=depth + 1)]
+    raise AssertionError(f"a resolution carried an unexpected {type(value).__name__}")
+
+
+def test_the_field_walk_sees_a_field_nobody_told_it_about() -> None:
+    """The walk is generic, so an added field is covered without an edit here."""
+
+    @dataclass(frozen=True)
+    class Sneaky:
+        outcome: str
+        heard: str
+
+    assert _resolution_strings(Sneaky(outcome="goal", heard=SECRET)) == ["goal", SECRET]
 
 
 # ---------------------------------------------------------------------------
@@ -287,8 +305,6 @@ def test_the_module_cannot_write_anywhere_on_its_own() -> None:
     version — "call resolve and see that nothing was written" — passes for a
     module that writes to a file the test does not know about.
     """
-    from pz_agent_voice import intents
-
     source = Path(intents.__file__).read_text(encoding="utf-8")
     for forbidden in ("import logging", "print(", "open(", "subprocess", "socket", "sys.std"):
         assert forbidden not in source, forbidden

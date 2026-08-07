@@ -101,6 +101,7 @@ from enum import Enum
 from typing import Any, Final, TypeVar
 
 from pz_agent_core.goals import (
+    DEFAULT_MAX_REMEMBERED,
     MAX_EVIDENCE_KEYS,
     GoalAdmission,
     GoalBudget,
@@ -115,9 +116,11 @@ from pz_agent_core.goals import (
     parse_skill,
 )
 from pz_agent_core.protocol import JsonDict, ReasonCode
+from pz_agent_mcp.ports import GoalCancellation, GoalChannelStatus
 from pz_agent_mcp.remote.codec import (
     CodecError,
     optional_int,
+    optional_str,
     require_bool,
     require_enum,
     require_float,
@@ -128,24 +131,27 @@ from pz_agent_mcp.remote.codec import (
 )
 
 __all__ = [
+    "MAX_GOALS_ON_THE_WIRE",
     "decode_goal_admission",
     "decode_goal_budget",
     "decode_goal_cancellation",
+    "decode_goal_channel_status",
     "decode_goal_id",
     "decode_goal_params",
+    "decode_goal_query",
     "decode_goal_record",
     "decode_goal_refusal",
     "decode_goal_request",
-    "decode_goal_status",
     "encode_goal_admission",
     "encode_goal_budget",
     "encode_goal_cancellation",
+    "encode_goal_channel_status",
     "encode_goal_id",
     "encode_goal_params",
+    "encode_goal_query",
     "encode_goal_record",
     "encode_goal_refusal",
     "encode_goal_request",
-    "encode_goal_status",
 ]
 
 _REQUEST: Final = "goal.request"
@@ -154,12 +160,27 @@ _BUDGET: Final = "goal.budget"
 _RECORD: Final = "goal.record"
 _REFUSAL: Final = "goal.refusal"
 _ADMISSION: Final = "goal.admission"
-_STATUS: Final = "goal.status body"
-_CANCEL: Final = "goal.cancel body"
+_CHANNEL: Final = "goal channel status"
+_CANCEL: Final = "goal cancellation"
+_QUERY_PARAMS: Final = "goal query params"
 _ID_PARAMS: Final = "goal id params"
 
-#: The key a record sits under, in a status body and in an admission. Present
-#: only when there is a record; see :func:`encode_goal_status`.
+#: How many records one ``goal.status`` answer may carry in its backlog.
+#:
+#: Taken from :data:`~pz_agent_core.goals.DEFAULT_MAX_REMEMBERED` rather than
+#: restated, and from *that* rather than from the smaller open-goal cap:
+#: :class:`~pz_agent_core.goals.GoalQueue` refuses to be built unless it
+#: remembers at least as many records as it may hold open, so no honest channel
+#: can offer a backlog longer than the history behind it. The length is checked
+#: before a single record is decoded, so a peer answering with a million-element
+#: array costs this process one ``len``.
+#:
+#: A sidecar configured above the default would be refused here rather than
+#: silently truncated. That is the intended direction: losing part of a backlog
+#: without saying so is how a user is told a goal is not queued when it is.
+MAX_GOALS_ON_THE_WIRE: Final = DEFAULT_MAX_REMEMBERED
+
+#: The key a single record sits under, in an admission and in a cancellation.
 _GOAL_FIELD: Final = "goal"
 
 #: The key a refusal sits under in an admission. An admission carries exactly
@@ -169,15 +190,20 @@ _REFUSAL_FIELD: Final = "refusal"
 #: Whether the admitted record is one the channel already held.
 _DUPLICATE_FIELD: Final = "duplicate"
 
-#: The one key of a ``goal.cancel`` answer. ``True`` means an open goal's
-#: cancellation was recorded and the channel will apply it; ``False`` means
-#: there was nothing open under that id. Both are answers — neither is a
-#: failure — so they travel as a value rather than as an error code.
+#: Whether a cancel request was accepted against an open goal. ``False`` means
+#: the goal had already ended — an answer, not a failure — so it travels as a
+#: value rather than as an error code.
 _REQUESTED_FIELD: Final = "requested"
+
+#: The three keys of a channel status.
+_ACTIVE_FIELD: Final = "active"
+_PENDING_FIELD: Final = "pending"
+_NAMED_FIELD: Final = "named"
 
 #: The one param of ``goal.status`` and of ``goal.cancel``. Named once, here,
 #: because both halves of the link read it from this module rather than
-#: spelling it twice.
+#: spelling it twice — and because the two bodies differ only in whether the id
+#: may be null, which is a distinction worth having in one place.
 _GOAL_ID_FIELD: Final = "goal_id"
 
 _EnumT = TypeVar("_EnumT", bound=Enum)
@@ -610,67 +636,130 @@ def decode_goal_admission(payload: Mapping[str, Any]) -> GoalAdmission:
         ) from None
 
 
-def encode_goal_status(record: GoalRecord | None) -> JsonDict:
+def _optional_record(payload: Mapping[str, Any], field: str, *, where: str) -> GoalRecord | None:
+    """Read an optional nested record. Absent and null are the same answer."""
+    if payload.get(field) is None:
+        return None
+    return decode_goal_record(require_mapping(payload, field, where=where))
+
+
+def encode_goal_channel_status(status: GoalChannelStatus) -> JsonDict:
     """The result body for ``goal.status``.
 
-    The channel answers ``None`` for an id it has no record of — a goal that
-    finished long enough ago to have been evicted from the bounded history.
-    That is encoded as a missing key rather than as ``{}``, because an empty
-    object decodes as "a record with every field missing", which is an error,
-    and the caller would learn "the answer was malformed" when the truth is
-    "there is no such goal".
+    All three fields, always. ``active`` and ``named`` are written as an
+    explicit ``null`` when there is no such goal, and ``pending`` as an empty
+    array when the backlog is empty — an empty backlog is a fact about the
+    channel, and a missing key would decode as a body somebody truncated.
+
+    ``pending`` keeps the channel's order, oldest first by admission sequence.
+    A codec that sorted it would silently repair a peer that had it wrong, and
+    the repair would be indistinguishable from the peer being right.
     """
-    if record is None:
-        return {}
-    return {_GOAL_FIELD: encode_goal_record(record)}
+    return {
+        _ACTIVE_FIELD: None if status.active is None else encode_goal_record(status.active),
+        _PENDING_FIELD: [encode_goal_record(record) for record in status.pending],
+        _NAMED_FIELD: None if status.named is None else encode_goal_record(status.named),
+    }
 
 
-def decode_goal_status(payload: Mapping[str, Any]) -> GoalRecord | None:
-    """Read that body back, distinguishing "no such goal" from "unreadable".
+def decode_goal_channel_status(payload: Mapping[str, Any]) -> GoalChannelStatus:
+    """Read a channel status back, bounded backlog and all.
+
+    ``named`` stays ``None`` when the peer sent none, and this function does not
+    try to work out whether that means "no id was asked about" or "the id names
+    nothing". It cannot: only the caller knows whether it sent an id. The
+    distinction is kept by :class:`~pz_agent_mcp.router.ToolRouter`, which does.
 
     Raises:
-        CodecError: the key is present but is not a goal record. Deliberately
-            not raised when the key is absent: that is the documented "the
-            channel has no goal with this id" answer.
+        CodecError: a field is missing or ill-typed, the backlog is longer than
+            :data:`MAX_GOALS_ON_THE_WIRE`, or one of the records is not one.
     """
-    if _GOAL_FIELD not in payload:
-        return None
-    return decode_goal_record(require_mapping(payload, _GOAL_FIELD, where=_STATUS))
+    active = _optional_record(payload, _ACTIVE_FIELD, where=_CHANNEL)
+    named = _optional_record(payload, _NAMED_FIELD, where=_CHANNEL)
+
+    raw_pending = require_sequence(payload, _PENDING_FIELD, where=_CHANNEL)
+    if len(raw_pending) > MAX_GOALS_ON_THE_WIRE:
+        raise CodecError(
+            f"{_CHANNEL}: pending carries more than the {MAX_GOALS_ON_THE_WIRE} goals "
+            f"a channel remembers"
+        )
+    pending: list[GoalRecord] = []
+    for position, raw_record in enumerate(raw_pending):
+        # The position is structural — it comes from the array, not from
+        # anything the payload said — so naming it leaks nothing.
+        where = f"{_CHANNEL}: pending[{position}]"
+        if not isinstance(raw_record, Mapping):
+            raise CodecError(f"{where} must be an object")
+        pending.append(decode_goal_record(raw_record))
+
+    return GoalChannelStatus(active=active, pending=tuple(pending), named=named)
 
 
-def encode_goal_cancellation(requested: bool) -> JsonDict:
+def encode_goal_cancellation(cancellation: GoalCancellation) -> JsonDict:
     """The result body for ``goal.cancel``.
 
-    ``True`` means an open goal's cancellation was recorded and the channel will
-    apply it on its next tick; ``False`` means nothing open was found under that
-    id, which is the ordinary answer for a goal that had already ended. Both are
-    answers, and a caller needs to tell them apart: one says "it will stop", the
-    other says "it already had".
+    ``requested`` is not "cancelled": the channel applies a cancellation on its
+    next tick, so an accepted request is routinely reported against a goal that
+    is still running. The field keeps the channel's own word for it, and the
+    goal's actual state travels inside the record.
     """
-    return {_REQUESTED_FIELD: requested}
+    return {
+        _REQUESTED_FIELD: cancellation.requested,
+        _GOAL_FIELD: None if cancellation.goal is None else encode_goal_record(cancellation.goal),
+    }
 
 
-def decode_goal_cancellation(payload: Mapping[str, Any]) -> bool:
-    """Read that body back.
+def decode_goal_cancellation(payload: Mapping[str, Any]) -> GoalCancellation:
+    """Read a cancellation back, invariant and all.
 
-    Required rather than defaulted. ``False`` is the safe-looking default and it
-    is the wrong one: a peer that dropped the key would be reported as "there
-    was nothing to cancel", and a user who was told that about a goal that is
-    still running has been told the opposite of the truth.
+    ``requested`` is required rather than defaulted. ``False`` is the
+    safe-looking default and it is the wrong one: a peer that dropped the key
+    would be reported as "there was nothing to cancel", and a user told that
+    about a goal that is still running has been told the opposite of the truth.
+
+    The pairing rule — an accepted request must name the goal it was accepted
+    for — is :class:`~pz_agent_mcp.ports.GoalCancellation`'s own, and this
+    function calls the constructor rather than restating it.
 
     Raises:
-        CodecError: the field is missing or is not a boolean.
+        CodecError: ``requested`` is missing or is not a boolean, ``goal`` is
+            present and is not a record, or the pair is one a cancellation
+            refuses to hold.
     """
-    return require_bool(payload, _REQUESTED_FIELD, where=_CANCEL)
+    requested = require_bool(payload, _REQUESTED_FIELD, where=_CANCEL)
+    goal = _optional_record(payload, _GOAL_FIELD, where=_CANCEL)
+    try:
+        return GoalCancellation(goal=goal, requested=requested)
+    except ValueError:
+        raise CodecError(
+            f"{_CANCEL}: a cancellation that was accepted must name the goal it was accepted for"
+        ) from None
+
+
+def encode_goal_query(goal_id: str | None) -> JsonDict:
+    """The params body for ``goal.status``.
+
+    The id is optional — asking with none is asking about the channel rather
+    than about a goal — and it is written as an explicit ``null`` so the body
+    always carries the field. A peer that omits it is saying the same thing and
+    the decoder accepts either.
+    """
+    return {_GOAL_ID_FIELD: goal_id}
+
+
+def decode_goal_query(payload: Mapping[str, Any]) -> str | None:
+    """Read a ``goal.status`` params body, or refuse it.
+
+    Raises:
+        CodecError: the id is present and is not a string. Absent and ``null``
+            are the documented "tell me about the channel" request, not an
+            error.
+    """
+    return optional_str(payload, _GOAL_ID_FIELD, where=_QUERY_PARAMS)
 
 
 def encode_goal_id(goal_id: str) -> JsonDict:
-    """The params body for ``goal.status`` and for ``goal.cancel``.
-
-    One function for both because it is one body. A second spelling in the
-    client half is a key that can drift, and the drift arrives on a user's
-    machine as a refusal nobody can read.
-    """
+    """The params body for ``goal.cancel``, whose id is not optional."""
     return {_GOAL_ID_FIELD: goal_id}
 
 
