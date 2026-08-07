@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -98,9 +99,35 @@ class DocumentInvalidError(LiveTestError):
     """A document does not satisfy its schema."""
 
 
+def canonical_json_bytes(document: Mapping[str, Any] | Sequence[Any]) -> bytes:
+    """The one serialisation used for every artefact and every digest.
+
+    **Bytes, not text, and this is the whole point.** Every evidence digest is
+    a claim about what is on disk, and on Windows ``Path.write_text`` opens in
+    text mode and translates ``\\n`` to ``\\r\\n`` on the way out. A digest taken
+    from the string before that translation describes bytes that were never
+    written: on Windows every untouched ``result.json`` read back as *tampered*,
+    which is the one verdict this project must never produce by accident —
+    ``finalize`` refuses on it, so the release gate could not pass on the
+    operating system the release is for.
+
+    Returning ``bytes`` rather than ``str`` removes the opportunity rather than
+    documenting it. There is no text form of an artefact to accidentally hash,
+    and :func:`write_document` writes exactly what was hashed.
+    """
+    return (
+        json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True).encode("utf-8") + b"\n"
+    )
+
+
 def canonical_json(document: Mapping[str, Any] | Sequence[Any]) -> str:
-    """The one serialisation used for every artefact and every digest."""
-    return json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    """The canonical form as text, for printing and for comparing in tests.
+
+    Never for writing a file whose digest is recorded — use
+    :func:`canonical_json_bytes` and :func:`write_document`, which cannot lose
+    the newline translation argument because they never hold a string.
+    """
+    return canonical_json_bytes(document).decode("utf-8")
 
 
 def sha256_bytes(data: bytes) -> str:
@@ -108,6 +135,7 @@ def sha256_bytes(data: bytes) -> str:
 
 
 def sha256_text(text: str) -> str:
+    """Hash text as UTF-8. Not a substitute for hashing the file that was written."""
     return sha256_bytes(text.encode("utf-8"))
 
 
@@ -253,13 +281,45 @@ def write_document(
     """
     if schema is not None:
         validate_document(document, schema)
-    text = canonical_json(document)
+    data = canonical_json_bytes(document)
     path.parent.mkdir(parents=True, exist_ok=True)
+    write_bytes_atomically(path, data)
+    # Read back rather than trusting the buffer. The digest is a claim about
+    # the file, and the only way to make that claim true is to hash the file:
+    # a filesystem that rewrote a byte, a truncated write, or a newline
+    # translation nobody expected all show up here rather than three commands
+    # later as an accusation of tampering.
+    digest, size = sha256_file(path)
+    if digest != sha256_bytes(data) or size != len(data):
+        raise LiveTestError(
+            f"{path.name}: the bytes on disk are not the bytes that were written "
+            f"({size} bytes hashing to {digest[:12]}…, expected {len(data)} bytes "
+            f"hashing to {sha256_bytes(data)[:12]}…)"
+        )
+    return ArtefactDigest(path=path.name, sha256=digest, size_bytes=size)
+
+
+def write_bytes_atomically(path: Path, data: bytes) -> None:
+    """Write *data* whole or not at all, in binary, never in text mode.
+
+    Binary because text mode translates newlines on Windows and a digest taken
+    from the buffer would then describe bytes nobody wrote. Atomic because a
+    half-written artefact is indistinguishable from a tampered one to every
+    reader downstream, and a run interrupted mid-write must not leave the
+    evidence tree in a state ``finalize`` will refuse for the wrong reason.
+
+    Raises:
+        LiveTestError: if the file cannot be written. The temporary file is
+            removed first, so a failure leaves nothing behind to be hashed.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f"{path.name}.{os.getpid()}.tmp")
     try:
-        path.write_text(text, encoding="utf-8")
+        temporary.write_bytes(data)
+        os.replace(temporary, path)
     except OSError as exc:
+        temporary.unlink(missing_ok=True)
         raise LiveTestError(f"{path.name}: cannot be written: {exc}") from exc
-    return ArtefactDigest(path=path.name, sha256=sha256_text(text), size_bytes=len(text.encode()))
 
 
 def read_document(path: Path, *, expected_sha256: str | None = None) -> JsonDict:

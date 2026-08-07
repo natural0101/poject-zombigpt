@@ -28,7 +28,8 @@ from typing import Final
 
 import pz_agent_core
 import pz_agent_mcp
-from pz_agent_mcp.__main__ import EXIT_NO_SDK, EXIT_NOT_WIRED, EXIT_OK, EXIT_USAGE
+import pz_agent_mcp.__main__
+from pz_agent_mcp.__main__ import EXIT_NO_SDK, EXIT_NOT_WIRED, EXIT_OK
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[2]
 CONFIG_README: Final = REPO_ROOT / "configs" / "mcp" / "README.md"
@@ -37,12 +38,35 @@ CONFIG_README: Final = REPO_ROOT / "configs" / "mcp" / "README.md"
 #: paths, so the location is read from the import system rather than guessed.
 _PACKAGES: Final = (pz_agent_mcp, pz_agent_core)
 
-#: ``**Exit 3 — the MCP SDK is not installed.**`` and its sibling.
-_STATED: Final = re.compile(r"\*\*Exit (\d+) —")
+#: Either spelling the document uses: the prose form ``**Exit 3 — …**`` it began
+#: with, and the table row ``| 3 | … |`` it grew into once there were nine codes
+#: rather than two. Both are read, so reformatting the section does not silently
+#: empty this guard — a parser that matched nothing would leave every assertion
+#: below vacuously true.
+_STATED_PROSE: Final = re.compile(r"\*\*Exit (\d+) —")
+_STATED_ROW: Final = re.compile(r"^\|\s*(\d+)\s*\|", re.MULTILINE)
 
 
 def _documented_codes() -> set[int]:
-    return {int(code) for code in _STATED.findall(CONFIG_README.read_text(encoding="utf-8"))}
+    text = CONFIG_README.read_text(encoding="utf-8")
+    found = {int(code) for code in _STATED_PROSE.findall(text)}
+    found |= {int(code) for code in _STATED_ROW.findall(text)}
+    assert found, "no exit code was found in the document at all; the parser has gone stale"
+    return found
+
+
+def _defined_codes() -> dict[str, int]:
+    """Every ``EXIT_*`` the entry point declares, read from the module.
+
+    Deliberately not a list written out here. This test began with four codes
+    copied into it; the program grew to nine, and a copy cannot notice that.
+    Read from the module, a code added tomorrow has to be documented tomorrow.
+    """
+    return {
+        name: value
+        for name, value in vars(pz_agent_mcp.__main__).items()
+        if name.startswith("EXIT_") and isinstance(value, int)
+    }
 
 
 def _run(*argv: str) -> subprocess.CompletedProcess[str]:
@@ -89,11 +113,28 @@ def test_the_readme_names_both_refusals_not_only_one() -> None:
 
 def test_every_code_the_readme_states_is_one_the_program_defines() -> None:
     """A stated code the program cannot produce is a remedy for nothing."""
-    defined = {EXIT_OK, EXIT_NOT_WIRED, EXIT_USAGE, EXIT_NO_SDK}
-
-    invented = sorted(_documented_codes() - defined)
+    invented = sorted(_documented_codes() - set(_defined_codes().values()))
 
     assert invented == [], "configs/mcp/README.md states exit codes the server never returns"
+
+
+def test_every_code_the_program_defines_is_one_the_readme_states() -> None:
+    """The other direction, and the one that actually rots.
+
+    A code added to the entry point and not to the document is a refusal a
+    client author meets with no remedy — which is how this file came to exist,
+    and how five more codes arrived undocumented the moment the executable
+    learned to connect.
+    """
+    documented = _documented_codes()
+    undocumented = sorted(
+        f"{name}={value}" for name, value in _defined_codes().items() if value not in documented
+    )
+
+    assert undocumented == [], (
+        "configs/mcp/README.md does not tell a client author what these mean: "
+        f"{', '.join(undocumented)}"
+    )
 
 
 def test_a_bare_launch_refuses_with_a_documented_code_and_says_why() -> None:

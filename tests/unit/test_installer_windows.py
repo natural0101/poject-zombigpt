@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -40,6 +41,7 @@ from installer.pz_agent_installer import (
 from pz_agent_cli.config import load_config
 from pz_agent_cli.context import STATE_DIR_NAME as CLI_STATE_DIR_NAME
 from pz_agent_cli.modinstall import MOD_ID
+from pz_agent_core.platform.paths import portable_relative_path
 from tests.fixtures.cli_worlds import make_mod_source
 from tests.fixtures.platform_trees import CYRILLIC_USER, make_user_dir
 
@@ -64,7 +66,13 @@ def _payload(tmp_path: Path) -> Path:
 
 
 def _tree(root: Path) -> set[str]:
-    return {str(path.relative_to(root)) for path in sorted(root.rglob("*"))}
+    """Every path under *root*, named the way the manifest names one.
+
+    Portable, not native. ``str(relative_to(...))`` gives ``pz-agent\\config.toml``
+    on Windows and ``pz-agent/config.toml`` elsewhere, so a comparison against a
+    manifest entry — which is portable by contract — failed on Windows only.
+    """
+    return {portable_relative_path(path, root) for path in sorted(root.rglob("*"))}
 
 
 # ---------------------------------------------------------------------------
@@ -231,15 +239,21 @@ def test_an_existing_config_is_left_exactly_as_the_user_wrote_it(tmp_path: Path)
     target = _target(tmp_path)
     config = target / STATE_DIR_NAME / CONFIG_NAME
     config.parent.mkdir(parents=True)
-    body = '[session]\ndefault_mode = "assisted"\n'
-    config.write_text(body, encoding="utf-8")
+    # Written as bytes, and compared as bytes. The point of this test is that
+    # the installer does not touch a configuration the user wrote, and "does not
+    # touch" is a statement about bytes: writing it as text here would have the
+    # test itself translate the newlines on Windows, so it measured the harness
+    # rather than the installer, and `len(body)` disagreed with the file by two.
+    body = b'[session]\ndefault_mode = "assisted"\n'
+    config.write_bytes(body)
 
     result = install(target, _payload(tmp_path))
 
-    assert config.read_text(encoding="utf-8") == body
+    assert config.read_bytes() == body, "the installer rewrote a config it should have kept"
     assert result.config_created is False
     recorded = result.manifest.by_path()[f"{STATE_DIR_NAME}/{CONFIG_NAME}"]
     assert recorded.preserved is True
+    assert recorded.size == config.stat().st_size
     assert recorded.size == len(body)
 
 
@@ -355,6 +369,52 @@ def test_the_generated_config_passes_the_validator_the_program_will_run(
     assert validation.config.default_mode.value == "OBSERVE"
 
 
+def test_every_manifest_path_is_portable_rather_than_native(tmp_path: Path) -> None:
+    """The manifest is read back by the uninstaller, possibly by another build.
+
+    `str(relative_to(...))` gives `pz-agent\\config.toml` on Windows and
+    `pz-agent/config.toml` elsewhere. A manifest written by one and read by the
+    other has no entry that matches, so an uninstall would report every file as
+    already gone and remove nothing — a silent no-op, not an error.
+    """
+    target = _target(tmp_path)
+
+    result = install(target, _payload(tmp_path))
+    ledger = json.loads((target / STATE_DIR_NAME / MANIFEST_NAME).read_text(encoding="utf-8"))
+
+    recorded = [entry["path"] for entry in ledger["files"]] + list(ledger["directories"])
+    assert recorded, "the manifest recorded nothing to check"
+    for path in recorded:
+        assert "\\" not in path, f"native separator in the manifest: {path!r}"
+        assert not path.startswith("/"), f"manifest path is not relative: {path!r}"
+        assert ":" not in path, f"manifest path names a drive: {path!r}"
+    assert [entry.path for entry in result.manifest.files] == [
+        entry["path"] for entry in ledger["files"]
+    ]
+
+
+def test_the_manifest_does_not_depend_on_where_it_was_installed(tmp_path: Path) -> None:
+    """Two targets, the same ledger — which is what "portable" has to mean.
+
+    A path that leaked the install root would differ between these two, and
+    would carry the account name into a file the user is told they can attach
+    to a bug report.
+    """
+    first = _target(tmp_path / "one")
+    second = _target(tmp_path / "two" / "Игры")
+
+    left = install(first, _payload(tmp_path))
+    right = install(second, _payload(tmp_path))
+
+    assert [entry.path for entry in left.manifest.files] == [
+        entry.path for entry in right.manifest.files
+    ]
+    assert left.manifest.directories == right.manifest.directories
+    assert CYRILLIC_USER not in json.dumps(
+        [entry.to_dict() for entry in left.manifest.files], ensure_ascii=False
+    )
+
+
 def test_the_installer_and_the_cli_agree_on_the_state_directory_name() -> None:
     assert STATE_DIR_NAME == CLI_STATE_DIR_NAME
 
@@ -365,14 +425,100 @@ def test_the_generated_config_takes_its_build_from_the_payload() -> None:
 
 
 def test_the_launcher_starts_the_sidecar_before_the_game_and_names_the_config() -> None:
-    text = render_launcher(config_path=Path("/x/Zomboid/pz-agent/config.toml"))
+    # The path is asserted as the OS spells it rather than as a POSIX literal:
+    # a launcher is read by cmd.exe and must carry a native path, and comparing
+    # against a hardcoded "/x/..." failed on Windows for being right.
+    config_path = Path("/x/Zomboid/pz-agent/config.toml")
+    text = render_launcher(config_path=config_path)
 
     start_at = text.index("pz-agent --config")
     steam_at = text.index("steam://rungameid/108600")
     assert start_at < steam_at
-    assert "/x/Zomboid/pz-agent/config.toml" in text
+    assert str(config_path) in text
     assert "pz-agent arm" in text
     assert text.endswith("endlocal\r\n")
+
+
+def test_the_launcher_sets_a_utf8_codepage_before_any_non_ascii_path() -> None:
+    """A Cyrillic profile is the case this project was built for.
+
+    cmd.exe reads a .bat in the console's OEM codepage — 866 or 1251 on a
+    Russian Windows — and the installer writes UTF-8. Without `chcp 65001` the
+    path is read as mojibake and the sidecar starts against a directory that
+    does not exist, which looks like a broken install rather than an encoding.
+    """
+    text = render_launcher(config_path=Path("C:/Users/Иван/Zomboid/pz-agent/config.toml"))
+
+    codepage_at = text.index("chcp 65001")
+    assert codepage_at < text.index("Иван"), "the codepage is set after the path it has to decode"
+    assert ">nul" in text[codepage_at : codepage_at + 24], (
+        "the codepage number is printed at startup"
+    )
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "C:/Users/Иван/Zomboid/pz-agent/config.toml",
+        "C:/Users/John Smith/Zomboid/pz-agent/config.toml",
+        "C:/Program Files/Zomboid/pz-agent/config.toml",
+    ],
+    ids=["cyrillic", "spaces", "program-files"],
+)
+def test_every_expansion_of_the_config_path_is_quoted(raw: str) -> None:
+    """A path with a space in it is the ordinary case, not the exotic one."""
+    text = render_launcher(config_path=Path(raw))
+
+    assert f'set "PZ_AGENT_CONFIG={Path(raw)}"' in text
+    for line in text.splitlines():
+        if "%PZ_AGENT_CONFIG%" in line:
+            assert '"%PZ_AGENT_CONFIG%"' in line, f"unquoted expansion: {line}"
+
+
+def _unquoted_spans(line: str) -> list[str]:
+    """The parts of a batch line that are *not* inside double quotes.
+
+    cmd.exe has no other quoting: a path is either between two ``"`` or it is
+    split on every space it contains. Splitting on ``"`` and taking the even
+    elements is therefore an exact model of what the shell will see bare.
+    """
+    return line.split('"')[0::2]
+
+
+#: A drive-qualified path or a URL — anything with a separator right after a
+#: colon. `with:` and `errorlevel 1` are not paths and must not be flagged.
+_PATHISH = re.compile(r"[A-Za-z]:[\\/]|://")
+
+#: A variable expansion. `%PZ_AGENT_CONFIG%` holds a path; bare, it is split on
+#: every space in that path, which is the failure `C:\Users\John Smith` shows.
+_EXPANSION = re.compile(r"%[~\w]+%|%~\d")
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "C:/Users/Иван/Zomboid/pz-agent/config.toml",
+        "C:/Users/John Smith/Zomboid/pz-agent/config.toml",
+        "C:/Program Files/Zomboid/pz-agent/config.toml",
+        "C:/Users/Иван Петров/Zomboid/pz-agent/config.toml",
+    ],
+    ids=["cyrillic", "spaces", "program-files", "cyrillic-with-space"],
+)
+def test_no_path_in_the_launcher_is_left_for_cmd_to_split_on_a_space(raw: str) -> None:
+    """Every path in the whole file, not only the ones spelled `%PZ_AGENT_CONFIG%`.
+
+    The narrower test above checks the expansions it knows the name of, which
+    cannot notice a path added later under a different name. This one models
+    cmd.exe's quoting and asserts over the rendered file, so a new unquoted path
+    fails it whatever it is called.
+    """
+    text = render_launcher(config_path=Path(raw))
+
+    for number, line in enumerate(text.splitlines(), start=1):
+        assert line.count('"') % 2 == 0, f"line {number} has an unbalanced quote: {line}"
+        for span in _unquoted_spans(line):
+            assert not _PATHISH.search(span), f"line {number} has a bare path: {line}"
+            assert not _EXPANSION.search(span), f"line {number} has a bare expansion: {line}"
 
 
 def test_the_launcher_never_arms_anything_by_itself() -> None:

@@ -7,6 +7,7 @@ import json
 import os
 import stat
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -382,15 +383,29 @@ def test_a_file_that_grows_past_the_cap_after_the_stat_is_refused_whole(
     assert result.index().has("ISEatFoodAction.new")
 
 
-def test_an_unreadable_file_is_reported_and_does_not_stop_the_scan(tmp_path: Path) -> None:
-    if os.geteuid() == 0:
-        pytest.skip("running as root: file permissions do not deny reads")
+def test_an_unreadable_file_is_reported_and_does_not_stop_the_scan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One file the scanner cannot open must not cost it the other findings.
+
+    The refusal is injected rather than produced with ``chmod``. ``chmod(0)``
+    does not deny a read on Windows and ``os.geteuid`` does not exist there, so
+    the previous form of this test could not run on the platform this project
+    ships to — and the behaviour under test is the *handling* of an ``OSError``,
+    which no filesystem needs to be involved to provoke.
+    """
     root = full_lua_tree(tmp_path)
     blocked = root / "client" / "TimedActions" / "ISReadABook.lua"
-    blocked.chmod(0)
-    try:
-        result = scan_lua_tree(root)
-        assert any("cannot read" in problem for problem in result.problems)
-        assert result.index().has("ISEatFoodAction.new")
-    finally:
-        blocked.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    real_open = Path.open
+
+    def refusing(self: Path, *args: Any, **kwargs: Any) -> Any:
+        if self == blocked:
+            raise PermissionError(13, "Permission denied")
+        return real_open(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", refusing)
+
+    result = scan_lua_tree(root)
+
+    assert any("cannot read" in problem for problem in result.problems)
+    assert result.index().has("ISEatFoodAction.new"), "one refused file stopped the whole scan"

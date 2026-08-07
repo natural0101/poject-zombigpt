@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, dev, "claude/**"]
+    branches: [main, dev, "claude/**", "fix/**"]
   pull_request:
     branches: [main, dev]
   workflow_dispatch:
@@ -24,6 +24,15 @@ jobs:
         python-version: ["3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The whole history, not the default single commit. The baseline
+          # evidence under docs/control/evidence/ records the SHAs this work
+          # started from, and tests/unit/test_control_baseline_evidence.py
+          # resolves every one of them with `git cat-file` — that resolution is
+          # what makes the file evidence rather than prose. On a shallow clone
+          # those objects are simply absent, so the test failed in CI for a
+          # reason that had nothing to do with the SHAs being wrong.
+          fetch-depth: 0
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
@@ -34,9 +43,18 @@ jobs:
         run: uv python install ${{ matrix.python-version }}
 
       - name: Create environment
+        # The mcp extra is installed here for the same reason it is installed in
+        # windows.yml: tests/unit/test_mcp_entry.py and
+        # tests/contract/test_mcp_subprocess_e2e.py run the real entry point and
+        # assert the exit code it gives for a real refusal. Without the SDK the
+        # entry point answers EXIT_NO_SDK (3) before it reaches any of that, so
+        # every one of those assertions compares 3 against the code it meant to
+        # check. That is not a failing test, it is an untested surface wearing a
+        # red mark — and it read as red on Linux and green on Windows purely
+        # because the two workflows installed different things.
         run: |
           uv venv .venv --python ${{ matrix.python-version }}
-          uv pip install --python .venv/bin/python -e ".[dev]"
+          uv pip install --python .venv/bin/python -e ".[dev,mcp]"
 
       - name: Ruff format
         run: .venv/bin/python -m ruff format --check .

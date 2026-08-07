@@ -149,7 +149,11 @@ def test_the_configuration_the_cli_prints_sets_no_variable_either(tmp_path: Path
 
     entry = json.loads("{" + block + "}")["pz-agent"]
     assert entry["env"] == {}, "the printed configuration names a variable nothing reads"
-    assert entry["args"] == ["-m", "pz_agent_mcp"]
+    assert entry["args"][:2] == ["-m", "pz_agent_mcp"]
+    # The state directory is passed as an argument now, because a client
+    # launches the server detached with its own environment and an argument is
+    # the only thing that reliably carries the answer.
+    assert "--state-dir" in entry["args"], "the server is launched without being told where to look"
     assert entry["command"], "the block names no interpreter to launch"
 
 

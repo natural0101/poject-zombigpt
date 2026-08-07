@@ -87,7 +87,10 @@ def build_server(
             types.Tool(
                 name=descriptor["name"],
                 description=descriptor["description"],
-                inputSchema=descriptor["inputSchema"],
+                # The SDK's field is `input_schema`; `inputSchema` is its wire alias
+                # and pydantic accepts either. Named by field so the type checker
+                # can see it — the serialised form is `inputSchema` regardless.
+                input_schema=descriptor["inputSchema"],
             )
             for descriptor in router.list_tools()
         ]
@@ -101,7 +104,7 @@ def build_server(
                 uri=descriptor["uri"],
                 name=descriptor["name"],
                 description=descriptor["description"],
-                mimeType=descriptor["mimeType"],
+                mime_type=descriptor["mimeType"],
             )
             for descriptor in reader.list()
         ]

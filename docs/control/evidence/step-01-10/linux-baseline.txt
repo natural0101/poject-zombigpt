@@ -1,0 +1,3 @@
+baseline at 873037c081800cf4f4373b9307fc1cdff3140e99 (dev), Linux, Python 3.11.15
+command: .venv/bin/python -m pytest tests/
+3677 passed, 2 skipped in 20.53s

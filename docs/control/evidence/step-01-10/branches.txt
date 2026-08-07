@@ -1,0 +1,9 @@
+claude/workflows-routines-docs-l294qp f8c1596f000da32f2a793c540a0ad94bf24c4284
+dev 873037c081800cf4f4373b9307fc1cdff3140e99
+feature/playable-agent-1.0 82043f40d4a02916cb2e85021860cc41680b2b63
+fix/windows-mcp-voice-runtime 873037c081800cf4f4373b9307fc1cdff3140e99
+main 3f9f6dda8f5f017eee3d78b827a8038e7c3b05bb
+origin/claude/workflows-routines-docs-l294qp 6f73bc0c52135965cd67605b8002618bcf2282d6
+origin/dev 873037c081800cf4f4373b9307fc1cdff3140e99
+origin/feature/playable-agent-1.0 82043f40d4a02916cb2e85021860cc41680b2b63
+origin/main 3f9f6dda8f5f017eee3d78b827a8038e7c3b05bb

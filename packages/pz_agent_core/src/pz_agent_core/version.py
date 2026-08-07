@@ -24,6 +24,15 @@ SCHEMA_VERSION: Final = "1.0"
 #: Version of the Lua mod (matches ``pz-mod/42/mod.info``).
 MOD_VERSION: Final = "0.1.0"
 
+#: Wire protocol spoken between the sidecar's RPC server and a local client —
+#: today the MCP executable, which runs as a separate process because an MCP
+#: client launches it. Versioned apart from :data:`PROTOCOL_VERSION` because the
+#: two boundaries move independently: the mod↔sidecar protocol is constrained by
+#: what Kahlua can encode, this one is not. A client refuses a server whose
+#: major differs, which is the only way a stale executable left behind by an
+#: earlier install fails loudly instead of misreading a newer envelope.
+RPC_PROTOCOL_VERSION: Final = "1.0"
+
 #: Game builds this release has been designed against. The doctor command warns
 #: — it does not hard-fail — when the detected build is outside this set, because
 #: a point release usually keeps the API surface we rely on.

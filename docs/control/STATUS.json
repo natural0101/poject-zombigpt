@@ -1,0 +1,1757 @@
+{
+  "blockers": [],
+  "branch": "fix/windows-mcp-voice-runtime",
+  "current_step": 51,
+  "github_release": null,
+  "head_commit": "fceb4162fdfafd4e63467a4010bcf6ec5405a704",
+  "last_passed_step": 50,
+  "linux_ci": {
+    "status": "GREEN",
+    "url": "https://github.com/natural0101/poject-zombigpt/actions/runs/31163394870"
+  },
+  "live_game_percent": 0,
+  "live_scenarios": {
+    "failed": 0,
+    "not_run": 20,
+    "passed": 0
+  },
+  "next_step": 51,
+  "overall_percent": 50,
+  "rc_artifact": {
+    "sha256": null,
+    "status": "NOT_BUILT",
+    "url": null
+  },
+  "release_percent": 0,
+  "remote_percent": 50,
+  "repository": "https://github.com/natural0101/poject-zombigpt",
+  "steps": [
+    {
+      "commit": "50c851ca490f458f1c0650dc5f4f2378aa2dfc56",
+      "depends_on": [],
+      "evidence": [
+        "docs/control/evidence/step-01-10/branches.txt"
+      ],
+      "finished_at": "2026-08-07T07:30:00Z",
+      "id": 1,
+      "notes": "",
+      "owner": "remote",
+      "started_at": "2026-08-07T07:30:00Z",
+      "status": "PASS",
+      "tests": [
+        "git fetch --all --prune"
+      ],
+      "title": "Refresh local refs for every remote branch"
+    },
+    {
+      "commit": "50c851ca490f458f1c0650dc5f4f2378aa2dfc56",
+      "depends_on": [
+        1
+      ],
+      "evidence": [
+        "docs/control/evidence/step-01-10/branches.txt"
+      ],
+      "finished_at": "2026-08-07T07:30:00Z",
+      "id": 2,
+      "notes": "",
+      "owner": "remote",
+      "started_at": "2026-08-07T07:30:00Z",
+      "status": "PASS",
+      "tests": [
+        "git checkout dev && git pull --ff-only"
+      ],
+      "title": "Switch to the current `dev`"
+    },
+    {
+      "commit": "50c851ca490f458f1c0650dc5f4f2378aa2dfc56",
+      "depends_on": [
+        2
+      ],
+      "evidence": [
+        "docs/control/evidence/step-01-10/branches.txt"
+      ],
+      "finished_at": "2026-08-07T07:30:00Z",
+      "id": 3,
+      "notes": "",
+      "owner": "remote",
+      "started_at": "2026-08-07T07:30:00Z",
+      "status": "PASS",
+      "tests": [
+        "git checkout -b fix/windows-mcp-voice-runtime"
+      ],
+      "title": "Create `fix/windows-mcp-voice-runtime`"
+    },
+    {
+      "commit": "50c851ca490f458f1c0650dc5f4f2378aa2dfc56",
+      "depends_on": [
+        3
+      ],
+      "evidence": [
+        "docs/control/evidence/step-01-10/linux-baseline.txt"
+      ],
+      "finished_at": "2026-08-07T07:30:00Z",
+      "id": 4,
+      "notes": "",
+      "owner": "remote",
+      "started_at": "2026-08-07T07:30:00Z",
+      "status": "PASS",
+      "tests": [
+        "git rev-parse HEAD"
+      ],
+      "title": "Record the starting commit SHA"
+    },
+    {
+      "commit": "50c851ca490f458f1c0650dc5f4f2378aa2dfc56",
+      "depends_on": [
+        4
+      ],
+      "evidence": [
+        "docs/control/evidence/step-01-10/branches.txt"
+      ],
+      "finished_at": "2026-08-07T07:30:00Z",
+      "id": 5,
+      "notes": "",
+      "owner": "remote",
+      "started_at": "2026-08-07T07:30:00Z",
+      "status": "PASS",
+      "tests": [
+        "git branch -a --format='%(refname:short) %(objectname)'"
+      ],
+      "title": "Record every branch and its SHA"
+    },
+    {
+      "commit": "50c851ca490f458f1c0650dc5f4f2378aa2dfc56",
+      "depends_on": [
+        5
+      ],
+      "evidence": [
+        "docs/control/evidence/step-01-10/windows-workflow-runs.txt"
+      ],
+      "finished_at": "2026-08-07T07:30:00Z",
+      "id": 6,
+      "notes": "",
+      "owner": "remote",
+      "started_at": "2026-08-07T07:30:00Z",
+      "status": "PASS",
+      "tests": [
+        "GitHub Actions: list_workflow_runs windows.yml"
+      ],
+      "title": "Record the recent CI workflow runs"
+    },
+    {
+      "commit": "50c851ca490f458f1c0650dc5f4f2378aa2dfc56",
+      "depends_on": [
+        6
+      ],
+      "evidence": [
+        "docs/control/evidence/step-01-10/linux-baseline.txt"
+      ],
+      "finished_at": "2026-08-07T07:30:00Z",
+      "id": 7,
+      "notes": "",
+      "owner": "remote",
+      "started_at": "2026-08-07T07:30:00Z",
+      "status": "PASS",
+      "tests": [
+        ".venv/bin/python -m pytest tests/"
+      ],
+      "title": "Record the current Linux test result"
+    },
+    {
+      "commit": "50c851ca490f458f1c0650dc5f4f2378aa2dfc56",
+      "depends_on": [
+        7
+      ],
+      "evidence": [
+        "docs/control/evidence/step-01-10/windows-failures.txt"
+      ],
+      "finished_at": "2026-08-07T07:30:00Z",
+      "id": 8,
+      "notes": "24 failed, 3633 passed, 22 skipped on Windows run 31156087690 at 873037c0. Read from Actions, not run here.",
+      "owner": "remote",
+      "started_at": "2026-08-07T07:30:00Z",
+      "status": "PASS",
+      "tests": [
+        "GitHub Actions: get_job_logs run 31156087690"
+      ],
+      "title": "Record the current Windows failures"
+    },
+    {
+      "commit": "50c851ca490f458f1c0650dc5f4f2378aa2dfc56",
+      "depends_on": [
+        8
+      ],
+      "evidence": [
+        "docs/control/PLAN.md",
+        "docs/control/STATUS.json",
+        "docs/control/BLOCKERS.md",
+        "docs/control/DECISIONS.md",
+        "docs/control/EVIDENCE_INDEX.md",
+        "docs/control/COMMAND_LOG.md",
+        "docs/control/CHANGE_LOG.md",
+        "docs/control/HANDOFF.md",
+        "scripts/check_progress.py",
+        "scripts/progress_report.py"
+      ],
+      "finished_at": "2026-08-07T07:30:00Z",
+      "id": 9,
+      "notes": "Each refusal of check_progress.py was verified by planting the violation.",
+      "owner": "remote",
+      "started_at": "2026-08-07T07:30:00Z",
+      "status": "PASS",
+      "tests": [
+        ".venv/bin/python scripts/check_progress.py"
+      ],
+      "title": "Create every `docs/control/` file"
+    },
+    {
+      "commit": "50c851ca490f458f1c0650dc5f4f2378aa2dfc56",
+      "depends_on": [
+        9
+      ],
+      "evidence": [
+        "docs/control/STATUS.json"
+      ],
+      "finished_at": "2026-08-07T07:30:00Z",
+      "id": 10,
+      "notes": "This commit.",
+      "owner": "remote",
+      "started_at": "2026-08-07T07:30:00Z",
+      "status": "PASS",
+      "tests": [
+        ".venv/bin/python scripts/check_progress.py"
+      ],
+      "title": "First control commit"
+    },
+    {
+      "commit": "367124b6f517a3b78d4ace50bb26ab72d17bfc2b",
+      "depends_on": [
+        10
+      ],
+      "evidence": [
+        "docs/control/evidence/step-01-10/linux-baseline.txt"
+      ],
+      "finished_at": "2026-08-07T07:40:00Z",
+      "id": 11,
+      "notes": "3677 passed, 2 skipped at the starting commit.",
+      "owner": "remote",
+      "started_at": "2026-08-07T07:40:00Z",
+      "status": "PASS",
+      "tests": [
+        ".venv/bin/python -m pytest tests/"
+      ],
+      "title": "Reproduce the full Linux suite"
+    },
+    {
+      "commit": "367124b6f517a3b78d4ace50bb26ab72d17bfc2b",
+      "depends_on": [
+        11
+      ],
+      "evidence": [
+        "docs/control/evidence/step-01-10/windows-workflow-runs.txt",
+        "docs/control/evidence/step-01-10/windows-failures.txt"
+      ],
+      "finished_at": "2026-08-07T07:40:00Z",
+      "id": 12,
+      "notes": "24 failed, 3633 passed, 22 skipped. Read from Actions; no Windows machine here.",
+      "owner": "remote",
+      "started_at": "2026-08-07T07:40:00Z",
+      "status": "PASS",
+      "tests": [
+        "GitHub Actions windows.yml run 31156087690"
+      ],
+      "title": "Reproduce the full Windows suite through GitHub Actions"
+    },
+    {
+      "commit": "367124b6f517a3b78d4ace50bb26ab72d17bfc2b",
+      "depends_on": [
+        12
+      ],
+      "evidence": [
+        "docs/control/DECISIONS.md"
+      ],
+      "finished_at": "2026-08-07T07:40:00Z",
+      "id": 13,
+      "notes": "Six root causes, D-002, each mapped to its step.",
+      "owner": "remote",
+      "started_at": "2026-08-07T07:40:00Z",
+      "status": "PASS",
+      "tests": [],
+      "title": "Split the Windows failures by root cause"
+    },
+    {
+      "commit": "367124b6f517a3b78d4ace50bb26ab72d17bfc2b",
+      "depends_on": [
+        13
+      ],
+      "evidence": [
+        "packages/pz_agent_cli/src/pz_agent_cli/livetest/evidence.py",
+        "tests/contract/test_evidence_bytes_are_portable.py"
+      ],
+      "finished_at": "2026-08-07T07:40:00Z",
+      "id": 14,
+      "notes": "canonical_json_bytes returns bytes; the text form is derived from it.",
+      "owner": "remote",
+      "started_at": "2026-08-07T07:40:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/contract/test_evidence_bytes_are_portable.py::test_the_canonical_form_is_bytes_and_ends_in_one_newline"
+      ],
+      "title": "Implement `canonical_json_bytes()`"
+    },
+    {
+      "commit": "367124b6f517a3b78d4ace50bb26ab72d17bfc2b",
+      "depends_on": [
+        14
+      ],
+      "evidence": [
+        "packages/pz_agent_cli/src/pz_agent_cli/livetest/evidence.py",
+        "packages/pz_agent_cli/src/pz_agent_cli/livetest/runner.py"
+      ],
+      "finished_at": "2026-08-07T07:40:00Z",
+      "id": 15,
+      "notes": "No write_text and no open(...,'w') on any hashed path; the runner moves bytes.",
+      "owner": "remote",
+      "started_at": "2026-08-07T07:40:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/contract/test_evidence_bytes_are_portable.py::test_the_file_holds_exactly_the_canonical_bytes"
+      ],
+      "title": "Move every evidence JSON writer to binary"
+    },
+    {
+      "commit": "367124b6f517a3b78d4ace50bb26ab72d17bfc2b",
+      "depends_on": [
+        15
+      ],
+      "evidence": [
+        "packages/pz_agent_cli/src/pz_agent_cli/livetest/evidence.py",
+        "docs/control/evidence/step-11-19/evidence-suites.txt"
+      ],
+      "finished_at": "2026-08-07T07:40:00Z",
+      "id": 16,
+      "notes": "write_bytes_atomically: temporary file then os.replace, temp removed on failure.",
+      "owner": "remote",
+      "started_at": "2026-08-07T07:40:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/contract/test_evidence_bytes_are_portable.py::test_writing_is_all_or_nothing"
+      ],
+      "title": "Atomic evidence writes through a temporary file"
+    },
+    {
+      "commit": "367124b6f517a3b78d4ace50bb26ab72d17bfc2b",
+      "depends_on": [
+        16
+      ],
+      "evidence": [
+        "docs/control/evidence/step-11-19/mutations.txt",
+        "tests/contract/test_evidence_bytes_are_portable.py"
+      ],
+      "finished_at": "2026-08-07T07:40:00Z",
+      "id": 17,
+      "notes": "Digest read back from the file; guard proven by injecting a translating writer.",
+      "owner": "remote",
+      "started_at": "2026-08-07T07:40:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/contract/test_evidence_bytes_are_portable.py::test_a_write_that_changed_the_bytes_is_caught_rather_than_hashed"
+      ],
+      "title": "SHA-256 over the actual bytes on disk"
+    },
+    {
+      "commit": "367124b6f517a3b78d4ace50bb26ab72d17bfc2b",
+      "depends_on": [
+        17
+      ],
+      "evidence": [
+        "tests/contract/test_evidence_bytes_are_portable.py"
+      ],
+      "finished_at": "2026-08-07T07:40:00Z",
+      "id": 18,
+      "notes": "size_bytes comes from sha256_file, never len(text).",
+      "owner": "remote",
+      "started_at": "2026-08-07T07:40:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/contract/test_evidence_bytes_are_portable.py::test_the_returned_digest_is_the_digest_of_the_file"
+      ],
+      "title": "`size_bytes` from the actual file size"
+    },
+    {
+      "commit": "367124b6f517a3b78d4ace50bb26ab72d17bfc2b",
+      "depends_on": [
+        18
+      ],
+      "evidence": [
+        "docs/control/evidence/step-11-19/evidence-suites.txt",
+        "docs/control/evidence/step-11-19/linux-after.txt"
+      ],
+      "finished_at": "2026-08-07T07:40:00Z",
+      "id": 19,
+      "notes": "11 cross-platform tests: CRLF, Cyrillic, emoji, key order, atomicity, tamper.",
+      "owner": "remote",
+      "started_at": "2026-08-07T07:40:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/contract/test_evidence_bytes_are_portable.py"
+      ],
+      "title": "Cross-platform canonical JSON tests"
+    },
+    {
+      "commit": "935437ef88eb257a590b2bda930cce85de88632c",
+      "depends_on": [
+        19
+      ],
+      "evidence": [
+        "packages/pz_agent_core/src/pz_agent_core/platform/paths.py",
+        "docs/control/evidence/step-20-29/portable-and-launcher.txt"
+      ],
+      "finished_at": "2026-08-07T08:40:00Z",
+      "id": 20,
+      "notes": "portable_relative_path + portable_posix, with PathNotUnderRoot.",
+      "owner": "remote",
+      "started_at": "2026-08-07T08:40:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/unit/test_installer_windows.py"
+      ],
+      "title": "`portable_relative_path()`"
+    },
+    {
+      "commit": "935437ef88eb257a590b2bda930cce85de88632c",
+      "depends_on": [
+        20
+      ],
+      "evidence": [
+        "tests/unit/test_installer_windows.py",
+        "docs/control/evidence/step-20-29/portable-and-launcher.txt"
+      ],
+      "finished_at": "2026-08-07T08:40:00Z",
+      "id": 21,
+      "notes": "_tree compares portable names; the installer already stored POSIX and split_relative rejects backslashes.",
+      "owner": "remote",
+      "started_at": "2026-08-07T08:40:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/unit/test_installer_windows.py::test_the_round_trip_leaves_no_residue_but_the_config"
+      ],
+      "title": "Manifest paths on the POSIX separator"
+    },
+    {
+      "commit": "935437ef88eb257a590b2bda930cce85de88632c",
+      "depends_on": [
+        21
+      ],
+      "evidence": [
+        "tests/contract/test_documented_commands_parse.py"
+      ],
+      "finished_at": "2026-08-07T08:40:00Z",
+      "id": 22,
+      "notes": "Document roots keyed by portable path, so docs/QUICKSTART.md matches on Windows.",
+      "owner": "remote",
+      "started_at": "2026-08-07T08:40:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/contract/test_documented_commands_parse.py::test_the_documents_are_being_read_at_all"
+      ],
+      "title": "Document path checks corrected for Windows"
+    },
+    {
+      "commit": "935437ef88eb257a590b2bda930cce85de88632c",
+      "depends_on": [
+        22
+      ],
+      "evidence": [
+        "packages/pz_agent_core/src/pz_agent_core/diagnostics/redaction.py",
+        "tests/contract/test_windows_path_shapes.py"
+      ],
+      "finished_at": "2026-08-07T08:40:00Z",
+      "id": 23,
+      "notes": "<ZOMBOID>/logs on every platform; tail normalised, three separator spellings matched.",
+      "owner": "remote",
+      "started_at": "2026-08-07T08:40:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/contract/test_windows_path_shapes.py::test_the_placeholder_never_carries_a_backslash"
+      ],
+      "title": "Redactor emits stable separators"
+    },
+    {
+      "commit": "935437ef88eb257a590b2bda930cce85de88632c",
+      "depends_on": [
+        23
+      ],
+      "evidence": [
+        "tests/contract/test_windows_path_shapes.py"
+      ],
+      "finished_at": "2026-08-07T08:40:00Z",
+      "id": 24,
+      "notes": "Longest literal first; user_dir reported for a path inside the Zomboid directory.",
+      "owner": "remote",
+      "started_at": "2026-08-07T08:40:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/contract/test_windows_path_shapes.py::test_the_zomboid_directory_wins_over_the_profile_that_contains_it"
+      ],
+      "title": "Redactor rule order: specific path before general"
+    },
+    {
+      "commit": "935437ef88eb257a590b2bda930cce85de88632c",
+      "depends_on": [
+        24
+      ],
+      "evidence": [
+        "tests/unit/test_capabilities_scanner.py"
+      ],
+      "finished_at": "2026-08-07T08:40:00Z",
+      "id": 25,
+      "notes": "os.geteuid gone; PermissionError injected instead of chmod.",
+      "owner": "remote",
+      "started_at": "2026-08-07T08:40:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/unit/test_capabilities_scanner.py::test_an_unreadable_file_is_reported_and_does_not_stop_the_scan"
+      ],
+      "title": "Remove `os.geteuid()` from Windows-executable test paths"
+    },
+    {
+      "commit": "935437ef88eb257a590b2bda930cce85de88632c",
+      "depends_on": [
+        25
+      ],
+      "evidence": [
+        "tests/unit/test_cli_supervisor.py"
+      ],
+      "finished_at": "2026-08-07T08:40:00Z",
+      "id": 26,
+      "notes": "signal.SIGKILL gone from every test path.",
+      "owner": "remote",
+      "started_at": "2026-08-07T08:40:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/unit/test_cli_supervisor.py::TestTheChildIsConfirmedAlive::test_a_child_that_keeps_running_is_reported_as_started"
+      ],
+      "title": "Remove `signal.SIGKILL` from Windows-executable test paths"
+    },
+    {
+      "commit": "935437ef88eb257a590b2bda930cce85de88632c",
+      "depends_on": [
+        26
+      ],
+      "evidence": [
+        "packages/pz_agent_cli/src/pz_agent_cli/supervisor.py",
+        "docs/control/evidence/step-20-29/suites.txt"
+      ],
+      "finished_at": "2026-08-07T08:40:00Z",
+      "id": 27,
+      "notes": "SpawnedProcess handle: pid, poll, terminate, wait, stop. Supervisor still publishes a pid.",
+      "owner": "remote",
+      "started_at": "2026-08-07T08:40:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/unit/test_cli_supervisor.py"
+      ],
+      "title": "Process tests hold a `subprocess.Popen` handle"
+    },
+    {
+      "commit": "935437ef88eb257a590b2bda930cce85de88632c",
+      "depends_on": [
+        27
+      ],
+      "evidence": [
+        "tests/unit/test_installer_windows.py"
+      ],
+      "finished_at": "2026-08-07T08:40:00Z",
+      "id": 28,
+      "notes": "Bytes in, bytes compared, size from stat().st_size.",
+      "owner": "remote",
+      "started_at": "2026-08-07T08:40:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/unit/test_installer_windows.py::test_an_existing_config_is_left_exactly_as_the_user_wrote_it"
+      ],
+      "title": "Existing config preserved byte for byte"
+    },
+    {
+      "commit": "935437ef88eb257a590b2bda930cce85de88632c",
+      "depends_on": [
+        28
+      ],
+      "evidence": [
+        "installer/pz_agent_installer.py",
+        "docs/control/evidence/step-20-29/portable-and-launcher.txt"
+      ],
+      "finished_at": "2026-08-07T08:40:00Z",
+      "id": 29,
+      "notes": "chcp 65001 before any non-ASCII byte; every expansion quoted.",
+      "owner": "remote",
+      "started_at": "2026-08-07T08:40:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/unit/test_installer_windows.py::test_the_launcher_sets_a_utf8_codepage_before_any_non_ascii_path"
+      ],
+      "title": "Windows installer and launcher path handling"
+    },
+    {
+      "commit": "a7c16ba27c27c51a75f8c298b0aa0577823b0cf2",
+      "depends_on": [
+        29
+      ],
+      "evidence": [
+        "docs/control/evidence/step-30-40/windows-suite.txt",
+        "packages/pz_agent_core/src/pz_agent_core/diagnostics/redaction.py"
+      ],
+      "finished_at": "2026-08-07T09:00:00Z",
+      "id": 30,
+      "notes": "24 -> 13 -> 1 -> 0 failures. Run 31163394899: 3714 passed, 22 skipped, every stage green.",
+      "owner": "remote",
+      "started_at": "2026-08-07T09:00:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/contract/test_windows_path_shapes.py",
+        "tests/unit/test_diagnostics_bundle.py"
+      ],
+      "title": "Zero Windows failures in this block"
+    },
+    {
+      "commit": "15296e507958501b7c2737c4676813c30d6a9d15",
+      "depends_on": [
+        30
+      ],
+      "evidence": [
+        "installer/pz_agent_installer.py"
+      ],
+      "finished_at": "2026-08-07T09:00:00Z",
+      "id": 31,
+      "notes": "Models cmd.exe quoting over the whole rendered file, not only the expansions it knows the name of. Mutation: unquoting one expansion fails 4 parametrisations.",
+      "owner": "remote",
+      "started_at": "2026-08-07T09:00:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/unit/test_installer_windows.py::test_no_path_in_the_launcher_is_left_for_cmd_to_split_on_a_space"
+      ],
+      "title": "Quote every path in the BAT files"
+    },
+    {
+      "commit": "15296e507958501b7c2737c4676813c30d6a9d15",
+      "depends_on": [
+        31
+      ],
+      "evidence": [
+        "installer/pz_agent_installer.py"
+      ],
+      "finished_at": "2026-08-07T09:00:00Z",
+      "id": 32,
+      "notes": "C:/Users/John Smith and C:/Program Files.",
+      "owner": "remote",
+      "started_at": "2026-08-07T09:00:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/unit/test_installer_windows.py::test_no_path_in_the_launcher_is_left_for_cmd_to_split_on_a_space[spaces]"
+      ],
+      "title": "Paths with spaces"
+    },
+    {
+      "commit": "15296e507958501b7c2737c4676813c30d6a9d15",
+      "depends_on": [
+        32
+      ],
+      "evidence": [
+        "installer/pz_agent_installer.py"
+      ],
+      "finished_at": "2026-08-07T09:00:00Z",
+      "id": 33,
+      "notes": "Cyrillic alone and Cyrillic with a space.",
+      "owner": "remote",
+      "started_at": "2026-08-07T09:00:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/unit/test_installer_windows.py::test_no_path_in_the_launcher_is_left_for_cmd_to_split_on_a_space[cyrillic]",
+        "tests/unit/test_installer_windows.py::test_the_launcher_sets_a_utf8_codepage_before_any_non_ascii_path"
+      ],
+      "title": "Paths with Cyrillic"
+    },
+    {
+      "commit": "15296e507958501b7c2737c4676813c30d6a9d15",
+      "depends_on": [
+        33
+      ],
+      "evidence": [
+        "installer/pz_agent_installer.py"
+      ],
+      "finished_at": "2026-08-07T09:00:00Z",
+      "id": 34,
+      "notes": "Byte-for-byte, with the manifest recording the real digest and the real file size.",
+      "owner": "remote",
+      "started_at": "2026-08-07T09:00:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/unit/test_installer_windows.py::test_an_existing_config_is_left_exactly_as_the_user_wrote_it"
+      ],
+      "title": "An existing `config.toml` is kept"
+    },
+    {
+      "commit": "15296e507958501b7c2737c4676813c30d6a9d15",
+      "depends_on": [
+        34
+      ],
+      "evidence": [
+        "packages/pz_agent_core/src/pz_agent_core/platform/paths.py",
+        "tests/contract/test_portable_paths.py"
+      ],
+      "finished_at": "2026-08-07T09:00:00Z",
+      "id": 35,
+      "notes": "portable_relative_path preserved the running platform's flavour, which made the separator claim untestable on Linux and produced C:\\/Users from portable_posix. Fixed; the mutation now fails four tests.",
+      "owner": "remote",
+      "started_at": "2026-08-07T09:00:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/unit/test_installer_windows.py::test_every_manifest_path_is_portable_rather_than_native",
+        "tests/unit/test_installer_windows.py::test_the_manifest_does_not_depend_on_where_it_was_installed",
+        "tests/contract/test_portable_paths.py::test_a_windows_path_is_recorded_with_posix_separators"
+      ],
+      "title": "Installer manifest on Windows"
+    },
+    {
+      "commit": "15296e507958501b7c2737c4676813c30d6a9d15",
+      "depends_on": [
+        35
+      ],
+      "evidence": [
+        "installer/pz_agent_installer.py"
+      ],
+      "finished_at": "2026-08-07T09:00:00Z",
+      "id": 36,
+      "notes": "",
+      "owner": "remote",
+      "started_at": "2026-08-07T09:00:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/unit/test_installer_windows.py::test_uninstall_keeps_a_mod_file_the_user_edited_and_names_it"
+      ],
+      "title": "Uninstall with a user file inside the mod"
+    },
+    {
+      "commit": "15296e507958501b7c2737c4676813c30d6a9d15",
+      "depends_on": [
+        36
+      ],
+      "evidence": [
+        "installer/pz_agent_installer.py"
+      ],
+      "finished_at": "2026-08-07T09:00:00Z",
+      "id": 37,
+      "notes": "",
+      "owner": "remote",
+      "started_at": "2026-08-07T09:00:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/unit/test_installer_windows.py::test_uninstall_leaves_saves_alone"
+      ],
+      "title": "Uninstall does not remove a save"
+    },
+    {
+      "commit": "15296e507958501b7c2737c4676813c30d6a9d15",
+      "depends_on": [
+        37
+      ],
+      "evidence": [
+        "installer/pz_agent_installer.py"
+      ],
+      "finished_at": "2026-08-07T09:00:00Z",
+      "id": 38,
+      "notes": "",
+      "owner": "remote",
+      "started_at": "2026-08-07T09:00:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/unit/test_installer_windows.py::test_uninstall_reports_the_config_as_kept_rather_than_removed",
+        "tests/unit/test_installer_windows.py::test_uninstall_leaves_backups_and_logs_alone"
+      ],
+      "title": "Uninstall does not remove the config"
+    },
+    {
+      "commit": "a7c16ba27c27c51a75f8c298b0aa0577823b0cf2",
+      "depends_on": [
+        38
+      ],
+      "evidence": [
+        "docs/control/evidence/step-30-40/windows-suite.txt"
+      ],
+      "finished_at": "2026-08-07T09:00:00Z",
+      "id": 39,
+      "notes": "The whole installer suite ran on windows-latest in run 31163394899. A Linux result would not have counted.",
+      "owner": "remote",
+      "started_at": "2026-08-07T09:00:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/unit/test_installer_windows.py::test_the_round_trip_leaves_no_residue_but_the_config"
+      ],
+      "title": "Synthetic installer round trip on Windows"
+    },
+    {
+      "commit": "a7c16ba27c27c51a75f8c298b0aa0577823b0cf2",
+      "depends_on": [
+        39
+      ],
+      "evidence": [
+        "docs/control/evidence/step-30-40/windows-suite.txt"
+      ],
+      "finished_at": "2026-08-07T09:00:00Z",
+      "id": 40,
+      "notes": "Run 31163394899: tests, both PyInstaller builds, both executables answering, the archive and the release gate all succeeded; nothing skipped.",
+      "owner": "remote",
+      "started_at": "2026-08-07T09:00:00Z",
+      "status": "PASS",
+      "tests": [],
+      "title": "Commit: installer block green"
+    },
+    {
+      "commit": "15296e507958501b7c2737c4676813c30d6a9d15",
+      "depends_on": [
+        40
+      ],
+      "evidence": [
+        "packages/pz_agent_cli/src/pz_agent_cli/app.py"
+      ],
+      "finished_at": "2026-08-07T09:00:00Z",
+      "id": 41,
+      "notes": "mcp_client_entry returns a dict; nothing is assembled from f-strings.",
+      "owner": "remote",
+      "started_at": "2026-08-07T09:00:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/contract/test_mcp_snippet_is_json.py"
+      ],
+      "title": "Build the MCP config as a dict"
+    },
+    {
+      "commit": "15296e507958501b7c2737c4676813c30d6a9d15",
+      "depends_on": [
+        41
+      ],
+      "evidence": [
+        "packages/pz_agent_cli/src/pz_agent_cli/app.py"
+      ],
+      "finished_at": "2026-08-07T09:00:00Z",
+      "id": 42,
+      "notes": "_mcp_snippet renders through json.dumps only.",
+      "owner": "remote",
+      "started_at": "2026-08-07T09:00:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/contract/test_mcp_snippet_is_json.py"
+      ],
+      "title": "Serialise only through `json.dumps`"
+    },
+    {
+      "commit": "a7c16ba27c27c51a75f8c298b0aa0577823b0cf2",
+      "depends_on": [
+        42
+      ],
+      "evidence": [
+        "docs/control/evidence/step-30-40/windows-suite.txt"
+      ],
+      "finished_at": "2026-08-07T09:00:00Z",
+      "id": 43,
+      "notes": "Five interpreter paths including one with an embedded quote; round-tripped through json.loads. Ran on windows-latest.",
+      "owner": "remote",
+      "started_at": "2026-08-07T09:00:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/contract/test_mcp_snippet_is_json.py"
+      ],
+      "title": "Test a Windows interpreter path"
+    },
+    {
+      "commit": "a7c16ba27c27c51a75f8c298b0aa0577823b0cf2",
+      "depends_on": [
+        43
+      ],
+      "evidence": [
+        "docs/control/evidence/step-30-40/windows-suite.txt"
+      ],
+      "finished_at": "2026-08-07T09:00:00Z",
+      "id": 44,
+      "notes": "Cyrillic, spaces and Program Files.",
+      "owner": "remote",
+      "started_at": "2026-08-07T09:00:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/contract/test_mcp_snippet_is_json.py"
+      ],
+      "title": "Test Cyrillic and spaces"
+    },
+    {
+      "commit": "15296e507958501b7c2737c4676813c30d6a9d15",
+      "depends_on": [
+        44
+      ],
+      "evidence": [
+        "packages/pz_agent_cli/src/pz_agent_cli/app.py"
+      ],
+      "finished_at": "2026-08-07T09:00:00Z",
+      "id": 45,
+      "notes": "",
+      "owner": "remote",
+      "started_at": "2026-08-07T09:00:00Z",
+      "status": "PASS",
+      "tests": [],
+      "title": "Commit: MCP config correction"
+    },
+    {
+      "commit": "fceb4162fdfafd4e63467a4010bcf6ec5405a704",
+      "depends_on": [
+        45
+      ],
+      "evidence": [
+        "docs/CORE_RPC.md"
+      ],
+      "finished_at": "2026-08-07T09:00:00Z",
+      "id": 46,
+      "notes": "The envelope, the caps, the descriptor, the token, the deadlines and the two families.",
+      "owner": "remote",
+      "started_at": "2026-08-07T09:00:00Z",
+      "status": "PASS",
+      "tests": [],
+      "title": "Document the Local Core RPC protocol"
+    },
+    {
+      "commit": "fceb4162fdfafd4e63467a4010bcf6ec5405a704",
+      "depends_on": [
+        46
+      ],
+      "evidence": [
+        "schemas/core_rpc_request.schema.json",
+        "schemas/core_rpc_response.schema.json"
+      ],
+      "finished_at": "2026-08-07T09:00:00Z",
+      "id": 47,
+      "notes": "Both directions pinned. Found a real gap: the schema required a format marker the decoder never checked. check_versions.py now fails if the schema's version drifts from the code's.",
+      "owner": "remote",
+      "started_at": "2026-08-07T09:00:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/contract/test_core_rpc_schema_conformance.py"
+      ],
+      "title": "JSON schemas for the request/response envelope"
+    },
+    {
+      "commit": "fceb4162fdfafd4e63467a4010bcf6ec5405a704",
+      "depends_on": [
+        47
+      ],
+      "evidence": [
+        "packages/pz_agent_core/src/pz_agent_core/rpc/token.py"
+      ],
+      "finished_at": "2026-08-07T09:00:00Z",
+      "id": 48,
+      "notes": "32 CSPRNG bytes, new every run.",
+      "owner": "remote",
+      "started_at": "2026-08-07T09:00:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/unit/test_rpc_token_and_descriptor.py::TestTheToken"
+      ],
+      "title": "Random RPC auth token"
+    },
+    {
+      "commit": "fceb4162fdfafd4e63467a4010bcf6ec5405a704",
+      "depends_on": [
+        48
+      ],
+      "evidence": [
+        "packages/pz_agent_core/src/pz_agent_core/rpc/token.py"
+      ],
+      "finished_at": "2026-08-07T09:00:00Z",
+      "id": 49,
+      "notes": "Mode 0600 set at creation by descriptor rather than chmod-ed after; absent from the descriptor and from every exception.",
+      "owner": "remote",
+      "started_at": "2026-08-07T09:00:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/unit/test_rpc_token_and_descriptor.py::TestTheToken::test_the_file_is_not_readable_by_anyone_else",
+        "tests/unit/test_rpc_token_and_descriptor.py::TestTheToken::test_the_token_lives_apart_from_the_descriptor",
+        "tests/unit/test_rpc_token_and_descriptor.py::TestTheToken::test_no_error_message_contains_the_token"
+      ],
+      "title": "Safe storage of the auth token"
+    },
+    {
+      "commit": "fceb4162fdfafd4e63467a4010bcf6ec5405a704",
+      "depends_on": [
+        49
+      ],
+      "evidence": [
+        "packages/pz_agent_core/src/pz_agent_core/rpc/descriptor.py"
+      ],
+      "finished_at": "2026-08-07T09:00:00Z",
+      "id": 50,
+      "notes": "<state-dir>/runtime/core-rpc.json, written atomically, refused when stale.",
+      "owner": "remote",
+      "started_at": "2026-08-07T09:00:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/unit/test_rpc_token_and_descriptor.py::TestFindingAServer",
+        "tests/unit/test_rpc_token_and_descriptor.py::TestWriting"
+      ],
+      "title": "Runtime descriptor `core-rpc.json`"
+    },
+    {
+      "commit": null,
+      "depends_on": [
+        50
+      ],
+      "evidence": [],
+      "finished_at": null,
+      "id": 51,
+      "notes": "",
+      "owner": "remote",
+      "started_at": null,
+      "status": "NOT_STARTED",
+      "tests": [],
+      "title": "`AF_PIPE` transport for Windows"
+    },
+    {
+      "commit": null,
+      "depends_on": [
+        51
+      ],
+      "evidence": [],
+      "finished_at": null,
+      "id": 52,
+      "notes": "",
+      "owner": "remote",
+      "started_at": null,
+      "status": "NOT_STARTED",
+      "tests": [],
+      "title": "`AF_UNIX` transport for Linux tests"
+    },
+    {
+      "commit": null,
+      "depends_on": [
+        52
+      ],
+      "evidence": [],
+      "finished_at": null,
+      "id": 53,
+      "notes": "",
+      "owner": "remote",
+      "started_at": null,
+      "status": "NOT_STARTED",
+      "tests": [],
+      "title": "Forbid pickle serialisation"
+    },
+    {
+      "commit": null,
+      "depends_on": [
+        53
+      ],
+      "evidence": [],
+      "finished_at": null,
+      "id": 54,
+      "notes": "",
+      "owner": "remote",
+      "started_at": null,
+      "status": "NOT_STARTED",
+      "tests": [],
+      "title": "Maximum request size"
+    },
+    {
+      "commit": null,
+      "depends_on": [
+        54
+      ],
+      "evidence": [],
+      "finished_at": null,
+      "id": 55,
+      "notes": "",
+      "owner": "remote",
+      "started_at": null,
+      "status": "NOT_STARTED",
+      "tests": [],
+      "title": "Maximum response size"
+    },
+    {
+      "commit": null,
+      "depends_on": [
+        55
+      ],
+      "evidence": [],
+      "finished_at": null,
+      "id": 56,
+      "notes": "",
+      "owner": "remote",
+      "started_at": null,
+      "status": "NOT_STARTED",
+      "tests": [],
+      "title": "Deadline and timeout"
+    },
+    {
+      "commit": null,
+      "depends_on": [
+        56
+      ],
+      "evidence": [],
+      "finished_at": null,
+      "id": 57,
+      "notes": "",
+      "owner": "remote",
+      "started_at": null,
+      "status": "NOT_STARTED",
+      "tests": [],
+      "title": "Stale descriptor refused"
+    },
+    {
+      "commit": null,
+      "depends_on": [
+        57
+      ],
+      "evidence": [],
+      "finished_at": null,
+      "id": 58,
+      "notes": "",
+      "owner": "remote",
+      "started_at": null,
+      "status": "NOT_STARTED",
+      "tests": [],
+      "title": "Protocol mismatch refused"
+    },
+    {
+      "commit": null,
+      "depends_on": [
+        58
+      ],
+      "evidence": [],
+      "finished_at": null,
+      "id": 59,
+      "notes": "",
+      "owner": "remote",
+      "started_at": null,
+      "status": "NOT_STARTED",
+      "tests": [],
+      "title": "RPC server inside the sidecar"
+    },
+    {
+      "commit": null,
+      "depends_on": [
+        59
+      ],
+      "evidence": [],
+      "finished_at": null,
+      "id": 60,
+      "notes": "",
+      "owner": "remote",
+      "started_at": null,
+      "status": "NOT_STARTED",
+      "tests": [],
+      "title": "Commit: Local Core RPC server"
+    },
+    {
+      "commit": null,
+      "depends_on": [
+        60
+      ],
+      "evidence": [],
+      "finished_at": null,
+      "id": 61,
+      "notes": "",
+      "owner": "remote",
+      "started_at": null,
+      "status": "NOT_STARTED",
+      "tests": [],
+      "title": "RPC client"
+    },
+    {
+      "commit": null,
+      "depends_on": [
+        61
+      ],
+      "evidence": [],
+      "finished_at": null,
+      "id": 62,
+      "notes": "",
+      "owner": "remote",
+      "started_at": null,
+      "status": "NOT_STARTED",
+      "tests": [],
+      "title": "`RemoteCoreServices`"
+    },
+    {
+      "commit": null,
+      "depends_on": [
+        62
+      ],
+      "evidence": [],
+      "finished_at": null,
+      "id": 63,
+      "notes": "",
+      "owner": "remote",
+      "started_at": null,
+      "status": "NOT_STARTED",
+      "tests": [],
+      "title": "Session operations"
+    },
+    {
+      "commit": null,
+      "depends_on": [
+        63
+      ],
+      "evidence": [],
+      "finished_at": null,
+      "id": 64,
+      "notes": "",
+      "owner": "remote",
+      "started_at": null,
+      "status": "NOT_STARTED",
+      "tests": [],
+      "title": "Observation operations"
+    },
+    {
+      "commit": null,
+      "depends_on": [
+        64
+      ],
+      "evidence": [],
+      "finished_at": null,
+      "id": 65,
+      "notes": "",
+      "owner": "remote",
+      "started_at": null,
+      "status": "NOT_STARTED",
+      "tests": [],
+      "title": "Action operations"
+    },
+    {
+      "commit": null,
+      "depends_on": [
+        65
+      ],
+      "evidence": [],
+      "finished_at": null,
+      "id": 66,
+      "notes": "",
+      "owner": "remote",
+      "started_at": null,
+      "status": "NOT_STARTED",
+      "tests": [],
+      "title": "Plan operations"
+    },
+    {
+      "commit": null,
+      "depends_on": [
+        66
+      ],
+      "evidence": [],
+      "finished_at": null,
+      "id": 67,
+      "notes": "",
+      "owner": "remote",
+      "started_at": null,
+      "status": "NOT_STARTED",
+      "tests": [],
+      "title": "Memory operations"
+    },
+    {
+      "commit": null,
+      "depends_on": [
+        67
+      ],
+      "evidence": [],
+      "finished_at": null,
+      "id": 68,
+      "notes": "",
+      "owner": "remote",
+      "started_at": null,
+      "status": "NOT_STARTED",
+      "tests": [],
+      "title": "Diagnostics operations"
+    },
+    {
+      "commit": null,
+      "depends_on": [
+        68
+      ],
+      "evidence": [],
+      "finished_at": null,
+      "id": 69,
+      "notes": "",
+      "owner": "remote",
+      "started_at": null,
+      "status": "NOT_STARTED",
+      "tests": [],
+      "title": "Capability operations"
+    },
+    {
+      "commit": null,
+      "depends_on": [
+        69
+      ],
+      "evidence": [],
+      "finished_at": null,
+      "id": 70,
+      "notes": "",
+      "owner": "remote",
+      "started_at": null,
+      "status": "NOT_STARTED",
+      "tests": [],
+      "title": "Commit: `RemoteCoreServices`"
+    },
+    {
+      "commit": null,
+      "depends_on": [
+        70
+      ],
+      "evidence": [],
+      "finished_at": null,
+      "id": 71,
+      "notes": "",
+      "owner": "remote",
+      "started_at": null,
+      "status": "NOT_STARTED",
+      "tests": [],
+      "title": "`--state-dir` on `pz-agent-mcp`"
+    },
+    {
+      "commit": null,
+      "depends_on": [
+        71
+      ],
+      "evidence": [],
+      "finished_at": null,
+      "id": 72,
+      "notes": "",
+      "owner": "remote",
+      "started_at": null,
+      "status": "NOT_STARTED",
+      "tests": [],
+      "title": "Standard discovery of the RPC descriptor"
+    },
+    {
+      "commit": null,
+      "depends_on": [
+        72
+      ],
+      "evidence": [],
+      "finished_at": null,
+      "id": 73,
+      "notes": "",
+      "owner": "remote",
+      "started_at": null,
+      "status": "NOT_STARTED",
+      "tests": [],
+      "title": "Wire `RemoteCoreServices` into `pz-agent-mcp`"
+    },
+    {
+      "commit": null,
+      "depends_on": [
+        73
+      ],
+      "evidence": [],
+      "finished_at": null,
+      "id": 74,
+      "notes": "",
+      "owner": "remote",
+      "started_at": null,
+      "status": "NOT_STARTED",
+      "tests": [],
+      "title": "Launch a real MCP subprocess"
+    },
+    {
+      "commit": null,
+      "depends_on": [
+        74
+      ],
+      "evidence": [],
+      "finished_at": null,
+      "id": 75,
+      "notes": "",
+      "owner": "remote",
+      "started_at": null,
+      "status": "NOT_STARTED",
+      "tests": [],
+      "title": "MCP `initialize`"
+    },
+    {
+      "commit": null,
+      "depends_on": [
+        75
+      ],
+      "evidence": [],
+      "finished_at": null,
+      "id": 76,
+      "notes": "",
+      "owner": "remote",
+      "started_at": null,
+      "status": "NOT_STARTED",
+      "tests": [],
+      "title": "A real tool call"
+    },
+    {
+      "commit": null,
+      "depends_on": [
+        76
+      ],
+      "evidence": [],
+      "finished_at": null,
+      "id": 77,
+      "notes": "",
+      "owner": "remote",
+      "started_at": null,
+      "status": "NOT_STARTED",
+      "tests": [],
+      "title": "A real resource read"
+    },
+    {
+      "commit": null,
+      "depends_on": [
+        77
+      ],
+      "evidence": [],
+      "finished_at": null,
+      "id": 78,
+      "notes": "",
+      "owner": "remote",
+      "started_at": null,
+      "status": "NOT_STARTED",
+      "tests": [],
+      "title": "Commit: MCP E2E"
+    },
+    {
+      "commit": null,
+      "depends_on": [
+        78
+      ],
+      "evidence": [],
+      "finished_at": null,
+      "id": 79,
+      "notes": "",
+      "owner": "remote",
+      "started_at": null,
+      "status": "NOT_STARTED",
+      "tests": [],
+      "title": "Closed typed goal schema"
+    },
+    {
+      "commit": null,
+      "depends_on": [
+        79
+      ],
+      "evidence": [],
+      "finished_at": null,
+      "id": 80,
+      "notes": "",
+      "owner": "remote",
+      "started_at": null,
+      "status": "NOT_STARTED",
+      "tests": [],
+      "title": "Bounded goal queue"
+    },
+    {
+      "commit": null,
+      "depends_on": [
+        80
+      ],
+      "evidence": [],
+      "finished_at": null,
+      "id": 81,
+      "notes": "",
+      "owner": "remote",
+      "started_at": null,
+      "status": "NOT_STARTED",
+      "tests": [],
+      "title": "`goal.submit`"
+    },
+    {
+      "commit": null,
+      "depends_on": [
+        81
+      ],
+      "evidence": [],
+      "finished_at": null,
+      "id": 82,
+      "notes": "",
+      "owner": "remote",
+      "started_at": null,
+      "status": "NOT_STARTED",
+      "tests": [],
+      "title": "`goal.status`"
+    },
+    {
+      "commit": null,
+      "depends_on": [
+        82
+      ],
+      "evidence": [],
+      "finished_at": null,
+      "id": 83,
+      "notes": "",
+      "owner": "remote",
+      "started_at": null,
+      "status": "NOT_STARTED",
+      "tests": [],
+      "title": "`goal.cancel`"
+    },
+    {
+      "commit": null,
+      "depends_on": [
+        83
+      ],
+      "evidence": [],
+      "finished_at": null,
+      "id": 84,
+      "notes": "",
+      "owner": "remote",
+      "started_at": null,
+      "status": "NOT_STARTED",
+      "tests": [],
+      "title": "Commit: typed goal channel"
+    },
+    {
+      "commit": null,
+      "depends_on": [
+        84
+      ],
+      "evidence": [],
+      "finished_at": null,
+      "id": 85,
+      "notes": "",
+      "owner": "remote",
+      "started_at": null,
+      "status": "NOT_STARTED",
+      "tests": [],
+      "title": "Working voice `PlanPort` over Core RPC"
+    },
+    {
+      "commit": null,
+      "depends_on": [
+        85
+      ],
+      "evidence": [],
+      "finished_at": null,
+      "id": 86,
+      "notes": "",
+      "owner": "remote",
+      "started_at": null,
+      "status": "NOT_STARTED",
+      "tests": [],
+      "title": "Russian intents to `GoalKind`"
+    },
+    {
+      "commit": null,
+      "depends_on": [
+        86
+      ],
+      "evidence": [],
+      "finished_at": null,
+      "id": 87,
+      "notes": "",
+      "owner": "remote",
+      "started_at": null,
+      "status": "NOT_STARTED",
+      "tests": [],
+      "title": "Keep the short stop path separate"
+    },
+    {
+      "commit": null,
+      "depends_on": [
+        87
+      ],
+      "evidence": [],
+      "finished_at": null,
+      "id": 88,
+      "notes": "",
+      "owner": "remote",
+      "started_at": null,
+      "status": "NOT_STARTED",
+      "tests": [],
+      "title": "`TeamONBridgeClient`"
+    },
+    {
+      "commit": null,
+      "depends_on": [
+        88
+      ],
+      "evidence": [],
+      "finished_at": null,
+      "id": 89,
+      "notes": "",
+      "owner": "remote",
+      "started_at": null,
+      "status": "NOT_STARTED",
+      "tests": [],
+      "title": "Fake subprocess bridge E2E"
+    },
+    {
+      "commit": null,
+      "depends_on": [
+        89
+      ],
+      "evidence": [],
+      "finished_at": null,
+      "id": 90,
+      "notes": "",
+      "owner": "remote",
+      "started_at": null,
+      "status": "NOT_STARTED",
+      "tests": [],
+      "title": "Commit: voice E2E"
+    },
+    {
+      "commit": null,
+      "depends_on": [
+        90
+      ],
+      "evidence": [],
+      "finished_at": null,
+      "id": 91,
+      "notes": "",
+      "owner": "remote",
+      "started_at": null,
+      "status": "NOT_STARTED",
+      "tests": [],
+      "title": "Build `pz-agent.exe` with PyInstaller"
+    },
+    {
+      "commit": null,
+      "depends_on": [
+        91
+      ],
+      "evidence": [],
+      "finished_at": null,
+      "id": 92,
+      "notes": "",
+      "owner": "remote",
+      "started_at": null,
+      "status": "NOT_STARTED",
+      "tests": [],
+      "title": "Build `pz-agent-mcp.exe` with PyInstaller"
+    },
+    {
+      "commit": null,
+      "depends_on": [
+        92
+      ],
+      "evidence": [],
+      "finished_at": null,
+      "id": 93,
+      "notes": "",
+      "owner": "remote",
+      "started_at": null,
+      "status": "NOT_STARTED",
+      "tests": [],
+      "title": "Both executables run on Windows"
+    },
+    {
+      "commit": null,
+      "depends_on": [
+        93
+      ],
+      "evidence": [],
+      "finished_at": null,
+      "id": 94,
+      "notes": "",
+      "owner": "remote",
+      "started_at": null,
+      "status": "NOT_STARTED",
+      "tests": [],
+      "title": "Build `v1.0.0-rc1.zip`"
+    },
+    {
+      "commit": null,
+      "depends_on": [
+        94
+      ],
+      "evidence": [],
+      "finished_at": null,
+      "id": 95,
+      "notes": "",
+      "owner": "remote",
+      "started_at": null,
+      "status": "NOT_STARTED",
+      "tests": [],
+      "title": "Windows package workflow green"
+    },
+    {
+      "commit": null,
+      "depends_on": [
+        95
+      ],
+      "evidence": [],
+      "finished_at": null,
+      "id": 96,
+      "notes": "",
+      "owner": "local",
+      "started_at": null,
+      "status": "NOT_STARTED",
+      "tests": [],
+      "title": "Live scenarios S01–S18"
+    },
+    {
+      "commit": null,
+      "depends_on": [
+        96
+      ],
+      "evidence": [],
+      "finished_at": null,
+      "id": 97,
+      "notes": "",
+      "owner": "local",
+      "started_at": null,
+      "status": "NOT_STARTED",
+      "tests": [],
+      "title": "Autonomous test, 30 minutes"
+    },
+    {
+      "commit": null,
+      "depends_on": [
+        97
+      ],
+      "evidence": [],
+      "finished_at": null,
+      "id": 98,
+      "notes": "",
+      "owner": "local",
+      "started_at": null,
+      "status": "NOT_STARTED",
+      "tests": [],
+      "title": "Autonomous test, 2 hours"
+    },
+    {
+      "commit": null,
+      "depends_on": [
+        98
+      ],
+      "evidence": [],
+      "finished_at": null,
+      "id": 99,
+      "notes": "",
+      "owner": "local",
+      "started_at": null,
+      "status": "NOT_STARTED",
+      "tests": [],
+      "title": "Fix everything the live tests found"
+    },
+    {
+      "commit": null,
+      "depends_on": [
+        99
+      ],
+      "evidence": [],
+      "finished_at": null,
+      "id": 100,
+      "notes": "",
+      "owner": "local",
+      "started_at": null,
+      "status": "NOT_STARTED",
+      "tests": [],
+      "title": "Release the confirmed v1.0.0"
+    }
+  ],
+  "windows_ci": {
+    "head_sha": "a7c16ba27c27c51a75f8c298b0aa0577823b0cf2",
+    "run_id": 31163394899,
+    "status": "GREEN",
+    "url": "https://github.com/natural0101/poject-zombigpt/actions/runs/31163394899"
+  }
+}

@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/pz-agent/core_rpc_response.schema.json",
+  "title": "PZ Agent Local Core RPC Response",
+  "description": "One answer to a Core RPC request. `ok` is required and never inferred: a reader that took an absent `error` for success would turn a dropped field into a success, and a reader that took it for failure would invent one with no reason.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "protocol", "id", "ok"],
+  "properties": {
+    "format": {
+      "const": "pz-agent-core-rpc/1"
+    },
+    "protocol": {
+      "const": "1.0"
+    },
+    "id": {
+      "description": "The id of the request this answers.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "ok": {
+      "type": "boolean"
+    },
+    "result": {
+      "type": "object"
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": {
+          "description": "MALFORMED, TOO_LARGE and PROTOCOL_MISMATCH mean the message never reached a method. UNKNOWN_METHOD means the router has no such name. CORE_REFUSED carries the core's own refusal. TIMEOUT and UNAVAILABLE are the client's own, never sent by a server.",
+          "enum": [
+            "MALFORMED",
+            "TOO_LARGE",
+            "PROTOCOL_MISMATCH",
+            "UNKNOWN_METHOD",
+            "CORE_REFUSED",
+            "TIMEOUT",
+            "UNAVAILABLE"
+          ]
+        },
+        "message": {
+          "description": "Names the field and the reason, never the value. This string reaches a traceback and a bug report before any redactor sees it.",
+          "type": "string"
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "ok": { "const": true } }, "required": ["ok"] },
+      "then": { "required": ["result"] }
+    },
+    {
+      "if": { "properties": { "ok": { "const": false } }, "required": ["ok"] },
+      "then": { "required": ["error"] }
+    }
+  ]
+}

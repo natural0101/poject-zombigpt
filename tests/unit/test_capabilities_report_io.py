@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -136,14 +137,29 @@ def test_load_or_empty_treats_a_first_run_as_empty_but_not_as_capable(tmp_path: 
     assert loaded.notes
 
 
-def test_load_or_empty_reports_a_path_it_cannot_even_inspect(tmp_path: Path) -> None:
-    # "I could not look" is not "there is nothing there". Returning an empty
-    # report here would tell the caller the ledger is empty on the strength of an
-    # error it never saw.
-    blocked = tmp_path / "a-file-not-a-directory"
-    blocked.write_text("{}", encoding="utf-8")
+def test_load_or_empty_reports_a_path_it_cannot_even_inspect(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ "I could not look" is not "there is nothing there".
+
+    Returning an empty report here would tell the caller the ledger is empty on
+    the strength of an error it never saw. The error is injected rather than
+    produced by using a file as a directory: that raises ``ENOTDIR`` on POSIX
+    and something else on Windows, so the previous form asserted an errno rather
+    than the handling, and failed on the platform that ships.
+    """
+    path = tmp_path / "generated_api_report.json"
+    real_stat = Path.stat
+
+    def refusing(self: Path, *args: Any, **kwargs: Any) -> Any:
+        if self == path:
+            raise PermissionError(13, "Permission denied")
+        return real_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", refusing)
+
     with pytest.raises(ReportIOError, match="cannot stat"):
-        load_or_empty(blocked / "generated_api_report.json", expected_build="42.20")
+        load_or_empty(path, expected_build="42.20")
 
 
 def test_load_or_empty_still_fails_on_a_corrupt_existing_file(tmp_path: Path) -> None:

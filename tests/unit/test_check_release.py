@@ -124,8 +124,12 @@ def _evidence(root: Path, *, failing: str = "", tamper: str = "") -> tuple[Path,
         directory.mkdir(parents=True, exist_ok=True)
         for kind, name in (("state", "state.json"), ("result", "result.json")):
             path = directory / name
-            body = json.dumps({"scenario_id": scenario_id, "kind": kind}) + "\n"
-            path.write_text(body, encoding="utf-8")
+            # Bytes, and the digest below is taken from the same bytes. Written
+            # as text this fixture translated its own newlines on Windows, so
+            # every artefact it built was "tampered" before the gate saw it —
+            # the fixture reproduced the defect it was meant to be testing past.
+            body = (json.dumps({"scenario_id": scenario_id, "kind": kind}) + "\n").encode("utf-8")
+            path.write_bytes(body)
             artefacts.append(
                 {
                     "scenario_id": scenario_id,
@@ -133,8 +137,8 @@ def _evidence(root: Path, *, failing: str = "", tamper: str = "") -> tuple[Path,
                     "path": f"{scenario_id}/{name}",
                     "required": True,
                     "present": True,
-                    "sha256": hashlib.sha256(body.encode("utf-8")).hexdigest(),
-                    "size_bytes": len(body.encode("utf-8")),
+                    "sha256": hashlib.sha256(body).hexdigest(),
+                    "size_bytes": len(body),
                     "problem": "",
                 }
             )
@@ -149,7 +153,7 @@ def _evidence(root: Path, *, failing: str = "", tamper: str = "") -> tuple[Path,
             }
         )
     if tamper:
-        (root / tamper / "result.json").write_text('{"edited": true}\n', encoding="utf-8")
+        (root / tamper / "result.json").write_bytes(b'{"edited": true}\n')
 
     manifest = root.parent / "release" / "evidence-manifest.json"
     manifest.parent.mkdir(parents=True, exist_ok=True)

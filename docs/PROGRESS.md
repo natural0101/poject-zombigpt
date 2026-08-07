@@ -9,7 +9,7 @@ green · `wip` in progress · `todo` not started · `live` blocked on a step tha
 physically requires a running game.
 
 Last updated: 28 of 30 tasks closed; T029 and T030 are blocked on a live game,
-not deferred. 3674 Python tests and 2875 Lua assertions across 26 suites,
+not deferred. 3677 Python tests and 2875 Lua assertions across 26 suites,
 mypy strict over 271 files, `scripts/check.sh` green — measured under Python
 3.11.15, which is the only interpreter with the suite installed here. CI
 declares a 3.11/3.12 matrix; that is configuration, not a result observed in
@@ -111,6 +111,33 @@ the code it covers cannot fail for the reason these failed: both sides were
 correct in isolation and the assumption connecting them was never stated
 anywhere a test could read it. **The live run is the next seam of the same
 kind**, and it is the only one that cannot be closed from here.
+
+## Where the current work is tracked
+
+The T001–T030 graph below is closed. Work since then is the release candidate,
+and it is tracked somewhere else, under a stricter rule: **one step is one
+percentage point, and a step is `PASS` only with a commit and an evidence path
+that exists.**
+
+- [`docs/control/PLAN.md`](https://github.com/natural0101/poject-zombigpt/blob/main/docs/control/PLAN.md) — the hundred steps in twelve stages,
+  what a `PASS` costs, and the nine substitutions that may never be counted (a
+  Linux result as evidence about Windows, a mock as evidence about the game, a
+  PyInstaller spec with no built executable, …).
+- [`docs/control/STATUS.json`](https://github.com/natural0101/poject-zombigpt/blob/main/docs/control/STATUS.json) — the only place progress is
+  recorded. `overall_percent` is **counted** by `scripts/progress_report.py`,
+  never written by hand.
+- `scripts/check_progress.py` — the gate, not a report. It refuses a percentage
+  that disagrees with the `PASS` count, a `PASS` with no evidence or no commit,
+  a gap in the sequence, a step passing while a dependency has not, a live-game
+  step passing at all from this environment, a Windows step passing while the
+  Windows workflow is red, and step 100 passing with no GitHub Release.
+- [`docs/control/BLOCKERS.md`](https://github.com/natural0101/poject-zombigpt/blob/main/docs/control/BLOCKERS.md) — one entry per thing that
+  stopped a step, closed only by a fix plus a regression test.
+
+Three totals are counted separately because they are separately blocked:
+remote implementation (steps 1–95, this environment), live game validation
+(96–98, needs Windows + Steam + Project Zomboid), final release (99–100). "Done"
+is not a word that applies until step 100 is `PASS`.
 
 ## Status
 

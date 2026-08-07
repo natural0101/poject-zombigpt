@@ -25,6 +25,7 @@ from pz_agent_core.version import (  # noqa: E402  (path set up above)
     MOD_VERSION,
     PRODUCT_VERSION,
     PROTOCOL_VERSION,
+    RPC_PROTOCOL_VERSION,
     SCHEMA_VERSION,
 )
 
@@ -85,6 +86,16 @@ def check_schemas(problems: list[str]) -> None:
             _fail(
                 problems,
                 f"{path.name} protocol_version const={protocol_const!r} != {PROTOCOL_VERSION!r}",
+            )
+        # The Core RPC envelope spells its version `protocol` rather than
+        # `protocol_version`, because it is a different boundary with its own
+        # cadence: the mod↔sidecar protocol is constrained by what Kahlua can
+        # encode, this one is not. Schemas without the field return None here.
+        rpc_const = _const_of(data, "protocol")
+        if rpc_const is not None and rpc_const != RPC_PROTOCOL_VERSION:
+            _fail(
+                problems,
+                f"{path.name} protocol const={rpc_const!r} != {RPC_PROTOCOL_VERSION!r}",
             )
 
 

@@ -1,0 +1,74 @@
+Step 30 — the Windows test suite, run by run
+============================================
+
+Each line is the pytest summary of the `windows package` workflow's test stage
+on windows-latest / CPython 3.12.10. A Linux result says nothing about any of
+this, which is why the numbers come from the workflow and nowhere else.
+
+  873037c0  run 31156087690   24 failed, 3633 passed, 22 skipped   (branch point)
+  df2db383  run 31160929042   13 failed, 3679 passed, 22 skipped
+  ce707119  run 31162211524    1 failed, 3700 passed, 22 skipped
+  2c4fd3c8  run 31162649795    0 failed, 3714 passed, 22 skipped
+
+The last failure, at ce707119, was
+`test_verify_flags_a_member_that_reached_the_archive_unredacted`:
+
+  AssertionError: assert 'user_dir' in ('home_dir', 'windows_user_profile',
+                                        'absolute_path', 'literal:account_name')
+
+Not a test artefact. The redactor enumerated whole spellings of a literal path
+— all-`/`, all-`\`, all-doubled, all-percent-encoded — so a path that *mixed*
+them (`C:\Users\Иван/Zomboid`, which is what `f"{path}/name"` produces) matched
+none of them and fell through to the shorter `home_dir` literal. The path was
+still struck out, so this was not a leak; it came out under `<USER_HOME>`
+instead of `<ZOMBOID>` and was reported under the wrong label, which means the
+same file produced a different line on Windows than on Linux. That is the one
+guarantee a placeholder exists to provide.
+
+Fixed at 2c4fd3c8 by matching each separator position independently rather than
+enumerating mixtures, which are exponential in the number of separators.
+Regression tests: tests/contract/test_windows_path_shapes.py, six of which fail
+against the previous redactor.
+
+The workflow itself is *not* green at 2c4fd3c8. It fails one stage later, in
+the PyInstaller build of pz-agent-mcp.exe:
+
+  RuntimeError: Child process call to _collect_submodules() failed with:
+    File ".../mcp/cli/cli.py", line 15, in <module>
+      import typer
+  ModuleNotFoundError: No module named 'typer'
+  ...
+  SystemExit: 1
+
+`pz-agent.exe` built and the tests passed; this is stage 10's territory
+(step 92) surfacing early because the workflow builds both. Addressed at
+15296e50 with packaging/windows/specutil.py. Step 30 stays IN_PROGRESS until a
+run is green end to end — the test suite being green is a necessary part of
+that and not the whole of it.
+
+Closed
+------
+
+  a7c16ba2  run 31163394899   0 failed, 3714 passed, 22 skipped
+
+and, for the first time on this branch, every later stage of the workflow too:
+
+  Tests                                            success
+  Build pz-agent.exe                               success
+  Build pz-agent-mcp.exe                           success
+  Both executables answer                          success
+  Assemble the archive                             success
+  Release gate                                     success
+  Upload the release candidate                     success
+
+No step skipped. The `pz-agent-mcp.exe` build was fixed at 15296e50 by
+packaging/windows/specutil.py, which reads the SDK's package directory instead
+of importing each module to discover it — `mcp.cli` calls `sys.exit` at import
+time without its optional `typer` extra, and a `SystemExit` is not an
+`Exception`, so PyInstaller's `on_error` could not skip it.
+
+Nothing was loosened to get here: no assertion removed, no Windows failure
+turned into a skip, and the workflow runs every check it ran at the branch
+point. Steps 91-95 are not claimed on this run — they come after the RPC, MCP
+and voice stages in the plan, and will need their own green run once those
+land.

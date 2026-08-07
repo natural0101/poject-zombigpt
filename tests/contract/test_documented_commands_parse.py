@@ -30,6 +30,8 @@ from typing import Final
 import pytest
 
 from pz_agent_cli.app import build_parser
+from pz_agent_core.platform.paths import portable_relative_path
+from pz_agent_mcp.__main__ import build_parser as mcp_parser
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[2]
 
@@ -128,7 +130,9 @@ def _invocations() -> list[tuple[str, str, list[str]]]:
                     # command; it does not tell anyone to type it bare. A block
                     # is different — what is in one is what a reader copies.
                     continue
-                built.append((f"{path.relative_to(REPO_ROOT)}:{number}", raw.strip(), argv))
+                built.append(
+                    (f"{portable_relative_path(path, REPO_ROOT)}:{number}", raw.strip(), argv)
+                )
     assert built, "no invocations were extracted; the pattern has stopped matching"
     return built
 
@@ -160,3 +164,60 @@ def test_the_parser_accepts_what_the_document_tells_a_user_to_type(
         parser.parse_args(argv)
     except SystemExit:
         pytest.fail(f"{where} says to run `pz-agent {raw}`, and the parser rejects it")
+
+
+# ---------------------------------------------------------------------------
+# the second executable, which has its own parser
+# ---------------------------------------------------------------------------
+
+#: ``pz-agent-mcp --describe`` and friends. A separate program with a separate
+#: and much smaller parser — ``--version`` and ``--describe`` and nothing else —
+#: so a document naming a flag for it is the same defect with a different
+#: argument table. ``.exe`` and ``.spec`` are packaging file names rather than
+#: invocations and are excluded by requiring whitespace after the program name.
+_MCP_INVOCATION: Final = re.compile(r"^\s*pz-agent-mcp(?!\S)\s*([^\n`\"'|;]*)")
+
+
+def _mcp_invocations() -> list[tuple[str, str, list[str]]]:
+    built: list[tuple[str, str, list[str]]] = []
+    for path in _documents():
+        fenced = False
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+            if _FENCE.match(line):
+                fenced = not fenced
+                continue
+            sources = [line] if fenced else _INLINE_CODE.findall(line)
+            for source in sources:
+                for raw in _MCP_INVOCATION.findall(source):
+                    argv = _clean(raw)
+                    if not fenced and not argv:
+                        # A bare mention of the program by name is not an
+                        # instruction; in a block it is one, and is checked.
+                        continue
+                    built.append(
+                        (f"{portable_relative_path(path, REPO_ROOT)}:{number}", raw.strip(), argv)
+                    )
+    return built
+
+
+_MCP_CASES: Final = _mcp_invocations()
+
+
+def test_the_server_invocations_are_being_read_at_all() -> None:
+    """``configs/mcp/README.md`` is a first-contact document and prints several."""
+    assert _MCP_CASES, "no pz-agent-mcp invocations found; the pattern has stopped matching"
+    assert any("configs/mcp/README.md" in where for where, _, _ in _MCP_CASES)
+
+
+@pytest.mark.parametrize(
+    ("where", "raw", "argv"),
+    _MCP_CASES,
+    ids=[f"{where} {raw[:24] or '<bare>'}" for where, raw, _ in _MCP_CASES],
+)
+def test_the_server_parser_accepts_what_the_document_names(
+    where: str, raw: str, argv: list[str]
+) -> None:
+    try:
+        mcp_parser().parse_args(argv)
+    except SystemExit:
+        pytest.fail(f"{where} says to run `pz-agent-mcp {raw}`, and its parser rejects it")

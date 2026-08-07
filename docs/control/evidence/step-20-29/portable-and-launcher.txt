@@ -1,0 +1,4 @@
+portable_relative_path on a Windows pair:
+  pz-agent/config.toml
+launcher: chcp before the Cyrillic path: True
+launcher: every expansion quoted: True

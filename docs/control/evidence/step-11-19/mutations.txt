@@ -1,0 +1,5 @@
+mutation checks run against the fix, on Linux:
+  1. write in text mode with newline='\r\n'  -> 4 tests fail
+  2. remove the read-back guard (hash the buffer) -> 1 test fails
+     (test_a_write_that_changed_the_bytes_is_caught_rather_than_hashed)
+  both restored from a file copy; suite green afterwards

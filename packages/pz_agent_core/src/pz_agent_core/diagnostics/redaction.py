@@ -29,9 +29,9 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Any, Final
 from urllib.parse import quote
 
@@ -121,7 +121,10 @@ class RedactionRule:
 
     label: str
     pattern: re.Pattern[str]
-    replacement: str
+    #: A literal replacement, or a function of the match. The function form
+    #: exists for the path rules, which have to rewrite what *follows* the
+    #: directory they struck out so the separator is the same on every machine.
+    replacement: str | Callable[[re.Match[str]], str]
 
     def apply(self, text: str) -> str:
         return self.pattern.sub(self.replacement, text)
@@ -143,15 +146,77 @@ def _normalisations(literal: str) -> set[str]:
     }
 
 
-def _literal_variants(literal: str) -> set[str]:
-    """Every spelling of *literal* that could appear in a record."""
-    variants: set[str] = set()
+def _segment_spellings(segment: str) -> list[str]:
+    """The spellings one path segment can arrive in, longest first.
+
+    Percent-encoding is applied per segment rather than to the whole path, so
+    that a partly-encoded path — the common shape, where a native prefix has
+    been joined to a URL-derived suffix — matches as readily as a wholly
+    encoded one.
+    """
+    spellings = {segment, quote(segment, safe=":"), quote(segment)}
+    return sorted((s for s in spellings if s), key=len, reverse=True)
+
+
+#: A separator, in any of the four spellings a record can carry one in: ``/``
+#: from a POSIX path, ``\`` from a native Windows one, ``\\`` from a Windows
+#: path that has been through :func:`json.dumps`, and ``%5C``/``%2F`` from one
+#: that has been through :func:`urllib.parse.quote` — a URL, a crash-reporter
+#: field, a log line copied out of a browser. The percent forms only matter on
+#: Windows, where the separator is a character ``quote`` escapes; on POSIX the
+#: ``/`` survives quoting untouched, which is why their absence went unnoticed
+#: until the Windows suite ran.
+_SEPARATOR: Final = r"\\\\|%5[Cc]|%2[Ff]|[\\/]"
+
+#: What may follow a redacted directory and still be part of the same path: one
+#: or more separator-led segments.
+_PATH_TAIL: Final = rf"(?P<tail>(?:(?:{_SEPARATOR})[^\s\"'<>|*?]+)*)"
+
+_ENCODED_SEPARATOR: Final = re.compile(r"%(?:5[Cc]|2[Ff])")
+
+
+def _posix_tail(tail: str) -> str:
+    """The remainder of a redacted path, in the one separator a reader expects.
+
+    A placeholder exists so two machines produce the same line for the same
+    file. Emitting ``<ZOMBOID>\\logs`` on Windows and ``<ZOMBOID>/logs``
+    elsewhere defeats that for no gain: the separator after the placeholder
+    carries no information about the machine, and leaving it native means every
+    document, test and comparison has to know which platform wrote it. The
+    percent-encoded forms normalise the same way and for the same reason.
+    """
+    return _ENCODED_SEPARATOR.sub("/", tail.replace("\\\\", "/").replace("\\", "/"))
+
+
+def _literal_body(literal: str) -> str:
+    """A pattern matching *literal* however its separators happen to be spelled.
+
+    Built segment by segment rather than by enumerating whole spellings of the
+    path. Enumerating cannot cover a *mixed* path — ``C:\\Users\\Иван/Zomboid``,
+    which is what `str(path) + "/" + name` produces and what a log line
+    assembled from a native prefix and a POSIX suffix looks like — because the
+    mixtures are exponential in the number of separators. Matching each
+    separator position independently covers all of them.
+
+    The failure this closes is not a leak: ``home_dir`` matched where
+    ``user_dir`` should have, so the path was still struck out, but under the
+    wrong placeholder and reported under the wrong label. The placeholder exists
+    so two machines produce the same line for the same file, and a Windows box
+    writing ``<USER_HOME>/Zomboid`` where Linux writes ``<ZOMBOID>`` is that
+    guarantee failing quietly.
+    """
+    alternatives: list[str] = []
     for base in _normalisations(literal):
-        for separated in (base, base.replace("\\", "/"), base.replace("/", "\\")):
-            variants.add(separated)
-            variants.add(separated.replace("\\", "\\\\"))
-            variants.add(quote(separated, safe=":/"))
-    return {variant for variant in variants if variant}
+        rendered: list[str] = []
+        for segment in re.split(r"[\\/]", base):
+            if not segment:
+                # A leading separator: the empty head of an absolute POSIX path.
+                rendered.append("")
+                continue
+            spellings = "|".join(re.escape(s) for s in _segment_spellings(segment))
+            rendered.append(f"(?:{spellings})")
+        alternatives.append(f"(?:{_SEPARATOR})".join(rendered))
+    return "|".join(sorted(set(alternatives), key=len, reverse=True))
 
 
 def _literal_rule(
@@ -161,14 +226,20 @@ def _literal_rule(
 
     ``word=True`` guards the match with word boundaries, which is what keeps a
     short account name from being struck out of the middle of an unrelated word.
+    It also marks a rule as *not* a path: an account name has no tail to
+    normalise, and consuming one would eat the rest of the line.
     """
-    variants = sorted(_literal_variants(literal), key=len, reverse=True)
-    body = "|".join(re.escape(variant) for variant in variants)
-    prefix, suffix = (r"(?<!\w)", r"(?!\w)") if word else ("", "")
+    body = _literal_body(literal)
+    if word:
+        return RedactionRule(
+            label=label,
+            pattern=re.compile(rf"(?<!\w)(?:{body})(?!\w)", re.IGNORECASE),
+            replacement=placeholder,
+        )
     return RedactionRule(
         label=label,
-        pattern=re.compile(f"{prefix}(?:{body}){suffix}", re.IGNORECASE),
-        replacement=placeholder,
+        pattern=re.compile(f"(?:{body}){_PATH_TAIL}", re.IGNORECASE),
+        replacement=lambda match: placeholder + _posix_tail(match.group("tail")),
     )
 
 
@@ -372,9 +443,13 @@ def _label_for(placeholder: str, index: int) -> str:
 
 def build_redactor(
     *,
-    user_dir: Path | None = None,
-    home_dir: Path | None = None,
-    install_dir: Path | None = None,
+    # ``PurePath`` rather than ``Path``: nothing here touches a filesystem — a
+    # redactor is built from the *spelling* of a directory — and accepting a
+    # pure path is what lets a test on Linux build the Windows shapes that only
+    # ever failed on Windows.
+    user_dir: PurePath | None = None,
+    home_dir: PurePath | None = None,
+    install_dir: PurePath | None = None,
     usernames: Iterable[str] = (),
     extra_literals: Mapping[str, str] | None = None,
 ) -> Redactor:
