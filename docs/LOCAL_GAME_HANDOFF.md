@@ -434,7 +434,20 @@ Use a dedicated test world. Do not point any of this at your main save.
 pz-agent logs --bundle
 ```
 
-That builds a redacted archive. Send it together with:
+That builds a redacted archive containing the sidecar's own logs
+(`logs/pz-agent.log` and `logs/pz-agent.jsonl`) and its trace
+(`traces/session.jsonl`). Both are written by a session that ran — before this
+branch neither existed, which is why the scenarios' log lists and
+`live-test collect` had never had anything to copy. If a bundle from a real run
+still has no `logs/`, that is a finding worth reporting on its own.
+
+`pz-agent replay <state>\traces\session.jsonl` steps through what the sidecar
+saw and did: each observation as a snapshot or a diff, each action beside the
+result that closed it. The trace is bounded and rotates, so a long scenario
+keeps its recent past rather than the whole run — copy it out at the end of a
+scenario rather than at the end of the day.
+
+Send the archive together with:
 
 - the whole of `%USERPROFILE%\Zomboid\console.txt` — not an excerpt; the
   load-time errors are at the top and an excerpt of the tail loses them;

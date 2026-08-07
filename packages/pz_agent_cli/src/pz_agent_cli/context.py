@@ -52,6 +52,11 @@ BUNDLE_DIR_NAME: Final = "bundles"
 BACKUP_DIR_NAME: Final = "backups"
 COMPAT_DIR_NAME: Final = "compat"
 
+#: The one trace a workspace keeps, inside :data:`TRACE_DIR_NAME`. Named here
+#: rather than in ``app`` because ``pz-agent replay`` takes a path from the
+#: operator, and a path they cannot predict is one they cannot type.
+TRACE_NAME: Final = "session.jsonl"
+
 CAPABILITY_REPORT_NAME: Final = "generated_api_report.json"
 
 

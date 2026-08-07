@@ -223,10 +223,18 @@ directory yourself if you want it gone.
 ```powershell
 .venv\Scripts\pz-agent logs                      # recent, human-readable
 .venv\Scripts\pz-agent logs --bundle --verify    # redacted archive, printed first
-.venv\Scripts\pz-agent replay <trace>            # step through what it did
+.venv\Scripts\pz-agent replay %USERPROFILE%\Zomboid\pz-agent\traces\session.jsonl
 ```
 
 `--verify` prints exactly what the archive contains after redaction. Run it
 before attaching anything to a public issue.
+
+`replay` steps through what the sidecar saw and did: each observation as a
+snapshot or a diff against the one before, and each action next to the result
+that closed it. The trace is written while a session runs and is bounded — a
+long run rotates it, keeping `session.jsonl` and two older generations, so what
+survives is the recent past rather than the whole session. It exists only after
+a run that observed a world, and `pz-agent start --foreground` prints the exact
+command when there is one to replay.
 
 See [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md).

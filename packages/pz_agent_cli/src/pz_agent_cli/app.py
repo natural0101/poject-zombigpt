@@ -31,11 +31,12 @@ import sys
 from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
 
 from pz_agent_core.actions.adapter import AdapterRegistry
 from pz_agent_core.actions.adapters import register_game_adapters
 from pz_agent_core.actions.builtin import register_builtins
+from pz_agent_core.diagnostics import DiagnosticLog, LogLevel, TraceWriter
 from pz_agent_core.ipc.layout import IpcLayout
 from pz_agent_core.protocol import SessionMode
 from pz_agent_core.version import PRODUCT_VERSION
@@ -49,7 +50,15 @@ from .autonomy import (
     publish_planner_record,
 )
 from .config import AgentConfig, ConfigValidation, default_config, load_config
-from .context import EXIT_FAILURE, EXIT_OK, EXIT_USAGE, CliContext, Workspace, resolve_workspace
+from .context import (
+    EXIT_FAILURE,
+    EXIT_OK,
+    EXIT_USAGE,
+    TRACE_NAME,
+    CliContext,
+    Workspace,
+    resolve_workspace,
+)
 from .doctor import check_capabilities, run_checks
 from .livetest import add_live_test_parser, run_live_test
 from .memory import SidecarMemory, add_remember_parser, build_sidecar_memory, run_remember
@@ -66,6 +75,8 @@ from .runtime import (
     DEFAULT_LIMITS,
     CapabilityLedger,
     LoopLimits,
+    RunSummary,
+    ShutdownOutcome,
     SidecarLoop,
 )
 from .saves import run_backup_save, run_restore_save
@@ -480,7 +491,13 @@ def build_capabilities(workspace: Workspace) -> CapabilityLedger:
     )
 
 
-def build_loop(ctx: CliContext, workspace: Workspace, *, limits: LoopLimits) -> SidecarLoop:
+def build_loop(
+    ctx: CliContext,
+    workspace: Workspace,
+    *,
+    limits: LoopLimits,
+    trace: TraceWriter | None = None,
+) -> SidecarLoop:
     """Assemble the loop from the parts that already exist.
 
     The registry is built here rather than shared, because registration is
@@ -525,6 +542,7 @@ def build_loop(ctx: CliContext, workspace: Workspace, *, limits: LoopLimits) -> 
         pid_file=build_supervisor(ctx, workspace).pid_file,
         capabilities=capabilities,
         planner=planner,
+        trace=trace,
     )
     publish_planner_record(
         workspace.state_dir / PLANNER_FILE_NAME,
@@ -689,17 +707,33 @@ def _start_foreground(
     printer: Printer,
 ) -> int:
     limits = DEFAULT_LIMITS if ticks is None else LoopLimits(tick_budget=ticks)
-    loop = build_loop(ctx, workspace, limits=limits)
+    loop = build_loop(ctx, workspace, limits=limits, trace=_sidecar_trace(ctx, workspace))
+    log = _sidecar_log(ctx, workspace)
     attach = loop.attach()
     if not attach.attached:
+        _log_safely(log, LogLevel.ERROR, "attach.refused", detail=attach.detail)
         printer.error(workspace.redactor.text(attach.detail))
         return EXIT_FAILURE
+    _log_safely(
+        log,
+        LogLevel.INFO,
+        "attach.ok",
+        detail=attach.detail,
+        resumed=attach.resumed,
+        session_id=None if attach.session is None else attach.session.session_id,
+    )
     supervisor = build_supervisor(ctx, workspace)
     supervisor.pid_file.claim(os.getpid())
     try:
         summary = loop.run()
     finally:
         shutdown = loop.shutdown(reason="the foreground loop ended")
+        _log_run(log, loop, summary=locals().get("summary"), shutdown=shutdown)
+    # Named only when it exists: the writer creates the directory at startup and
+    # the file on the first observation, so a run with no game behind it leaves
+    # nothing to replay, and pointing a user at an absent path is worse than
+    # saying nothing.
+    trace = loop.trace.path if loop.trace is not None and loop.trace.path.is_file() else None
     if as_json:
         printer.json(
             {
@@ -709,6 +743,7 @@ def _start_foreground(
                 "detail": summary.detail,
                 "lock_released": shutdown.lock_released,
                 "mode": loop.mode.value,
+                "trace": workspace.redact(trace),
             }
         )
         return EXIT_OK
@@ -716,7 +751,116 @@ def _start_foreground(
     printer.field("ticks", str(summary.ticks))
     printer.field("stopped", summary.detail)
     printer.field("lock", "released" if shutdown.lock_released else "was not held")
+    if trace is not None:
+        printer.field("trace", f"pz-agent replay {workspace.redact(trace)}")
     return EXIT_OK
+
+
+def _sidecar_log(ctx: CliContext, workspace: Workspace) -> DiagnosticLog | None:
+    """The sidecar's own log, or None when the directory will not take one.
+
+    ``DiagnosticLog`` was written, tested, rotated and redacted — and
+    constructed nowhere outside the test suite. Nothing wrote ``pz-agent.log``
+    or ``pz-agent.jsonl``, while nineteen of the twenty live scenarios name the
+    first among the logs to collect, ``docs/LOCAL_DEBUG_MAP.md`` sends an
+    operator to it, ``pz-agent logs`` reads it and the support bundle packs the
+    directory it lives in. Every one of those was reading a file that could not
+    exist.
+
+    Returning None rather than raising: a sidecar that will not start because
+    its log directory is read-only has traded the whole product for its
+    diagnostics.
+    """
+    try:
+        workspace.logs_dir.mkdir(parents=True, exist_ok=True)
+        return DiagnosticLog(workspace.logs_dir, redactor=workspace.redactor, clock=ctx.clock_ms)
+    except OSError:
+        return None
+
+
+def _sidecar_trace(ctx: CliContext, workspace: Workspace) -> TraceWriter | None:
+    """The file ``pz-agent replay`` reads, or None when it cannot be opened.
+
+    ``TraceWriter`` had the same defect ``DiagnosticLog`` did and one more
+    document resting on it: ``docs/QUICKSTART.md`` tells a user to run
+    ``pz-agent replay <trace>`` when something goes wrong, the support bundle
+    packs ``traces/*.jsonl``, and nothing in the product had ever written a
+    trace — so the remedy named a file that could not exist.
+
+    One rotating file per workspace rather than one per run: an operator running
+    ``replay`` needs a path they can predict, and the writer's own bound is what
+    keeps a long session from filling a disk.
+    """
+    try:
+        workspace.trace_dir.mkdir(parents=True, exist_ok=True)
+        return TraceWriter(
+            workspace.trace_dir / TRACE_NAME, redactor=workspace.redactor, clock=ctx.clock_ms
+        )
+    except OSError:
+        return None
+
+
+def _log_safely(log: DiagnosticLog | None, level: LogLevel, event: str, **fields: Any) -> None:
+    """Write one record, and never let logging be why the sidecar stopped.
+
+    A full disk, a file locked by a virus scanner mid-run, a directory removed
+    underneath a long session: all of them are reasons to lose a log line and
+    none is a reason to end a session that is driving a character.
+    """
+    if log is None:
+        return
+    try:
+        log.log(level, event, **fields)
+    except OSError:
+        return
+
+
+def _log_run(
+    log: DiagnosticLog | None,
+    loop: SidecarLoop,
+    *,
+    summary: object,
+    shutdown: ShutdownOutcome,
+) -> None:
+    """Everything the run retained, written once at the end.
+
+    At the end rather than per tick, deliberately. The loop keeps its
+    diagnostics and its safety events in bounded rings already, so writing them
+    here costs one pass over two small deques and puts nothing on the path that
+    drives the character. Per-action tracing is the obvious next step and is
+    *not* done here: it belongs in the tick, and adding writes to the tick is
+    not a change to make immediately before a two-and-a-half-hour live run
+    nobody can rehearse.
+    """
+    if log is None:
+        return
+    if isinstance(summary, RunSummary):
+        _log_safely(
+            log,
+            LogLevel.INFO,
+            "run.finished",
+            ticks=summary.ticks,
+            cause=summary.cause.value,
+            detail=summary.detail,
+        )
+    for event in loop.recent_events:
+        _log_safely(
+            log,
+            LogLevel.WARNING,
+            "safety.event",
+            reason_code=event.reason_code.value,
+            priority=event.priority.name,
+            message=event.message,
+            forces_disarm=event.forces_disarm,
+        )
+    _log_safely(
+        log,
+        LogLevel.INFO,
+        "shutdown",
+        lock_released=shutdown.lock_released,
+        detail=shutdown.detail,
+        lost=len(shutdown.lost),
+    )
 
 
 def _mcp_snippet(workspace: Workspace, *, redacted: bool) -> tuple[str, ...]:
