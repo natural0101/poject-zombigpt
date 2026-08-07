@@ -175,6 +175,11 @@ def _literal_rule(
 #: Field names whose *value* is a credential whatever it looks like. Used by
 #: :meth:`Redactor.value` on mapping keys, where the text rules cannot help: the
 #: key and the value are separate strings and never form one ``token=...`` span.
+#: Any placeholder this module writes, as a pattern. Every one is an uppercase
+#: word in angle brackets, and a rule that could match one would be a rule that
+#: matches its own output.
+PLACEHOLDER_SHAPE: Final = r"<[A-Z_]+>"
+
 SECRET_KEY_RE: Final = re.compile(
     r"(?i)(api[_-]?key|secret|token|password|passwd|steam_?id|authorization|credential)"
 )
@@ -216,7 +221,16 @@ SECRET_RULES: Final[tuple[RedactionRule, ...]] = (
         label="credential_assignment",
         pattern=re.compile(
             r"(?i)\b(api[_-]?key|secret|token|password|passwd|steam_?id|authorization)\b"
-            r"(\"?\s*[:=]\s*\"?)[^\s\"',}\]]+"
+            r"(\"?\s*[:=]\s*\"?)"
+            # Not a placeholder. Without this the rule matches its own output:
+            # `api_key=<REDACTED>` still looks like a credential assignment, so
+            # `findings` reported one on text that had already been cleaned.
+            # `text` was unaffected — replacing a placeholder with the same
+            # placeholder is a no-op — but `findings` is what
+            # `verify_bundle` asks, and a verifier that flags its own success
+            # teaches an operator to ignore the next flag, which will be real.
+            rf"(?!{PLACEHOLDER_SHAPE})"
+            r"[^\s\"',}\]]+"
         ),
         replacement=rf"\1\2{SECRET_PLACEHOLDER}",
     ),

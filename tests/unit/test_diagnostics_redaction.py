@@ -293,3 +293,102 @@ def test_a_findings_label_never_quotes_the_literal_it_was_built_from() -> None:
     # The rule still fires, and still replaces the literal.
     assert redactor.findings(f"hi {CYRILLIC_USER}") != ()
     assert redactor.text(f"hi {CYRILLIC_USER}") == f"hi {USERNAME_PLACEHOLDER}"
+
+
+# ---------------------------------------------------------------------------
+# a rule must not match its own output
+# ---------------------------------------------------------------------------
+
+
+class TestRedactionIsIdempotentToTheVerifier:
+    """``--verify`` exists to say whether a bundle is safe to attach publicly.
+
+    ``credential_assignment`` matched ``api_key=<REDACTED>``: the value group
+    ``[^\\s"',}\\]]+`` accepts the placeholder the rule itself writes. ``text``
+    was unaffected — replacing a placeholder with the same placeholder is a
+    no-op — but ``findings`` is what ``verify_bundle`` asks, so
+    ``pz-agent logs --bundle --verify`` printed "REVIEW BEFORE SHARING" and
+    exited 1 over a line whose secret had been correctly removed.
+
+    A verifier that flags its own success teaches an operator to ignore the
+    next flag, and the next flag is the one that matters. That is the defect:
+    not a leak, but the training of a habit that would let one through.
+    """
+
+    def _redactor(self) -> Redactor:
+        return build_redactor(
+            user_dir=Path("/home/someone/Zomboid"),
+            home_dir=Path("/home/someone"),
+            usernames=("someone",),
+        )
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "api_key=sk-live-9f8e7d6c5b4a3210",
+            "password=hunter2",
+            "token: abcdef0123456789",
+            "authorization=Bearer abcdefghijklmnop",
+        ],
+    )
+    def test_a_real_credential_is_struck_out_and_reported(self, line: str) -> None:
+        """The half that must not be lost while fixing the other one."""
+        redactor = self._redactor()
+
+        assert SECRET_PLACEHOLDER in redactor.text(line)
+        assert redactor.findings(line), "a live credential must still be reported"
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "api_key=<REDACTED>",
+            "password: <REDACTED>",
+            "token=<REDACTED>",
+            "steam_id=<STEAM_ID>",
+        ],
+    )
+    def test_an_already_redacted_value_is_not_reported_again(self, line: str) -> None:
+        redactor = self._redactor()
+
+        assert redactor.findings(line) == (), f"{line!r} is clean and was flagged"
+
+    def test_running_the_redactor_twice_changes_nothing_and_flags_nothing(self) -> None:
+        """The property the verifier actually depends on, stated directly.
+
+        A bundle's members are redacted on the way in and re-scanned on the way
+        out. If a second pass disagrees with the first, the scan is measuring
+        the redactor rather than the archive.
+        """
+        redactor = self._redactor()
+        original = "api_key=sk-live-9f8e7d6c5b4a3210 for someone at /home/someone/Zomboid"
+
+        once = redactor.text(original)
+        twice = redactor.text(once)
+
+        assert once == twice, "redaction is not stable under a second pass"
+        assert redactor.findings(once) == (), "the cleaned text still matches a rule"
+
+    def test_no_rule_can_match_a_placeholder_this_module_writes(self) -> None:
+        """Checked over every rule and every placeholder, not the one that bit.
+
+        ``credential_assignment`` was the one found by running the command. A
+        sibling with the same shape would be the same defect wearing a
+        different label, and enumerating is cheaper than waiting for it.
+        """
+        redactor = self._redactor()
+        placeholders = (
+            SECRET_PLACEHOLDER,
+            PATH_PLACEHOLDER,
+            USER_HOME_PLACEHOLDER,
+            USERNAME_PLACEHOLDER,
+            USER_DIR_PLACEHOLDER,
+            INSTALL_PLACEHOLDER,
+            STEAM_ID_PLACEHOLDER,
+        )
+        offenders = {
+            placeholder: redactor.findings(placeholder)
+            for placeholder in placeholders
+            if redactor.findings(placeholder)
+        }
+
+        assert offenders == {}, "these placeholders are matched by a rule that wrote them"

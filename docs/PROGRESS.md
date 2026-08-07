@@ -24,7 +24,7 @@ with them. See [the playable-agent section](#the-playable-agent-branch) below,
 and [`LOCAL_GAME_HANDOFF.md`](LOCAL_GAME_HANDOFF.md) for what still needs a
 machine with the game on it.
 
-**Sixteen defects that branch found are worth reading before any further work**,
+**Seventeen defects that branch found are worth reading before any further work**,
 because they are one family and the family is not closed. Every subsystem was
 written, tested and green; what nothing tested was whether the subsystems were
 *connected*.
@@ -40,6 +40,7 @@ written, tested and green; what nothing tested was whether the subsystems were
 | 7 | The memory store was complete and connected to nothing | `reserves_item` always answered False, so §7.9 rested on tag rules alone, and no home point could exist |
 | 8 | `pz_agent_voice` was imported by nothing and had no entry point | Russian voice control was complete, tested, and impossible to start |
 | 9 | The mod could drink from a sink; the sidecar had no argument for it, and the path it did have ran under the wrong capability | Two faults in one place: a working mod feature unreachable from Python, *and* `drink_world_source` — which §12.4 caps at `experimental` — reachable through `drink_carried`, which a scan verifies |
+| 17 | The support bundle's verifier flagged its own successful redaction | `credential_assignment` matched `api_key=<REDACTED>`, so `logs --bundle --verify` printed "REVIEW BEFORE SHARING" and exited 1 over a line whose secret had been correctly removed. Not a leak — the training of a habit that would let one through, in the one artefact designed to be attached to a public issue |
 | 16 | `configs/mcp/README.md` documented one of the two refusals a client meets | It said `pz-agent-mcp` "exits with status 1" for missing services. On a plain install the SDK gate fires first and returns 3, with a message about a missing package rather than a missing sidecar — so a client author would have gone looking for the wrong cause on their first launch |
 | 15 | **`pz-agent start` reported success on the strength of `Popen` returning** | A fork succeeding says nothing about whether the program ran. A sidecar that died on its first import left `start` printing "sidecar started as pid N" and exiting 0, `arm` then failing for reasons that named nothing, and `stop` reporting "no such process" — also exiting 0. Found by running the lifecycle, not by reading it |
 | 14 | **`live-test run` never consulted the prepare record** | `prepare` verifies a test save is named and a backup *reads back*, then writes `prepare.json`. Nothing read it. The one check standing between twenty deliberately destructive scenarios and a main save produced a record nobody consulted |
