@@ -32,6 +32,7 @@ sees hand-built fixtures is a model that has never met its own data.
 from __future__ import annotations
 
 import copy
+import shutil
 import subprocess
 import sys
 from collections.abc import Iterator
@@ -373,6 +374,124 @@ class TestTheGateAsACommand:
             "MASTER_PLAN.yaml has drifted from scripts/plan_epics_*.py:\n"
             f"{result.stdout}\n{result.stderr}"
         )
+
+
+class TestStatusCannotBeWrittenIntoStalenessRE:
+    """The generator refuses when the commit containing it would also move.
+
+    ``STATUS.json`` names the commit it describes, and the gate above requires
+    that commit to be an ancestor of HEAD with nothing outside ``docs/control/``
+    changed since. Regenerating STATUS while code is uncommitted therefore
+    produces a file that is stale the moment it is committed — the two are the
+    same commit, and it changed both.
+
+    That is not a hypothetical. It reached CI twice: once at ``ed35e81`` and
+    again at ``e481288``, each time as a red ``python 3.11`` and ``3.12`` on a
+    tree whose 6487 other tests passed. A rule a careful operator keeps tripping
+    is a rule that needs a guard at the point of the mistake rather than a
+    sentence in a document, so the generator now refuses and says what order to
+    do it in.
+    """
+
+    def test_the_generator_refuses_while_code_is_uncommitted(self, tmp_path: Path) -> None:
+        """Proved against a scratch repository, not against this one.
+
+        Running it here would depend on whether *this* tree happens to be dirty,
+        which is the kind of test that passes for a reason unrelated to what it
+        claims.
+        """
+        repo = _scratch_repo(tmp_path)
+        (repo / "packages" / "thing.py").write_text("x = 2\n", encoding="utf-8")
+
+        result = _reconcile_in(repo)
+
+        assert result.returncode == 1, result.stdout
+        assert "uncommitted work outside docs/control/" in result.stderr
+        assert "packages/thing.py" in result.stderr
+        assert "Commit the code first" in result.stderr
+
+    def test_it_writes_when_only_the_control_plane_is_dirty(self, tmp_path: Path) -> None:
+        """The other direction, so the guard is about staleness and not about dirt.
+
+        A commit that only rewrites ``docs/control/`` leaves every claim in
+        STATUS true, which is exactly the exemption the gate grants — so the
+        generator must not refuse here.
+        """
+        repo = _scratch_repo(tmp_path)
+        (repo / "docs" / "control" / "NOTES.md").write_text("scratch\n", encoding="utf-8")
+
+        result = _reconcile_in(repo)
+
+        assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
+
+    def test_allow_dirty_is_an_escape_hatch_and_not_the_default(self, tmp_path: Path) -> None:
+        repo = _scratch_repo(tmp_path)
+        (repo / "packages" / "thing.py").write_text("x = 3\n", encoding="utf-8")
+
+        assert _reconcile_in(repo).returncode == 1
+        assert _reconcile_in(repo, "--allow-dirty").returncode == 0
+
+
+def _scratch_repo(tmp_path: Path) -> Path:
+    """A git repository carrying just enough for the generator to run."""
+    repo = tmp_path / "repo"
+    (repo / "docs" / "control").mkdir(parents=True)
+    (repo / "packages").mkdir()
+    # Committed so the directory is tracked: git reports an untracked directory
+    # as one entry ("packages/") and never the file inside it, and the assertion
+    # below is about the guard naming the precise path it refused for.
+    (repo / "packages" / "kept.py").write_text("x = 1\n", encoding="utf-8")
+    (repo / "scripts").mkdir()
+    for name in (
+        "reconcile_status.py",
+        "master_report.py",
+        "check_master_plan.py",
+        "plan_model.py",
+    ):
+        shutil.copy(SCRIPTS / name, repo / "scripts" / name)
+    (repo / "scripts" / "__init__.py").write_text("", encoding="utf-8")
+    # Without this the scratch repo reports the __pycache__ the generator's own
+    # run creates as uncommitted work, and the guard — correctly, since git told
+    # it so — refuses for a reason the test is not about.
+    (repo / ".gitignore").write_text("__pycache__/\n*.pyc\n", encoding="utf-8")
+    shutil.copy(PLAN_PATH, repo / "docs" / "control" / "MASTER_PLAN.yaml")
+    for command in (
+        ["git", "init", "-q"],
+        ["git", "config", "user.email", "t@example.com"],
+        ["git", "config", "user.name", "t"],
+        ["git", "add", "-A"],
+        ["git", "commit", "-q", "-m", "base"],
+    ):
+        subprocess.run(command, cwd=repo, check=True, capture_output=True, timeout=120)
+    return repo
+
+
+def _reconcile_in(repo: Path, *extra: str) -> subprocess.CompletedProcess[str]:
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    return subprocess.run(
+        [
+            sys.executable,
+            str(repo / "scripts" / "reconcile_status.py"),
+            "--linux",
+            "PENDING",
+            "--linux-sha",
+            head,
+            "--windows",
+            "PENDING",
+            "--windows-sha",
+            head,
+            "--rc-status",
+            "NOT_BUILT",
+            *extra,
+        ],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=300,
+    )
 
 
 class TestAnEpicDoesNotCloseOnACount:

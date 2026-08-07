@@ -134,6 +134,29 @@ def build(arguments: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def _uncommitted_outside_control() -> list[str]:
+    """Paths with uncommitted changes that STATUS would go stale against.
+
+    ``docs/control/`` is excluded because a commit that only rewrites the control
+    plane leaves every claim in STATUS true — which is exactly the exemption
+    ``check_master_plan.py`` grants.
+    """
+    result = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=120,
+    )
+    paths = []
+    for line in result.stdout.splitlines():
+        path = line[3:].strip()
+        if path and not path.startswith("docs/control/"):
+            paths.append(path)
+    return sorted(paths)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--linux", required=True, choices=CI_STATES)
@@ -144,7 +167,30 @@ def main() -> int:
     parser.add_argument("--rc-sha", default=None)
     parser.add_argument("--rc-run", default=None)
     parser.add_argument("--rc-sha256", default=None)
+    parser.add_argument(
+        "--allow-dirty",
+        action="store_true",
+        help="write STATUS even with uncommitted work outside docs/control/",
+    )
     arguments = parser.parse_args()
+
+    if not arguments.allow_dirty:
+        dirty = _uncommitted_outside_control()
+        if dirty:
+            print(
+                "REFUSED: there is uncommitted work outside docs/control/, so the commit "
+                "that contains this STATUS would also change what it describes:\n  "
+                + "\n  ".join(dirty[:10])
+                + (f"\n  ... and {len(dirty) - 10} more" if len(dirty) > 10 else "")
+                + "\n\nSTATUS.json names the commit it describes, and check_master_plan.py "
+                "requires that commit to be an ancestor of HEAD with nothing outside "
+                "docs/control/ changed since. Writing it now produces a file that is stale "
+                "the moment it is committed — which has now happened twice, and CI caught "
+                "it both times.\n\nCommit the code first, then run this, then commit "
+                "docs/control/ alone. Use --allow-dirty only when you have a reason.",
+                file=sys.stderr,
+            )
+            return 1
 
     document = build(arguments)
     STATUS_PATH.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")
