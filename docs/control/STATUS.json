@@ -1,10 +1,10 @@
 {
   "blockers": [],
   "branch": "fix/windows-mcp-voice-runtime",
-  "current_step": 11,
+  "current_step": 20,
   "github_release": null,
-  "head_commit": "50c851ca490f458f1c0650dc5f4f2378aa2dfc56",
-  "last_passed_step": 10,
+  "head_commit": "1c1f10f408e3dcfcd813ef8ca8859fdebf30eabd",
+  "last_passed_step": 19,
   "linux_ci": {
     "status": "GREEN_LOCAL",
     "url": null
@@ -15,15 +15,15 @@
     "not_run": 20,
     "passed": 0
   },
-  "next_step": 11,
-  "overall_percent": 10,
+  "next_step": 20,
+  "overall_percent": 19,
   "rc_artifact": {
     "sha256": null,
     "status": "NOT_BUILT",
     "url": null
   },
   "release_percent": 0,
-  "remote_percent": 10,
+  "remote_percent": 19,
   "repository": "https://github.com/natural0101/poject-zombigpt",
   "steps": [
     {
@@ -224,138 +224,178 @@
       "title": "First control commit"
     },
     {
-      "commit": null,
+      "commit": "367124b6f517a3b78d4ace50bb26ab72d17bfc2b",
       "depends_on": [
         10
       ],
-      "evidence": [],
-      "finished_at": null,
+      "evidence": [
+        "docs/control/evidence/step-01-10/linux-baseline.txt"
+      ],
+      "finished_at": "2026-08-07T07:40:00Z",
       "id": 11,
-      "notes": "",
+      "notes": "3677 passed, 2 skipped at the starting commit.",
       "owner": "remote",
-      "started_at": null,
-      "status": "NOT_STARTED",
-      "tests": [],
+      "started_at": "2026-08-07T07:40:00Z",
+      "status": "PASS",
+      "tests": [
+        ".venv/bin/python -m pytest tests/"
+      ],
       "title": "Reproduce the full Linux suite"
     },
     {
-      "commit": null,
+      "commit": "367124b6f517a3b78d4ace50bb26ab72d17bfc2b",
       "depends_on": [
         11
       ],
-      "evidence": [],
-      "finished_at": null,
+      "evidence": [
+        "docs/control/evidence/step-01-10/windows-workflow-runs.txt",
+        "docs/control/evidence/step-01-10/windows-failures.txt"
+      ],
+      "finished_at": "2026-08-07T07:40:00Z",
       "id": 12,
-      "notes": "",
+      "notes": "24 failed, 3633 passed, 22 skipped. Read from Actions; no Windows machine here.",
       "owner": "remote",
-      "started_at": null,
-      "status": "NOT_STARTED",
-      "tests": [],
+      "started_at": "2026-08-07T07:40:00Z",
+      "status": "PASS",
+      "tests": [
+        "GitHub Actions windows.yml run 31156087690"
+      ],
       "title": "Reproduce the full Windows suite through GitHub Actions"
     },
     {
-      "commit": null,
+      "commit": "367124b6f517a3b78d4ace50bb26ab72d17bfc2b",
       "depends_on": [
         12
       ],
-      "evidence": [],
-      "finished_at": null,
+      "evidence": [
+        "docs/control/DECISIONS.md"
+      ],
+      "finished_at": "2026-08-07T07:40:00Z",
       "id": 13,
-      "notes": "",
+      "notes": "Six root causes, D-002, each mapped to its step.",
       "owner": "remote",
-      "started_at": null,
-      "status": "NOT_STARTED",
+      "started_at": "2026-08-07T07:40:00Z",
+      "status": "PASS",
       "tests": [],
       "title": "Split the Windows failures by root cause"
     },
     {
-      "commit": null,
+      "commit": "367124b6f517a3b78d4ace50bb26ab72d17bfc2b",
       "depends_on": [
         13
       ],
-      "evidence": [],
-      "finished_at": null,
+      "evidence": [
+        "packages/pz_agent_cli/src/pz_agent_cli/livetest/evidence.py",
+        "tests/contract/test_evidence_bytes_are_portable.py"
+      ],
+      "finished_at": "2026-08-07T07:40:00Z",
       "id": 14,
-      "notes": "",
+      "notes": "canonical_json_bytes returns bytes; the text form is derived from it.",
       "owner": "remote",
-      "started_at": null,
-      "status": "NOT_STARTED",
-      "tests": [],
+      "started_at": "2026-08-07T07:40:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/contract/test_evidence_bytes_are_portable.py::test_the_canonical_form_is_bytes_and_ends_in_one_newline"
+      ],
       "title": "Implement `canonical_json_bytes()`"
     },
     {
-      "commit": null,
+      "commit": "367124b6f517a3b78d4ace50bb26ab72d17bfc2b",
       "depends_on": [
         14
       ],
-      "evidence": [],
-      "finished_at": null,
+      "evidence": [
+        "packages/pz_agent_cli/src/pz_agent_cli/livetest/evidence.py",
+        "packages/pz_agent_cli/src/pz_agent_cli/livetest/runner.py"
+      ],
+      "finished_at": "2026-08-07T07:40:00Z",
       "id": 15,
-      "notes": "",
+      "notes": "No write_text and no open(...,'w') on any hashed path; the runner moves bytes.",
       "owner": "remote",
-      "started_at": null,
-      "status": "NOT_STARTED",
-      "tests": [],
+      "started_at": "2026-08-07T07:40:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/contract/test_evidence_bytes_are_portable.py::test_the_file_holds_exactly_the_canonical_bytes"
+      ],
       "title": "Move every evidence JSON writer to binary"
     },
     {
-      "commit": null,
+      "commit": "367124b6f517a3b78d4ace50bb26ab72d17bfc2b",
       "depends_on": [
         15
       ],
-      "evidence": [],
-      "finished_at": null,
+      "evidence": [
+        "packages/pz_agent_cli/src/pz_agent_cli/livetest/evidence.py",
+        "docs/control/evidence/step-11-19/evidence-suites.txt"
+      ],
+      "finished_at": "2026-08-07T07:40:00Z",
       "id": 16,
-      "notes": "",
+      "notes": "write_bytes_atomically: temporary file then os.replace, temp removed on failure.",
       "owner": "remote",
-      "started_at": null,
-      "status": "NOT_STARTED",
-      "tests": [],
+      "started_at": "2026-08-07T07:40:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/contract/test_evidence_bytes_are_portable.py::test_writing_is_all_or_nothing"
+      ],
       "title": "Atomic evidence writes through a temporary file"
     },
     {
-      "commit": null,
+      "commit": "367124b6f517a3b78d4ace50bb26ab72d17bfc2b",
       "depends_on": [
         16
       ],
-      "evidence": [],
-      "finished_at": null,
+      "evidence": [
+        "docs/control/evidence/step-11-19/mutations.txt",
+        "tests/contract/test_evidence_bytes_are_portable.py"
+      ],
+      "finished_at": "2026-08-07T07:40:00Z",
       "id": 17,
-      "notes": "",
+      "notes": "Digest read back from the file; guard proven by injecting a translating writer.",
       "owner": "remote",
-      "started_at": null,
-      "status": "NOT_STARTED",
-      "tests": [],
+      "started_at": "2026-08-07T07:40:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/contract/test_evidence_bytes_are_portable.py::test_a_write_that_changed_the_bytes_is_caught_rather_than_hashed"
+      ],
       "title": "SHA-256 over the actual bytes on disk"
     },
     {
-      "commit": null,
+      "commit": "367124b6f517a3b78d4ace50bb26ab72d17bfc2b",
       "depends_on": [
         17
       ],
-      "evidence": [],
-      "finished_at": null,
+      "evidence": [
+        "tests/contract/test_evidence_bytes_are_portable.py"
+      ],
+      "finished_at": "2026-08-07T07:40:00Z",
       "id": 18,
-      "notes": "",
+      "notes": "size_bytes comes from sha256_file, never len(text).",
       "owner": "remote",
-      "started_at": null,
-      "status": "NOT_STARTED",
-      "tests": [],
+      "started_at": "2026-08-07T07:40:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/contract/test_evidence_bytes_are_portable.py::test_the_returned_digest_is_the_digest_of_the_file"
+      ],
       "title": "`size_bytes` from the actual file size"
     },
     {
-      "commit": null,
+      "commit": "367124b6f517a3b78d4ace50bb26ab72d17bfc2b",
       "depends_on": [
         18
       ],
-      "evidence": [],
-      "finished_at": null,
+      "evidence": [
+        "docs/control/evidence/step-11-19/evidence-suites.txt",
+        "docs/control/evidence/step-11-19/linux-after.txt"
+      ],
+      "finished_at": "2026-08-07T07:40:00Z",
       "id": 19,
-      "notes": "",
+      "notes": "11 cross-platform tests: CRLF, Cyrillic, emoji, key order, atomicity, tamper.",
       "owner": "remote",
-      "started_at": null,
-      "status": "NOT_STARTED",
-      "tests": [],
+      "started_at": "2026-08-07T07:40:00Z",
+      "status": "PASS",
+      "tests": [
+        "tests/contract/test_evidence_bytes_are_portable.py"
+      ],
       "title": "Cross-platform canonical JSON tests"
     },
     {

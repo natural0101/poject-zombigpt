@@ -16,3 +16,14 @@ construction.
 | `docs/control/STATUS.json` | the recorded state |
 | `scripts/check_progress.py` | the gate |
 | `scripts/progress_report.py` | the counter |
+
+## Steps 11–19 — evidence bytes are portable
+
+| Path | What it shows |
+| --- | --- |
+| `docs/control/evidence/step-11-19/evidence-suites.txt` | the four affected suites, green after the fix |
+| `docs/control/evidence/step-11-19/mutations.txt` | both mutations and the tests each turns red |
+| `docs/control/evidence/step-11-19/linux-after.txt` | 3712 passed, 2 skipped after the fix |
+| `tests/contract/test_evidence_bytes_are_portable.py` | 11 cross-platform digest tests |
+| `tests/contract/test_windows_path_shapes.py` | Windows path shapes, asserted on Linux |
+| `tests/contract/test_mcp_snippet_is_json.py` | the printed MCP block parsed back, 5 interpreter paths |
