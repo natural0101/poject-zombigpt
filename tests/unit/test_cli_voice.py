@@ -11,13 +11,27 @@ here that turns files into a claim about the world. Every one of its answers is
 checked in the direction that costs something: an absent heartbeat must read as
 disconnected rather than as calm, and a heartbeat that does not mention arming
 must read as disarmed rather than as unknown-and-therefore-fine.
+
+The goal channel is the subject of the rest, and it is checked the same way. The
+placeholder this file used to test — a plan port that refused every submission —
+is gone, so "the goal went somewhere" can no longer be asserted by watching an
+exception arrive. It is asserted against a real
+:class:`~pz_agent_core.rpc.transport.RpcServer` on a real socket, with a real
+descriptor and a real token, because every cheaper double answers the same way
+whether or not a wire exists. The test that matters most is the one that starts
+that server, watches the probe report the channel reachable, closes the server
+*without* removing its descriptor, and watches the same probe say the channel is
+gone: a check that read the descriptor and stopped there would report a routed
+channel with nothing listening, which is the exact defect this milestone removed.
 """
 
 from __future__ import annotations
 
 import json
+import threading
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable, Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
@@ -27,16 +41,15 @@ from pz_agent_cli.config import ADAPTER_NONE, ADAPTER_TEAMON, AgentConfig, defau
 from pz_agent_cli.context import EXIT_FAILURE, EXIT_OK, resolve_workspace
 from pz_agent_cli.supervisor import CONTROL_FILE_NAME, SidecarSupervisor
 from pz_agent_cli.voice import (
-    GOALS_UNROUTED,
     VOICE_RECORD_NAME,
     ExchangeSessionPort,
-    GoalUnroutable,
-    UnroutedPlanPort,
+    GoalChannelReading,
     VoiceRecord,
     VoiceRecordError,
     VoiceRefused,
     adapter_name,
     collect_voice_status,
+    probe_goal_channel,
     publish_voice_record,
     read_phrase,
     read_voice_record,
@@ -46,13 +59,17 @@ from pz_agent_cli.voice import (
 )
 from pz_agent_core.ipc.layout import IpcLayout
 from pz_agent_core.planner.providers import DEFAULT_TEAMON_KEY_ENV
-from pz_agent_core.protocol import DangerLevel, SessionMode
+from pz_agent_core.protocol import DangerLevel, JsonDict, SessionMode
+from pz_agent_core.rpc.descriptor import runtime_dir, write_descriptor
+from pz_agent_core.rpc.token import issue_token
+from pz_agent_core.rpc.transport import RpcServer, new_address
+from pz_agent_core.rpc.wire import RpcRequest, RpcResponse
 from pz_agent_core.session.heartbeat import DEFAULT_TIMEOUT_MS, HeartbeatMonitor, Peer
 from pz_agent_core.version import PRODUCT_VERSION
 from pz_agent_voice.adapters.fake import FakeVoiceAdapter
 from pz_agent_voice.adapters.teamon import TeamONTranscript, TeamONVoiceAdapter
 from pz_agent_voice.messages import MAX_TRANSCRIPT_CHARS, VoiceGoal, VoiceIntent
-from pz_agent_voice.ports import PlanRequest
+from pz_agent_voice.ports import PlanRequest, SidecarUnavailable
 from tests.fixtures.cli_worlds import make_world
 from tests.fixtures.ipc_builders import FakeClock
 from tests.fixtures.voice_doubles import FakeTeamONClient
@@ -60,6 +77,39 @@ from tests.fixtures.voice_doubles import FakeTeamONClient
 BUILD: Final = "42.20"
 
 KEY: Final = "teamon-key-for-tests"
+
+#: Long enough that a loaded runner does not fail a happy path, short enough
+#: that a genuine hang ends one test rather than the suite's patience.
+GRACE: Final = 10.0
+
+#: What a core answers to each method the voice path may call, written out by
+#: hand rather than produced by the encoders under test: a body built from
+#: ``encode_goal_channel_status`` would assert that the codec equals itself, and
+#: a key misspelled in both halves would survive every round trip.
+#:
+#: ``plan.execute`` is the method this build's spoken goal takes and
+#: ``goal.submit`` is the typed channel it is moving to (``docs/control/
+#: DECISIONS.md``); both are answered so that the assertions below are about the
+#: request *arriving at a core*, which is the claim, rather than about which of
+#: the two carried it.
+CORE_ANSWERS: Final[dict[str, JsonDict]] = {
+    "goal.status": {"active": None, "pending": [], "named": None},
+    "plan.execute": {
+        "plan_id": "plan-9",
+        "status": "started",
+        "step_index": 2,
+        "steps": [
+            {
+                "index": 0,
+                "action": "movement.move_to",
+                "status": "succeeded",
+                "reason_code": "POSTCONDITION_MET",
+                "action_id": "action-4",
+            },
+            {"index": 1, "action": "consume.eat", "status": "started"},
+        ],
+    },
+}
 
 
 def a_port(tmp_path: Path, *, clock: FakeClock) -> ExchangeSessionPort:
@@ -235,28 +285,252 @@ def test_disarming_publishes_the_control_request_the_cli_publishes(tmp_path: Pat
 
 
 # ---------------------------------------------------------------------------
-# the plan route that does not exist
+# the goal route, against a core that is really there and really gone
 # ---------------------------------------------------------------------------
 
 
-def test_a_goal_is_refused_rather_than_answered_with_a_plan_nobody_made() -> None:
-    port = UnroutedPlanPort(detail=GOALS_UNROUTED)
-    request = PlanRequest(
-        goal=VoiceGoal.EAT.value,
+@dataclass
+class Core:
+    """A real RPC server on a real socket, and what it was asked."""
+
+    state_dir: Path
+    server: RpcServer
+    thread: threading.Thread
+    seen: list[RpcRequest]
+    #: What this core answers, live: the dispatcher reads it on every request,
+    #: so a test may take a method away from a *running* core. That is the one
+    #: way to reach the "something answered and it was not an answer" branch
+    #: without a second fixture, and it is a real state — a sidecar from another
+    #: build accepts the connection and refuses the method.
+    answers: dict[str, JsonDict]
+
+    @property
+    def methods(self) -> list[str]:
+        return [request.method for request in self.seen]
+
+    def close(self) -> None:
+        """Stop answering, and deliberately leave the descriptor behind.
+
+        A sidecar killed rather than stopped leaves exactly this state, and it is
+        the state that separates a probe which dials from one which reads a file
+        and calls that routed.
+        """
+        self.server.close()
+        self.thread.join(timeout=GRACE)
+
+
+Start = Callable[[Path], Core]
+
+
+@pytest.fixture
+def start_core() -> Iterator[Start]:
+    """Bring up real cores and take them all down again.
+
+    State directory names are given by the caller and kept short on purpose: a
+    POSIX socket path is bounded by ``sun_path``, and the profile directory a
+    :func:`~tests.fixtures.cli_worlds.make_world` machine hands out is far too
+    deep to bind under.
+    """
+    started: list[Core] = []
+
+    def _start(state_dir: Path) -> Core:
+        runtime = runtime_dir(state_dir)
+        runtime.mkdir(parents=True, exist_ok=True)
+        key = issue_token(runtime)
+        seen: list[RpcRequest] = []
+        answers = dict(CORE_ANSWERS)
+
+        def dispatch(request: RpcRequest) -> RpcResponse:
+            seen.append(request)
+            answer = answers.get(request.method)
+            if answer is None:
+                return RpcResponse(
+                    id=request.id,
+                    ok=False,
+                    error_code="UNKNOWN_METHOD",
+                    error_message=f"this fixture does not answer {request.method}",
+                )
+            return RpcResponse(id=request.id, ok=True, result=dict(answer))
+
+        server = RpcServer(new_address(runtime), authkey=key, handler=dispatch)
+        write_descriptor(state_dir, server.descriptor())
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        core = Core(state_dir=state_dir, server=server, thread=thread, seen=seen, answers=answers)
+        started.append(core)
+        return core
+
+    yield _start
+
+    for core in started:
+        core.close()
+
+
+def test_a_goal_channel_nobody_is_listening_on_is_reported_unreachable(tmp_path: Path) -> None:
+    """The state every machine is in until ``pz-agent start`` is run.
+
+    Naming the command is the point: "unreachable" on its own sends a user
+    looking for a broken install.
+    """
+    reading = probe_goal_channel(tmp_path / "s")
+
+    assert reading.reachable is False
+    assert "pz-agent start" in reading.detail
+
+
+def test_a_running_core_answers_the_probe_and_the_probe_says_it_was_asked(
+    tmp_path: Path, start_core: Start
+) -> None:
+    """Reachable means a request was made and answered, not that a file exists."""
+    core = start_core(tmp_path / "s")
+
+    reading = probe_goal_channel(core.state_dir)
+
+    assert reading.reachable is True
+    # Written out rather than taken from ``Method``: the two halves of the link
+    # have to agree on the string, and deriving it here would agree with itself.
+    assert core.methods == ["goal.status"]
+    # A read, and only a read. A probe that submitted something to find out
+    # whether it could submit would be a spoken goal nobody said.
+    assert "goal.submit" not in core.methods
+
+
+def test_a_core_that_stopped_answering_stops_being_reported_as_routed(
+    tmp_path: Path, start_core: Start
+) -> None:
+    """The load-bearing one, and the reason the probe dials at all.
+
+    The descriptor is still on disk after the server closes, and it still names
+    a live process — this one. Every check short of a connection therefore
+    passes, and every one of them would report a routed channel into a socket
+    nothing is accepting on.
+    """
+    core = start_core(tmp_path / "s")
+    assert probe_goal_channel(core.state_dir).reachable is True
+
+    core.close()
+    after = probe_goal_channel(core.state_dir)
+
+    assert (core.state_dir / "runtime" / "core-rpc.json").is_file(), "the descriptor was removed"
+    assert after.reachable is False
+    assert "pz-agent start" in after.detail
+
+
+def test_a_core_that_answers_but_refuses_the_probe_is_not_reported_as_routed(
+    tmp_path: Path, start_core: Start
+) -> None:
+    """Something is there, and this build cannot use it, which is not routed either.
+
+    A sidecar from another build accepts the connection, authenticates it and
+    then does not have the method — so every reading that stops at "a socket
+    accepted me" reports the channel up. The reading has to be the *answer*, and
+    the answer here is a refusal, which is reported with the remedy for the same
+    reason the absent case is: the user's next step is the same command.
+    """
+    core = start_core(tmp_path / "s")
+    del core.answers["goal.status"]
+
+    reading = probe_goal_channel(core.state_dir)
+
+    assert core.methods == ["goal.status"], "the probe decided without asking"
+    assert reading.reachable is False
+    assert "pz-agent start" in reading.detail
+
+
+def test_the_services_the_command_builds_reach_a_real_core(
+    tmp_path: Path, start_core: Start
+) -> None:
+    """The whole of the wiring: a goal submitted through what ``voice run`` builds.
+
+    The assertion is on what the *server* received. A bundle that refused
+    locally — which is what this build shipped — would leave ``seen`` empty
+    however plausible its exception was.
+    """
+    world = make_world(tmp_path)
+    world.ctx = world.ctx.with_overrides(state_dir=tmp_path / "s")
+    workspace = resolve_workspace(world.ctx)
+    core = start_core(workspace.state_dir)
+
+    services = voice_services(workspace, clock=world.ctx.clock_ms)
+    record = services.plans.execute(a_goal())
+
+    assert core.methods == ["plan.execute"]
+    assert core.seen[0].params["goal"] == "eat"
+    assert record.plan_id == "plan-9"
+
+
+def test_the_stop_stays_off_the_link_the_goal_takes(tmp_path: Path, start_core: Start) -> None:
+    """Two transports, and the stop keeps the one that works with nothing running."""
+    world = make_world(tmp_path)
+    world.ctx = world.ctx.with_overrides(state_dir=tmp_path / "s")
+    workspace = resolve_workspace(world.ctx)
+    assert workspace.ipc_root is not None
+    # The exchange directory is the mod's to create, and the stop writes into it.
+    IpcLayout(workspace.ipc_root).ensure()
+    core = start_core(workspace.state_dir)
+
+    services = voice_services(workspace, clock=world.ctx.clock_ms)
+    assert isinstance(services.session, ExchangeSessionPort)
+    services.session.stop()
+
+    assert core.methods == [], "the stop dialled the goal channel"
+    assert services.session.layout.panic_stop.read_text(encoding="utf-8").strip()
+
+
+def test_a_goal_with_no_core_is_refused_by_the_link_rather_than_by_this_process(
+    tmp_path: Path,
+) -> None:
+    """Nothing here answers "not routed" any more; the link answers "not running".
+
+    The difference is what the user does next. The first is a build without the
+    feature and there is nothing to do about it; the second names the command
+    that fixes it.
+    """
+    world = make_world(tmp_path)
+    world.ctx = world.ctx.with_overrides(state_dir=tmp_path / "s")
+    workspace = resolve_workspace(world.ctx)
+
+    services = voice_services(workspace, clock=world.ctx.clock_ms)
+
+    with pytest.raises(SidecarUnavailable, match="pz-agent start"):
+        services.plans.execute(a_goal())
+
+
+def a_goal(goal: str = VoiceGoal.EAT.value) -> PlanRequest:
+    return PlanRequest(
+        goal=goal,
         mode=SessionMode.ASSISTED,
         max_steps=4,
         max_real_seconds=60,
         idempotency_key="key-1",
     )
 
-    with pytest.raises(GoalUnroutable, match="eat"):
-        port.execute(request)
 
+def test_no_source_file_in_this_package_refuses_a_goal_unrouted() -> None:
+    """The placeholder is gone from the CLI and must not grow back.
 
-def test_no_plan_can_be_read_from_a_process_that_holds_none() -> None:
-    """``None`` would be a claim that nothing is running, which is not observable."""
-    with pytest.raises(GoalUnroutable):
-        UnroutedPlanPort(detail=GOALS_UNROUTED).current()
+    ``tests/unit/test_voice_plan_port.py`` makes the same scan over
+    :mod:`pz_agent_voice`, and scoped it there deliberately — these names were
+    this package's to remove. This is the other half, so neither half can grow
+    the refusal back while the other's scan stays green.
+
+    An empty ``offenders`` proves nothing on its own: a root that stopped
+    resolving makes :meth:`Path.rglob` yield nothing and the assertion below pass
+    without reading a line. So the scan is required to have found the module it
+    is scanning *for* first.
+    """
+    root = Path(__file__).resolve().parents[2] / "packages" / "pz_agent_cli" / "src"
+    scanned = {path: path.read_text(encoding="utf-8") for path in sorted(root.rglob("*.py"))}
+
+    assert root / "pz_agent_cli" / "voice.py" in scanned, f"scanned nothing under {root}"
+
+    offenders = [
+        path.name
+        for path, source in scanned.items()
+        if "Unrouted" in source or "GoalUnroutable" in source
+    ]
+
+    assert offenders == []
 
 
 def test_services_refuse_a_machine_with_no_exchange_directory(tmp_path: Path) -> None:
@@ -299,11 +573,64 @@ def test_a_stop_is_never_told_it_needs_a_wake_word() -> None:
     assert not any("wake word" in note for note in reading.notes)
 
 
-def test_a_goal_is_told_that_nothing_will_route_it() -> None:
-    reading = read_phrase("агент, поешь")
+def exploding_probe() -> GoalChannelReading:
+    """A probe that fails the test if a phrase that is not a goal consults it."""
+    raise AssertionError("a phrase that needs no sidecar dialled one")
+
+
+@pytest.mark.parametrize("phrase", ["стоп", "бармаглот", "агент"])
+def test_only_a_goal_asks_the_channel_anything(phrase: str) -> None:
+    """A stop must be answerable on a machine with no sidecar and no socket."""
+    reading = read_phrase(phrase, channel=exploding_probe)
+
+    assert reading.channel is None
+
+
+def test_a_goal_carries_the_channels_own_answer(tmp_path: Path) -> None:
+    """The reading reports what the probe said, and does not summarise it away."""
+    answered = GoalChannelReading(reachable=False, detail="nothing answered; run 'pz-agent start'")
+
+    reading = read_phrase("агент, поешь", channel=lambda: answered)
 
     assert reading.goal is VoiceGoal.EAT
-    assert any(note == GOALS_UNROUTED for note in reading.notes)
+    assert reading.channel == answered
+    assert reading.to_dict()["goal_channel"] == {
+        "reachable": False,
+        "detail": "nothing answered; run 'pz-agent start'",
+    }
+
+
+def test_a_phrase_read_without_a_probe_claims_nothing_about_the_channel() -> None:
+    """Silence rather than a default: "routed" is the answer that must be earned."""
+    assert read_phrase("агент, поешь").channel is None
+
+
+def test_voice_check_reports_the_channel_as_unreachable_and_names_the_command(
+    tmp_path: Path,
+) -> None:
+    """The command a user runs before they own a sidecar, answered honestly."""
+    world = make_world(tmp_path)
+    world.ctx = world.ctx.with_overrides(state_dir=tmp_path / "s")
+
+    code = world.run("voice", "check", "агент", "поешь")
+
+    assert code == EXIT_OK, "the phrase resolves; it is the sidecar that is missing"
+    assert "UNREACHABLE" in world.stdout
+    assert "pz-agent start" in world.stdout
+
+
+def test_voice_check_reports_a_live_channel_as_reachable(tmp_path: Path, start_core: Start) -> None:
+    """And it is the same command, on the same machine, with a core added."""
+    world = make_world(tmp_path)
+    world.ctx = world.ctx.with_overrides(state_dir=tmp_path / "s")
+    core = start_core(resolve_workspace(world.ctx).state_dir)
+
+    code = world.run("voice", "check", "агент", "поешь", "--json")
+
+    assert code == EXIT_OK
+    assert core.methods == ["goal.status"]
+    assert '"reachable": true' in world.stdout
+    assert "UNREACHABLE" not in world.stdout
 
 
 def test_a_phrase_that_matches_nothing_is_not_blamed_on_the_wake_word() -> None:
@@ -434,6 +761,29 @@ def test_a_malformed_record_reads_as_absent_rather_than_half_understood(
     assert read_voice_record(path) is None, why
     with pytest.raises(VoiceRecordError):
         VoiceRecord.from_dict(payload)
+
+
+def test_a_record_that_never_said_where_goals_went_claims_no_route(tmp_path: Path) -> None:
+    """An omission is not a claim, here as it is for a heartbeat that omits ``armed``.
+
+    Both defaults are asserted against the literal ``False`` rather than against
+    each other: a record this process built without naming the field, and a
+    document on disk from a build that had no such field to name. If either read
+    as routed, ``status`` would tell a user that a companion which never had a
+    goal channel was submitting goals over one.
+    """
+    assert a_record().goals_routed is False
+
+    path = tmp_path / VOICE_RECORD_NAME
+    path.write_text(
+        json.dumps({"running": True, "adapter": ADAPTER_TEAMON, "detail": "it listened"}),
+        encoding="utf-8",
+    )
+
+    record = read_voice_record(path)
+
+    assert record is not None
+    assert record.goals_routed is False
 
 
 def test_a_missing_record_is_absent_not_stopped(tmp_path: Path) -> None:

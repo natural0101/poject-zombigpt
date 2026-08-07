@@ -43,6 +43,34 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **The two CI workflows installed different projects.** `windows.yml` installed
+  `.[dev,mcp]`; `ci.yml` installed `.[dev]`. `pz-agent-mcp` checks one thing
+  before anything else — is the MCP SDK importable — and answers `EXIT_NO_SDK`
+  (3) if it is not, so every assertion in `test_mcp_entry.py` and
+  `test_mcp_subprocess_e2e.py` that runs the entry point and compares an exit
+  code was comparing 3 against the code it meant to check. The same commit was
+  green on windows-latest and red on ubuntu-latest with 34 failures, none of
+  which were about the code they named; the local gate was green too, because a
+  developer venv has the SDK in it. The fix is the extra. The guard is
+  `tests/contract/test_ci_installs_what_the_tests_need.py`, which reads the
+  extras out of both workflow files and requires them to be *equal* — the
+  divergence, not the missing package, is what made the failure invisible — and
+  proves its own premise by running the real entry point with the SDK shadowed
+  by a package that raises `ImportError` and observing `EXIT_NO_SDK`.
+- **The RPC token was written in text mode on Windows.** `os.open` defaults to
+  text mode there, so `os.write` translated every `0x0A` in the payload into
+  `0x0D 0x0A`. A token is 32 random bytes; the chance one of them is a newline
+  is about one in eight. On those runs the file was 33 bytes, did not match the
+  token the server was authenticating with, and the client was refused — on
+  Windows only, one run in eight, with a message about authentication rather
+  than about encoding. `os.O_BINARY` where the platform has it.
+- **CI cloned shallow, so the recorded baseline SHAs could not resolve.**
+  `actions/checkout@v4` defaults to `fetch-depth: 1`, and
+  `tests/unit/test_control_baseline_evidence.py` resolves every recorded SHA
+  with `git cat-file` — which is what makes that file evidence rather than
+  prose. The objects were simply absent. Both workflows fetch the full history
+  now, and the test says "this is a shallow clone" instead of "these SHAs are
+  wrong".
 - **`safety.disabled_capabilities`: switch a capability off by name.** The
   state `disabled_by_policy` existed, the mod guarded on it, `PermissionEngine`
   refused on it with a message written for a user — *"X is switched off by

@@ -38,8 +38,8 @@ from typing import Any
 
 import pytest
 
-from pz_agent_core.actions import ActionRequest
 from pz_agent_core.capabilities.model import CapabilityReport
+from pz_agent_core.goals import GoalKind, GoalParams, GoalRequest
 from pz_agent_core.protocol import (
     ActionName,
     ActionStatus,
@@ -100,6 +100,11 @@ SECRET = "sk-live-51H0-PZ-token-9f8e7d6c5b4a3210"
 #: An id the fake action port knows about.
 KNOWN_ACTION_ID = "ac-7f1c9a2b"
 
+#: The first id ``CountingGoalIds`` mints, which is therefore the id the goal
+#: the fixture submits below carries. Written out rather than read back off the
+#: queue, for the same reason ``SUBMITTED_ACTION_ID`` is.
+KNOWN_GOAL_ID = "00000000-0000-0000-0000-0000000060a2"
+
 GRACE = 5.0
 
 
@@ -131,6 +136,15 @@ PLAN_PARAMS: JsonDict = {
 
 MEMORY_PARAMS: JsonDict = {"kinds": ["place", "container"], "limit": 3}
 
+#: A goal submission, hand-written as JSON. ``read_for_boredom`` is chosen over
+#: the parameterless kinds because it carries a bounded numeric parameter, so a
+#: router that dropped the params on the way to the channel is visible here.
+GOAL_SUBMIT_PARAMS: JsonDict = {
+    "kind": "read_for_boredom",
+    "idempotency_key": "read-a-book-1",
+    "params": {"pages": 12},
+}
+
 #: Three distinct filter values for three distinct filters, so a swap between
 #: any two of them changes what the port is asked for.
 TAIL_PARAMS: JsonDict = {
@@ -157,6 +171,9 @@ VALID_PARAMS: dict[str, JsonDict] = {
     Method.MEMORY_QUERY: MEMORY_PARAMS,
     Method.DIAGNOSTICS_DOCTOR: {},
     Method.DIAGNOSTICS_TAIL: TAIL_PARAMS,
+    Method.GOAL_SUBMIT: GOAL_SUBMIT_PARAMS,
+    Method.GOAL_STATUS: {"goal_id": KNOWN_GOAL_ID},
+    Method.GOAL_CANCEL: {"goal_id": KNOWN_GOAL_ID},
 }
 
 #: The exact object ``session.status`` answers with, written by hand. Pinned
@@ -223,6 +240,38 @@ OBSERVATION: Observation = make_observation()
 #: written down. One entry is not a literal: an observation is a nested document
 #: with its own schema and its own tests, and what this file pins about it is
 #: the key it travels under and that it is the port's value.
+#: The goal the ``doubles`` fixture seeds, as the router writes it. Two goals
+#: appear across these bodies and they differ in every field a handler could
+#: confuse: id, page count, sequence and key digest. A router answering
+#: ``goal.cancel`` with the goal it was *submitting* rather than the goal it was
+#: cancelling would be caught by the digest alone.
+GOLDEN_SEEDED_GOAL: JsonDict = {
+    "goal_id": KNOWN_GOAL_ID,
+    "kind": "read_for_boredom",
+    "params": {"pages": 3},
+    "budget": {"max_wall_ms": 600_000, "max_steps": 4, "pending_ttl_ms": 120_000},
+    "key_digest": "8f10d9a44a6b36e6",
+    "sequence": 1,
+    "state": "pending",
+    "submitted_at_ms": 0,
+    "started_at_ms": None,
+    "finished_at_ms": None,
+    "steps_used": 0,
+    "reason_code": None,
+    "evidence_keys": [],
+    "detail": "",
+}
+
+#: The goal ``GOAL_SUBMIT_PARAMS`` creates: the second id the counter mints,
+#: twelve pages rather than three, sequence two.
+GOLDEN_SUBMITTED_GOAL: JsonDict = {
+    **GOLDEN_SEEDED_GOAL,
+    "goal_id": "00000000-0000-0000-0000-0000000060a3",
+    "params": {"pages": 12},
+    "key_digest": "44cac845028214d8",
+    "sequence": 2,
+}
+
 GOLDEN_RESULTS: dict[str, JsonDict] = {
     Method.SESSION_STATUS: GOLDEN_STATUS_RESULT,
     Method.SESSION_ARM: {**GOLDEN_STATUS_RESULT, "mode": "AUTONOMOUS", "armed": True},
@@ -279,6 +328,13 @@ GOLDEN_RESULTS: dict[str, JsonDict] = {
             }
         ]
     },
+    Method.GOAL_SUBMIT: {"goal": GOLDEN_SUBMITTED_GOAL, "duplicate": False},
+    Method.GOAL_STATUS: {
+        "active": None,
+        "pending": [GOLDEN_SEEDED_GOAL],
+        "named": GOLDEN_SEEDED_GOAL,
+    },
+    Method.GOAL_CANCEL: {"goal": GOLDEN_SEEDED_GOAL, "requested": True},
 }
 
 
@@ -288,7 +344,19 @@ def request(method: str, params: JsonDict | None = None) -> RpcRequest:
 
 
 def call(services: CoreServices, method: str, params: JsonDict | None = None) -> RpcResponse:
-    return CoreRouter(services)(request(method, params))
+    """Route one request, wiring the goal channel the way the sidecar does.
+
+    ``CoreServices.goals`` is ``GoalPort | None`` and ``CoreRouter`` takes a
+    non-optional ``goals``, because the router may contain no comparison at all
+    — ``TestTheRouterDecidesNothing`` reads its AST and fails on a single ``If``
+    or ``Compare`` node. The ``or`` is a decision, so it lives at the call site.
+    This helper is that call site for the tests, and it has to make the same
+    choice the sidecar makes or these sweeps would be exercising a router nobody
+    ships.
+    """
+    channel = services.goals
+    router = CoreRouter(services) if channel is None else CoreRouter(services, goals=channel)
+    return router(request(method, params))
 
 
 @pytest.fixture
@@ -338,6 +406,22 @@ def doubles() -> Doubles:
             action_id="ac-0004",
         ),
     )
+    # One goal already on the channel, so goal.status and goal.cancel have
+    # something to answer about. Submitted through the real queue rather than
+    # placed there, because a record the queue never admitted would not carry
+    # the sequence and budget its own invariants gave it.
+    admission = bundle.goals.queue.submit(
+        GoalRequest(
+            kind=GoalKind.READ_FOR_BOREDOM,
+            idempotency_key="seeded-goal-1",
+            params=GoalParams(pages=3),
+        )
+    )
+    assert admission.goal is not None, admission
+    assert admission.goal.goal_id == KNOWN_GOAL_ID, (
+        f"the fixture's goal id is written down as {KNOWN_GOAL_ID} and the queue "
+        f"minted {admission.goal.goal_id}"
+    )
     return bundle
 
 
@@ -354,11 +438,15 @@ def services(doubles: Doubles) -> CoreServices:
 class _Refuses:
     """Every port method, and every one of them raises.
 
-    One class rather than seven because the router must not care which port it
+    One class rather than eight because the router must not care which port it
     is: a refusal is a refusal wherever it came from, and the point of the test
-    that uses this is that all thirteen methods reach *a* port.
+    that uses this is that all sixteen methods reach *a* port.
     """
 
+    #: One method serves two ports. ``ActionPort.status`` takes an action id and
+    #: ``GoalPort.status`` takes an optional goal id, and the router passes both
+    #: positionally, so a single optional parameter satisfies each of them. It
+    #: would not if either side ever switched to a keyword.
     def status(self, action_id: str | None = None) -> Any:
         raise RuntimeError(REFUSAL)
 
@@ -377,7 +465,12 @@ class _Refuses:
     def report(self) -> CapabilityReport:
         raise RuntimeError(REFUSAL)
 
-    def submit(self, action_request: ActionRequest) -> ActionRecord:
+    #: Two ports again. ``ActionPort.submit`` takes an ``ActionRequest`` and
+    #: ``GoalPort.submit`` takes a ``GoalRequest``; both are positional, so one
+    #: method with a widened parameter serves each of them. Typed ``Any`` rather
+    #: than a union because this class satisfies eight protocols at once and a
+    #: union here would only be a longer way of saying so.
+    def submit(self, action_request: Any) -> Any:
         raise RuntimeError(REFUSAL)
 
     def execute(self, plan_request: PlanRequest) -> PlanRecord:
@@ -402,6 +495,13 @@ class _Refuses:
     ) -> Sequence[LogRecord]:
         raise RuntimeError(REFUSAL)
 
+    # The goal channel's third method. ``submit`` and ``status`` above already
+    # serve it. Raising rather than answering an empty status, because an empty
+    # status is what "no goals are running" looks like, and this port has to be
+    # indistinguishable from one that is broken.
+    def cancel(self, goal_id: str) -> Any:
+        raise RuntimeError(REFUSAL)
+
 
 def refusing_services() -> CoreServices:
     port = _Refuses()
@@ -413,6 +513,7 @@ def refusing_services() -> CoreServices:
         plans=port,
         memory=port,
         diagnostics=port,
+        goals=port,
     )
 
 

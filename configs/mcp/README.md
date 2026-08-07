@@ -20,6 +20,7 @@ do next**, so every one has its own exit code.
 | 6 | The descriptor is unreadable or not ours. | Have it rewritten: stop and start the sidecar. Restarting a running one will not fix it. |
 | 7 | The sidecar answered, and the answer could not be read. | A version skew or a corrupted link. `pz-agent doctor`. |
 | 8 | No state directory could be determined. | Name one with `--state-dir`, or the Zomboid user directory with `--zomboid-dir`. |
+| 9 | The MCP SDK is installed and is the wrong major. | The remedy is a version, not an install: `pip install "mcp>=2,<3"`. This build drives the 2.x server API. It is a separate code from 3 because `pip install pz-agent[mcp]` would not have fixed it. |
 
 Codes 3 and 8 fire before anything is dialled, so they are what you meet on a
 machine that has never run the sidecar. Codes 4 to 7 mean the link was tried.
@@ -116,6 +117,12 @@ with them:
   `pz_action_unequip`, `pz_action_bandage`, `pz_action_rest`,
   `pz_action_sleep`, `pz_action_wait`, `pz_action_cancel`
 - **plan** — `pz_plan_execute`, `pz_plan_status`
+- **goal** — `pz_goal_submit`, `pz_goal_status`, `pz_goal_cancel`. The typed
+  goal channel: a closed set of kinds with per-kind typed, range-checked
+  parameters, one goal active at a time, and every goal bounded by wall clock
+  *and* step count. `pz_goal_submit` is a mutating tool and is gated on arming
+  like the rest of them. Submission is not service — it answers `pending` and
+  the sidecar's own loop activates it, which is why `pz_goal_status` exists.
 - **safety** — `pz_safety_stop`
 - **memory and diagnostics** — `pz_memory_query`, `pz_debug_doctor`,
   `pz_debug_tail`

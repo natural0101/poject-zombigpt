@@ -23,10 +23,12 @@ has none, right up until it eats something.
 The voice line is the record *and* the setting, kept apart on purpose. Nothing
 starts the companion but the user — no sidecar spawns it — so "configured" and
 "listening" are separate facts, and a machine where they disagree is exactly the
-one whose owner is talking to a microphone nothing is reading. It also carries
-the one thing this build cannot do: a spoken goal reaches no planner, and that
-gap is printed here rather than left as a companion that refuses every goal for
-a reason the user has nowhere to read.
+one whose owner is talking to a microphone nothing is reading. It also says
+where a listening companion's goals go, and reads that off the record rather
+than describing today's wiring over the top of it: a goal travels to a *second*
+process over the Core RPC link, so "something is listening" and "a goal it hears
+can land" are two facts and not one, and a record left by the build that had no
+goal route at all is still reported as what it was.
 
 The backup line is read rather than recorded, because unlike the other two it is
 a fact about *now*: which backups exist, and whether one of them names the save
@@ -489,9 +491,15 @@ def _render_voice(state: VoiceStatus | None, printer: Printer) -> None:
 
     The adapter printed for a running companion is the one it *constructed*, not
     the one the file names: they are the same in every ordinary case, and the
-    case where they differ is the only one worth a line here. The goal route is
-    printed whenever it is absent, because an agent that hears «поешь» and does
-    nothing looks exactly like one that did not hear it.
+    case where they differ is the only one worth a line here.
+
+    The goal route is printed either way. A companion with one is worth a line
+    because the route runs through a *second process*, so "it is listening" and
+    "a goal it hears can land" are two different facts; a companion without one
+    is worth a line because an agent that hears «поешь» and does nothing looks
+    exactly like one that did not hear it. Records written before the Core RPC
+    link carried goals are the ones that say so, and this reads what they wrote
+    rather than describing today's build over the top of them.
     """
     if state is None:
         printer.field("voice", "not read")
@@ -505,8 +513,16 @@ def _render_voice(state: VoiceStatus | None, printer: Printer) -> None:
                 "voice detail",
                 f"config.toml names {state.adapter}; the running companion is on {record.adapter}",
             )
-        if not record.goals_routed:
-            printer.line("    a spoken stop reaches the game; a spoken goal reaches no planner")
+        if record.goals_routed:
+            printer.line(
+                "    a spoken goal is submitted to the sidecar over the Core RPC link, so it "
+                "needs one running; a spoken stop does not"
+            )
+        else:
+            printer.line(
+                "    this companion was started without a goal route: a spoken stop reaches "
+                "the game, a spoken goal reaches no planner"
+            )
         for note in record.notes:
             printer.field("voice note", note)
         return

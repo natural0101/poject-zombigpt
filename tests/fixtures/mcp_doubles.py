@@ -23,6 +23,11 @@ from pz_agent_core.capabilities.model import (
     CapabilityReport,
     Evidence,
 )
+from pz_agent_core.goals import (
+    GoalAdmission,
+    GoalQueue,
+    GoalRequest,
+)
 from pz_agent_core.observation.compact import redact_text
 from pz_agent_core.protocol import (
     ActionName,
@@ -38,6 +43,8 @@ from pz_agent_mcp.ports import (
     ActionRecord,
     CoreServices,
     DoctorCheck,
+    GoalCancellation,
+    GoalChannelStatus,
     LogRecord,
     MemoryRecord,
     PlanRecord,
@@ -254,6 +261,129 @@ class FakeDiagnosticsPort:
         return self.lines
 
 
+class CountingGoalIds:
+    """Goal ids a test can write down.
+
+    The queue mints ids so a caller cannot choose one — an id a caller chose is
+    an id a caller could fill with text, and it comes back inside refusals. That
+    rule is about the *request* path; the factory is constructor wiring, so
+    swapping it here changes nothing a peer can reach.
+
+    Without this, every result body carrying a goal id contains a fresh uuid4
+    and cannot be pinned against a hand-written object, which is how
+    tests/unit/test_remote_router.py checks that a handler answered the right
+    thing rather than merely something JSON-shaped.
+
+    They are UUIDs, not ``goal-0001``, and that is not decoration: the MCP
+    tool's ``goal_id`` argument is validated against a UUID pattern, so a
+    counter minting a friendlier string makes every call through the tool layer
+    fail with ``INVALID_ARGUMENT`` — a double diverging from production in the
+    one respect the schema checks. Same construction as
+    :class:`FakeActionPort`'s ids, for the same reason.
+    """
+
+    #: 0x60A1 reads as "goal" in the low bytes of a UUID, so a failing assertion
+    #: says which counter minted the value it is complaining about.
+    BASE = 0x60A1
+
+    def __init__(self) -> None:
+        self.issued = 0
+
+    def __call__(self) -> str:
+        self.issued += 1
+        return str(uuid.UUID(int=self.BASE + self.issued))
+
+
+class StoppedClock:
+    """Wall-clock milliseconds that never advance unless a test moves them.
+
+    The goal queue reads a ``Clock`` rather than the system clock, which is what
+    lets a deadline be landed on exactly. Frozen by default: a double whose time
+    moved on its own would make an expiry test pass or fail on how long the rest
+    of the suite took.
+    """
+
+    def __init__(self, start: int = 0) -> None:
+        self.now = start
+
+    def advance(self, milliseconds: int) -> None:
+        self.now += milliseconds
+
+    def __call__(self) -> int:
+        return self.now
+
+
+@dataclass
+class FakeGoalPort:
+    """The goal channel, backed by the real :class:`GoalQueue`.
+
+    Deliberately not a hand-written stand-in that returns whatever the test
+    wants. Every other double here fakes a *boundary the core owns*; the goal
+    channel's invariants — one active goal at a time, a bounded backlog, an
+    idempotency key that makes a resubmission the same goal — are the thing
+    under test at every layer above, and a double that did not enforce them
+    would let a router or a codec pass while getting them wrong.
+
+    So this wraps the genuine queue and records what crossed it. What it fakes
+    is the clock, because the alternative is a test that sleeps.
+    """
+
+    queue: GoalQueue = field(
+        default_factory=lambda: GoalQueue(clock=StoppedClock(), new_id=CountingGoalIds())
+    )
+    submitted: list[GoalRequest] = field(default_factory=list)
+    status_calls: list[str | None] = field(default_factory=list)
+    cancelled: list[str] = field(default_factory=list)
+    #: Set to raise from every method, for the "the core refuses" paths.
+    raises: Exception | None = None
+
+    def submit(self, request: GoalRequest) -> GoalAdmission:
+        self.submitted.append(request)
+        if self.raises is not None:
+            raise self.raises
+        return self.queue.submit(request)
+
+    def status(self, goal_id: str | None = None) -> GoalChannelStatus:
+        self.status_calls.append(goal_id)
+        if self.raises is not None:
+            raise self.raises
+        named = self.queue.record(goal_id) if goal_id is not None else None
+        return GoalChannelStatus(
+            active=self.queue.active,
+            pending=self.queue.pending,
+            named=named,
+        )
+
+    def cancel(self, goal_id: str) -> GoalCancellation:
+        self.cancelled.append(goal_id)
+        if self.raises is not None:
+            raise self.raises
+        goal = self.queue.record(goal_id)
+        if goal is None:
+            return GoalCancellation(goal=None, requested=False)
+        requested = self.queue.request_cancel(goal_id)
+        return GoalCancellation(goal=self.queue.record(goal_id) or goal, requested=requested)
+
+
+@dataclass
+class RefusingGoalPort:
+    """A goal channel that is wired but answers nothing.
+
+    For the routing sweeps, which need every method to *reach a port* without
+    caring what it says. Raising is the honest shape: a channel that returned an
+    empty status would be indistinguishable from one with no goals in it.
+    """
+
+    def submit(self, request: GoalRequest) -> GoalAdmission:
+        raise RuntimeError("this goal channel refuses on purpose")
+
+    def status(self, goal_id: str | None = None) -> GoalChannelStatus:
+        raise RuntimeError("this goal channel refuses on purpose")
+
+    def cancel(self, goal_id: str) -> GoalCancellation:
+        raise RuntimeError("this goal channel refuses on purpose")
+
+
 @dataclass
 class Doubles:
     """Every port, kept addressable so a test can steer one of them."""
@@ -265,9 +395,30 @@ class Doubles:
     plans: FakePlanPort = field(default_factory=FakePlanPort)
     memory: FakeMemoryPort = field(default_factory=FakeMemoryPort)
     diagnostics: FakeDiagnosticsPort = field(default_factory=FakeDiagnosticsPort)
+    goals: FakeGoalPort = field(default_factory=FakeGoalPort)
 
     @property
     def services(self) -> CoreServices:
+        return CoreServices(
+            session=self.session,
+            observations=self.observations,
+            capabilities=self.capabilities,
+            actions=self.actions,
+            plans=self.plans,
+            memory=self.memory,
+            diagnostics=self.diagnostics,
+            goals=self.goals,
+        )
+
+    @property
+    def services_without_a_goal_channel(self) -> CoreServices:
+        """The bundle a build with no goal leg assembles.
+
+        ``CoreServices.goals`` defaults to ``None`` and the router answers the
+        three goal tools with ``CAPABILITY_UNAVAILABLE`` naming it. That is a
+        shipped configuration, so it needs a fixture rather than an ad-hoc
+        ``replace()`` in whichever test remembered.
+        """
         return CoreServices(
             session=self.session,
             observations=self.observations,

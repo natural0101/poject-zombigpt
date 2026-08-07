@@ -19,15 +19,26 @@ while no sidecar is running — which is precisely the state a user reaches for 
 stop word in. :meth:`ExchangeSessionPort.stop` is therefore one guarded path and
 one write, with every read it needs happening *after* the write.
 
-**A spoken goal is not routed, and says so.** :class:`UnroutedPlanPort` refuses
-every submission, because this build has no channel that carries a goal from a
-second process into the running sidecar: the control channel carries arm, disarm
-and stop and nothing else, and the planner proposes from observations rather than
-from requests. The alternative — writing to the command queue the sidecar owns —
-would put the microphone past the reflex guard, the capability gate and the
-policy engine in one step, which is the privileged caller
-:mod:`pz_agent_voice.ports` exists to refuse. The refusal is reported to the user
-as a refusal, recorded in the voice record, and printed by ``pz-agent status``.
+**A spoken goal takes the Core RPC link, and the stop does not.** This module
+used to ship a plan port that refused every submission on the grounds that no
+channel carried a goal from a second process into the running sidecar. That
+stopped being true when the Local Core RPC link landed, and a refusal that
+outlives its reason is a feature the user is told does not exist while the wire
+for it runs. :func:`voice_services` now builds the goal route with
+:func:`~pz_agent_voice.plan_port.services_over_core_rpc` over the same state
+directory the supervisor is given, so a spoken goal arrives in the process that
+owns the planner, the policy engine and the action queue — by the same method,
+the same codec and the same refusals a tool call uses, which is what keeps the
+microphone from being a privileged caller. The one thing that does *not* take
+the link is the stop, for the reason above: a goal needs a sidecar, and a stop
+has to work when nothing is running.
+
+**Nothing claims the channel is up without asking it.** ``voice check`` dials
+:meth:`~pz_agent_mcp.remote.client.RemoteGoalPort.status` before it says
+anything about where a goal would go, and reports the link's own sentence —
+which names ``pz-agent start`` — when there is nothing there. A descriptor on
+disk and a live pid are both cheaper and both say "routed" about a sidecar that
+has stopped answering, which is exactly the report this build removed.
 
 **The fake is not selectable.** :data:`~pz_agent_cli.config.SUPPORTED_VOICE_ADAPTERS`
 does not list it and :func:`select_adapter` does not construct it under any
@@ -52,10 +63,10 @@ import argparse
 import asyncio
 import os
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, TypeAlias
 
 from pz_agent_core.capabilities import MAX_NOTES
 from pz_agent_core.diagnostics import DiagnosticLog, LogLevel
@@ -66,7 +77,14 @@ from pz_agent_core.planner.providers import CredentialUnavailable, key_from_env
 from pz_agent_core.protocol import DangerLevel, JsonDict, ReasonCode, SessionMode
 from pz_agent_core.session.heartbeat import HeartbeatMonitor, Peer
 from pz_agent_core.version import PROTOCOL_VERSION
-from pz_agent_mcp.ports import PlanRecord, PlanRequest, SessionSnapshot, StopReport
+from pz_agent_mcp.ports import SessionSnapshot, StopReport
+from pz_agent_mcp.remote.client import (
+    SIDECAR_REMEDY,
+    CoreLink,
+    RemoteCoreError,
+    RemoteGoalPort,
+    SidecarUnavailable,
+)
 from pz_agent_voice import (
     DEFAULT_VOICE_CONFIG,
     TeamONVoiceAdapter,
@@ -84,6 +102,7 @@ from pz_agent_voice.adapters.teamon import (
     require_teamon_sdk,
 )
 from pz_agent_voice.messages import VoiceGoal, VoiceInput, VoiceIntent
+from pz_agent_voice.plan_port import services_over_core_rpc
 
 from .config import ADAPTER_NONE, ADAPTER_TEAMON, AgentConfig, load_config
 from .context import EXIT_FAILURE, EXIT_OK, CliContext, Workspace, resolve_workspace
@@ -91,13 +110,14 @@ from .output import Printer
 from .supervisor import SidecarSupervisor, _read_json, _write_json
 
 __all__ = [
-    "GOALS_UNROUTED",
+    "GOALS_ROUTED",
+    "GOAL_CHANNEL_PROBE_SECONDS",
     "VOICE_RECORD_NAME",
     "VOICE_SUBCOMMANDS",
+    "ChannelProbe",
     "ExchangeSessionPort",
-    "GoalUnroutable",
+    "GoalChannelReading",
     "PhraseReading",
-    "UnroutedPlanPort",
     "VoiceRecord",
     "VoiceRecordError",
     "VoiceRefused",
@@ -106,6 +126,7 @@ __all__ = [
     "add_voice_parser",
     "build_companion",
     "collect_voice_status",
+    "probe_goal_channel",
     "publish_voice_record",
     "read_phrase",
     "read_voice_record",
@@ -135,16 +156,6 @@ class VoiceRefused(ValueError):
 
 class VoiceRecordError(ValueError):
     """A voice record could not be read or written as a whole document."""
-
-
-class GoalUnroutable(RuntimeError):
-    """A spoken goal had nowhere to go, so nothing was submitted.
-
-    Raised rather than answered with a refused :class:`~pz_agent_mcp.ports.PlanRecord`
-    because a record is a statement about a plan that exists, and none does. The
-    companion reports it as a refusal, keeps listening, and the next «стоп» still
-    reaches the latch.
-    """
 
 
 # ---------------------------------------------------------------------------
@@ -279,48 +290,39 @@ class ExchangeSessionPort:
         return StopReport(cleared=0, disarmed=not snapshot.armed, mode=snapshot.mode)
 
 
-@dataclass(frozen=True, slots=True)
-class UnroutedPlanPort:
-    """The plan route a second process does not have, stated as a refusal.
-
-    Every other honest option is worse. Returning a refused record would claim a
-    plan was considered and declined, when none was submitted anywhere; returning
-    ``None`` from :meth:`current` would claim nothing is running, which this
-    process cannot see either. So both raise, the companion says «Не получилось.»,
-    and ``pz-agent status`` prints the gap rather than leaving it as an agent that
-    listens and then does nothing for reasons the user cannot discover.
-    """
-
-    detail: str
-
-    def execute(self, request: PlanRequest) -> PlanRecord:
-        """Refuse *request* without submitting it anywhere.
-
-        Raises:
-            GoalUnroutable: always.
-        """
-        raise GoalUnroutable(f"the goal {request.goal!r} was not submitted: {self.detail}")
-
-    def current(self) -> PlanRecord | None:
-        """Refuse to answer, because this process cannot see a plan.
-
-        Raises:
-            GoalUnroutable: always.
-        """
-        raise GoalUnroutable(f"no plan can be read from here: {self.detail}")
-
-
-#: Why a spoken goal goes nowhere in this build. Carried on the port so the
-#: refusal a user hears about and the sentence ``status`` prints are one string.
-GOALS_UNROUTED: Final = (
-    "this build has no channel that carries a goal into a running sidecar — the "
-    "control channel carries arm, disarm and stop only, and the planner proposes "
-    "from observations rather than from requests"
+#: Where a spoken goal goes, in one sentence. One constant rather than one
+#: phrasing per call site, so the line ``voice run`` prints and the reason a
+#: record carries cannot drift apart.
+GOALS_ROUTED: Final = (
+    "a spoken goal is submitted to the running sidecar over the Core RPC link, where it meets "
+    "the same planner, policy engine and limits a tool call meets; with no sidecar running the "
+    "companion says the goal did not land, and «стоп» reaches the game either way"
 )
+
+#: How long ``voice check`` waits for the goal channel to answer before it
+#: reports it unreachable. Short on purpose: this command answers a question
+#: about a phrase and a user is waiting at a terminal for it. The call it bounds
+#: is a read — ``goal.status`` reports what the channel holds and changes
+#: nothing — so an expiry leaves nothing half-done.
+GOAL_CHANNEL_PROBE_SECONDS: Final = 2.0
 
 
 def voice_services(workspace: Workspace, *, clock: Clock) -> VoiceServices:
-    """The two ports the companion drives, over *workspace*'s exchange directory.
+    """The ports the companion drives: the exchange directory, and the link.
+
+    Two transports, deliberately. Arm, disarm and stop stay on
+    :class:`ExchangeSessionPort`, where one write reaches the mod whether or not
+    a sidecar is running. Goals take
+    :func:`~pz_agent_voice.plan_port.services_over_core_rpc` over
+    ``workspace.state_dir`` — the directory :class:`SidecarSupervisor` is handed
+    here and the one a running sidecar publishes its RPC descriptor and token
+    into, so there is no second path to configure and nothing to keep in step.
+
+    Nothing is dialled by this function. The link resolves the descriptor and
+    the token on every call, so the companion may be started before the sidecar,
+    a sidecar that restarts underneath it stays reachable, and "the sidecar is
+    not running" arrives as a refused goal the user is told about rather than as
+    a companion that never started and therefore never heard «стоп».
 
     Raises:
         VoiceRefused: when there is no exchange directory to drive, which is the
@@ -332,13 +334,72 @@ def voice_services(workspace: Workspace, *, clock: Clock) -> VoiceServices:
             "no Zomboid directory was found, so there is no exchange directory to "
             "speak to. Run 'pz-agent doctor' and read PZD003"
         )
-    return VoiceServices(
-        session=ExchangeSessionPort(
+    return services_over_core_rpc(
+        ExchangeSessionPort(
             layout=IpcLayout(ipc_root),
             supervisor=SidecarSupervisor(workspace.state_dir, clock=clock),
             clock=clock,
         ),
-        plans=UnroutedPlanPort(detail=GOALS_UNROUTED),
+        workspace.state_dir,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class GoalChannelReading:
+    """What the goal channel answered when this process asked it.
+
+    ``reachable`` is observed rather than inferred: something accepted a
+    connection, authenticated it and answered ``goal.status``. The cheaper
+    checks were all available — a descriptor on disk, a process id that is still
+    alive — and every one of them reports a routed channel about a sidecar that
+    has stopped answering, which is the claim this reading exists to stop making.
+    """
+
+    reachable: bool
+    detail: str
+
+    def to_dict(self) -> JsonDict:
+        return {"reachable": self.reachable, "detail": self.detail}
+
+
+#: Asks the goal channel about itself, once, when something needs the answer.
+#: A callable rather than a reading so that :func:`read_phrase` can stay a pure
+#: function of the words for every phrase that is not a goal — a stop must be
+#: answerable on a machine with no sidecar, no game and no network at all.
+ChannelProbe: TypeAlias = Callable[[], GoalChannelReading]
+
+
+def probe_goal_channel(
+    state_dir: Path, *, deadline: float = GOAL_CHANNEL_PROBE_SECONDS
+) -> GoalChannelReading:
+    """Ask the goal channel at *state_dir* whether it is there.
+
+    One read-only call. ``goal.status`` submits nothing, admits nothing and
+    cancels nothing, so this is safe to run against a live armed session by a
+    user who only wants to know whether a spoken goal would land.
+
+    Every way of not reaching the channel is reported as unreachable carrying
+    the link's own sentence, which names the file that was missing and the
+    command that starts a sidecar. Nothing here rewrites those: this process
+    knows strictly less about the failure than the layer that raised it.
+    """
+    port = RemoteGoalPort(CoreLink(state_dir=state_dir, deadline=deadline))
+    try:
+        status = port.status()
+    except SidecarUnavailable as absent:
+        # Its message already ends in SIDECAR_REMEDY, which names 'pz-agent start'.
+        return GoalChannelReading(reachable=False, detail=str(absent))
+    except RemoteCoreError as unreadable:
+        # A refusal or an unreadable answer. Something is there and this build
+        # cannot use it, which is not a routed channel either.
+        return GoalChannelReading(reachable=False, detail=f"{unreadable}; {SIDECAR_REMEDY}")
+    active = "one goal active" if status.active is not None else "no goal active"
+    return GoalChannelReading(
+        reachable=True,
+        detail=(
+            f"the channel answered: {active} and {len(status.pending)} waiting, so a goal "
+            "spoken now is submitted to it"
+        ),
     )
 
 
@@ -359,7 +420,7 @@ def build_companion(
         services,
         clock=clock,
         # A fresh key per submission, so a transcript the recogniser repeated
-        # cannot become two plans if the goal route is ever wired.
+        # cannot become two plans on the far side of the link.
         ids=lambda: uuid.uuid4().hex,
         config=config,
     )
@@ -486,9 +547,14 @@ class VoiceRecord:
     ``voice run`` that ended up on something other than the configured adapter
     would say so here instead of looking identical to one that did not.
 
-    ``goals_routed`` is the field this build writes ``False`` into, and it is
-    here rather than hard-coded in the renderer so that the day a goal channel
-    exists, ``status`` starts saying so without ``status`` changing.
+    ``goals_routed`` says whether the companion that wrote this record had a
+    route for a spoken goal at all. This build writes ``True``: goals take the
+    Core RPC link. It is a field rather than a constant in the renderer because
+    it is a fact about the process that ran — a record left by the build that
+    had no such route reads ``False``, and ``status`` says so instead of
+    describing a route that companion never had. It is not a claim that a
+    sidecar is up; that is a question only :func:`probe_goal_channel` answers,
+    and only at the moment it is asked.
 
     ``running`` is written when the companion starts and rewritten when it exits,
     including on a failure. A process killed outright leaves it True with nothing
@@ -674,7 +740,7 @@ _EFFECTS: Final[dict[VoiceIntent, str]] = {
         "stops the agent, from any state, with no wake word and without waiting for the "
         "recogniser to settle"
     ),
-    VoiceIntent.GOAL: "asks the agent to start work",
+    VoiceIntent.GOAL: "asks the agent to start work, over the running sidecar's goal channel",
     VoiceIntent.STATUS: "asks the companion to say what the session is",
     VoiceIntent.AFFIRM: "answers an outstanding question; on its own it does nothing",
     VoiceIntent.DENY: "declines an outstanding question; on its own it does nothing",
@@ -694,6 +760,7 @@ class PhraseReading:
     woke: bool
     effect: str
     notes: tuple[str, ...] = ()
+    channel: GoalChannelReading | None = None
 
     @property
     def recognised(self) -> bool:
@@ -709,6 +776,7 @@ class PhraseReading:
             "recognised": self.recognised,
             "effect": self.effect,
             "notes": list(self.notes),
+            "goal_channel": None if self.channel is None else self.channel.to_dict(),
         }
 
 
@@ -724,7 +792,12 @@ def _needs_a_wake_word(intent: VoiceIntent, *, config: VoiceConfig, woke: bool) 
     return config.require_wake_word and not woke
 
 
-def read_phrase(phrase: str, *, config: VoiceConfig = DEFAULT_VOICE_CONFIG) -> PhraseReading:
+def read_phrase(
+    phrase: str,
+    *,
+    config: VoiceConfig = DEFAULT_VOICE_CONFIG,
+    channel: ChannelProbe | None = None,
+) -> PhraseReading:
     """Resolve *phrase* exactly as a heard transcript would resolve.
 
     Through :func:`~pz_agent_voice.intent.classify` and nothing else, because a
@@ -735,6 +808,13 @@ def read_phrase(phrase: str, *, config: VoiceConfig = DEFAULT_VOICE_CONFIG) -> P
     The phrase is treated as a final transcript at full confidence — a typed one
     is neither a guess nor half-heard — so what this reports is what the session
     would do with the words, not with the recogniser's opinion of them.
+
+    *channel* is asked only when the phrase resolves to a goal, which is the one
+    intent whose effect depends on another process being there. A stop is
+    answered without it, and so is a word that matched nothing: dialling a socket
+    to explain «бармаглот» would make this command fail on the machines it is
+    most often run on. Left at ``None`` the reading simply says nothing about the
+    channel, which is what a caller that did not ask has a right to.
     """
     raw = VoiceInput(transcript=phrase, at_ms=0, final=True, confidence=1.0)
     match = classify(raw, wake_words=config.wake_words)
@@ -744,8 +824,6 @@ def read_phrase(phrase: str, *, config: VoiceConfig = DEFAULT_VOICE_CONFIG) -> P
             "no wake word in this phrase: it is acted on only inside an open wake session. "
             f"The wake words are {', '.join(sorted(config.wake_words))}"
         )
-    if match.intent is VoiceIntent.GOAL:
-        notes.append(GOALS_UNROUTED)
     if match.intent is VoiceIntent.AMBIGUOUS and match.goals:
         notes.append(
             "it matched " + ", ".join(goal.value for goal in match.goals) + ", so nothing starts"
@@ -757,6 +835,7 @@ def read_phrase(phrase: str, *, config: VoiceConfig = DEFAULT_VOICE_CONFIG) -> P
         woke=match.woke,
         effect=_EFFECTS[match.intent],
         notes=tuple(notes),
+        channel=None if channel is None or match.intent is not VoiceIntent.GOAL else channel(),
     )
 
 
@@ -810,6 +889,26 @@ def run_voice(ctx: CliContext, args: argparse.Namespace) -> int:
     raise AssertionError(f"unrouted voice subcommand: {subcommand!r}")
 
 
+def _goal_channel_probe(ctx: CliContext) -> ChannelProbe:
+    """Dial the goal channel for this machine, if a goal is what was said.
+
+    The workspace is resolved inside the closure rather than around it, so a
+    ``voice check стоп`` on a machine with no game and no profile still answers
+    without running discovery, and only a goal pays for the lookup.
+
+    The link's sentences name files rather than paths, but they are printed and
+    pasted into bug reports, so they go through the workspace's redactor for the
+    same reason every other line this command prints does.
+    """
+
+    def probe() -> GoalChannelReading:
+        workspace = resolve_workspace(ctx)
+        reading = probe_goal_channel(workspace.state_dir)
+        return replace(reading, detail=workspace.redactor.text(reading.detail))
+
+    return probe
+
+
 def run_voice_check(ctx: CliContext, *, phrase: str, as_json: bool) -> int:
     """Handler for ``pz-agent voice check``.
 
@@ -817,9 +916,15 @@ def run_voice_check(ctx: CliContext, *, phrase: str, as_json: bool) -> int:
     matcher compares — the answer to "why was that not recognised" is usually
     visible in them — and they are already bounded and stripped of everything a
     terminal would act on, which the raw argument is not.
+
+    A phrase that resolves to a goal also gets the goal channel asked about
+    itself, and the answer is printed whichever way it came out. The exit code
+    stays a statement about *recognition* — that is the question a script asks
+    this command, and an unreachable sidecar is not the phrase's fault — so the
+    channel is reported in a field of its own rather than folded into the status.
     """
     printer = Printer(ctx.stdout, ctx.stderr)
-    reading = read_phrase(phrase)
+    reading = read_phrase(phrase, channel=_goal_channel_probe(ctx))
     if as_json:
         printer.json(reading.to_dict())
         return EXIT_OK if reading.recognised else EXIT_FAILURE
@@ -833,6 +938,9 @@ def run_voice_check(ctx: CliContext, *, phrase: str, as_json: bool) -> int:
         printer.field("goal", reading.goal.value)
     printer.field("wake word", "heard" if reading.woke else "not in this phrase")
     printer.field("effect", reading.effect)
+    if reading.channel is not None:
+        state = "reachable" if reading.channel.reachable else "UNREACHABLE"
+        printer.field("goal channel", f"{state} — {reading.channel.detail}")
     for note in reading.notes:
         printer.field("note", note)
     return EXIT_OK if reading.recognised else EXIT_FAILURE
@@ -893,15 +1001,14 @@ def run_voice_run(ctx: CliContext, *, as_json: bool, client: TeamONClient | None
             detail=f"a companion is listening on {name}",
             pid=os.getpid(),
             started_at_ms=started_at_ms,
-            goals_routed=False,
-            notes=(GOALS_UNROUTED,),
+            goals_routed=True,
         ),
     )
     log = _companion_log(ctx, workspace)
-    _log_safely(log, LogLevel.INFO, "voice.start", adapter=name, goals_routed=False)
+    _log_safely(log, LogLevel.INFO, "voice.start", adapter=name, goals_routed=True)
     if not as_json:
         printer.line(f"listening on {name}. Say «стоп» to stop the agent; Ctrl-C to stop this.")
-        printer.field("goals", GOALS_UNROUTED)
+        printer.field("goals", GOALS_ROUTED)
     ended, code = _serve(companion)
     _log_session(log, companion, adapter=name, ended=workspace.redactor.text(ended))
     publish_voice_record(
@@ -912,7 +1019,7 @@ def run_voice_run(ctx: CliContext, *, as_json: bool, client: TeamONClient | None
             detail=workspace.redactor.text(ended),
             pid=os.getpid(),
             started_at_ms=started_at_ms,
-            goals_routed=False,
+            goals_routed=True,
         ),
     )
     message = workspace.redactor.text(ended)
@@ -922,7 +1029,7 @@ def run_voice_run(ctx: CliContext, *, as_json: bool, client: TeamONClient | None
                 "started": True,
                 "adapter": name,
                 "detail": message,
-                "goals_routed": False,
+                "goals_routed": True,
                 "ok": code == EXIT_OK,
             }
         )

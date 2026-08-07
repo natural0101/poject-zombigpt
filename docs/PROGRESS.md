@@ -1,20 +1,26 @@
 # Progress
 
-Live status of the task graph in
-[`docs/blueprint/task_graph.yaml`](https://github.com/natural0101/poject-zombigpt/blob/main/docs/blueprint/task_graph.yaml). This file is the
-handover point between work sessions: read it first, update it last.
+The handover point between work sessions: read it first, update it last.
+
+> **This file is no longer where progress is decided.** The plan of record is
+> [`docs/control/MASTER_PLAN.yaml`](https://github.com/natural0101/poject-zombigpt/blob/main/docs/control/MASTER_PLAN.yaml), and the current figure
+> comes from `.venv/bin/python scripts/master_report.py`, never from a number
+> written here. What follows is the closed T001–T030 graph, kept as history,
+> and the defect record — which is the part still worth reading.
 
 **Legend** — `done` implementation + tests + docs complete and `scripts/check.sh`
 green · `wip` in progress · `todo` not started · `live` blocked on a step that
 physically requires a running game.
 
-Last updated: 28 of 30 tasks closed; T029 and T030 are blocked on a live game,
-not deferred. 3677 Python tests and 2875 Lua assertions across 26 suites,
-mypy strict over 271 files, `scripts/check.sh` green — measured under Python
-3.11.15, which is the only interpreter with the suite installed here. CI
-declares a 3.11/3.12 matrix; that is configuration, not a result observed in
-this container.
-See FINAL_IMPLEMENTATION_REPORT.md.
+The T001–T030 graph: 28 of 30 closed; T029 and T030 are blocked on a live game,
+not deferred. That measurement was 3677 Python tests and 2875 Lua assertions
+across 26 suites with mypy strict over 271 files, taken under Python 3.11.15,
+the only interpreter with the suite installed in this container. It is a
+historical reading and has not been re-taken; the tree has grown by roughly
+1500 tests since. CI declares a 3.11/3.12 matrix and both legs are now observed
+green, which was configuration rather than a result when that line was written.
+See FINAL_IMPLEMENTATION_REPORT.md — noting that it, too, predates the master
+plan and describes the release candidate as it stood then.
 
 Work beyond the original graph is complete on `feature/playable-agent-1.0`:
 the protocol grew from fifteen actions to twenty-two, the mod gained a real
@@ -114,30 +120,84 @@ kind**, and it is the only one that cannot be closed from here.
 
 ## Where the current work is tracked
 
-The T001–T030 graph below is closed. Work since then is the release candidate,
-and it is tracked somewhere else, under a stricter rule: **one step is one
-percentage point, and a step is `PASS` only with a commit and an evidence path
-that exists.**
+**The plan of record is
+[`docs/control/MASTER_PLAN.yaml`](https://github.com/natural0101/poject-zombigpt/blob/main/docs/control/MASTER_PLAN.yaml).** The T001–T030 graph
+below is closed and is kept as history. Everything after it lives in the master
+plan, and nothing else in this repository states how far along the project is.
 
-- [`docs/control/PLAN.md`](https://github.com/natural0101/poject-zombigpt/blob/main/docs/control/PLAN.md) — the hundred steps in twelve stages,
-  what a `PASS` costs, and the nine substitutions that may never be counted (a
-  Linux result as evidence about Windows, a mock as evidence about the game, a
-  PyInstaller spec with no built executable, …).
-- [`docs/control/STATUS.json`](https://github.com/natural0101/poject-zombigpt/blob/main/docs/control/STATUS.json) — the only place progress is
-  recorded. `overall_percent` is **counted** by `scripts/progress_report.py`,
-  never written by hand.
-- `scripts/check_progress.py` — the gate, not a report. It refuses a percentage
-  that disagrees with the `PASS` count, a `PASS` with no evidence or no commit,
-  a gap in the sequence, a step passing while a dependency has not, a live-game
-  step passing at all from this environment, a Windows step passing while the
-  Windows workflow is red, and step 100 passing with no GitHub Release.
-- [`docs/control/BLOCKERS.md`](https://github.com/natural0101/poject-zombigpt/blob/main/docs/control/BLOCKERS.md) — one entry per thing that
-  stopped a step, closed only by a fix plus a regression test.
+The hundred-step model that used to be described here has been **retired**. It
+counted steps and called one step one percentage point, which meant a paragraph
+of documentation and a Project Zomboid scenario running on a real machine were
+the same size — so `STEP 51/100` read as "half done" while several subsystems
+had not been started. `docs/control/PLAN.md` and `STATUS.json` are historical.
 
-Three totals are counted separately because they are separately blocked:
-remote implementation (steps 1–95, this environment), live game validation
-(96–98, needs Windows + Steam + Project Zomboid), final release (99–100). "Done"
-is not a word that applies until step 100 is `PASS`.
+What replaced it:
+
+- **Five levels.** `EPIC → MILESTONE → TASK → CHECK → EVIDENCE`. A `TASK` is one
+  action. A `CHECK` is a claim about a milestone that no single task
+  establishes — the integration claim, true of the whole and of none of the
+  parts. `EVIDENCE` is a path that exists on disk; everything above it is a
+  claim.
+- **Weight, not count.** `progress = Σ weight(PASS) / Σ weight(all) × 100`,
+  derived on every read. No percentage is stored anywhere, so none can go stale;
+  `tests/unit/test_master_plan.py` asserts that the file contains no stored
+  figure at all. Weights sit in validated, disjoint bands: `doc` 1–2, `audit`
+  1–3, `portability` and `packaging` 3–5, `evidence` 4–6, `transport` 5–6,
+  `integration` 7–8, `security` 7–9, `live` 9–10. Documentation, RPC transport,
+  MCP end-to-end and live tests cannot share a weight — a rule the bands broke
+  until `transport` and `integration` were narrowed apart.
+- **An epic does not close because its tasks did.** Five conditions, all
+  required: every task `PASS`, every check `PASS`, evidence present, the
+  required workflow green, and a declared integration scenario that has run.
+  Nineteen of twenty tasks is open. Every task passing with the check open is
+  open, because that is the exact shape of the recurring defect in this
+  repository — a subsystem complete, tested, green, and connected to nothing.
+- **Seven metrics, reported separately**, because one number hides a subsystem
+  at zero. Two of them are at zero right now, and the overall figure is not.
+
+The tooling, all of it gates rather than reports:
+
+- `scripts/build_master_plan.py` emits the YAML from the task definitions and
+  refuses a weight outside its band. `--check` detects a hand-edited plan.
+- `scripts/check_master_plan.py` — eleven refusals: a `PASS` with no evidence,
+  with no commit, with an evidence path that does not exist, with an unmet
+  dependency, with a regression test that does not exist; a `local` task marked
+  `PASS` from this environment, which cannot honestly claim it; a Windows claim
+  on a red Windows workflow; a `PASS` check with no evidence; an epic recorded
+  closed that `epic_closed` disagrees with; an unknown status; and drift from
+  the generator.
+- `scripts/master_report.py` prints the mandated block.
+- `scripts/verify_carryover.py` re-runs a task's regression test before its
+  `PASS` is believed. Nothing inherits a pass from the old model.
+- `tests/unit/test_master_plan.py` proves each of those refusals by planting the
+  violation it exists to catch, and includes a control asserting a clean plan is
+  admitted — without which a gate that rejected everything would satisfy them
+  all.
+
+### The figures, as of `521f1e4`
+
+Run `.venv/bin/python scripts/master_report.py` for the current ones; these are
+not maintained by hand and will drift.
+
+```
+OVERALL WEIGHTED PROGRESS: 40.1%  (1244/3104 weight)
+TOTAL TASKS 480 · PASS 218 · IN_PROGRESS 33 · FAIL 0 · BLOCKED 0 · NOT_STARTED 229
+CHECKS: 0/54 PASS
+
+CODE IMPLEMENTATION    56.2%   (682/1213)
+WINDOWS COMPATIBILITY  89.3%   (259/290)
+MCP OPERABILITY        58.3%   (154/264)
+VOICE OPERABILITY       0.0%   (0/324)
+RC PACKAGING           17.3%   (35/202)
+LIVE GAME VALIDATION    0.0%   (0/599)
+FINAL RELEASE           0.0%   (0/200)
+```
+
+Three of those seven are at zero. **Live game validation is 599 of 3104 weight —
+a fifth of the project — and nothing in this environment can move it**, because
+nothing here can start Project Zomboid. Every task in those epics is owned
+`local`, and the gate refuses to mark one `PASS` from here at all. "Done" is not
+a word that applies to this build.
 
 ## Status
 

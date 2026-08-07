@@ -36,6 +36,89 @@ something above it failed — and `doctor` says which.
 
 ---
 
+## The MCP server's exit codes
+
+`pz-agent-mcp` is launched as a subprocess by your MCP client, so when it
+refuses, what you see in the client's log is an exit code and one line on
+stderr. There are nine, all declared as `EXIT_*` constants in
+`packages/pz_agent_mcp/src/pz_agent_mcp/__main__.py`, and they are nine rather
+than fewer because the remedies are different: "no sidecar is running", "the
+sidecar died without cleaning up", "there are two installs on this machine" and
+"the SDK extra is missing" send you to four different places.
+
+| Code | Constant | Cause | Remedy |
+| --- | --- | --- | --- |
+| 0 | `EXIT_OK` | Served the surface, or answered `--describe` / `--version` / `--help`. | — |
+| 1 | `EXIT_NOT_WIRED` | No sidecar for that state directory: either its `runtime/` folder holds no `core-rpc.json`, or the descriptor names a live process and nothing answered on its address within the deadline. Both mean the sidecar is not running. | `pz-agent start`, then `pz-agent status`. |
+| 2 | `EXIT_USAGE` | A malformed invocation. Passing both `--state-dir` and `--zomboid-dir` lands here — they are two answers to one question, and a precedence rule would leave you certain you had set the one that was ignored. So does passing either alongside embedder-supplied services, and so does a directory flag naming a directory that is not there. | Read `--help`. `pz-agent start` prints the client configuration block with `--state-dir` already filled in. |
+| 3 | `EXIT_NO_SDK` | The optional `mcp` extra is not installed. This gate fires **before** anything to do with the sidecar, so it is what you meet on a fresh install — not exit 1. | `pip install pz-agent[mcp]`. |
+| 4 | `EXIT_STALE_DESCRIPTOR` | `core-rpc.json` is there and the process it names is gone, or its token file went with it. The sidecar was killed rather than stopped. | `pz-agent start` again. If it keeps stopping, `pz-agent doctor` reports why. |
+| 5 | `EXIT_PROTOCOL_MISMATCH` | The descriptor says the sidecar speaks a different Core RPC major than this executable does. Both halves ship from one install, so two installs are present. | Run each half with `--version` — the `pz-agent` command and the `pz-agent-mcp` command — and use the pair that match. Restarting the sidecar cannot fix this. |
+| 6 | `EXIT_DESCRIPTOR_UNREADABLE` | There is a file where the descriptor belongs and it is not one: truncated, foreign, or left by a start that did not finish. | `pz-agent stop` then `pz-agent start` rewrites it. Restarting a running sidecar will not. |
+| 7 | `EXIT_ANSWER_UNREADABLE` | Something answered on the sidecar's address and this build cannot read the answer. Never reported as a refusal: the core did not say no, this side could not tell what it said. | Check both versions match, then `pz-agent doctor`. |
+| 8 | `EXIT_NO_STATE_DIR` | Neither directory flag was given and the process cannot work out which state directory to use — either the CLI package that owns the layout is not importable (an incomplete install), or the machine's directories could not be read. | Name it with `--state-dir`. `pz-agent doctor` reports what is unreadable. |
+
+Codes 3 and 8 fire before anything is dialled. Codes 4 to 7 mean the link was
+tried. `tests/contract/test_mcp_exit_codes_documented.py` reads the `EXIT_*`
+constants out of the module and fails when one of them is undocumented, so this
+table cannot fall behind the executable.
+
+Two invocations never reach any of that machinery and answer on a machine with
+no game, no sidecar and no SDK:
+
+```
+pz-agent-mcp --describe
+```
+
+That writes the whole published surface as JSON. `--version` answers the same
+way. If those work and nothing else does, the executable is fine and the problem
+is the link.
+
+**Nothing but protocol reaches stdout.** Once serving starts, stdout is the
+JSON-RPC stream your client is parsing. Every diagnostic goes to stderr, and the
+one line written on a successful connection names the server and the version and
+nothing else. The address and the token never reach either stream.
+
+---
+
+## Refusals you will actually see
+
+Every failure the agent reports carries a `reason_code` from a closed set
+(the full list is in [`PROTOCOL.md`](PROTOCOL.md)). The ones below are the ones
+with a remedy that is not obvious. The rest of this document expands the
+common ones.
+
+| Reason code | What it means | What to do |
+| --- | --- | --- |
+| `NOT_ARMED` | The session is in `OBSERVE` or `OFF` and the tool changes the world. | `pz-agent arm --mode assisted`, or use a read/query tool. Stopping, disarming and cancelling are never refused this way. |
+| `POLICY_DENIED` | The mode, the initiative or the risk tier does not allow it. A `P4` action on the agent's own initiative always lands here. | Ask for it explicitly; a `P4` needs a per-call grant. |
+| `CAPABILITY_UNAVAILABLE` | The capability behind the action is not usable on this install. | See *"Capability unsupported"* below. |
+| `INVALID_REF` | A reference from a previous session or save generation. | Re-observe. Not retryable. |
+| `INVALID_ARGUMENT` | The value failed the published schema or the adapter's own check. | Compare against `docs/MCP_TOOLS.md`; the bounds there are the enforced ones. |
+| `PRECONDITION_FAILED` | The world was not in the state the action needs — bandaging a part that is not bleeding, for instance. | Re-observe and pick again. |
+| `QUEUE_REJECTED` | The mod would not take the command; usually one is already in flight. | Retryable. Wait for the terminal ack. |
+| `LEASE_EXPIRED` | The command's TTL ran out. | See below. |
+| `PATH_NOT_FOUND` / `TARGET_OUT_OF_RANGE` / `TARGET_NOT_LOADED` | The destination cannot be reached, is beyond `max_distance`, or is in a chunk the game has not loaded. | Move closer and re-observe. Not retryable. |
+| `PATH_STUCK` / `NO_PROGRESS` | The character stopped making progress. | Retryable within the budget; then reported. |
+| `ACTION_TIMEOUT` | The action did not reach a terminal state inside its lease. | Retryable. |
+| `POSTCONDITION_FAILED` | See below — this is the system working. |  |
+| `NO_SAFE_FOOD` / `NO_SAFE_DRINK` / `NO_SUITABLE_LITERATURE` | Policy rejected every candidate, and says why each one lost. | See below. |
+| `RESOURCE_RESERVED` | The only candidate is one you reserved. | `pz-agent remember release <item>`. |
+| `CONTAINER_FULL` | The destination has no room. | Free space or pick another container. |
+| `USER_TAKEOVER` / `PLAYER_BUSY_MANUAL_ACTION` | You queued an action, or the mod saw one it did not queue. | Nothing. This is the design; automation waits for you. |
+| `THREAT_INTERRUPTED` | The reflex guard stopped the action. | Deal with the zombie. |
+| `PANIC_STOP` | The panic latch was set. | Re-arm deliberately when ready. |
+| `GAME_DISCONNECTED` / `STALE_SESSION` / `SESSION_TERMINATED` / `SAVE_CHANGED` | The session ended, the link went stale, the character died, or the save changed. | Restart and re-arm. Nothing re-arms itself. |
+| `SEQ_CONFLICT` | A sequence gap or a duplicate the journal could not reconcile. | Re-observe; the sidecar requests a full snapshot on a gap. |
+| `INTERNAL_ERROR` | A bug. | `pz-agent logs --bundle --verify` and file it. |
+
+Only five codes are retryable — `PATH_STUCK`, `NO_PROGRESS`, `ACTION_TIMEOUT`,
+`QUEUE_REJECTED`, `PLAYER_BUSY_MANUAL_ACTION` — and the `retryable` field of an
+MCP error payload tells you which one you are holding, so you do not have to
+keep your own table.
+
+---
+
 ## "Nothing happens"
 
 This has four distinct causes that look identical from the outside. `doctor`
@@ -122,8 +205,13 @@ If you disagree with a rule, the one you can change without editing code is the
 reserve: `pz-agent remember list` shows what is currently held back and
 `pz-agent remember release <item>` stops reserving it. The freshness and
 rot thresholds are policy in `pz_agent_core/policy/food.py` and are not exposed
-in `config.toml` — `[safety]` holds `allow_multiplayer`, `manual_takeover`,
-`max_autonomous_radius` and `panic_hotkey`, and nothing else.
+in `config.toml` — `[safety]` holds `allow_multiplayer`,
+`disabled_capabilities`, `manual_takeover`, `max_autonomous_radius` and
+`panic_hotkey`, and nothing else. None of the five reaches a selection rule.
+`disabled_capabilities` comes closest and only subtracts: its accepted names are
+read from the probe table, so it can switch a capability off and can never
+invent one, and a name that is not a probe's is a configuration error rather
+than an ignored line.
 
 ## "INVALID_REF"
 

@@ -80,3 +80,57 @@ figure would have averaged that into something that sounds like progress.
 last is an integration scenario that exercises the epic end to end. Every defect
 this project has found was a subsystem that was complete, tested, green and
 connected to nothing — which is exactly what a task count cannot see.
+
+## The voice companion routes through `goal.submit`, not `plan.execute`
+
+Decided at `ed35e81`. An agent building the voice plan port raised this rather
+than guessing, which was the right call: it had wired `PlanPort` because that is
+what `VoiceSession._start_goal` calls, and asked whether the typed goal channel
+was meant to replace it before either milestone was marked done.
+
+**The answer is the goal channel, and the reason is parameters.**
+
+The privacy argument, which is the one that looks decisive, turns out not to be.
+`VoiceGoal` is already a closed `StrEnum` of four tokens — `eat`, `drink`,
+`read`, `resume` — and `PlanRequest.goal` receives `goal.value`, so no
+transcript text crosses that boundary today. `PlanRequest.goal` being typed
+`str` is a latitude nothing exercises. Routing voice through `plan.execute`
+would not leak a transcript.
+
+What it cannot do is carry a *quantity*. `VoiceGoal` has no parameters at all,
+and E09-M02 requires two things of the intent layer that depend on having them:
+T003, that quantities and targets become typed fields, and T004, that a
+parameter outside its declared range is refused. "Прочитай двенадцать страниц"
+has to arrive somewhere as `pages=12`, and be refused at `pages=999`. There is
+nowhere in a `PlanRequest` to put it that is not a substring of the goal string
+— which *would* be transcript text, and would be the leak the privacy floor
+forbids. So the two milestones are not independent: satisfying E09-M02 through
+`plan.execute` requires reintroducing free text.
+
+`GoalKind` carries exactly what is needed, and three of the four voice tokens
+map onto it without invention:
+
+| `VoiceGoal` | `GoalKind` | parameters |
+| --- | --- | --- |
+| `eat` | `satisfy_hunger` | `satisfy_to` (optional) |
+| `drink` | `satisfy_thirst` | `satisfy_to` (optional) |
+| `read` | `read_for_boredom` | `pages` (optional) |
+| `resume` | — | not a goal; a control verb over the active one |
+
+`resume` is the interesting one and it is *not* a defect in the mapping. It does
+not name work to do, it names something to do to work already submitted, which
+is what `goal.status` and the queue's own activation answer. Mapping it onto a
+`GoalKind` would have invented a fifth kind that the planner has no way to
+serve — a stub wearing an enum member's clothes, which `goals/model.py` says in
+as many words it will not have.
+
+Three things come with the channel that `plan.execute` does not have, and each
+is a requirement somewhere in E08 or E09 rather than a nicety: one active goal
+at a time with the refusal naming the active one, a bounded budget in wall clock
+*and* steps so a spoken goal cannot run forever, and an idempotency key so a
+retried utterance is not a second sandwich.
+
+`train_skill` and `learn_recipe` have no voice phrasing yet. They are reachable
+from MCP and not from a microphone, and that asymmetry is recorded here rather
+than closed, because inventing Russian phrasings for them is a grammar decision
+and not a wiring one.

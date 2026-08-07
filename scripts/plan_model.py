@@ -53,8 +53,8 @@ BANDS: Final = {
     "portability": (3, 5),
     "packaging": (3, 5),
     "evidence": (4, 6),
-    "transport": (5, 7),
-    "integration": (6, 8),
+    "transport": (5, 6),
+    "integration": (7, 8),
     "security": (7, 9),
     "live": (9, 10),
 }
@@ -89,6 +89,16 @@ class Task:
     evidence: str
     depends_on: tuple[str, ...] = ()
     status: str = "NOT_STARTED"
+    #: The commit that made the claim true. Kept separate from the one below
+    #: because an independent audit found tasks whose recorded commit PREDATED
+    #: the behaviour they claimed — E07's were pinned to 7014428, dated a day
+    #: before the E07 implementation landed in 7df4275. One field could not
+    #: express the difference, so it hid it.
+    implementation_commit: str | None = None
+    #: The commit that made the claim CHECKABLE: the one that introduced the
+    #: regression test named below. Must not precede the implementation, and a
+    #: PASS without one is a PASS nothing can fail.
+    verification_commit: str | None = None
     commit: str | None = None
     ci_url: str | None = None
     reason: str = ""
@@ -107,6 +117,8 @@ class Task:
             "regression_test": self.regression_test,
             "evidence": self.evidence,
             "status": self.status,
+            "implementation_commit": self.implementation_commit,
+            "verification_commit": self.verification_commit,
             "commit": self.commit,
             "ci_url": self.ci_url,
             "reason": self.reason,

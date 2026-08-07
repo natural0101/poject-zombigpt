@@ -40,12 +40,13 @@ from typing import Final
 import pytest
 
 from pz_agent_core.actions import ActionRequest
+from pz_agent_core.goals import GoalKind, GoalParams, GoalRequest
 from pz_agent_core.protocol import ActionName, ActionStatus, ReasonCode, SessionMode
 from pz_agent_core.rpc.descriptor import write_descriptor
 from pz_agent_core.rpc.token import issue_token
 from pz_agent_core.rpc.transport import RpcServer, new_address
 from pz_agent_core.rpc.wire import RpcRequest, RpcResponse
-from pz_agent_mcp.ports import CoreServices
+from pz_agent_mcp.ports import CoreServices, GoalPort
 from pz_agent_mcp.remote.client import (
     SIDECAR_NOT_RUNNING,
     CoreRefused,
@@ -149,6 +150,9 @@ class TestTheTwoHalvesAgree:
             Method.MEMORY_QUERY: partial(bridge.services.memory.query, kinds=["home"], limit=5),
             Method.DIAGNOSTICS_DOCTOR: bridge.services.diagnostics.doctor,
             Method.DIAGNOSTICS_TAIL: partial(bridge.services.diagnostics.tail, limit=5),
+            Method.GOAL_SUBMIT: partial(_goals(bridge).submit, _a_goal()),
+            Method.GOAL_STATUS: _goals(bridge).status,
+            Method.GOAL_CANCEL: partial(_goals(bridge).cancel, "no-such-goal"),
         }
 
         assert set(exercised) | {Method.PLAN_EXECUTE} == ALL_METHODS, (
@@ -375,6 +379,31 @@ def _services_served_by(
     thread.start()
     _SERVERS.append((server, thread))
     return RemoteCoreServices.from_state_dir(state_dir, deadline=GRACE)
+
+
+def _goals(bridge: Bridge) -> GoalPort:
+    """The bridge's goal channel, asserted present rather than assumed.
+
+    ``CoreServices.goals`` is ``GoalPort | None``, and ``RemoteCoreServices``
+    fills it in because this link carries all three ``goal.*`` methods. If it
+    ever stops doing so, the three entries below would quietly become calls on
+    ``None`` — an ``AttributeError`` inside the loop's ``try``, which catches
+    ``CoreRefused`` and would not have caught this. So the absence is named here.
+    """
+    channel = bridge.services.goals
+    assert channel is not None, (
+        "the remote services carry no goal channel, so goal.submit / goal.status / "
+        "goal.cancel are declared and unreachable from a client"
+    )
+    return channel
+
+
+def _a_goal() -> GoalRequest:
+    return GoalRequest(
+        kind=GoalKind.READ_FOR_BOREDOM,
+        idempotency_key="seam-goal-1",
+        params=GoalParams(pages=5),
+    )
 
 
 def _a_request() -> ActionRequest:

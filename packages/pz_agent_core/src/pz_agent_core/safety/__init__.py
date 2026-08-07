@@ -8,6 +8,11 @@ misbehaving provider cannot disable the rules that protect the character.
 
 from __future__ import annotations
 
+from .input import (
+    SyntheticInputDecision,
+    SyntheticInputRequest,
+    evaluate_synthetic_input,
+)
 from .priority import (
     DEFAULT_ANTI_LOOP_CONFIG,
     AntiLoopConfig,
@@ -53,9 +58,12 @@ __all__ = [
     "ReflexSignals",
     "RunningPlan",
     "SafetyEvent",
+    "SyntheticInputDecision",
+    "SyntheticInputRequest",
     "ThreatAssessment",
     "ThreatConfig",
     "assess_danger",
     "assess_threat",
+    "evaluate_synthetic_input",
     "may_cancel_running_action",
 ]

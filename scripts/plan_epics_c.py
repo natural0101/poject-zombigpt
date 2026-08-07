@@ -28,7 +28,7 @@ _E06_CODEC = [
     ),
     (
         "Refuse a bool where an int is required",
-        6,
+        7,
         "True is not accepted as 1",
         f".venv/bin/pytest {T}/test_rpc_codec_session.py -q",
         f"{T}/test_rpc_codec_session.py",
@@ -52,7 +52,7 @@ _E06_CODEC = [
     ),
     (
         "Codec the session snapshot and stop report",
-        6,
+        7,
         "round-trip equality over every field, both optional present and absent",
         f".venv/bin/pytest {T}/test_rpc_codec_session.py -q",
         f"{T}/test_rpc_codec_session.py",
@@ -68,7 +68,7 @@ _E06_CODEC = [
     ),
     (
         "Codec the plan request, step record and plan record",
-        6,
+        7,
         "steps decode to a tuple, order is preserved, an empty list round-trips",
         f".venv/bin/pytest {T}/test_rpc_codec_plans.py -q",
         f"{T}/test_rpc_codec_plans.py",
@@ -84,7 +84,7 @@ _E06_CODEC = [
     ),
     (
         "Codec the doctor check and log record",
-        6,
+        7,
         "a long message and a path-shaped message survive byte for byte",
         f".venv/bin/pytest {T}/test_rpc_codec_diagnostics.py -q",
         f"{T}/test_rpc_codec_diagnostics.py",
@@ -176,7 +176,7 @@ _E06_CLIENT = [
     ),
     (
         "Implement RemoteCoreServices.memory",
-        6,
+        7,
         "query returns records with data values still typed",
         f".venv/bin/pytest {T}/test_remote_core_services.py -q",
         f"{T}/test_remote_core_services.py",
@@ -184,7 +184,7 @@ _E06_CLIENT = [
     ),
     (
         "Implement RemoteCoreServices.diagnostics",
-        6,
+        7,
         "doctor and tail return the core's records with their filters applied",
         f".venv/bin/pytest {T}/test_remote_core_services.py -q",
         f"{T}/test_remote_core_services.py",
@@ -767,7 +767,7 @@ _E08_SCHEMA = [
     ),
     (
         "Publish the goal JSON schema",
-        6,
+        7,
         "schemas/goal.schema.json compiles and pins the closed set",
         ".venv/bin/python scripts/check_schemas.py",
         f"{C}/test_goal_schema_conformance.py",
@@ -1021,7 +1021,7 @@ _E09_PORT = [
     ),
     (
         "Keep arm, disarm and stop on their existing short path",
-        7,
+        6,
         "the stop path does not depend on the goal channel being up",
         f".venv/bin/pytest {T}/test_voice_plan_port.py -q",
         f"{T}/test_voice_plan_port.py",
@@ -1029,7 +1029,7 @@ _E09_PORT = [
     ),
     (
         "Prove a stop still works when the RPC link is down",
-        7,
+        6,
         "a stop is honoured with the core unreachable",
         f".venv/bin/pytest {T}/test_voice_plan_port.py -q",
         f"{T}/test_voice_plan_port.py",
@@ -1056,7 +1056,7 @@ _E09_INTENT = [
     ),
     (
         "Refuse an intent with no GoalKind rather than inventing one",
-        7,
+        6,
         "an unmapped phrase produces a named refusal",
         f".venv/bin/pytest {T}/test_voice_intents.py -q",
         f"{T}/test_voice_intents.py",
@@ -1088,7 +1088,7 @@ _E09_INTENT = [
     ),
     (
         "Keep the transcript out of the goal",
-        7,
+        6,
         "no transcript text is carried into a GoalKind",
         f".venv/bin/pytest {T}/test_voice_intents.py -q",
         f"{T}/test_voice_intents.py",
@@ -1096,7 +1096,7 @@ _E09_INTENT = [
     ),
     (
         "Keep the transcript out of the sidecar entirely",
-        7,
+        6,
         "no RPC call from the voice package carries transcript text",
         f".venv/bin/pytest {T}/test_voice_privacy.py -q",
         f"{T}/test_voice_privacy.py",
@@ -1104,7 +1104,7 @@ _E09_INTENT = [
     ),
     (
         "Keep the transcript out of the logs",
-        7,
+        6,
         "voice logs record intents and outcomes only",
         f".venv/bin/pytest {T}/test_voice_privacy.py -q",
         f"{T}/test_voice_privacy.py",
@@ -1112,7 +1112,7 @@ _E09_INTENT = [
     ),
     (
         "Keep the transcript out of the support bundle",
-        7,
+        6,
         "no bundle member contains a transcript",
         f".venv/bin/pytest {T}/test_voice_privacy.py -q",
         f"{T}/test_voice_privacy.py",
@@ -1128,7 +1128,7 @@ _E09_INTENT = [
     ),
     (
         "Recognise the stop phrase before any other intent",
-        7,
+        6,
         "the stop grammar is matched first, so a stop is never mistaken for a goal",
         f".venv/bin/pytest {T}/test_voice_intents.py -q",
         f"{T}/test_voice_intents.py",
@@ -1163,7 +1163,7 @@ _E09_INTENT = [
 _E09_E2E = [
     (
         "Deliver a goal from a spoken phrase to the core",
-        7,
+        6,
         "an intent produces a goal the core receives",
         f".venv/bin/pytest {C}/test_voice_goal_e2e.py -q",
         f"{C}/test_voice_goal_e2e.py",
@@ -1179,7 +1179,7 @@ _E09_E2E = [
     ),
     (
         "Cancel a goal by voice",
-        7,
+        6,
         "a spoken cancel ends the active goal",
         f".venv/bin/pytest {C}/test_voice_goal_e2e.py -q",
         f"{C}/test_voice_goal_e2e.py",
@@ -1203,7 +1203,7 @@ _E09_E2E = [
     ),
     (
         "Prove a fake voice adapter is not counted as a real integration",
-        7,
+        6,
         "the E2E suite fails if the goal never reaches the core, even with the adapter green",
         f".venv/bin/pytest {C}/test_voice_goal_e2e.py -q",
         f"{C}/test_voice_goal_e2e.py",
@@ -1308,7 +1308,7 @@ _E10_CLIENT = [
     ),
     (
         "Never block the stop path on the bridge",
-        7,
+        6,
         "a stop works with the bridge hung",
         f".venv/bin/pytest {T}/test_teamon_bridge.py -q",
         f"{T}/test_teamon_bridge.py",
@@ -1340,7 +1340,7 @@ _E10_CLIENT = [
     ),
     (
         "Keep no credential in the bridge configuration",
-        7,
+        6,
         "no key is read from or written to config",
         "grep -rn 'api_key\\|token' packages/pz_agent_voice/src",
         f"{T}/test_teamon_bridge.py",
@@ -1367,7 +1367,7 @@ _E10_PROTOCOL = [
     ),
     (
         "Carry an intent to the bridge without the transcript",
-        7,
+        6,
         "no message contains transcript text",
         f".venv/bin/pytest {T}/test_voice_privacy.py -q",
         f"{T}/test_voice_privacy.py",
@@ -1434,7 +1434,7 @@ _E10_PROTOCOL = [
 _E10_E2E = [
     (
         "Run the bridge against a fake subprocess implementing the contract",
-        7,
+        6,
         "a real subprocess speaks JSONL over a pipe and the exchange completes",
         f".venv/bin/pytest {C}/test_teamon_bridge_e2e.py -q",
         f"{C}/test_teamon_bridge_e2e.py",
@@ -1442,7 +1442,7 @@ _E10_E2E = [
     ),
     (
         "Deliver an intent through the bridge to a goal",
-        7,
+        6,
         "the goal the core receives is the one asked for",
         f".venv/bin/pytest {C}/test_teamon_bridge_e2e.py -q",
         f"{C}/test_teamon_bridge_e2e.py",
@@ -1450,7 +1450,7 @@ _E10_E2E = [
     ),
     (
         "Survive the bridge exiting mid-exchange",
-        7,
+        6,
         "the companion reports it and stays up",
         f".venv/bin/pytest {C}/test_teamon_bridge_e2e.py -q",
         f"{C}/test_teamon_bridge_e2e.py",
@@ -1466,7 +1466,7 @@ _E10_E2E = [
     ),
     (
         "Prove the fake bridge is not counted as a TeamON integration",
-        7,
+        6,
         "the plan and the documents both record this as a contract test, not a live one",
         "read docs/VOICE.md",
         f"{C}/test_teamon_bridge_e2e.py",
@@ -1490,7 +1490,7 @@ _E10_E2E = [
     ),
     (
         "Keep the bridge optional so the sidecar runs without it",
-        7,
+        6,
         "a missing bridge does not stop pz-agent start",
         f".venv/bin/pytest {T}/test_teamon_bridge.py -q",
         f"{T}/test_teamon_bridge.py",
@@ -1506,7 +1506,7 @@ _E10_E2E = [
     ),
     (
         "Prove no transcript reaches the bridge under any path",
-        7,
+        6,
         "an adversarial phrase containing a path and a credential is not forwarded",
         f".venv/bin/pytest {T}/test_voice_privacy.py -q",
         f"{T}/test_voice_privacy.py",

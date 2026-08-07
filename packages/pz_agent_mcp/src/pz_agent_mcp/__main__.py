@@ -101,7 +101,13 @@ from .remote.client import (
     RemoteCoreServices,
     SidecarUnavailable,
 )
-from .server import SERVER_NAME, McpSdkUnavailable, require_sdk, run_stdio
+from .server import (
+    SERVER_NAME,
+    McpSdkIncompatible,
+    McpSdkUnavailable,
+    require_sdk,
+    run_stdio,
+)
 
 __all__ = [
     "ANSWER_UNREADABLE_MESSAGE",
@@ -115,6 +121,7 @@ __all__ = [
     "EXIT_NO_STATE_DIR",
     "EXIT_OK",
     "EXIT_PROTOCOL_MISMATCH",
+    "EXIT_SDK_INCOMPATIBLE",
     "EXIT_STALE_DESCRIPTOR",
     "EXIT_USAGE",
     "NO_DESCRIPTOR_MESSAGE",
@@ -183,6 +190,15 @@ EXIT_ANSWER_UNREADABLE: Final = 7
 #: directories could not be read. One code because there is one remedy: name the
 #: directory with ``--state-dir``.
 EXIT_NO_STATE_DIR: Final = 8
+
+#: The SDK is installed and is not a version this build can drive. Distinct from
+#: :data:`EXIT_NO_SDK` because the remedy is a version constraint rather than an
+#: install, and because the two were indistinguishable while this failure went
+#: unnoticed: `pyproject.toml` asked for `mcp>=1.2` with no upper bound, 2.0
+#: resolved, its `Server` had dropped the four registration methods this build
+#: called, and the child died with an AttributeError traceback carrying no code
+#: at all. A traceback is not a diagnosis.
+EXIT_SDK_INCOMPATIBLE: Final = 9
 
 #: Descriptors are a few hundred bytes. The cap is on the read rather than on
 #: what follows it, so a huge file where a descriptor belongs costs one bounded
@@ -372,6 +388,8 @@ def _require_sdk() -> None:
         require_sdk()
     except McpSdkUnavailable as absent:
         raise _Refused(EXIT_NO_SDK, str(absent)) from absent
+    except McpSdkIncompatible as mismatched:
+        raise _Refused(EXIT_SDK_INCOMPATIBLE, str(mismatched)) from mismatched
 
 
 def _existing(directory: Path, message: str) -> Path:
