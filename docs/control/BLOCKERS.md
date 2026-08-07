@@ -10,7 +10,9 @@ remote implementation; it stops `v1.0.0`. A remote blocker stops both.
 
 Last reconciled at `62d69c3`, after an independent monitor found STATUS.json
 carrying a stale HEAD, a percentage no calculation produced, a CI verdict
-belonging to another commit, and `Open: none`.
+belonging to another commit, and `Open: none`. Re-reconciled at `276b9d9`,
+the first commit on `main` where both workflows are green and the release
+candidate was built from the commit they describe.
 
 ---
 
@@ -18,7 +20,18 @@ belonging to another commit, and `Open: none`.
 
 These stop the remote stage. Every one is reproducible in this environment.
 
-### R-001 — `pz-agent-mcp` cannot serve: the MCP SDK 2.0 API break
+### R-001 — `pz-agent-mcp` cannot serve: the MCP SDK 2.0 API break — **CLOSED**
+
+Closed at `f7433ad`: `build_server` passes its handlers to the 2.0 constructor
+(`on_list_tools`/`on_call_tool`/`on_list_resources`/`on_read_resource`) and
+returns typed results; `require_sdk` inspects the constructor's signature and
+refuses an SDK missing any of the four with `EXIT_SDK_INCOMPATIBLE` (9), so the
+next API break is a diagnosis, not an `AttributeError`; `pyproject.toml` bounds
+the extra at `mcp>=2,<3`; and the Linux workflow installs the `mcp` extra —
+guarded by `tests/contract/test_ci_installs_what_the_tests_need.py`, which
+failed the day the two workflows' extras diverged. The E07-M04 suite (28
+subprocess E2E tests, 14 protocol tests) passes against a real child on both
+platforms at `276b9d9`. The original record follows.
 
 **Severity: critical. This is the largest single finding of the reconciliation.**
 
@@ -66,7 +79,11 @@ generic 1 and a traceback, rather than one of the nine declared `EXIT_*` codes.
 reaches the constant table. Even once R-001 is fixed, any SDK-shape mismatch
 reaches a client author as a traceback instead of a diagnosis.
 
-### R-003 — the TeamON bridge exists twice, and the tested copy is not the shipped one
+### R-003 — the TeamON bridge exists twice, and the tested copy is not the shipped one — **CLOSED**
+
+Closed: `pz_agent_voice/bridge/` is deleted. `teamon.py` is the only
+implementation, it is what the tests import, and it is what the packaged
+executable ships. The original record follows.
 
 Two modules implement the same thing:
 
@@ -110,11 +127,17 @@ The verifier found five claimed behaviours with no test that could catch their
 absence, including that branch: a core that accepts the connection and then
 refuses `goal.status` was reported ROUTED. All five are now covered.
 
-### R-006 — the required workflows have not run against HEAD
+### R-006 — the required workflows have not run against HEAD — **CLOSED**
 
 CI and `windows package` for `62d69c3` were still in progress at reconciliation
 time. Until both report against **this** commit, no CI-dependent task may be
 `PASS`. A green run on a parent commit is not evidence about this one.
+
+Closed at `276b9d9`: both workflows completed green against that commit
+(CI run 31214158422, `windows package` run 31214158408), and
+`scripts/check_master_plan.py` now enforces the rule structurally — STATUS.json
+may only call a workflow GREEN for the commit it actually ran against, and the
+staleness check refuses a STATUS whose named commit has code changes after it.
 
 ---
 
@@ -145,16 +168,17 @@ not the same as running beside Project Zomboid.
 
 Everything above, plus:
 
-### RB-001 — the release candidate is STALE
+### RB-001 — the release candidate is STALE — **CLOSED**
 
-Built from `521f1e4`; HEAD is `62d69c3`. A ZIP that exists is not a
+Built from `521f1e4` while HEAD was `62d69c3`. A ZIP that exists is not a
 certification of the current tree. `scripts/check_master_plan.py` refuses a
 STATUS.json marking an RC `CURRENT` whose `source_commit` is not HEAD.
 
-* workflow run: https://github.com/natural0101/poject-zombigpt/actions/runs/31190105731
-* artifact: `pz-agent-windows-rc`, id 8998557228
-* archive sha256: `0313ea8ffbfdef0dd7773ff25802af4caf09dc88a2f912db8cfa602c415d7c03`
-* source commit: `521f1e45a38887e2bc2f88203ece238afd914bc1`
+Closed: the current release candidate was built from `276b9d90` by
+run 31214158408 (`pz-agent-windows-rc`, archive sha256
+`3eb5ca63c4d113f3a3a48914a7cd206f77439a24a80f891fcea60b205733bbe2`) and
+STATUS.json records it `CURRENT`. The rule stands; any commit after the RC's
+source commit makes it STALE again until the workflow rebuilds it.
 
 ### RB-002 — no `v1.0.0` may be tagged
 
@@ -165,3 +189,25 @@ program that runs; nothing here has watched this one run.
 
 An epic does not close on its task count. Every `CHECK` in the plan — the
 statements about a milestone that no single task establishes — is open.
+
+---
+
+## CLOSED WINDOWS DEFECTS — how each root cause reproduces
+
+The six root causes of D-002 (`docs/control/DECISIONS.md`), each with the
+command that reproduced it before its fix and guards against its return now.
+Every command runs here on Linux as well as on `windows-latest`, per D-004:
+each fix's regression test constructs the Windows shape explicitly, so the
+command fails on any platform if the defect returns.
+
+| Root cause | Reproduction command |
+| --- | --- |
+| Text-mode evidence digests (CRLF) | `.venv/bin/pytest tests/unit/test_livetest_evidence.py tests/unit/test_livetest_runner.py tests/unit/test_check_release.py -q` |
+| Redactor left the native separator | `.venv/bin/pytest tests/unit/test_diagnostics_redaction.py tests/unit/test_diagnostics_bundle.py -q` |
+| Redactor rule order (profile before Zomboid dir) | `.venv/bin/pytest tests/unit/test_diagnostics_redaction.py -q` |
+| Installer: separator, `len(body)`, launcher path | `.venv/bin/pytest tests/unit/test_installer_windows.py -q` |
+| MCP config from f-strings is not JSON on Windows | `.venv/bin/pytest tests/unit/test_mcp_configs.py tests/contract/test_mcp_snippet_is_json.py -q` |
+| POSIX-only calls in tests (SIGKILL, chmod) | `.venv/bin/pytest tests/unit/test_cli_supervisor.py tests/unit/test_capabilities_scanner.py tests/unit/test_capabilities_report_io.py -q` |
+| Document-root globs with mixed separators | `.venv/bin/pytest tests/contract/test_documented_commands_parse.py tests/contract/test_archive_documents_resolve.py -q` |
+
+The original failing-test list is `docs/control/evidence/step-01-10/windows-failures.txt`.

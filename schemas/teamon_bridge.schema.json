@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/pz-agent/teamon_bridge.schema.json",
+  "title": "PZ Agent TeamON Bridge Message",
+  "description": "One line of the voice bridge protocol, either direction. The transport is the child's stdin/stdout: one JSON object per line, UTF-8, at most 16384 bytes encoded. Four types travel to the bridge (hello, speak, interrupt, goal) and four travel from it (ready, transcript, outcome, error); a type on the wrong side is refused as firmly as an unknown one. The 'goal' message carries a token from a closed enum, never transcript text: the channel from a microphone to anything else is exactly that enum. The 'error' message's 'detail' is free text from the far end; a reader classifies 'code' and drops 'detail' unread, because every consumer of a fault eventually reaches a speech synthesiser.",
+  "type": "object",
+  "required": ["v", "type"],
+  "properties": {
+    "v": {
+      "description": "The sender's protocol version, MAJOR.MINOR. A reader accepts any peer whose MAJOR matches its own; a MINOR difference is compatible.",
+      "type": "string",
+      "pattern": "^\\d{1,3}\\.\\d{1,4}$"
+    },
+    "type": {
+      "enum": ["hello", "speak", "interrupt", "goal", "ready", "transcript", "outcome", "error"]
+    }
+  },
+  "oneOf": [
+    {
+      "description": "To the bridge: opens the session and declares this build's protocol version. No other fields.",
+      "properties": {
+        "type": { "const": "hello" },
+        "v": true
+      },
+      "additionalProperties": false
+    },
+    {
+      "description": "To the bridge: one utterance to synthesise.",
+      "properties": {
+        "type": { "const": "speak" },
+        "v": true,
+        "utterance_id": { "$ref": "#/$defs/handle" },
+        "text": {
+          "description": "What to say. Refused empty and refused past the cap rather than truncated: an overlong utterance here is a bug on the sending side, and truncating would hide it mid-sentence.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "priority": { "type": "integer", "minimum": 0 },
+        "interruptible": { "type": "boolean" }
+      },
+      "required": ["utterance_id", "text", "priority", "interruptible"],
+      "additionalProperties": false
+    },
+    {
+      "description": "To the bridge: abandon one utterance now.",
+      "properties": {
+        "type": { "const": "interrupt" },
+        "v": true,
+        "utterance_id": { "$ref": "#/$defs/handle" }
+      },
+      "required": ["utterance_id"],
+      "additionalProperties": false
+    },
+    {
+      "description": "To the bridge: dispatch one goal token under a request id. The token set is closed on purpose — there is no field wide enough to carry a transcript.",
+      "properties": {
+        "type": { "const": "goal" },
+        "v": true,
+        "request_id": { "$ref": "#/$defs/handle" },
+        "goal": { "enum": ["eat", "drink", "read", "resume"] }
+      },
+      "required": ["request_id", "goal"],
+      "additionalProperties": false
+    },
+    {
+      "description": "From the bridge: answers hello with the bridge's own protocol version (the 'v' field). No other fields.",
+      "properties": {
+        "type": { "const": "ready" },
+        "v": true
+      },
+      "additionalProperties": false
+    },
+    {
+      "description": "From the bridge: one recognition result, interim hypotheses included. A reader clamps rather than refuses: text is cut to 400 characters, at_ms floored at 0, confidence clamped to [0, 1] — a recogniser emitting accumulated context is doing something normal.",
+      "properties": {
+        "type": { "const": "transcript" },
+        "v": true,
+        "text": { "type": "string" },
+        "at_ms": { "type": "integer" },
+        "final": { "type": "boolean" },
+        "confidence": { "type": "number" }
+      },
+      "required": ["text", "at_ms"],
+      "additionalProperties": false
+    },
+    {
+      "description": "From the bridge: how one speak or one goal ended. 'ended' is the only status that claims the thing was carried out; failed, refused and cancelled are all 'it stopped', distinguished because the companion says something different about each.",
+      "properties": {
+        "type": { "const": "outcome" },
+        "v": true,
+        "request_id": { "$ref": "#/$defs/handle" },
+        "status": { "enum": ["ended", "failed", "refused", "cancelled"] }
+      },
+      "required": ["request_id", "status"],
+      "additionalProperties": false
+    },
+    {
+      "description": "From the bridge: a bridge-side failure. A reader turns 'code' into a fixed phrase and reads nothing else; 'detail' is where the far end's free text lives and it is dropped on the floor. A code a reader does not know is reported as an unknown failure rather than refused, because refusing the report of a failure loses the failure.",
+      "properties": {
+        "type": { "const": "error" },
+        "v": true,
+        "code": {
+          "description": "The closed set a current bridge emits. A reader must also survive a code outside this list (a newer bridge), which is why the schema documents the set without the reader enforcing it.",
+          "type": "string"
+        },
+        "detail": { "type": "string" }
+      },
+      "required": ["code"],
+      "additionalProperties": false
+    }
+  ],
+  "$defs": {
+    "handle": {
+      "description": "An id minted by the companion: lowercase, 1 to 64 characters from letters, digits, dot, dash and underscore.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_.\\-]{0,63}$"
+    }
+  }
+}

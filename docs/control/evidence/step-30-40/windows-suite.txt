@@ -72,3 +72,25 @@ turned into a skip, and the workflow runs every check it ran at the branch
 point. Steps 91-95 are not claimed on this run — they come after the RPC, MCP
 and voice stages in the plan, and will need their own green run once those
 land.
+
+--- 2026-08-07: run 31214158408 on main at 276b9d90 ---
+
+https://github.com/natural0101/poject-zombigpt/actions/runs/31214158408
+windows-latest, conclusion: success, every step green.
+
+  Tests                                            success
+  Build pz-agent.exe                               success
+  Build pz-agent-mcp.exe                           success
+  Both executables answer                          success
+  Assemble the archive                             success
+  Release gate                                     success
+  Upload the release candidate                     success
+
+Observed for E11-M02-T004: the "Both executables answer" step ran
+pz-agent-mcp.exe and the reports artifact (pz-agent-windows-reports,
+sha256 6f5beaea...) contains pz-agent-mcp-catalogue.json written by the
+executable on that runner.
+
+Observed for E11-M03-T001: the "Assemble the archive" step produced the
+release zip and it was uploaded as pz-agent-windows-rc
+(sha256 3eb5ca63c4d113f3a3a48914a7cd206f77439a24a80f891fcea60b205733bbe2).
