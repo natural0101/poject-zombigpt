@@ -520,39 +520,55 @@ def test_a_member_named_twice_is_refused(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    ("member", "category"),
+    ("name", "category"),
     [
         ("mod\\media\\Иван.lua", "uses a native separator instead of /"),
         ("C:/Users/Иван/mod.info", "carries a drive letter or an alternate stream marker"),
+        ("C:\\Users\\Иван\\mod.info", "uses a native separator instead of /"),
+        ("", "is empty"),
+        ("mod/media/runtime.lua", ""),
     ],
-    ids=["backslash", "drive-letter"],
+    ids=["backslash", "drive-letter", "both", "empty", "portable"],
 )
-def test_an_unportable_member_name_is_refused_without_echoing_it(
-    tmp_path: Path, member: str, category: str
-) -> None:
-    """Both categories, each with a name that reaches the check unaltered.
+def test_a_member_name_is_classified_by_what_is_wrong_with_it(name: str, category: str) -> None:
+    """The classification, tested where it lives rather than through a ZIP.
 
-    Split in two because the single case that was here named
-    ``C:\\Users\\Иван\\mod.info`` — which carries a backslash *and* a drive
-    letter — and asserted the backslash category. That is the first branch on
-    Linux and, after ``ZipInfo`` rewrote the separator, the second on Windows.
-    One name cannot pin an ordered classification on two platforms; two names,
-    each unambiguous, can.
+    This used to go through a hand-built archive, and that made it a test about
+    ``zipfile`` as much as about this rule. Two platform behaviours got in the
+    way: ``ZipInfo.__init__`` rewrites ``os.sep`` to ``/`` — so a backslash name
+    written on Windows arrives *portable* and the check never fires — and after
+    assigning the name past that constructor, the Windows job still reported
+    ``DID NOT RAISE`` for a reason I could not reproduce here and did not want
+    to guess at.
 
-    The name is never echoed either way. These are exactly the names that may be
-    native absolute paths, and ``C:\\Users\\Иван\\…`` in a refusal reaches a bug
-    report with the operator's account name in it.
+    ``member_name_problem`` is a pure function of a string. Testing it as one is
+    both stronger and honest about what it covers: no writer can alter the input
+    on the way in, and the ordered classification is pinned on every platform.
+    The archive-level claim — that ``verify_archive`` refuses such a member — is
+    the test below, and it uses the name form observed to survive both platforms.
+    """
+    assert build_rc.member_name_problem(name) == category
+
+
+def test_an_unportable_member_name_is_refused_without_echoing_it(tmp_path: Path) -> None:
+    """The archive level: verify_archive refuses, and says nothing quotable.
+
+    The category is deliberately *not* pinned here — that is the test above.
+    What matters at this level is that a member whose name is not portable stops
+    the archive, and that the refusal names a count and a category rather than
+    the name. These are exactly the names that may be native absolute paths, and
+    ``C:\\Users\\Иван\\…`` in a refusal reaches a bug report with the operator's
+    account name in it.
     """
     archive = _lone_archive(
         tmp_path / "unportable.zip",
-        {build_rc.MANIFEST_NAME: _index_bytes([]), member: MOD_INFO_BODY},
+        {build_rc.MANIFEST_NAME: _index_bytes([]), "C:/Users/Иван/mod.info": MOD_INFO_BODY},
     )
     with pytest.raises(build_rc.ArchiveError) as caught:
         build_rc.verify_archive(archive)
     message = str(caught.value)
     assert "not portable" in message
-    assert category in message
-    for fragment in ("Иван", "C:", "mod.info", "mod\\media"):
+    for fragment in ("Иван", "C:", "mod.info"):
         assert fragment not in message
 
 

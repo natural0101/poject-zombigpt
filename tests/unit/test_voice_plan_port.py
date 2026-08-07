@@ -96,6 +96,13 @@ GRACE: Final = 10.0
 #: waiting the shipped three seconds to prove a timeout is three seconds a run.
 IMPATIENT: Final = 0.2
 
+#: One tick of the coarsest wall clock this project ships on. Windows' default
+#: timer interval is ~15.6 ms and ``time.monotonic`` inherits it, so a measured
+#: duration may fall that far short of a deadline that was genuinely waited out.
+#: Subtracted from lower bounds only — an upper bound is about the companion not
+#: hanging, and granularity cannot make it hang.
+_CLOCK_GRANULE: Final = 0.016
+
 #: Sentences this build speaks, written out rather than imported from
 #: :mod:`pz_agent_voice.phrases`. Comparing the module against itself would pass
 #: however the table was edited.
@@ -835,7 +842,15 @@ def test_a_stalled_core_produces_a_spoken_failure_rather_than_silence(start: Sta
     # It waited, and it stopped waiting: the lower bound proves the deadline was
     # used rather than the call failing outright, and the upper bound proves the
     # companion did not sit on the core's silence.
-    assert IMPATIENT <= elapsed < GRACE
+    #
+    # The lower bound allows one clock granule. Windows' wall clock advances in
+    # ~15.6 ms steps, so a wait of exactly 0.2 s is routinely *measured* as
+    # slightly less: this failed on windows-latest at 0.187 s, which is 0.013 s
+    # short — inside one granule. Asserting the full deadline demands that the
+    # platform's timer be finer than it is, and would go on failing at random.
+    # pz_agent_core.goals.queue's docstring records the same granularity for the
+    # same reason.
+    assert IMPATIENT - _CLOCK_GRANULE <= elapsed < GRACE
 
 
 def test_the_wait_is_bounded_by_the_deadline_the_wiring_chose(start: Start) -> None:
