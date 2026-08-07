@@ -188,6 +188,12 @@ Everything below ran and passed in the remote environment:
   evidence — but "writes nothing" invited you to believe a failed prepare left
   no trace, and it leaves twenty directories. `live-test finalize` refuses and
   names every missing artefact, one line each;
+- **the support bundle, with a real secret and a real home path planted in the
+  logs.** `logs --bundle --verify` struck out an AWS-shaped key, a private-key
+  header and an `api_key=` assignment, and rewrote the home directory and the
+  account name. Then the archive was unzipped and its bytes read directly,
+  rather than trusting the verifier's own "clean" — which is how the false
+  positive below was found;
 - **`live-test collect` and the MCP server.** `collect` names every file it
   could not find and reports "copied 0, skipped 15" rather than a bare success;
   `pz-agent-mcp --describe` answers with the whole published surface — 31 tools

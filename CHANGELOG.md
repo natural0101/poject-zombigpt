@@ -50,6 +50,19 @@ drift out of sync with `pz_agent_core.version`.
   postcondition accepts only thirst — a refill raises the vessel's volume and
   the drink lowers it again, so the vessel witnesses nothing in either
   direction. Published as `pz_action_drink_source`.
+- **The support bundle's verifier no longer flags its own redaction.**
+  `docs/TROUBLESHOOTING.md` tells a stuck user to run
+  `pz-agent logs --bundle --verify` before attaching an archive to a public
+  issue, and the whole point of `--verify` is to answer whether anything
+  private survived. The `credential_assignment` rule matched
+  `api_key=<REDACTED>` — its value group accepts the placeholder the rule
+  itself writes — so the command printed "REVIEW BEFORE SHARING" and exited 1
+  over a line whose secret had been correctly struck out. `text` was
+  unaffected; `findings` is what the verifier asks. Nothing leaked, and that is
+  not the harm: a verifier that flags its own success teaches an operator to
+  ignore the next flag, and the next flag is the real one. Every rule is now
+  checked against every placeholder this module writes, not only the one that
+  bit, and redaction is asserted stable under a second pass.
 - **`configs/mcp/README.md` names both refusals a client can meet, not one.**
   It said `pz-agent-mcp` "starts, finds no core services attached to its
   process ... and exits with status 1". On a plain install you get **3**,
