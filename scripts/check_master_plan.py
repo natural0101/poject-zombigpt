@@ -25,6 +25,7 @@ disagree with.
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -109,6 +110,8 @@ def problems(document: dict[str, Any], *, windows_green: bool) -> list[str]:
         if check["status"] == "PASS" and not check.get("evidence"):
             found.append(f"{check['id']} is a PASS check with no evidence")
 
+    found.extend(_provenance_problems(tasks))
+
     # A Windows-dependent task may not pass on a red workflow. Identified by the
     # epic's required_ci rather than by a hand-kept list, so a new task in a
     # Windows epic is covered without anybody remembering to add it.
@@ -123,6 +126,148 @@ def problems(document: dict[str, Any], *, windows_green: bool) -> list[str]:
                             f"{task['id']} claims a Windows result while the Windows "
                             "workflow is not green"
                         )
+    return found
+
+
+def _head() -> str:
+    result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+    return result.stdout.strip()
+
+
+def _resolves(sha: str) -> bool:
+    return (
+        subprocess.run(
+            ["git", "cat-file", "-e", f"{sha}^{{commit}}"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            check=False,
+            timeout=60,
+        ).returncode
+        == 0
+    )
+
+
+def _is_ancestor(earlier: str, later: str) -> bool:
+    return (
+        subprocess.run(
+            ["git", "merge-base", "--is-ancestor", earlier, later],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            check=False,
+            timeout=60,
+        ).returncode
+        == 0
+    )
+
+
+def _provenance_problems(tasks: list[dict[str, Any]]) -> list[str]:
+    """The refusals an independent monitor asked for, about *history*.
+
+    Every check in :func:`problems` reads the tree as it stands today. That is
+    the hole: a task could name a commit that predated the behaviour it claimed
+    and nothing looked. E07's tasks were pinned to a commit dated a day before
+    the implementation landed, and the plan called them PASS.
+    """
+    found: list[str] = []
+    for task in tasks:
+        if task["status"] != "PASS":
+            continue
+        identifier = task["id"]
+        implementation = task.get("implementation_commit")
+        verification = task.get("verification_commit")
+
+        for label, sha in (("implementation", implementation), ("verification", verification)):
+            if sha and not _resolves(str(sha)):
+                found.append(f"{identifier}: its {label} commit {str(sha)[:8]} does not resolve")
+
+        # An integration, security or live task must say both, because those are
+        # the ones where "the code exists" and "the code was shown to work" came
+        # apart in practice.
+        if task["band"] in {"integration", "security", "live"}:
+            if not implementation:
+                found.append(f"{identifier} is a {task['band']} PASS with no implementation_commit")
+            if not verification:
+                found.append(f"{identifier} is a {task['band']} PASS with no verification_commit")
+
+        # Both must be reachable from HEAD. Deliberately NOT "the verification
+        # descends from the implementation": a regression test written before
+        # the code it later proves is ordinary test-first work, not a defect.
+        # What makes a claim false is being asserted at a commit where one of
+        # the two did not yet exist, and every PASS here is asserted at HEAD.
+        for label, sha in (("implementation", implementation), ("verification", verification)):
+            if sha and _resolves(str(sha)) and not _is_ancestor(str(sha), "HEAD"):
+                found.append(
+                    f"{identifier}: its {label} commit {str(sha)[:8]} is not an ancestor of "
+                    f"HEAD, so this branch does not contain what the claim rests on"
+                )
+    return found
+
+
+def _status_problems(document: dict[str, Any]) -> list[str]:
+    """STATUS.json must agree with the plan on disk, this repository and this commit.
+
+    Called from :func:`main` against the real plan only. It reads git and two
+    files in ``docs/control/``, so it is meaningless against a fixture and
+    would fail every one of them.
+    """
+    found: list[str] = []
+    status_path = REPO_ROOT / "docs" / "control" / "STATUS.json"
+    if not status_path.exists():
+        return ["docs/control/STATUS.json does not exist"]
+    try:
+        status = json.loads(status_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as broken:
+        return [f"docs/control/STATUS.json is not readable JSON: {broken}"]
+
+    tasks = tasks_of(document)
+    total = sum(int(t["weight"]) for t in tasks)
+    done = sum(int(t["weight"]) for t in tasks if t["status"] == "PASS")
+    calculated = round(done / total * 100.0, 2) if total else 0.0
+    recorded = status.get("weighted_progress_percent")
+    if recorded != calculated:
+        found.append(
+            f"STATUS.json records {recorded}% and the plan calculates {calculated}%. "
+            "Regenerate with scripts/reconcile_status.py."
+        )
+
+    current = _head()
+    if current and status.get("head_commit") != current:
+        found.append(
+            f"STATUS.json describes {str(status.get('head_commit'))[:8]} and HEAD is "
+            f"{current[:8]}; a status about another commit is not a status"
+        )
+
+    for field in ("linux_ci", "windows_ci"):
+        entry = status.get(field) or {}
+        if entry.get("status") == "GREEN" and entry.get("commit") != current:
+            found.append(
+                f"STATUS.json claims {field} GREEN for {str(entry.get('commit'))[:8]}, which "
+                f"is not HEAD; a workflow result for one commit is not evidence about another"
+            )
+
+    release = status.get("release_candidate") or {}
+    if release.get("status") == "CURRENT" and release.get("source_commit") != current:
+        found.append(
+            "STATUS.json marks the release candidate CURRENT while it was built from "
+            f"{str(release.get('source_commit'))[:8]}, not HEAD; it is STALE"
+        )
+
+    blocked = [t["id"] for t in tasks if t["status"] in {"FAIL", "BLOCKED"}]
+    blockers = REPO_ROOT / "docs" / "control" / "BLOCKERS.md"
+    if blocked and blockers.exists():
+        text = blockers.read_text(encoding="utf-8").lower()
+        if "open: none" in text:
+            found.append(
+                f"BLOCKERS.md says 'Open: none' while {len(blocked)} task(s) are FAIL or "
+                f"BLOCKED, first {blocked[0]}"
+            )
     return found
 
 
@@ -141,6 +286,12 @@ def main() -> int:
     document = load()
     windows_green = "--windows-red" not in sys.argv
     found = problems(document, windows_green=windows_green)
+    # Asked here rather than inside problems(): these are questions about the
+    # repository — its HEAD, its STATUS.json, its BLOCKERS.md — not about the
+    # document under examination. Inside problems() they would fire against
+    # every hand-built fixture a test passes in, which is how a guard becomes
+    # noise and then gets deleted.
+    found.extend(_status_problems(document))
     if _drifted():
         found.append(
             "MASTER_PLAN.yaml has drifted from scripts/plan_epics_*.py; "

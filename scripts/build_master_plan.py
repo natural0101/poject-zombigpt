@@ -34,7 +34,14 @@ PLAN_PATH: Final = REPO_ROOT / "docs" / "control" / "MASTER_PLAN.yaml"
 
 #: Fields whose value is decided by a run rather than by the plan's author, and
 #: which are therefore carried across a regeneration rather than reset.
-_CARRIED: Final = ("status", "commit", "ci_url", "reason")
+_CARRIED: Final = (
+    "status",
+    "implementation_commit",
+    "verification_commit",
+    "commit",
+    "ci_url",
+    "reason",
+)
 
 
 def _existing() -> dict[str, dict[str, Any]]:
