@@ -125,13 +125,17 @@ kind**, and it is the only one that cannot be closed from here.
 below is closed and is kept as history. Everything after it lives in the master
 plan, and nothing else in this repository states how far along the project is.
 
-**State at the last update (2026-08-07):** `main` is the working branch, and it
+**State at the last update (2026-08-08):** `main` is the working branch, and it
 is green — CI and `windows package` both passed against `276b9d9`, the first
 commit where every claim in `STATUS.json` describes the commit that carries it,
 and the release candidate was built from it (run 31214158408). On that
 foundation `scripts/verify_carryover.py` confirmed the accumulated work into
 the plan by running each task's named regression test: weighted progress stands
-at **53.25%**, with MCP_OPERABILITY, VOICE_OPERABILITY and the goal channel now
+at **59.66%** — after a criterion-coverage audit of the 75 heaviest claims
+reopened 22 whose tests pass without observing their criteria (R-009), and
+found that the shipped sidecar never serves the Core RPC router (R-008,
+critical, open). Before the audit the figure read 74.26%; the drop is the
+audit working. Earlier it stood at 53.25%, with MCP_OPERABILITY, VOICE_OPERABILITY and the goal channel now
 counted because their tests ran, not because their code exists. Still at zero
 and honestly so: LIVE_GAME_VALIDATION (599 weight, needs a machine with the
 game) and FINAL_RELEASE. Still open besides them: all 54 integration `CHECK`s,

@@ -10,6 +10,23 @@ drift out of sync with `pz_agent_core.version`.
 
 ## [Unreleased]
 
+### Changed
+
+- **A criterion-coverage audit of the 75 heaviest claims moved the honest
+  figure from 74.26% to 59.66%.** Twelve read-only auditors asked one question
+  per weight-8+ PASS task: does the named test observe the stated criterion,
+  such that the criterion becoming false fails the suite? 53 confirmed, with
+  the observing assertion named. 22 refused — and among them the audit found
+  the project's recurring defect live in the product: **the shipped sidecar
+  never serves the Core RPC router** (R-008). `CoreRouter` is constructed
+  only by tests; `pz-agent start` publishes no link, so a real `pz-agent-mcp`
+  against a real sidecar finds nothing to connect to, while every E2E test
+  hosts the router itself over fakes. The 22 tasks and their 34 ordered
+  dependents are back to IN_PROGRESS (R-009), each with its precise gap
+  recorded in `docs/control/evidence/criterion-audit-094cb8a.md`; each
+  returns to PASS when an assertion observes its criterion.
+
+
 ### Fixed
 
 - **The R-002 boundary tests hung windows-latest, and the suite gained the

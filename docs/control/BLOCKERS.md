@@ -189,6 +189,42 @@ richer in `intents.py`; the wiring is `intent.py`'s), and the tests have to
 name the survivor.
 *Blocks:* closing E09-M02 honestly. Found at `743115c`; not yet resolved.
 
+### R-008 — the shipped sidecar never serves the Core RPC router
+
+**Severity: critical — the recurring defect, live.** `CoreRouter` (the server
+half of the Core RPC link) exists only in `pz_agent_mcp/remote/server.py` and
+is constructed by tests alone. `grep` over `packages/pz_agent_cli/src` finds
+no import of it; `SidecarLoop` builds no `CoreServices` adapter over its real
+session, observations, actions, planner, memory or goals; and the one caller
+of `SidecarRpc.serve_rpc` outside its own module is a lifecycle test with an
+echo handler. Every end-to-end test — the MCP subprocess E2E, the round trip,
+the voice goal E2E — hosts the router *in the test process over fake ports*.
+
+Consequence: `pz-agent start` launches a sidecar that publishes no descriptor
+and serves no link, so a real `pz-agent-mcp` or `voice run` against a real
+running sidecar finds nothing to connect to. The parts are tested and green;
+nothing joins them. Found by the criterion-coverage audit
+(`docs/control/evidence/criterion-audit-094cb8a.md`, E06-M04-T001).
+
+*Closing needs:* a `CoreServices` adapter over the sidecar's real subsystems
+in `pz_agent_cli`, the router served through `SidecarRpc` on start, and an
+end-to-end test in which a second process reaches the *real* core — the mod
+side faked at the exchange directory, nothing else.
+
+### R-009 — twenty-two heavy claims rested on criteria their tests do not observe
+
+The same audit refused 22 of the 75 weight-8+ PASS claims: each named test
+passes without observing the stated criterion, so the criterion becoming
+false would leave the suite green. The itemised gaps are in
+`docs/control/evidence/criterion-audit-094cb8a.md`; among them: three of the
+four waits on another process have no observed (or in two cases no existing)
+deadline; the `recv_bytes` length bound is asserted nowhere; the eval/exec
+rules of `check_forbidden` are never exercised against the shipped tree by
+any test; several E12-M01 secret-hygiene claims scan doubles rather than the
+real writers. All 22 tasks are back to IN_PROGRESS, with the ordering
+cascade pulling 34 dependents with them; each returns to PASS when an
+assertion observes its criterion.
+
 ---
 
 ## LIVE BLOCKERS

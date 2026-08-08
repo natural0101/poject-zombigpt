@@ -483,10 +483,15 @@ Full walkthrough: [`docs/QUICKSTART.md`](docs/QUICKSTART.md).
 
 `094af1e` on `main`. See the header for why this is the parent rather than the
 containing commit; `git log 094af1e..HEAD --oneline` shows anything this
-document does not cover. Both workflows are green against it, and
-`docs/control/STATUS.json` records the remote stage at its ceiling: 74.26%
-weighted, every remote-owned task and 48 of 54 integration checks PASS,
-thirteen of fifteen epics closed. The open fifth of the plan is §9.
+document does not cover. Both workflows are green against it. A subsequent
+criterion-coverage audit of the 75 heaviest claims moved the recorded figure
+from 74.26% to 59.66% and found R-008 — **the shipped sidecar never serves
+the Core RPC router**, so `pz-agent start` publishes no link and a real
+`pz-agent-mcp` against a real sidecar finds nothing to connect to, while
+every end-to-end test hosts the router itself over fakes. That blocker is
+open and is the project's top task; `docs/control/BLOCKERS.md` and
+`docs/control/evidence/criterion-audit-094cb8a.md` carry the details. The
+open fifth of the plan beyond it is §9.
 
 ---
 
