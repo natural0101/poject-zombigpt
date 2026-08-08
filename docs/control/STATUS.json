@@ -13,7 +13,7 @@
     "NOT_STARTED": 80,
     "PASS": 344
   },
-  "head_commit": "6bc4ec7a456d0a31e011007661b9cb76a898e87d",
+  "head_commit": "c2a9cb478a6ca94bfd8bc97df3b57050f50573ed",
   "linux_ci": {
     "commit": "e75754e179da2945ffd505e4f6c5aac59106a8de",
     "describes_current_head": false,
