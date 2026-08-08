@@ -4,39 +4,52 @@ Prepared to the gate in [`docs/RELEASE.md`](docs/RELEASE.md), whose "The final
 report" section lists nine things this document must state. They are §1 to §9
 below, in that order.
 
-**Base commit:** `main` at `094af1e` (see below — it is refreshed each time this file is)
+**Base commit:** `rescue/today-finalization` at `3d8078d` (see below — it is
+refreshed each time this file is). `3d8078d` is a docs-only commit over
+`8b9d0bd` — the diff between them touches `docs/control/STATUS.json` and
+`docs/control/EVIDENCE_INDEX.md` and nothing else — so `8b9d0bd` is the code
+tree every CI verdict in this report names.
 **Versions:** product 0.1.0 · protocol 1.1 · rpc protocol 1.0 · schema 1.0 · mod 0.1.0 · supported build 42.20
 
 A report cannot name the commit that contains it — the hash does not exist until
 the commit is made. The hash above is this report's parent. Check
-`git log 094af1e..HEAD` before trusting any number here against a newer tree.
+`git log 3d8078d..HEAD` before trusting any number here against a newer tree.
 
 **Note the version.** The release candidate is named `v1.0.0-rc1`, and every
 version constant in the tree says `0.1.0`. No `1.0.0` exists in `version.py`,
-`pyproject.toml` or either `mod.info`, and no git tag exists at all. The RC
-filename is a target, not a state.
+`pyproject.toml` or either `mod.info`, and no git tag exists at all — both
+re-checked at this commit. The RC filename is a target, not a state.
 
-Every figure below was produced by running something at this commit. The
-previous revision was pinned to `edeff8e` and honestly reported a red gate —
-three failing tests and a lint error, the mid-flight state of the
-release-candidate work. That work has landed: the failing tests were the old
-phrase pin and the plan mid-update, both resolved, and `scripts/check.sh` at
-this commit **exits 0**. The suite count moved again (6581 → 6564 collected)
-because R-007 deleted a 600-line module production never imported and rewrote
-its tests against the shipped one. The lesson stands either way: numbers are
-re-measured at each revision, never carried over.
+Every figure below was produced by running something at this commit:
+`bash scripts/check.sh` (exit 0, output quoted in §3),
+`.venv/bin/python -m pytest --collect-only` (6737 collected),
+`.venv/bin/python scripts/master_report.py` (the weighted figures in §1), a
+fresh `--junitxml` suite run fed to `scripts/check_release.py --rc` (§8), and
+the individual probes named where their numbers appear. The previous revision
+was pinned to `094af1e`, where the gate also exited 0 but R-008 — the shipped
+sidecar serving no Core RPC link — was open and honestly reported. That
+blocker is closed and verified end-to-end (§7). The suite count moved again
+(6564 → 6737 collected) because closing it, and the day's audit findings,
+added real suites: the remote action channel, the RPC and MCP adversarial
+tests, the two-way wire census, the workflow contract made executable. The
+lesson stands either way: numbers are re-measured at each revision, never
+carried over.
 
 ---
 
 ## The short version
 
-Twenty-eight of the thirty tasks in
-[`docs/blueprint/task_graph.yaml`](docs/blueprint/task_graph.yaml) are complete,
-tested and documented. The two that are not — the endurance run and this
-release's evidence — **cannot be completed in this environment, because there is
-no Project Zomboid installation here.** They are not deferred for convenience;
-they are physically blocked, and §9 is the complete list of what closing them
-requires.
+The plan of record is [`docs/control/MASTER_PLAN.yaml`](docs/control/MASTER_PLAN.yaml):
+480 weighted tasks, measured at this commit by `scripts/master_report.py` at
+**74.3% (2305 of 3104 weight)** — 400 tasks `PASS`, 80 `NOT_STARTED`, zero
+`FAIL`, zero `BLOCKED`. Five bands are complete: CODE IMPLEMENTATION,
+WINDOWS COMPATIBILITY, MCP OPERABILITY, VOICE OPERABILITY and RC PACKAGING
+each read **100.0**. The two at **0.0** — LIVE GAME VALIDATION (599 weight)
+and FINAL RELEASE (200 weight) — **cannot move in this environment, because
+there is no Project Zomboid installation here.** They are not deferred for
+convenience; they are physically blocked, and §9 is the complete list of what
+closing them requires. The original T001–T030 graph stays as history in
+`docs/PROGRESS.md`: 28 of 30 closed, T029 and T030 blocked on the same game.
 
 Nothing in this repository claims to have been verified against the engine. Not
 one engine symbol has been confirmed against a running game. All twenty
@@ -47,22 +60,31 @@ precisely so a scenario nobody ran cannot report a pass.
 
 ## 1. What is implemented, by task id
 
+The plan of record, measured at this commit by `scripts/master_report.py`:
+
+| Band | Weight | Progress |
+| --- | --- | --- |
+| CODE IMPLEMENTATION | 1213 | **100.0** |
+| WINDOWS COMPATIBILITY | 290 | **100.0** |
+| MCP OPERABILITY | 264 | **100.0** |
+| VOICE OPERABILITY | 324 | **100.0** |
+| RC PACKAGING | 202 | **100.0** |
+| LIVE GAME VALIDATION | 599 | **0.0 — needs the game** |
+| FINAL RELEASE | 200 | **0.0 — gated on the band above** |
+
+480 tasks: 400 `PASS`, 80 `NOT_STARTED`, 0 `FAIL`, 0 `BLOCKED`. Of the plan's
+54 integration checks, 48 pass; the six open are E14's and E15's — the
+live-game statements only a machine with the game can establish. The historical
+graph, kept in `docs/PROGRESS.md`:
+
 | Task | Title | Status |
 | --- | --- | --- |
 | T001–T028 | The full graph through the live smoke harness | **done** |
 | T029 | Endurance run | **blocked on a live game** |
 | T030 | Release artefact and evidence | **blocked on T029** |
 
-`docs/PROGRESS.md` carries the per-task table and the deviations. Work beyond
-the original graph — the mod's command executor, the seventeen game adapters,
-the model-backed planners, the live-test harness, the Windows RC and the
-handoff documentation — is recorded there under "The playable-agent branch".
-The release-candidate work after that — the Local Core RPC link, the typed goal
-channel and the voice route over it — is tracked in
-`docs/control/MASTER_PLAN.yaml` and `docs/control/STATUS.json`, which
-`docs/PROGRESS.md` points to.
-
-Measured at this commit:
+Measured at this commit (each count re-derived by importing the shipped
+modules, not read from a document):
 
 | Surface | Count |
 | --- | --- |
@@ -73,6 +95,51 @@ Measured at this commit:
 | CLI commands | 17 |
 | Capability probes | 12 |
 | Live-test scenarios | 20 |
+
+### What changed in behaviour since the last revision
+
+Substantive changes, not bookkeeping — each with its witnessing test:
+
+- **Remote actions are served over the Core RPC link.** The loop owns a
+  bounded `ActionChannel` drained at most one submission per tick, through the
+  same funnel a planner proposal takes — arming gate, action budget, the
+  engine's own capability and permission machinery — so every dispatch still
+  happens on the tick thread. Disarm, panic and shutdown end waiting
+  submissions with terminal records naming the lever. Remote **plans remain a
+  reasoned refusal**, recorded on the port itself: a plan is many engine calls
+  driven to their ends in one request, and the tick thread cannot hold them
+  without putting its own stop levers out of reach.
+  (`tests/contract/test_remote_actions_served.py`, `tests/unit/test_action_channel.py`.)
+- **The `action.wait` and targeted `plan.cancel` wires were broken, and the
+  contract test's blind spot that hid them is closed.** The sidecar sent
+  `game_seconds` where the mod demanded `duration_ms` — a different unit
+  against a different clock — and the targeted cancel's `command_id` was a key
+  the mod's adapter never declared. The agreement suite had built its registry
+  from the game adapters alone and dumped only the mod's published adapter
+  list, so the control adapters lived exactly in its gap. It now builds the
+  registry the way `pz_agent_cli.app` builds it, dumps both adapter families,
+  and closes with a **two-way census with zero exempt actions**
+  (`tests/contract/test_adapter_args_agreement.py`).
+- **Two movement defects fixed.** Every real walk died on its first poll with
+  `INTERNAL_ERROR`: `pollWalk` answered the string `running`, which the two
+  movement adapters — keeping their own shape instead of going through
+  `Toolkit.declare` — handed to the runtime untranslated
+  (`tests/lua/test_movement_runtime.lua`, verified red on the pre-fix code).
+  And a move already satisfied answered `POSTCONDITION_FAILED`, because its
+  three world readings were necessarily identical; it now returns the full
+  outcome table stating the truth — already within radius, nothing queued.
+- **Adversarial suites across both remote surfaces.** RPC: hostile frames,
+  replay, stale and wrong-server descriptors, death mid-call, restart with
+  rotation, partial frames (`tests/unit/test_rpc_adversarial.py`,
+  `test_rpc_recovery.py` — servers outlive every barrage, refusals typed and
+  bounded). MCP: six hostile paths, each against a live child process
+  (`tests/contract/test_mcp_adversarial_e2e.py`).
+- **`docs/GAME_API_VERIFICATION.md` was rebuilt against the code**: a sweep of
+  195 symbols across every `requires` list, constructor call, accessor string
+  and `Events.*` registration; zero missing rows; the five rows that disagreed
+  with their call sites (the queue reader, `onSleep`'s argument order,
+  `ISReadABook`'s arity, `getBodyParts`, the `PlayerStats` spellings) now
+  match them exactly. Every row is still `requires_live` — see §2.
 
 ### Thirty-two defects, found and closed
 
@@ -118,9 +185,9 @@ harder shape, because a reader has no reason to doubt them:
 12. **`grep -rn "Build 42:" pz-mod/` was described as listing every guess**, in
     five documents including `docs/LOCAL_AGENT_PROMPT.md`, the file the local
     agent starts from, where it read "Это исчерпывающий список". It returns six
-    lines in two files against 52 `requires_live` rows — about an eighth. An
-    agent following that would have checked six symbols and concluded the
-    unconfirmed surface was covered.
+    lines in two files — today against the rebuilt document's 120
+    `requires_live` rows, about a twentieth. An agent following that would have
+    checked six symbols and concluded the unconfirmed surface was covered.
 13. **The release archive omitted two documents its own shipped documents told
     the operator to open** — `GAME_API_VERIFICATION.md` and
     `LOCAL_AGENT_PROMPT.md`. Introduced by fixing number 12: the correction
@@ -161,9 +228,11 @@ written in none, or written in one place and read nowhere (23, 28); and nine are
 both at once — a subsystem connected to nothing with documents, shipped
 archives, live scenarios or a governing agreement already resting on it (18, 19,
 24, 25, 26, 27, 30, 31, 32). The family is not closed, and these are no longer
-the most recently found: the ones after them are numbered R-001 to R-007 in
+the most recently found: the ones after them are numbered R-001 to R-009 in
 `docs/control/BLOCKERS.md`, found by the release-candidate work and recorded
-where that work is tracked rather than appended here.
+where that work is tracked rather than appended here. All nine R-blockers are
+**CLOSED** at this commit; what remains open there is the live family — L-001
+to L-003 and RB-002, the no-tag rule — every one blocked on the game.
 
 18. **`DiagnosticLog` was constructed nowhere, so the sidecar wrote no log.**
     Complete, rotating, redacting, level-filtered, well tested — and built only
@@ -243,12 +312,12 @@ where that work is tracked rather than appended here.
     this was found, the build carried arm, disarm and stop from a second process
     and no channel carried a goal, so the route named in section 7 answered «Не
     получилось.» — and the fix was to say so in the document. The channel has
-    since been built: the Local Core RPC link carries `goal.submit`,
-    `pz_agent_voice.plan_port.services_over_core_rpc` routes a spoken goal over
-    it, `pz-agent voice run` wires that route, and
-    `tests/contract/test_voice_goal_e2e.py` crosses the seam — so the QUICKSTART
-    passage that now says voice carries no goal is the half of this defect that
-    has gone stale in the opposite direction.
+    since been built and both halves of the defect are closed: the Local Core
+    RPC link carries `goal.submit`, the voice companion routes a spoken goal
+    over it as a typed `GoalRequest` (`plan.execute` asserted absent from the
+    wire), `pz-agent voice run` wires that route,
+    `tests/contract/test_voice_goal_e2e.py` crosses the seam — and the
+    QUICKSTART passage now describes the route that exists.
 30. **`voice run` wrote nothing to `logs/`** — defect 18's shape one package
     over, with `LOCAL_DEBUG_MAP.md` naming `logs/` for both voice symptoms
     including «стоп» heard while the character kept going.
@@ -276,9 +345,18 @@ thing.
 
 [`docs/GAME_API_VERIFICATION.md`](docs/GAME_API_VERIFICATION.md) lists every
 symbol the mod assumes, each marked `requires_live` with an "Actual" column no
-live run has ever filled in. The capability probes report at best `available_unverified` from a
-static scan of the install's own Lua; only a live ack through `confirm()`
-promotes one to `verified`, and no live ack has ever been produced.
+live run has ever filled in. The document was **rebuilt at this close from a
+sweep of the sources themselves** — every `requires` list, every class handed
+to `Toolkit.construct`, every accessor string, every direct global lookup,
+every `Events.*` registration: 195 swept symbols, zero missing rows, and the
+five rows that disagreed with their call sites corrected to match them
+exactly. It now carries 120 symbol rows, all `requires_live`; its own text
+records that the earlier revision carried about fifty rows, missed roughly
+sixty symbols the mod touches — including the boot-path globals — and
+disagreed with the code in five places. The capability probes report at best
+`available_unverified` from a static scan of the install's own Lua; only a
+live ack through `confirm()` promotes one to `verified`, and no live ack has
+ever been produced.
 
 Twelve probes, and three of them cannot reach `verified` from a scan at all:
 
@@ -309,39 +387,44 @@ Two symbols deserve naming individually, because their failure modes are quiet:
 
 ## 3. Tests and their results
 
-`scripts/check.sh` at this commit, every step — and it exits 0:
+`bash scripts/check.sh` at this commit, every step — and it exits 0:
 
 ```
-ruff format        ok      423 files already formatted
+ruff format        ok      440 files already formatted
 ruff lint          ok      all checks passed
-mypy               ok      no issues found in 340 source files
+mypy               ok      no issues found in 351 source files
 forbidden patterns ok      no forbidden patterns found
 version sync       ok      product=0.1.0 protocol=1.1 schema=1.0 mod=0.1.0
 schema validity    ok      10 schema(s) valid
 playbook in sync   ok      docs/LIVE_TEST_PLAYBOOK.md matches its 20 scenarios
-pytest             ok      6559 passed, 5 skipped of 6564 collected
-luacheck           ok      0 warnings / 0 errors in 63 files
-lua tests          ok      2875 assertions across 26 suites, 0 failed
+pytest             ok      6732 passed, 5 skipped of 6737 collected
+luacheck           ok      0 warnings / 0 errors in 65 files
+lua tests          ok      2966 assertions across 28 suites, 0 failed
 ```
 
-Both workflows are green against this exact commit: CI run 31227188016 and
-`windows package` run 31227188006, the latter running both executables with
-PATH reduced to the system directories before certifying the archive.
+Both workflows are green against `8b9d0bd`, the code tree of this exact head
+(`3d8078d` differs from it only in the two control documents): `windows
+package` run 31252766042 rebuilt and certified the release candidate from that
+tree (§8), and the Linux CI verdict for the same commit is recorded GREEN in
+`docs/control/STATUS.json` — whose reconciler refuses to call a workflow green
+for any commit other than the one it actually ran against.
 
 **The five skips, named rather than summarised.** One is a capability-tier
-disagreement on `movement.move_to` in `test_mcp_action_coverage.py`; two are
-`test_mcp_server.py` declining to test the no-SDK refusal because the MCP SDK
-*is* installed in this environment; one is `test_teamon_bridge.py` on
+disagreement on `movement.move_to` — publishing P3 while its adapter declares
+P2 and escalates per call — now pinned in
+`tests/contract/test_mcp_action_coverage.py`; two are `test_mcp_server.py`
+declining to test the no-SDK refusal because the MCP SDK *is* installed in
+this environment; one is `test_teamon_bridge.py` on
 `subprocess.CREATE_NO_WINDOW`, which exists only on Windows; and one is the
 plan's own next-task check skipping with "every remote task is closed; there
 is no next one to check" — the skip that marks the remote stage complete.
 None is a missing optional dependency.
 
 **On the Python matrix.** `.venv` runs 3.11.15 and that is the interpreter every
-number above came from. `python3.12` exists in this container but has no pytest
-installed, so the suite was *not* run under it at this commit. CI declares a
-3.11/3.12 matrix in `.github/workflows/ci.yml`; that is configuration, not a
-result observed here.
+number above came from. `python3.12` exists in this container (3.12.11) but has
+no pytest installed, so the suite was *not* run under it at this commit. CI
+declares a 3.11/3.12 matrix in `.github/workflows/ci.yml`; that is
+configuration, not a result observed here.
 
 ### What the suite is and is not
 
@@ -350,9 +433,15 @@ engine globals. It proves the mod's logic. It proves nothing about Build 42.20,
 and its own docstrings say so.
 
 `tests/contract/` is where this build's characteristic defect gets caught. It
-holds thirty-seven seam files now; the first ten existed because ten seams were
-found broken, each mutation-checked, because a seam test that would not have
-failed is not evidence that the seam holds.
+holds forty seam files now; the first ten existed because ten seams were found
+broken, each mutation-checked, because a seam test that would not have failed
+is not evidence that the seam holds. The newest of them are this close's:
+`test_sidecar_serves_the_core.py` reaches the real loop from a second OS
+process through the exact client path `pz-agent-mcp` uses;
+`test_remote_actions_served.py` watches a disarmed submit end `NOT_ARMED` and
+an armed `action.wait` drain through the real engine to `SUCCEEDED`; and
+`test_adapter_args_agreement.py` closes with the two-way census described in
+§1.
 
 `tests/unit/test_lua_observation_contract.py` runs the mod's observation builder
 under `lua5.4` and puts its bytes through both gates the sidecar puts them
@@ -365,7 +454,7 @@ resolves to a different object.
 
 ## 4. Live scenarios: which ran, which did not
 
-**None ran. All twenty are `NOT_RUN`.**
+**None ran. All twenty are `NOT_RUN`.** Re-run at this commit:
 
 ```
 $ pz-agent live-test status
@@ -388,15 +477,15 @@ buried:
 The same number means different things in each — `S06_drink.yaml` against
 `S06_MANUAL_TAKEOVER`. **`scripts/check_release.py --release` enforces only the
 first**, and every handoff document sends an operator only there.
-`docs/RELEASE.md` asked for the second until this commit, which meant a human
-working the checklist and a machine working the gate were checking different
-things. Neither catalogue is retired here: that is a decision about what the
-release means, and it belongs with the person who will run them.
+`docs/RELEASE.md` asked for the second until this was reconciled, which meant a
+human working the checklist and a machine working the gate were checking
+different things. Neither catalogue is retired here: that is a decision about
+what the release means, and it belongs with the person who will run them.
 
-`pz-agent smoke --dry-run` reports `blocked 16` and writes, in as many words,
-that nothing was exercised. A dry run touched no game, so every scenario is
-`BLOCKED` and the stamp records the build as "(not detected — dry run)" rather
-than guessing.
+`pz-agent smoke --dry-run`, re-run at this commit, reports `blocked 16` and
+writes, in as many words, that nothing was exercised. A dry run touched no
+game, so every scenario is `BLOCKED` and the stamp records the build as
+"(not detected — dry run)" rather than guessing.
 
 ---
 
@@ -408,17 +497,22 @@ judging this release:
 **No engine compatibility is claimed.** Mocks prove logic. Only §9 closes the
 rest.
 
-**Multiplayer refusal is new, and untested against a real server.** Until this
-commit the documented protection did not exist. It does now, in two places: the
-configuration key is a hard error, and `ActionEngine._multiplayer_abort` refuses
-every mutating command unless the mod positively reported single player.
-`observation.game.multiplayer` has three states and **an absent reading is
-refused exactly as `true` is** — silence is not permission, the same rule that
-stops a missing `is_bleeding` from meaning "not bleeding". Stopping, disarming,
-cancelling and the three read-only actions stay exempt, because an agent that
-cannot be stopped in the one session it should not be running in is worse than
-no gate. Both halves were mutation-checked. Nobody has watched it refuse a
-server.
+**The multiplayer refusal is untested against a real server.** It exists in
+two places: the configuration key is a hard error, and
+`ActionEngine._multiplayer_abort` refuses every mutating command unless the
+mod positively reported single player. `observation.game.multiplayer` has
+three states and **an absent reading is refused exactly as `true` is** —
+silence is not permission, the same rule that stops a missing `is_bleeding`
+from meaning "not bleeding". Stopping, disarming, cancelling and the three
+read-only actions stay exempt, because an agent that cannot be stopped in the
+one session it should not be running in is worse than no gate. Both halves
+were mutation-checked. Nobody has watched it refuse a server.
+
+**Remote plans are refused by design, not served.** `plan.execute` over the
+Core RPC link answers a reasoned refusal recorded on the port: the loop's tick
+thread cannot drive a multi-step plan to completion without holding its own
+stop levers out of reach. The typed goal channel and the remote action channel
+are the served routes; a client that wants a plan submits a goal.
 
 **Reference generation is session-scoped, not save-scoped** as blueprint §3.7
 specifies. In-session save/load invalidation works by the sidecar seeing
@@ -439,11 +533,13 @@ design; the sdist and the Windows package carry the mod.
 candidates are guesses. Detection reports an honest unknown rather than
 substituting the target build.
 
-**The Windows executables have now been built — by CI, not here.**
-`.github/workflows/windows.yml` compiled both with PyInstaller and went green at
-`276b9d9` (`docs/control/STATUS.json` records it, marked stale against this
-head). Nothing carried them back into `dist/`: the archive here still ships
-without them, and neither executable has been signed. See §8.
+**The Windows executables are built and certified — by CI, not here.**
+`windows package` run 31252766042 compiled both with PyInstaller from
+`8b9d0bd`, ran them with PATH reduced to the system directories, proved the
+packaged pair speaks the Core RPC link (§8), and certified the archive.
+Neither executable is signed. Nothing carried them back into this container:
+the local `dist/` archive still ships without them, and no executable has ever
+run on a machine that has the game (blocker L-003).
 
 ---
 
@@ -481,72 +577,93 @@ Full walkthrough: [`docs/QUICKSTART.md`](docs/QUICKSTART.md).
 
 ## 7. The commit hash
 
-`094af1e` on `main`. See the header for why this is the parent rather than the
-containing commit; `git log 094af1e..HEAD --oneline` shows anything this
-document does not cover. Both workflows are green against it. A subsequent
-criterion-coverage audit of the 75 heaviest claims moved the recorded figure
-from 74.26% to 59.66% and found R-008 — **the shipped sidecar never serves
-the Core RPC router**, so `pz-agent start` publishes no link and a real
-`pz-agent-mcp` against a real sidecar finds nothing to connect to, while
-every end-to-end test hosts the router itself over fakes. That blocker is
-open and is the project's top task; `docs/control/BLOCKERS.md` and
-`docs/control/evidence/criterion-audit-094cb8a.md` carry the details. The
-open fifth of the plan beyond it is §9.
+`3d8078d` on `rescue/today-finalization` — a docs-only commit whose code tree
+is `8b9d0bd`, the commit both workflows ran against. See the header for why
+this is the parent rather than the containing commit;
+`git log 3d8078d..HEAD --oneline` shows anything this document does not cover.
+
+The previous revision reported R-008 open — **the shipped sidecar never served
+the Core RPC router**, so `pz-agent start` published no link and a real
+`pz-agent-mcp` found nothing to connect to, while every end-to-end test hosted
+the router itself over fakes. It is closed: `pz_agent_cli.core_services`
+implements the port bundle over the loop's real subsystems, `serve_core_rpc`
+runs on start and comes down in the loop's own `finally`, and
+`tests/contract/test_sidecar_serves_the_core.py` reaches the real core from a
+second OS process through the exact client path the MCP server uses. The same
+criterion audit had marked the recorded progress down from 74.26% to 59.66% by
+refusing 22 heavy claims whose tests did not observe them; all 56 affected
+tasks were **re-verified rather than inherited** — `scripts/verify_carryover.py`
+ran every named test here and now, 56 of 56 confirmed — which is how the figure
+in §1 was earned back. `docs/control/BLOCKERS.md` carries every record.
 
 ---
 
 ## 8. The release artefact and its checksum
+
+**The artefact of record is CI's.** `windows package` run 31252766042 built
+both executables from `8b9d0bd` — this head's code tree — and **CERTIFIED
+v1.0.0-rc1**:
+
+```
+pz-agent-windows-v1.0.0-rc1.zip  (CI artifact pz-agent-windows-rc, id 9015413488)
+  sha256   482e11d09bbfd14f7518a7f081847202c60a5656644a3c407d774499d4449d56
+  entries  71 — the 69 below plus bin/pz-agent.exe and bin/pz-agent-mcp.exe
+```
+
+Certification there means every step green, including two that are new since
+the last revision: a workflow step in which the **packaged `pz-agent.exe`
+serves the Core RPC link for real and the packaged `pz-agent-mcp.exe`
+completes a JSON-RPC `initialize` through it** — both running with PATH
+reduced to the system directories, no Python reachable — and the release
+gate's new `tests.mcp-e2e` rule, which refuses any report where the E2E suite
+did not run (30 testcases from `tests/contract/test_mcp_subprocess_e2e.py` ran
+and passed there). `docs/control/STATUS.json` records this RC `CURRENT`;
+by its own rule, any code commit after `8b9d0bd` makes it STALE until the
+workflow rebuilds it.
+
+The local archive is the honest record of what this container can produce —
+no PyInstaller output, so no executables. Re-verified at this commit with a
+fresh `pytest --junitxml` run fed to `scripts/check_release.py --rc`:
 
 ```
 dist/pz-agent-windows-v1.0.0-rc1.zip
   sha256   fa8253459bef96e11b89c2f588acba17f110dd6df31ceb08ae333367997f084e
   size     284 427 bytes
   entries  69 (68 files plus BUILD-MANIFEST.json)
-```
 
-**It is marked INCOMPLETE and it is not a release candidate by this project's
-own gate.** `BUILD-MANIFEST.json` records `complete: false`, `build_rc.py` exits
-1, and `scripts/check_release.py --rc --junit <fresh report>` refuses — on the
-missing executables and on nothing else, now that the suite is green:
-
-```
 [ok  ] archive:          pz-agent-windows-v1.0.0-rc1.zip, 69 entr(ies)
 [FAIL] archive.complete: the archive declares 2 missing file(s): bin/pz-agent.exe, bin/pz-agent-mcp.exe
 [ok  ] archive.claims:   the archive claims no live-test evidence
 [ok  ] archive.bat:      all 11 wrappers are at the root
 [FAIL] archive.bin:      missing from bin/: pz-agent.exe, pz-agent-mcp.exe
 [ok  ] archive.digests:  68 file(s) match the digests recorded for them
-[ok  ] tests:            6559 of 6564 test(s) passed, no failures and no errors; 5 skipped
+[ok  ] tests:            6732 of 6737 test(s) passed, no failures and no errors; 5 skipped
+[ok  ] tests.mcp-e2e:    30 testcase(s) from tests.contract.test_mcp_subprocess_e2e ran and passed
 
-REFUSED v1.0.0-rc1: 2 of 7 check(s) failed.
+REFUSED v1.0.0-rc1: 2 of 8 check(s) failed.
 ```
 
-Both executables need PyInstaller on Windows. `.github/workflows/windows.yml`
-builds them on `windows-latest`; nothing in this Linux container can. **The
-artefact of record is therefore CI's, not this container's**: run 31227188006
-built both executables from this exact commit, ran them with PATH reduced to
-the system directories (no Python reachable), passed the release gate and
-uploaded `pz-agent-windows-rc` — artifact 9012693407, sha256
-`2d3d9e4b9db95dc9c9f5e31de226424ad95bd9f8fa69b4f93309a45462da8bf7`, 47 576 972
-bytes. `docs/control/EVIDENCE_INDEX.md` tracks the current one; the local
-`dist/` archive above is the historical Linux-built ZIP, kept as the honest
-record of what this container can and cannot produce.
+That refusal is correct — the gate refusing the executable-less local build is
+the gate working, and the same gate passing on CI's build is why the archive
+of record is CI's.
 
 `check_release.py --release` refuses additionally on
 `release/evidence-manifest.json`, which does not exist and is produced by
-`pz-agent live-test finalize` and by nothing else. That refusal is the gate
-working.
+`pz-agent live-test finalize` and by nothing else. That refusal is also the
+gate working.
 
-No wheel or sdist was built at this commit. The pair in `dist/` still carries
-the hashes recorded in `dist/SHA256SUMS` by a build dozens of commits old
-(`fe649932…`, `e1f6d665…`); they describe that tree, not this one.
+No wheel or sdist was built at this commit. The pair in `dist/` still matches
+`dist/SHA256SUMS` (`fe649932…`, `e1f6d665…` — re-hashed here), but both were
+built dozens of commits ago; they describe that tree, not this one.
 
 ---
 
 ## 9. Every step that physically requires launching the game
 
 This is the list the whole report exists for. Each item is blocked on a running
-Project Zomboid Build 42.20 on Windows, and on nothing else.
+Project Zomboid Build 42.20 on Windows, and on nothing else. It is the same
+list `docs/LOCAL_AGENT_PROMPT.md` and `docs/LOCAL_GAME_HANDOFF.md` hand to the
+operator; only then may `v1.0.0` exist.
 
 ### Once, before anything
 
@@ -576,38 +693,48 @@ Project Zomboid Build 42.20 on Windows, and on nothing else.
    verdict — is in [`docs/LIVE_TEST_PLAYBOOK.md`](docs/LIVE_TEST_PLAYBOOK.md),
    which is generated from the same table the runner executes.
 
-   Declared time budget across all twenty: **5 h 16 min**, of which S19
-   (30 minutes unattended) and S20 (2 hours) are the endurance runs that close
-   T029. Several scenarios need a deliberately awkward setup — a player-queued
-   action running alongside a mod-queued one, a zombie allowed to notice the
-   character mid-read — and the playbook says which.
+   Declared time budget across all twenty: **5 h 16 min** (re-summed from the
+   playbook at this commit), of which S19 (30 minutes unattended) and S20
+   (2 hours) are the endurance runs that close T029. Several scenarios need a
+   deliberately awkward setup — a player-queued action running alongside a
+   mod-queued one, a zombie allowed to notice the character mid-read — and the
+   playbook says which.
 
-8. **Measured p50/p95 latencies.** Only the scenarios flagged `measures_latency`
-   record them. Any number produced without running them would be invented.
+8. **Measured p50/p95 latencies.** Only the three scenarios flagged
+   `measures_latency` record them. Any number produced without running them
+   would be invented.
 
 ### Things only a live run can settle
 
-9. **Every engine symbol in `docs/GAME_API_VERIFICATION.md`** — 50 rows marked
-   `requires_live`. Note that `grep -rn "Build 42:" pz-mod/` returns 6 lines
-   covering roughly 8 symbols, so it is *not* a complete list of the guesses;
-   the document is.
+9. **Every engine symbol in `docs/GAME_API_VERIFICATION.md`** — 120 rows
+   marked `requires_live`, rebuilt at this close from a 195-symbol sweep of
+   the sources (§2). Note that `grep -rn "Build 42:" pz-mod/` returns 6 lines,
+   about a twentieth of the surface, so it is *not* a complete list of the
+   guesses — the document is. (The handoff documents still quote the earlier
+   revision's 52-row count; the rebuilt document supersedes it, and the
+   instruction they give — work the document, row by row — is unchanged.)
 10. **`BackupManager.restore`'s game-running probe.** It reports "may be
     running" when it cannot tell, and that conservative answer needs confirming
     against a real Project Zomboid process name. A wrong answer here is the one
     that corrupts a save.
 11. **The multiplayer refusal against an actual server.** Tested against fakes
     only.
-12. **`release/evidence-manifest.json`**, via `pz-agent live-test finalize`.
-    Nothing else produces it — not a build, not a green test suite.
+12. **The remote surfaces against the game.** The Core RPC link, the remote
+    action channel, the goal channel and the voice route are proven between
+    real OS processes with the mod faked at the exchange files — never with
+    the game on the other side of those files.
+13. **`release/evidence-manifest.json`**, via `pz-agent live-test finalize`.
+    Nothing else produces it — not a build, not a green test suite, not the
+    certified RC.
 
 ### Then, and only then
 
-13. Build the two executables with PyInstaller on Windows and re-run
-    `packaging/windows/build_rc.py`.
-14. `scripts/check_release.py --release` must stop refusing.
+14. `scripts/check_release.py --release` must stop refusing — the RC gate
+    already passes on CI's build, and the `--release` gate's remaining refusal
+    is the evidence manifest above.
 15. Merge to `main`, tag, and cut the release. **Do not tag `v1.0.0` before
-    step 14 passes**, and note that every version constant currently says
-    `0.1.0`.
+    step 14 passes** (`docs/control/BLOCKERS.md` RB-002 states the same rule),
+    and note that every version constant currently says `0.1.0`.
 
 ---
 
@@ -616,13 +743,17 @@ Project Zomboid Build 42.20 on Windows, and on nothing else.
 It does not say the architecture is ready and only needs testing. It does not
 say a user can take it from here.
 
-It says: twenty-eight tasks are implemented and covered by 6564 Python tests and
-2875 Lua assertions — all of them passing at this commit, with the gate exiting
-0 and both workflows green against this exact tree; thirty-two
-defects were found by seam tests and closed, one of them a safety gate that had
-been documented for weeks and never written; two tasks are blocked on a game
-that does not exist in this environment; and §9 is the complete list of what
-closing them requires.
+It says: the remote stage is complete by its own weighted plan — 74.3%
+overall, with every band a container can move at 100.0 and the two the game
+owns at zero; the tree is covered by 6737 Python tests and 2966 Lua assertions
+across 28 suites — 6732 passed and 5 named skips at this commit, with
+`scripts/check.sh` exiting 0 and both workflows green against this head's code
+tree; the release candidate was rebuilt and certified by CI from that same
+tree, its packaged executables proving the served link between themselves;
+thirty-two defects were found by seam tests and closed, one of them a safety
+gate that had been documented for weeks and never written, and the nine
+R-blockers after them are closed too; and §9 is the complete list of what a
+running game — and nothing else — still has to settle.
 
 Where a claim could not be checked, this report says so rather than rounding up.
 That is the same rule the code follows: success means a postcondition was
