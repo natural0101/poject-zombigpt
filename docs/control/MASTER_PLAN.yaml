@@ -3980,14 +3980,12 @@ epics:
       verify_command: .venv/bin/pytest tests/contract/test_sidecar_serves_the_core.py -q
       regression_test: tests/contract/test_sidecar_serves_the_core.py
       evidence: packages/pz_agent_cli/src/pz_agent_cli/core_services.py
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: 136f16ecde4c2df2c62fd33316b53f449f0dde68
-      verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
+      verification_commit: d6a7bf00fc128565199f1eb9d61369729adcd0d3
       commit: 136f16ecde4c2df2c62fd33316b53f449f0dde68
       ci_url: null
-      reason: 'R-008 closed: serve_core_rpc wires CoreRouter over the real loop in pz-agent start, proven
-        by test_sidecar_serves_the_core.py through the client''s exact from_state_dir path over a real
-        socket; stays IN_PROGRESS until the proof runs the client in a genuine second OS process'
+      reason: ''
     - id: E06-M04-T002
       subsystem: rpc-server
       action: Build RemoteCoreServices from a state directory alone
@@ -4000,13 +3998,12 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_remote_core_services.py -q
       regression_test: tests/unit/test_remote_core_services.py
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/remote/client.py
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: 136f16ecde4c2df2c62fd33316b53f449f0dde68
       verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
       commit: 136f16ecde4c2df2c62fd33316b53f449f0dde68
       ci_url: null
-      reason: its own criterion is observed, but the milestone orders it after a task the criterion-coverage
-        audit reopened; it returns to PASS with its prerequisite
+      reason: ''
     - id: E06-M04-T003
       subsystem: rpc-server
       action: Report a stale descriptor as 'the sidecar is not running'
@@ -4019,13 +4016,12 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_remote_core_services.py -q
       regression_test: tests/unit/test_remote_core_services.py
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/remote/client.py
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: 136f16ecde4c2df2c62fd33316b53f449f0dde68
       verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
       commit: 136f16ecde4c2df2c62fd33316b53f449f0dde68
       ci_url: null
-      reason: its own criterion is observed, but the milestone orders it after a task the criterion-coverage
-        audit reopened; it returns to PASS with its prerequisite
+      reason: ''
     - id: E06-M04-T004
       subsystem: rpc-server
       action: Replace UnroutedPlanPort with the remote plan port
@@ -4038,13 +4034,12 @@ epics:
       verify_command: grep -rn 'Unrouted' packages
       regression_test: tests/unit/test_remote_core_services.py
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/remote/client.py
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: 136f16ecde4c2df2c62fd33316b53f449f0dde68
       verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
       commit: 136f16ecde4c2df2c62fd33316b53f449f0dde68
       ci_url: null
-      reason: its own criterion is observed, but the milestone orders it after a task the criterion-coverage
-        audit reopened; it returns to PASS with its prerequisite
+      reason: ''
     - id: E06-M04-T005
       subsystem: rpc-server
       action: Prove no CoreServices port is left unimplemented in the shipped path
@@ -4057,13 +4052,12 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_remote_core_services.py -q
       regression_test: tests/unit/test_remote_core_services.py
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/remote/client.py
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: 136f16ecde4c2df2c62fd33316b53f449f0dde68
       verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
       commit: 136f16ecde4c2df2c62fd33316b53f449f0dde68
       ci_url: null
-      reason: its own criterion is observed, but the milestone orders it after a task the criterion-coverage
-        audit reopened; it returns to PASS with its prerequisite
+      reason: ''
     checks:
     - id: E06-M04-C01
       statement: No port in the shipped wiring is a stub or an Unrouted placeholder.
@@ -4433,16 +4427,12 @@ epics:
       verify_command: .venv/bin/pytest tests/contract/test_mcp_subprocess_e2e.py -q
       regression_test: tests/contract/test_mcp_subprocess_e2e.py
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/__main__.py
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: 3944c0a727cde76df5d92925a9af3a969f575539
       verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
       commit: 3944c0a727cde76df5d92925a9af3a969f575539
       ci_url: null
-      reason: 'criterion-coverage audit at 094cb8a: Neither half of the criterion is asserted anywhere
-        for the mid-session case: (a) no test asserts that a tool call made over an already-established
-        MCP connection, after the sidecar has gone away, returns an error payload reporting the link is
-        down (e.g. reason_code STALE_SESSION) rather than the connection dying; (b) no test asserts the
-        pz-agent-mcp process stays alive / exits cleanly (does not cr'
+      reason: ''
     - id: E07-M03-T006
       subsystem: mcp
       action: Bound the time any single tool call may take
@@ -4455,13 +4445,12 @@ epics:
       verify_command: .venv/bin/pytest tests/contract/test_mcp_subprocess_e2e.py -q
       regression_test: tests/contract/test_mcp_subprocess_e2e.py
       evidence: packages/pz_agent_mcp/src/pz_agent_mcp/server.py
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: 3944c0a727cde76df5d92925a9af3a969f575539
       verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
       commit: 3944c0a727cde76df5d92925a9af3a969f575539
       ci_url: null
-      reason: its own criterion is observed, but the milestone orders it after a task the criterion-coverage
-        audit reopened; it returns to PASS with its prerequisite
+      reason: ''
     - id: E07-M03-T007
       subsystem: mcp
       action: Run the subprocess E2E on windows-latest
@@ -4474,16 +4463,12 @@ epics:
       verify_command: read the windows workflow run
       regression_test: tests/contract/test_mcp_subprocess_e2e.py
       evidence: docs/control/evidence/step-30-40/windows-suite.txt
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: 3944c0a727cde76df5d92925a9af3a969f575539
       verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
       commit: 3944c0a727cde76df5d92925a9af3a969f575539
-      ci_url: null
-      reason: 'criterion-coverage audit at 094cb8a: Nothing executable in the repo observes the Windows
-        run''s outcome: if the E2E suite regressed on Windows, the named test would still pass wherever
-        the plan''s gate runs. The only artifact is a hand-copied transcript, docs/control/evidence/step-30-40/windows-suite.txt,
-        which is not a test and cannot go red — and it itself records that at the final commit (2c4fd3c8)
-        the windows workflow was NOT green'
+      ci_url: https://github.com/natural0101/poject-zombigpt/actions/runs/31251581990
+      reason: ''
     checks:
     - id: E07-M03-C01
       statement: stdout carries JSON-RPC and nothing else, on both platforms.
@@ -5204,16 +5189,12 @@ epics:
       verify_command: .venv/bin/pytest tests/contract/test_mcp_subprocess_e2e.py -q
       regression_test: tests/contract/test_mcp_subprocess_e2e.py
       evidence: tests/contract/test_mcp_subprocess_e2e.py
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: 3944c0a727cde76df5d92925a9af3a969f575539
       verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
       commit: 3944c0a727cde76df5d92925a9af3a969f575539
       ci_url: null
-      reason: 'criterion-coverage audit at 094cb8a: Nowhere does a real client submit, poll, and cancel
-        a goal against a running core. The pz_goal_* tools are exercised only in-process against doubles
-        (tests/unit/test_mcp_router.py, tests/unit/test_mcp_catalog_goals.py — no subprocess, no running
-        core). The closest cross-process test, tests/contract/test_remote_core_round_trip.py::test_every_declared_method_survives_a_real_call,
-        sends goal.submit/g'
+      reason: ''
     - id: E08-M03-T011
       subsystem: goals
       action: Prove a submitted goal reaches the planner
@@ -5226,13 +5207,12 @@ epics:
       verify_command: .venv/bin/pytest tests/contract/test_goal_reaches_the_planner.py -q
       regression_test: tests/contract/test_goal_reaches_the_planner.py
       evidence: tests/contract/test_goal_reaches_the_planner.py
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: 521f1e45a38887e2bc2f88203ece238afd914bc1
       verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
       commit: 521f1e45a38887e2bc2f88203ece238afd914bc1
       ci_url: null
-      reason: its own criterion is observed, but the milestone orders it after a task the criterion-coverage
-        audit reopened; it returns to PASS with its prerequisite
+      reason: ''
     checks:
     - id: E08-M03-C01
       statement: A goal submitted by a client is the plan the core runs.
@@ -6511,16 +6491,12 @@ epics:
       verify_command: read the windows workflow run
       regression_test: tests/contract/test_mcp_subprocess_e2e.py
       evidence: docs/control/evidence/step-30-40/windows-suite.txt
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: 3944c0a727cde76df5d92925a9af3a969f575539
       verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
       commit: 3944c0a727cde76df5d92925a9af3a969f575539
-      ci_url: null
-      reason: 'criterion-coverage audit at 094cb8a: Nothing asserts the packaged executable completes
-        an MCP initialize over the RPC link. The only CI exercise of pz-agent-mcp.exe is .github/workflows/windows.yml''s
-        ''Both executables answer'' step, which runs ''pz-agent-mcp.exe --describe'' — and the suite''s
-        own test_describe_succeeding_does_not_imply_a_working_transport proves --describe answers identically
-        with no sidecar, no socket, and no SDK. The '
+      ci_url: https://github.com/natural0101/poject-zombigpt/actions/runs/31251581990
+      reason: ''
     - id: E11-M02-T006
       subsystem: packaging
       action: Prove neither executable needs a Python installation
@@ -6533,13 +6509,12 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_windows_workflow_contract.py -q
       regression_test: tests/unit/test_windows_workflow_contract.py
       evidence: docs/control/evidence/step-30-40/windows-suite.txt
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: 7d4a110d2019e2fbadc2ebb064985cc26c5f822a
       verification_commit: be28770b8b1d04b29b47a00e818b8a2d682acc6f
       commit: 7d4a110d2019e2fbadc2ebb064985cc26c5f822a
       ci_url: https://github.com/natural0101/poject-zombigpt/actions/runs/31225901032
-      reason: its own criterion is observed, but the milestone orders it after a task the criterion-coverage
-        audit reopened; it returns to PASS with its prerequisite
+      reason: ''
     - id: E11-M02-T007
       subsystem: packaging
       action: Keep the console attached so a client can read stdio
@@ -6552,13 +6527,12 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_windows_workflow_contract.py -q
       regression_test: tests/unit/test_windows_workflow_contract.py
       evidence: packaging/windows/pz-agent-mcp.spec
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: 7d4a110d2019e2fbadc2ebb064985cc26c5f822a
       verification_commit: be28770b8b1d04b29b47a00e818b8a2d682acc6f
       commit: 7d4a110d2019e2fbadc2ebb064985cc26c5f822a
       ci_url: https://github.com/natural0101/poject-zombigpt/actions/runs/31225901032
-      reason: its own criterion is observed, but the milestone orders it after a task the criterion-coverage
-        audit reopened; it returns to PASS with its prerequisite
+      reason: ''
     - id: E11-M02-T008
       subsystem: packaging
       action: Leave both executables unpacked and unsigned rather than UPX-compressed
@@ -6571,13 +6545,12 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_windows_workflow_contract.py -q
       regression_test: tests/unit/test_windows_workflow_contract.py
       evidence: packaging/windows/pz-agent.spec
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: 7d4a110d2019e2fbadc2ebb064985cc26c5f822a
       verification_commit: be28770b8b1d04b29b47a00e818b8a2d682acc6f
       commit: 7d4a110d2019e2fbadc2ebb064985cc26c5f822a
       ci_url: https://github.com/natural0101/poject-zombigpt/actions/runs/31225901032
-      reason: its own criterion is observed, but the milestone orders it after a task the criterion-coverage
-        audit reopened; it returns to PASS with its prerequisite
+      reason: ''
     checks:
     - id: E11-M02-C01
       statement: Both executables run on a machine with no project Python.
@@ -6636,16 +6609,12 @@ epics:
       verify_command: .venv/bin/python scripts/check_release.py
       regression_test: tests/unit/test_check_release.py
       evidence: scripts/check_release.py
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: ce70711967e1be6cd5a0096e5bbfec554bb2eda3
       verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
       commit: ce70711967e1be6cd5a0096e5bbfec554bb2eda3
       ci_url: null
-      reason: 'criterion-coverage audit at 094cb8a: No test performs a same-size content edit of an archive
-        member — the only violation that hashing (as opposed to the recorded size) can catch — so deleting
-        the ''_sha256_bytes(...) != recorded'' comparison from _recorded_digests leaves the entire suite
-        green; the hash-mismatch message ''content does not match the recorded digest'' is asserted nowhere.
-        Nor does any test add a member to the archive that '
+      reason: ''
     - id: E11-M03-T004
       subsystem: packaging
       action: Include both executables in the archive
@@ -6658,13 +6627,12 @@ epics:
       verify_command: .venv/bin/python scripts/check_release.py
       regression_test: tests/unit/test_check_release.py
       evidence: packaging/windows/build_rc.py
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: ce70711967e1be6cd5a0096e5bbfec554bb2eda3
       verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
       commit: ce70711967e1be6cd5a0096e5bbfec554bb2eda3
       ci_url: null
-      reason: its own criterion is observed, but the milestone orders it after a task the criterion-coverage
-        audit reopened; it returns to PASS with its prerequisite
+      reason: ''
     - id: E11-M03-T005
       subsystem: packaging
       action: Include the mod payload
@@ -6677,13 +6645,12 @@ epics:
       verify_command: .venv/bin/python scripts/check_release.py
       regression_test: tests/unit/test_check_release.py
       evidence: packaging/windows/build_rc.py
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: ce70711967e1be6cd5a0096e5bbfec554bb2eda3
       verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
       commit: ce70711967e1be6cd5a0096e5bbfec554bb2eda3
       ci_url: null
-      reason: its own criterion is observed, but the milestone orders it after a task the criterion-coverage
-        audit reopened; it returns to PASS with its prerequisite
+      reason: ''
     - id: E11-M03-T006
       subsystem: packaging
       action: Include the installer and the launcher
@@ -6696,13 +6663,12 @@ epics:
       verify_command: .venv/bin/python scripts/check_release.py
       regression_test: tests/unit/test_check_release.py
       evidence: packaging/windows/build_rc.py
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: ce70711967e1be6cd5a0096e5bbfec554bb2eda3
       verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
       commit: ce70711967e1be6cd5a0096e5bbfec554bb2eda3
       ci_url: null
-      reason: its own criterion is observed, but the milestone orders it after a task the criterion-coverage
-        audit reopened; it returns to PASS with its prerequisite
+      reason: ''
     - id: E11-M03-T007
       subsystem: packaging
       action: Include every document an operator needs, and no dangling link
@@ -6715,13 +6681,12 @@ epics:
       verify_command: .venv/bin/pytest tests/contract/test_archive_documents_resolve.py -q
       regression_test: tests/contract/test_archive_documents_resolve.py
       evidence: packaging/windows/build_rc.py
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: bc248f931c48a3d3344089afeb812f5e79708844
       verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
       commit: bc248f931c48a3d3344089afeb812f5e79708844
       ci_url: null
-      reason: its own criterion is observed, but the milestone orders it after a task the criterion-coverage
-        audit reopened; it returns to PASS with its prerequisite
+      reason: ''
     - id: E11-M03-T008
       subsystem: packaging
       action: Refuse to publish an archive whose gate did not pass
@@ -6734,13 +6699,12 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_windows_workflow_contract.py -q
       regression_test: tests/unit/test_windows_workflow_contract.py
       evidence: .github/workflows/windows.yml
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: df79d65340c481028e0781632bda158232418794
       verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
       commit: df79d65340c481028e0781632bda158232418794
       ci_url: https://github.com/natural0101/poject-zombigpt/actions/runs/31214158408
-      reason: its own criterion is observed, but the milestone orders it after a task the criterion-coverage
-        audit reopened; it returns to PASS with its prerequisite
+      reason: ''
     - id: E11-M03-T009
       subsystem: packaging
       action: Record the archive digest in the plan when it is built
@@ -6753,13 +6717,12 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_packaging_rc.py -q
       regression_test: tests/unit/test_packaging_rc.py
       evidence: docs/control/MASTER_PLAN.yaml
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: cd1d21085671780a9c68441507c1887450c12737
       verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
       commit: cd1d21085671780a9c68441507c1887450c12737
       ci_url: https://github.com/natural0101/poject-zombigpt/actions/runs/31214158408
-      reason: its own criterion is observed, but the milestone orders it after a task the criterion-coverage
-        audit reopened; it returns to PASS with its prerequisite
+      reason: ''
     checks:
     - id: E11-M03-C01
       statement: Every archive member is verified independently of the index.
@@ -6781,16 +6744,12 @@ epics:
       verify_command: .venv/bin/python scripts/check_release.py
       regression_test: tests/unit/test_check_release.py
       evidence: scripts/check_release.py
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: 081414cdcc9dbdf246bb029319f8f2d8cbc53ce7
       verification_commit: 63cca87f42d5c0851425f055a2e9a8fcb09e3757
       commit: 081414cdcc9dbdf246bb029319f8f2d8cbc53ce7
       ci_url: null
-      reason: 'criterion-coverage audit at 094cb8a: No test anywhere runs check_release against a manifest
-        whose scenario states are ''NOT_RUN'' (check_release accepts an arbitrary --manifest path, so
-        such a manifest is a reachable gate input even though finalize refuses to write one). The gate''s
-        treatment of literal NOT_RUN verdicts is asserted nowhere: a change to _scenario_verdicts special-casing
-        ''NOT_RUN'' as acceptable (''has not run yet, benign'')'
+      reason: ''
     - id: E11-M04-T002
       subsystem: release
       action: Refuse a v1.0.0 tag before live validation passes
@@ -6803,13 +6762,12 @@ epics:
       verify_command: .venv/bin/python scripts/check_release.py
       regression_test: tests/unit/test_check_release.py
       evidence: scripts/check_release.py
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: 081414cdcc9dbdf246bb029319f8f2d8cbc53ce7
       verification_commit: 63cca87f42d5c0851425f055a2e9a8fcb09e3757
       commit: 081414cdcc9dbdf246bb029319f8f2d8cbc53ce7
       ci_url: null
-      reason: its own criterion is observed, but the milestone orders it after a task the criterion-coverage
-        audit reopened; it returns to PASS with its prerequisite
+      reason: ''
     - id: E11-M04-T003
       subsystem: release
       action: Keep the Windows workflow required for the RC
@@ -6822,13 +6780,12 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_windows_workflow_contract.py -q
       regression_test: tests/unit/test_windows_workflow_contract.py
       evidence: .github/workflows/windows.yml
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: df79d65340c481028e0781632bda158232418794
       verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
       commit: df79d65340c481028e0781632bda158232418794
       ci_url: https://github.com/natural0101/poject-zombigpt/actions/runs/31214158408
-      reason: its own criterion is observed, but the milestone orders it after a task the criterion-coverage
-        audit reopened; it returns to PASS with its prerequisite
+      reason: ''
     - id: E11-M04-T004
       subsystem: release
       action: Publish the RC as a workflow artefact with its digest
@@ -6841,13 +6798,12 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_windows_workflow_contract.py -q
       regression_test: tests/unit/test_windows_workflow_contract.py
       evidence: docs/control/MASTER_PLAN.yaml
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: df79d65340c481028e0781632bda158232418794
       verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
       commit: df79d65340c481028e0781632bda158232418794
       ci_url: https://github.com/natural0101/poject-zombigpt/actions/runs/31214158408
-      reason: its own criterion is observed, but the milestone orders it after a task the criterion-coverage
-        audit reopened; it returns to PASS with its prerequisite
+      reason: ''
     - id: E11-M04-T005
       subsystem: release
       action: Record the RC digest in the evidence index
@@ -6860,13 +6816,12 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_windows_workflow_contract.py -q
       regression_test: tests/unit/test_windows_workflow_contract.py
       evidence: docs/control/EVIDENCE_INDEX.md
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: cd1d21085671780a9c68441507c1887450c12737
       verification_commit: cd1d21085671780a9c68441507c1887450c12737
       commit: cd1d21085671780a9c68441507c1887450c12737
       ci_url: null
-      reason: its own criterion is observed, but the milestone orders it after a task the criterion-coverage
-        audit reopened; it returns to PASS with its prerequisite
+      reason: ''
     - id: E11-M04-T006
       subsystem: release
       action: Prove a PyInstaller spec with no built executable is not counted
@@ -6879,16 +6834,12 @@ epics:
       verify_command: .venv/bin/python scripts/check_master_plan.py
       regression_test: tests/unit/test_master_plan.py
       evidence: scripts/check_master_plan.py
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: 743115cb144951c326cf7203dc6890ff5959280c
       verification_commit: 743115cb144951c326cf7203dc6890ff5959280c
       commit: 743115cb144951c326cf7203dc6890ff5959280c
       ci_url: null
-      reason: 'criterion-coverage audit at 094cb8a: No assertion anywhere observes that build tasks are
-        BLOCKED (or refused as PASS) while no run has produced the executables. The real build tasks (E11-M02-T001..T008)
-        are PASS with evidence paths that are a CI log (docs/control/evidence/step-30-40/windows-suite.txt)
-        and the .spec file itself (packaging/windows/pz-agent.spec) — files that exist whether or not
-        any executable was ever built — so the g'
+      reason: ''
     - id: E11-M04-T007
       subsystem: release
       action: Prove a ZIP whose contents were never checked is not counted
@@ -6901,16 +6852,12 @@ epics:
       verify_command: .venv/bin/python scripts/check_master_plan.py
       regression_test: tests/unit/test_master_plan.py
       evidence: scripts/check_master_plan.py
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: 743115cb144951c326cf7203dc6890ff5959280c
       verification_commit: 743115cb144951c326cf7203dc6890ff5959280c
       commit: 743115cb144951c326cf7203dc6890ff5959280c
       ci_url: null
-      reason: 'criterion-coverage audit at 094cb8a: Nothing asserts the wiring the criterion actually
-        names: no test checks that the real plan''s archive tasks depend (directly or transitively) on
-        the per-member verification task, so deleting E11-M03-T003 from the depends_on chain — the only
-        mechanism making the criterion true — fails no test. Nor does anything assert the verification
-        ''has run'': the gate only reads recorded statuses, and no test obs'
+      reason: ''
     checks:
     - id: E11-M04-C01
       statement: No artefact can be published from a red gate or a red Windows run.
@@ -6940,16 +6887,12 @@ epics:
       verify_command: .venv/bin/python scripts/check_forbidden.py
       regression_test: tests/unit/test_check_forbidden.py
       evidence: scripts/check_forbidden.py
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: 6f73bc0c52135965cd67605b8002618bcf2282d6
       verification_commit: 6f73bc0c52135965cd67605b8002618bcf2282d6
       commit: 6f73bc0c52135965cd67605b8002618bcf2282d6
       ci_url: null
-      reason: 'criterion-coverage audit at 094cb8a: Nothing in the named test (or any other test found:
-        only test_mcp_configs.py checks secret shapes, and only inside configs/mcp) asserts either (a)
-        that check_secrets() fires on a planted secret — the rule''s continued existence — or (b) that
-        check_secrets() over the repository''s tracked files returns no findings — the criterion itself.
-        ''The secret scanner finds nothing tracked'' is observed solely b'
+      reason: ''
     - id: E12-M01-T002
       subsystem: safety
       action: Keep the RPC token out of every log line
@@ -6962,16 +6905,12 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_rpc_token_and_descriptor.py -q
       regression_test: tests/unit/test_rpc_token_and_descriptor.py
       evidence: packages/pz_agent_core/src/pz_agent_core/rpc/token.py
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: fceb4162fdfafd4e63467a4010bcf6ec5405a704
       verification_commit: fceb4162fdfafd4e63467a4010bcf6ec5405a704
       commit: fceb4162fdfafd4e63467a4010bcf6ec5405a704
       ci_url: null
-      reason: 'criterion-coverage audit at 094cb8a: Nothing asserts over an actual log record or log file:
-        if any core-side code (token issuance, the RPC transport handling authkey, the sidecar lifecycle)
-        logged the token — e.g. logging.info(''issued %s'', token.hex()) into the diagnostics log — no
-        test would fail, because no test ever captures log records or scans the sidecar''s log file for
-        the token. The criterion ''no log record contains the token'''
+      reason: ''
     - id: E12-M01-T003
       subsystem: safety
       action: Keep the RPC token out of every support bundle
@@ -6984,16 +6923,12 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_diagnostics_bundle.py -q
       regression_test: tests/unit/test_diagnostics_bundle.py
       evidence: packages/pz_agent_core/src/pz_agent_core/diagnostics/bundle.py
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: 11489259665c64c481d731b6af7fd94d90b39582
       verification_commit: bfcc230729d08fed8b1aecb4076e491f80836f5e
       commit: 11489259665c64c481d731b6af7fd94d90b39582
       ci_url: null
-      reason: 'criterion-coverage audit at 094cb8a: No test anywhere observes ''no bundle member contains
-        the RPC token''. The real bundle is assembled by pz_agent_cli.support.build_support_bundle (versions/doctor/capabilities/config/logs/traces/ipc-journal
-        members); no test issues a real token (pz_agent_core.rpc.token.issue_token) into a state directory,
-        builds that bundle, and scans every member''s bytes for the token value or its hex. The named
-        tes'
+      reason: ''
     - id: E12-M01-T004
       subsystem: safety
       action: Keep the RPC token out of every exception message
@@ -7006,13 +6941,12 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_rpc_token_and_descriptor.py -q
       regression_test: tests/unit/test_rpc_token_and_descriptor.py
       evidence: packages/pz_agent_core/src/pz_agent_core/rpc/token.py
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: fceb4162fdfafd4e63467a4010bcf6ec5405a704
       verification_commit: fceb4162fdfafd4e63467a4010bcf6ec5405a704
       commit: fceb4162fdfafd4e63467a4010bcf6ec5405a704
       ci_url: null
-      reason: its own criterion is observed, but the milestone orders it after a task the criterion-coverage
-        audit reopened; it returns to PASS with its prerequisite
+      reason: ''
     - id: E12-M01-T005
       subsystem: safety
       action: Strike a credential out of a log line entirely, not merely mark it
@@ -7025,16 +6959,12 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_diagnostics_redaction.py -q
       regression_test: tests/unit/test_diagnostics_redaction.py
       evidence: packages/pz_agent_core/src/pz_agent_core/diagnostics/redaction.py
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: 2c4fd3c8c2f73358b4521f7a296963acffb96827
       verification_commit: bfcc230729d08fed8b1aecb4076e491f80836f5e
       commit: 2c4fd3c8c2f73358b4521f7a296963acffb96827
       ci_url: null
-      reason: 'criterion-coverage audit at 094cb8a: The criterion says ''for every shape'', and three
-        of the eight SECRET_RULES in packages/pz_agent_core/src/pz_agent_core/diagnostics/redaction.py
-        (lines 271-285) have no absence assertion anywhere in the suite: openai_key (bare ''sk-'' + 16
-        alnum — the tested ''sk-live-...'' strings are matched by credential_assignment via their ''api_key=''
-        label, not by this rule), github_token (''ghp_...''), and aws_key_i'
+      reason: ''
     - id: E12-M01-T006
       subsystem: safety
       action: Report a leak in verify_bundle when one is present
@@ -7047,16 +6977,12 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_diagnostics_bundle.py -q
       regression_test: tests/unit/test_diagnostics_bundle.py
       evidence: packages/pz_agent_core/src/pz_agent_core/diagnostics/bundle.py
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: 11489259665c64c481d731b6af7fd94d90b39582
       verification_commit: bfcc230729d08fed8b1aecb4076e491f80836f5e
       commit: 11489259665c64c481d731b6af7fd94d90b39582
       ci_url: null
-      reason: 'criterion-coverage audit at 094cb8a: No test anywhere verifies a bundle whose member carries
-        a credential and asserts the verification findings are non-empty. The criterion''s composed claim
-        — verify_bundle over an archive containing a token/key produces non-empty findings — is asserted
-        in no test; it is covered only as two disjoint halves (credential->Redactor.findings in test_diagnostics_redaction.py;
-        rule-findings->VerifiedEntry.fi'
+      reason: ''
     - id: E12-M01-T007
       subsystem: safety
       action: Never flag a clean bundle as leaking
@@ -7069,13 +6995,12 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_diagnostics_bundle.py -q
       regression_test: tests/unit/test_diagnostics_bundle.py
       evidence: packages/pz_agent_core/src/pz_agent_core/diagnostics/bundle.py
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: 11489259665c64c481d731b6af7fd94d90b39582
       verification_commit: bfcc230729d08fed8b1aecb4076e491f80836f5e
       commit: 11489259665c64c481d731b6af7fd94d90b39582
       ci_url: null
-      reason: its own criterion is observed, but the milestone orders it after a task the criterion-coverage
-        audit reopened; it returns to PASS with its prerequisite
+      reason: ''
     - id: E12-M01-T008
       subsystem: safety
       action: Keep the account name out of every recorded path
@@ -7088,15 +7013,12 @@ epics:
       verify_command: .venv/bin/pytest tests/contract/test_portable_paths.py -q
       regression_test: tests/contract/test_portable_paths.py
       evidence: packages/pz_agent_core/src/pz_agent_core/platform/paths.py
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: 15296e507958501b7c2737c4676813c30d6a9d15
       verification_commit: 15296e507958501b7c2737c4676813c30d6a9d15
       commit: 15296e507958501b7c2737c4676813c30d6a9d15
       ci_url: null
-      reason: 'criterion-coverage audit at 094cb8a: The evidence-manifest half of the criterion is asserted
-        nowhere. The livetest evidence writer (pz_agent_cli/livetest/evidence.py) never uses paths.py:
-        EvidenceLayout.relative does its own relative_to, and for a path outside the tree it records path.as_posix()
-        — the absolute, account-name-carrying spelling — a behavior tests/unit/test_livetest_evidence.py::test_a_path_outside_the_tree_is_shown_rath'
+      reason: ''
     checks:
     - id: E12-M01-C01
       statement: A bundle built from a real session contains no credential, path or account name.
@@ -7136,16 +7058,12 @@ epics:
       verify_command: grep -rn 'pickle\|eval(\|exec(' packages/*/src
       regression_test: tests/unit/test_rpc_wire.py
       evidence: packages/pz_agent_core/src/pz_agent_core/rpc/wire.py
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: fceb4162fdfafd4e63467a4010bcf6ec5405a704
       verification_commit: fceb4162fdfafd4e63467a4010bcf6ec5405a704
       commit: fceb4162fdfafd4e63467a4010bcf6ec5405a704
       ci_url: null
-      reason: 'criterion-coverage audit at 094cb8a: No test observes ''no eval'' or ''no dynamic import
-        from a payload''. A ''liberal'' fallback in wire.py that ran eval() or __import__() on payload
-        content would leave test_rpc_wire.py green: every pickle stream fed to eval raises SyntaxError,
-        which would be wrapped as the very RpcError the pickle tests expect, and all well-formed inputs
-        still round-trip through the JSON path. The one gate that does ban '
+      reason: ''
     - id: E12-M02-T003
       subsystem: safety
       action: Bound every read from another process
@@ -7158,16 +7076,12 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_rpc_wire.py -q
       regression_test: tests/unit/test_rpc_wire.py
       evidence: packages/pz_agent_core/src/pz_agent_core/rpc/wire.py
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: fceb4162fdfafd4e63467a4010bcf6ec5405a704
       verification_commit: fceb4162fdfafd4e63467a4010bcf6ec5405a704
       commit: fceb4162fdfafd4e63467a4010bcf6ec5405a704
       ci_url: null
-      reason: 'criterion-coverage audit at 094cb8a: The criterion is ''every recv has a maximum length'',
-        and the actual recv bound lives in packages/pz_agent_core/src/pz_agent_core/rpc/transport.py lines
-        231 and 364 (connection.recv_bytes(maxlength=MAX_REQUEST_BYTES / MAX_RESPONSE_BYTES)). No test
-        asserts that bound: deleting the maxlength= arguments leaves test_rpc_wire.py (which decodes in-memory
-        bytes) and test_rpc_transport.py (grep finds no max'
+      reason: ''
     - id: E12-M02-T004
       subsystem: safety
       action: Bound every wait on another process
@@ -7180,16 +7094,12 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_rpc_transport.py -q
       regression_test: tests/unit/test_rpc_transport.py
       evidence: packages/pz_agent_core/src/pz_agent_core/rpc/transport.py
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: fceb4162fdfafd4e63467a4010bcf6ec5405a704
       verification_commit: fceb4162fdfafd4e63467a4010bcf6ec5405a704
       commit: fceb4162fdfafd4e63467a4010bcf6ec5405a704
       ci_url: null
-      reason: 'criterion-coverage audit at 094cb8a: Three of the four waits on another process are asserted
-        nowhere. (1) The server''s idle wait connection.poll(IDLE_SECONDS) (transport.py:228): changing
-        it to a blocking poll(None) fails no test — no test opens an authenticated connection, sends nothing,
-        and observes the drop. (2) The client''s connection.recv_bytes after a successful poll (transport.py:364)
-        has no deadline in the code at all — a ser'
+      reason: ''
     - id: E12-M02-T005
       subsystem: safety
       action: Never modify game memory
@@ -7202,13 +7112,12 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_check_forbidden.py -q
       regression_test: tests/unit/test_check_forbidden.py
       evidence: docs/SAFETY.md
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: 743115cb144951c326cf7203dc6890ff5959280c
       verification_commit: 743115cb144951c326cf7203dc6890ff5959280c
       commit: 743115cb144951c326cf7203dc6890ff5959280c
       ci_url: null
-      reason: its own criterion is observed, but the milestone orders it after a task the criterion-coverage
-        audit reopened; it returns to PASS with its prerequisite
+      reason: ''
     - id: E12-M02-T006
       subsystem: safety
       action: Never inject a library into the game process
@@ -7221,13 +7130,12 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_check_forbidden.py -q
       regression_test: tests/unit/test_check_forbidden.py
       evidence: docs/SAFETY.md
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: 743115cb144951c326cf7203dc6890ff5959280c
       verification_commit: 743115cb144951c326cf7203dc6890ff5959280c
       commit: 743115cb144951c326cf7203dc6890ff5959280c
       ci_url: null
-      reason: its own criterion is observed, but the milestone orders it after a task the criterion-coverage
-        audit reopened; it returns to PASS with its prerequisite
+      reason: ''
     - id: E12-M02-T007
       subsystem: safety
       action: Never attempt to bypass anti-cheat
@@ -7240,13 +7148,12 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_check_forbidden.py -q
       regression_test: tests/unit/test_check_forbidden.py
       evidence: docs/SAFETY.md
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: 743115cb144951c326cf7203dc6890ff5959280c
       verification_commit: 743115cb144951c326cf7203dc6890ff5959280c
       commit: 743115cb144951c326cf7203dc6890ff5959280c
       ci_url: null
-      reason: its own criterion is observed, but the milestone orders it after a task the criterion-coverage
-        audit reopened; it returns to PASS with its prerequisite
+      reason: ''
     - id: E12-M02-T008
       subsystem: safety
       action: Keep synthetic input disabled in multiplayer
@@ -7259,13 +7166,12 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_safety_input.py -q
       regression_test: tests/unit/test_safety_input.py
       evidence: packages/pz_agent_core/src/pz_agent_core/safety/input.py
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: 743115cb144951c326cf7203dc6890ff5959280c
       verification_commit: 743115cb144951c326cf7203dc6890ff5959280c
       commit: 743115cb144951c326cf7203dc6890ff5959280c
       ci_url: null
-      reason: its own criterion is observed, but the milestone orders it after a task the criterion-coverage
-        audit reopened; it returns to PASS with its prerequisite
+      reason: ''
     checks:
     - id: E12-M02-C01
       statement: Nothing in the shipped tree reads memory, injects code or deserialises executables.
@@ -7305,16 +7211,12 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_actions_engine.py -q
       regression_test: tests/unit/test_actions_engine.py
       evidence: packages/pz_agent_core/src/pz_agent_core/actions/engine.py
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: 2c4fd3c8c2f73358b4521f7a296963acffb96827
       verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
       commit: 2c4fd3c8c2f73358b4521f7a296963acffb96827
       ci_url: null
-      reason: 'criterion-coverage audit at 094cb8a: In the named file tests/unit/test_actions_engine.py,
-        no assertion covers a game dying after the command is dispatched: nothing asserts an in-flight
-        action (sink.sent non-empty) terminates with GAME_DISCONNECTED and a non-succeeded status. That
-        mid-action ending is asserted only in tests/unit/test_session_recovery.py::test_the_engine_does_not_keep_trying_against_a_game_that_is_gone
-        (engine layer) a'
+      reason: ''
     - id: E12-M03-T003
       subsystem: safety
       action: Recover when the RPC link drops mid-call
@@ -7327,16 +7229,12 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_rpc_transport.py -q
       regression_test: tests/unit/test_rpc_transport.py
       evidence: packages/pz_agent_core/src/pz_agent_core/rpc/transport.py
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: d630acb15f960e6ea6c311537e0fc3d7082ae765
       verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
       commit: d630acb15f960e6ea6c311537e0fc3d7082ae765
       ci_url: null
-      reason: 'criterion-coverage audit at 094cb8a: No test anywhere drops an established, authenticated
-        connection mid-exchange. The recovery code the criterion names is untested on both ends: RpcClient.call''s
-        except (OSError, EOFError) -> RpcUnavailable(''the sidecar closed the connection'') around send_bytes/recv_bytes
-        (transport.py:365-368) is reached by no test — deleting it fails nothing; likewise the server''s
-        _exchange recv-drop guard (transpo'
+      reason: ''
     - id: E12-M03-T004
       subsystem: safety
       action: Recover when the state directory becomes unwritable
@@ -7349,15 +7247,12 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_cli_supervisor.py -q
       regression_test: tests/unit/test_cli_supervisor.py
       evidence: packages/pz_agent_cli/src/pz_agent_cli/supervisor.py
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: 935437ef88eb257a590b2bda930cce85de88632c
       verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
       commit: 935437ef88eb257a590b2bda930cce85de88632c
       ci_url: null
-      reason: 'criterion-coverage audit at 094cb8a: The criterion ''the sidecar reports it rather than
-        losing the session silently'' is asserted nowhere. A repo-wide search for unwritable/PermissionError/write-failure
-        tests finds only different subjects: tests/unit/test_safety_stop.py::test_the_state_directory_really_cannot_be_written
-        wrecks the IPC exchange dir but only proves the panic latch stays READABLE; tests/unit/test_cli_app_build.py::test_a_'
+      reason: ''
     - id: E12-M03-T005
       subsystem: safety
       action: Recover from a corrupt journal
@@ -7370,15 +7265,12 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_ipc_journal.py -q
       regression_test: tests/unit/test_ipc_journal.py
       evidence: packages/pz_agent_core/src/pz_agent_core/ipc/journal.py
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: 0c9cb9342bf61dfa6fd1fa5454ebb73211ee97c8
       verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
       commit: 0c9cb9342bf61dfa6fd1fa5454ebb73211ee97c8
       ci_url: null
-      reason: 'criterion-coverage audit at 094cb8a: ''The session refuses to arm'' is asserted nowhere
-        in the repository. test_ipc_journal.py has no arming assertion; test_session_arming.py never touches
-        a journal; test_safety_stop.py''s ''truncated_journal'' wreck (_wreck_journal, test_the_truncated_journal_really_loses_its_last_record)
-        only proves the panic latch still reads and the tear is observable, not an arming refusal; test_session_recovery.py''s'
+      reason: ''
     - id: E12-M03-T006
       subsystem: safety
       action: Recover from a corrupt snapshot
@@ -7391,13 +7283,12 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_ipc_snapshot.py -q
       regression_test: tests/unit/test_ipc_snapshot.py
       evidence: packages/pz_agent_core/src/pz_agent_core/ipc/snapshot.py
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: 90ce2d41d79d9783d62047742780aa39c3e9a50a
       verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
       commit: 90ce2d41d79d9783d62047742780aa39c3e9a50a
       ci_url: null
-      reason: its own criterion is observed, but the milestone orders it after a task the criterion-coverage
-        audit reopened; it returns to PASS with its prerequisite
+      reason: ''
     - id: E12-M03-T007
       subsystem: safety
       action: Keep a panic stop working when every other subsystem is down
@@ -7410,13 +7301,12 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_safety_stop.py -q
       regression_test: tests/unit/test_safety_stop.py
       evidence: packages/pz_agent_core/src/pz_agent_core/safety/reflex.py
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: 62d69c336aee220614560d713ca6a6e092932279
       verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
       commit: 62d69c336aee220614560d713ca6a6e092932279
       ci_url: null
-      reason: its own criterion is observed, but the milestone orders it after a task the criterion-coverage
-        audit reopened; it returns to PASS with its prerequisite
+      reason: ''
     - id: E12-M03-T008
       subsystem: safety
       action: Never clear a queue entry the player owns
@@ -7429,13 +7319,12 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_safety_stop.py -q
       regression_test: tests/unit/test_safety_stop.py
       evidence: packages/pz_agent_core/src/pz_agent_core/safety/reflex.py
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: 62d69c336aee220614560d713ca6a6e092932279
       verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
       commit: 62d69c336aee220614560d713ca6a6e092932279
       ci_url: null
-      reason: its own criterion is observed, but the milestone orders it after a task the criterion-coverage
-        audit reopened; it returns to PASS with its prerequisite
+      reason: ''
     - id: E12-M03-T009
       subsystem: safety
       action: Refuse to act after a manual takeover, before dispatch
@@ -7448,13 +7337,12 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_actions_engine.py -q
       regression_test: tests/unit/test_actions_engine.py::test_manual_takeover_before_the_send_refuses_rather_than_cancels
       evidence: packages/pz_agent_core/src/pz_agent_core/actions/engine.py
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: 2c4fd3c8c2f73358b4521f7a296963acffb96827
       verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
       commit: 2c4fd3c8c2f73358b4521f7a296963acffb96827
       ci_url: null
-      reason: its own criterion is observed, but the milestone orders it after a task the criterion-coverage
-        audit reopened; it returns to PASS with its prerequisite
+      reason: ''
     - id: E12-M03-T010
       subsystem: safety
       action: Cancel in flight when a takeover arrives mid-action
@@ -7467,13 +7355,12 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_actions_engine.py -q
       regression_test: tests/unit/test_actions_engine.py
       evidence: packages/pz_agent_core/src/pz_agent_core/actions/engine.py
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: 2c4fd3c8c2f73358b4521f7a296963acffb96827
       verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
       commit: 2c4fd3c8c2f73358b4521f7a296963acffb96827
       ci_url: null
-      reason: its own criterion is observed, but the milestone orders it after a task the criterion-coverage
-        audit reopened; it returns to PASS with its prerequisite
+      reason: ''
     - id: E12-M03-T011
       subsystem: safety
       action: Require a confirmed backup before arming
@@ -7486,13 +7373,12 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_session_arming.py -q
       regression_test: tests/unit/test_session_arming.py
       evidence: packages/pz_agent_core/src/pz_agent_core/policy/autonomy.py
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: 62d69c336aee220614560d713ca6a6e092932279
       verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
       commit: 62d69c336aee220614560d713ca6a6e092932279
       ci_url: null
-      reason: its own criterion is observed, but the milestone orders it after a task the criterion-coverage
-        audit reopened; it returns to PASS with its prerequisite
+      reason: ''
     - id: E12-M03-T012
       subsystem: safety
       action: Bind the backup to the save the mod reports
@@ -7505,13 +7391,12 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_session_arming.py -q
       regression_test: tests/unit/test_session_arming.py
       evidence: packages/pz_agent_core/src/pz_agent_core/platform/backup.py
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: 62d69c336aee220614560d713ca6a6e092932279
       verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
       commit: 62d69c336aee220614560d713ca6a6e092932279
       ci_url: null
-      reason: its own criterion is observed, but the milestone orders it after a task the criterion-coverage
-        audit reopened; it returns to PASS with its prerequisite
+      reason: ''
     - id: E12-M03-T013
       subsystem: safety
       action: Refuse to act on a save that changed under us
@@ -7524,13 +7409,12 @@ epics:
       verify_command: .venv/bin/pytest tests/unit/test_actions_engine.py -q
       regression_test: tests/unit/test_actions_engine.py
       evidence: packages/pz_agent_core/src/pz_agent_core/actions/engine.py
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: 2c4fd3c8c2f73358b4521f7a296963acffb96827
       verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
       commit: 2c4fd3c8c2f73358b4521f7a296963acffb96827
       ci_url: null
-      reason: its own criterion is observed, but the milestone orders it after a task the criterion-coverage
-        audit reopened; it returns to PASS with its prerequisite
+      reason: ''
     - id: E12-M03-T014
       subsystem: safety
       action: Document every refusal an operator can hit
@@ -7543,13 +7427,12 @@ epics:
       verify_command: .venv/bin/pytest tests/contract/test_documented_commands_parse.py -q
       regression_test: tests/contract/test_documented_commands_parse.py
       evidence: docs/TROUBLESHOOTING.md
-      status: IN_PROGRESS
+      status: PASS
       implementation_commit: 935437ef88eb257a590b2bda930cce85de88632c
       verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
       commit: 935437ef88eb257a590b2bda930cce85de88632c
       ci_url: null
-      reason: its own criterion is observed, but the milestone orders it after a task the criterion-coverage
-        audit reopened; it returns to PASS with its prerequisite
+      reason: ''
     checks:
     - id: E12-M03-C01
       statement: A panic stop is honoured under every failure here.

@@ -232,7 +232,7 @@ in `pz_agent_cli`, the router served through `SidecarRpc` on start, and an
 end-to-end test in which a second process reaches the *real* core — the mod
 side faked at the exchange directory, nothing else.
 
-### R-009 — twenty-two heavy claims rested on criteria their tests do not observe
+### R-009 — twenty-two heavy claims rested on criteria their tests do not observe — CLOSED
 
 The same audit refused 22 of the 75 weight-8+ PASS claims: each named test
 passes without observing the stated criterion, so the criterion becoming
@@ -242,9 +242,19 @@ four waits on another process have no observed (or in two cases no existing)
 deadline; the `recv_bytes` length bound is asserted nowhere; the eval/exec
 rules of `check_forbidden` are never exercised against the shipped tree by
 any test; several E12-M01 secret-hygiene claims scan doubles rather than the
-real writers. All 22 tasks are back to IN_PROGRESS, with the ordering
-cascade pulling 34 dependents with them; each returns to PASS when an
-assertion observes its criterion.
+real writers. All 22 tasks were put back to IN_PROGRESS, with the ordering
+cascade pulling 34 dependents with them.
+
+**Closed.** Every recorded gap gained an observing assertion across the
+gap-closure and swarm iterations (secret hygiene over real writers, recovery
+over real drops, transport bounds pinned at their seams, the release gate
+demanding the E2E suite by name, the windows-workflow contract made
+executable, and a genuine second OS process reaching the real core). All 56
+tasks were re-verified — not inherited — by `scripts/verify_carryover.py`
+running every named test here and now: 56 of 56 confirmed. The tree they
+describe is green on both platforms at `ff63b38` (Linux run 31251581998,
+Windows run 31251581990, which also certified `v1.0.0-rc1` with the
+packaged pair completing an MCP initialize over the real link).
 
 ---
 

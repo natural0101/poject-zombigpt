@@ -19,3 +19,4 @@ test, commit. No entry — no MERGED.
 | A44 (fix) | real walks survive their polls | runtime-level suite red pre-fix, green post-fix | tests/lua/test_movement_runtime.lua | 7ef3104 |
 | A50 (red team) | all four orchestrator claims survive | 3 minor plan-pointer mismatches + accept-guard asymmetry recorded for control plane | — | — |
 | A46 (audit) | GAME_API_VERIFICATION incomplete/wrong rows | ~60 missing symbols, 5 wrong rows — fix in flight (doc agent) | — | — |
+| ORCH (reclaim) | all 56 reopened tasks re-verified, none inherited | verify_carryover ran every named test here and now: 56/56 confirmed; tree green both platforms at ff63b38; RC v1.0.0-rc1 certified with the packaged-pair link proof (run 31251581990, archive sha256 076f3c6c...) | scripts/verify_carryover.py | — |
