@@ -603,6 +603,51 @@ class TestTheSdkGate:
 
         assert run.code == entry.EXIT_NO_SDK
 
+    def test_a_server_crash_is_a_code_and_one_line_not_a_traceback(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """R-002: an exception past every named refusal still exits diagnosably.
+
+        ``require_sdk`` checks the constructor's four keywords, but an SDK can
+        keep the signature and change behind it, and a catalogue defect
+        surfaces only when the server is actually built. The child used to die
+        with Python's generic 1 under a traceback; a client author now reads
+        one stderr line and :data:`~pz_agent_mcp.__main__.EXIT_SERVER_FAILED`.
+        The message carries the exception's type and its text — bounded — and
+        stdout stays empty, because it belongs to the protocol even in death.
+        """
+
+        async def explode(_services: CoreServices) -> None:
+            raise RuntimeError("the SDK kept the signature and changed behind it")
+
+        monkeypatch.setattr(entry, "run_stdio", explode)
+
+        run = run_main(services=Doubles().services)
+
+        assert run.code == entry.EXIT_SERVER_FAILED
+        assert run.out == ""
+        assert "RuntimeError" in run.err
+        assert "changed behind it" in run.err
+        assert "Traceback" not in run.err
+
+    def test_a_keyboard_interrupt_is_not_reported_as_a_crash(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Ctrl-C is the user stopping the child, not the server failing.
+
+        ``KeyboardInterrupt`` is not an ``Exception``, so the crash boundary
+        must let it pass: reporting the user's own hand as a server failure
+        would send them debugging a healthy install.
+        """
+
+        async def interrupted(_services: CoreServices) -> None:
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(entry, "run_stdio", interrupted)
+
+        with pytest.raises(KeyboardInterrupt):
+            run_main(services=Doubles().services)
+
 
 # ---------------------------------------------------------------------------
 # four ways a descriptor stops this process, and four different mornings

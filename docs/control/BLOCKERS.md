@@ -71,13 +71,22 @@ for real rather than hypothetically.
 *Closed by:* an SDK-2.0 registration path, a version bound in `pyproject.toml`,
 and the E07-M04 suite passing against a real subprocess.
 
-### R-002 — `run_stdio` has no diagnosable exit code for a build failure
+### R-002 — `run_stdio` has no diagnosable exit code for a build failure — **CLOSED**
 
 An exception escaping `build_server` leaves the child exiting with Python's
 generic 1 and a traceback, rather than one of the nine declared `EXIT_*` codes.
 `test_no_two_refusals_share_a_code` cannot see this because the failure never
 reaches the constant table. Even once R-001 is fixed, any SDK-shape mismatch
 reaches a client author as a traceback instead of a diagnosis.
+
+Closed: `EXIT_SERVER_FAILED` (10) — `main` wraps the serve call, and an
+exception past every named refusal becomes one bounded stderr line naming the
+exception's type and text, with stdout untouched because it belongs to the
+protocol even in death. `KeyboardInterrupt` deliberately passes through: the
+user's own hand is not a server failure. Both directions pinned in
+`test_mcp_entry.py`; the code documented in `configs/mcp/README.md` (which
+`test_mcp_exit_codes_documented.py` enforces) and `docs/TROUBLESHOOTING.md`.
+With this, every remote blocker in this file is CLOSED.
 
 ### R-003 — the TeamON bridge exists twice, and the tested copy is not the shipped one — **CLOSED**
 

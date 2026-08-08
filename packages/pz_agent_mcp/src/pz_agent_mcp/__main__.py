@@ -122,6 +122,7 @@ __all__ = [
     "EXIT_OK",
     "EXIT_PROTOCOL_MISMATCH",
     "EXIT_SDK_INCOMPATIBLE",
+    "EXIT_SERVER_FAILED",
     "EXIT_STALE_DESCRIPTOR",
     "EXIT_USAGE",
     "NO_DESCRIPTOR_MESSAGE",
@@ -199,6 +200,15 @@ EXIT_NO_STATE_DIR: Final = 8
 #: called, and the child died with an AttributeError traceback carrying no code
 #: at all. A traceback is not a diagnosis.
 EXIT_SDK_INCOMPATIBLE: Final = 9
+
+#: The server itself failed — an exception escaped :func:`build_server` or the
+#: serve loop after every named refusal above had its chance. This code exists
+#: because the alternative was Python's generic 1 under a traceback (R-002):
+#: :func:`require_sdk` checks the constructor's four keywords, but an SDK can
+#: keep the signature and change behind it, and a catalogue defect surfaces
+#: only when the server is actually built. A client author reads one line on
+#: stderr and this code, not a stack.
+EXIT_SERVER_FAILED: Final = 10
 
 #: Descriptors are a few hundred bytes. The cap is on the read rather than on
 #: what follows it, so a huge file where a descriptor belongs costs one bounded
@@ -603,7 +613,16 @@ def main(
         err.write(f"{PROGRAM}: {refusal}\n")
         return refusal.code
 
-    asyncio.run(run_stdio(attached))
+    try:
+        asyncio.run(run_stdio(attached))
+    # The one broad handler in this module: past every named refusal, this is
+    # the boundary where a traceback would otherwise reach a client author.
+    except Exception as crashed:
+        err.write(
+            f"{PROGRAM}: the server failed while serving: "
+            f"{type(crashed).__name__}: {_clamped(str(crashed))}\n"
+        )
+        return EXIT_SERVER_FAILED
     return EXIT_OK
 
 

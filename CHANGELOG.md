@@ -10,6 +10,18 @@ drift out of sync with `pz_agent_core.version`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **R-002, the last open remote blocker: a server crash is now a diagnosis,
+  not a traceback.** An exception escaping the MCP server's build or serve
+  loop — a catalogue defect, or an SDK that keeps its constructor signature
+  and changes behind it — used to kill the child with Python's generic exit 1
+  under a stack trace. `main` now reports it as `EXIT_SERVER_FAILED` (10) with
+  one bounded stderr line naming the exception, stdout untouched because it
+  belongs to the protocol even in death. `KeyboardInterrupt` deliberately
+  passes through — the user's own hand is not a server failure. Every remote
+  blocker in `docs/control/BLOCKERS.md` is now CLOSED.
+
 ### Changed
 
 - **FINAL_IMPLEMENTATION_REPORT.md re-pinned to a green tree.** The report now

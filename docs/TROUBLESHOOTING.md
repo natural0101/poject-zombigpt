@@ -41,12 +41,12 @@ something above it failed — and `doctor` says which.
 
 `pz-agent-mcp` is launched as a subprocess by your MCP client, so when it
 refuses, what you see in the client's log is an exit code and one line on
-stderr. There are ten, all declared as `EXIT_*` constants in
-`packages/pz_agent_mcp/src/pz_agent_mcp/__main__.py`, and they are ten rather
-than fewer because the remedies are different: "no sidecar is running", "the
-sidecar died without cleaning up", "there are two installs on this machine",
-"the SDK extra is missing" and "the SDK is the wrong version" send you to five
-different places.
+stderr. There are eleven, all declared as `EXIT_*` constants in
+`packages/pz_agent_mcp/src/pz_agent_mcp/__main__.py`, and they are eleven
+rather than fewer because the remedies are different: "no sidecar is running",
+"the sidecar died without cleaning up", "there are two installs on this
+machine", "the SDK extra is missing", "the SDK is the wrong version" and "the
+server itself failed" send you to six different places.
 
 | Code | Constant | Cause | Remedy |
 | --- | --- | --- | --- |
@@ -60,6 +60,7 @@ different places.
 | 7 | `EXIT_ANSWER_UNREADABLE` | Something answered on the sidecar's address and this build cannot read the answer. Never reported as a refusal: the core did not say no, this side could not tell what it said. | Check both versions match, then `pz-agent doctor`. |
 | 8 | `EXIT_NO_STATE_DIR` | Neither directory flag was given and the process cannot work out which state directory to use — either the CLI package that owns the layout is not importable (an incomplete install), or the machine's directories could not be read. | Name it with `--state-dir`. `pz-agent doctor` reports what is unreadable. |
 | 9 | `EXIT_SDK_INCOMPATIBLE` | The `mcp` extra is installed and is not a version this build can drive — it needs the 2.x server API. Distinct from exit 3 because the remedy is a version constraint rather than an install: `pip install pz-agent[mcp]` would not fix it. | `pip install "mcp>=2,<3"`. |
+| 10 | `EXIT_SERVER_FAILED` | An exception escaped the server's build or its serve loop after every named refusal had its chance — a bug in the server, or an SDK that kept its constructor signature and changed behind it. | Read the one stderr line naming the exception, and report it with that line. Nothing you can install or restart fixes a bug. |
 
 Codes 3, 8 and 9 fire before anything is dialled. Codes 4 to 7 mean the link
 was tried. `tests/contract/test_mcp_exit_codes_documented.py` reads the
