@@ -37,6 +37,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
 
+from pz_agent_core.jsonbytes import deepest_nesting
 from pz_agent_core.rpc.token import TOKEN_FILENAME
 from pz_agent_core.version import RPC_PROTOCOL_VERSION, protocol_major
 
@@ -44,6 +45,7 @@ __all__ = [
     "DESCRIPTOR_FILENAME",
     "DESCRIPTOR_FORMAT",
     "MAX_DESCRIPTOR_BYTES",
+    "MAX_DESCRIPTOR_DEPTH",
     "RUNTIME_DIRNAME",
     "DescriptorError",
     "OversizeDescriptor",
@@ -90,6 +92,17 @@ MAX_PID: Final = 2**31 - 1
 #: parses whole, and the user would be sent hunting for a second install over a
 #: file neither half wrote.
 MAX_DESCRIPTOR_BYTES: Final = 8 * 1024
+
+#: Deepest array/object nesting a descriptor file may carry. A descriptor is a
+#: flat object of six scalar fields, so this is generous; it exists because a
+#: file left where the descriptor belongs can nest arbitrarily deep *inside* the
+#: byte cap above — a few thousand open brackets is well under 8 KiB — and
+#: ``json.loads`` recurses once per nesting level, overflowing the interpreter
+#: with a ``RecursionError`` that the byte cap cannot see and that this loader's
+#: contract does not name. Measured on the raw bytes before parsing — see
+#: :mod:`pz_agent_core.jsonbytes`, and the same guard in :mod:`pz_agent_core.rpc.wire`
+#: — so the parser is never handed a document that could take it there.
+MAX_DESCRIPTOR_DEPTH: Final = 64
 
 
 class DescriptorError(RuntimeError):
@@ -266,9 +279,21 @@ def load_descriptor(state_dir: Path, *, check_alive: bool = True) -> RpcDescript
             "copy of it before starting the sidecar, which replaces it"
         )
 
+    # Depth is measured on the raw bytes before parsing: ``json.loads`` recurses
+    # once per nesting level, so a foreign file of a few thousand open brackets —
+    # small enough to clear the byte cap above — would overflow the interpreter
+    # with a ``RecursionError`` this loader does not name, and catching that after
+    # the fact is not safe because the stack is already spent when it fires.
+    if deepest_nesting(raw) > MAX_DESCRIPTOR_DEPTH:
+        raise DescriptorError(f"{path.name}: nests deeper than {MAX_DESCRIPTOR_DEPTH}")
     try:
         document: Any = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except (UnicodeDecodeError, ValueError) as exc:
+        # ``ValueError`` rather than only its ``json.JSONDecodeError`` subclass: a
+        # bare integer literal of thousands of digits — again inside the byte cap —
+        # trips CPython's integer-string-conversion ceiling, which raises a plain
+        # ``ValueError`` from inside ``json.loads`` that the subclass would miss and
+        # let escape raw. The message names neither the digits nor the bytes.
         raise DescriptorError(f"{path.name}: is not readable JSON") from exc
     if not isinstance(document, dict):
         raise DescriptorError(f"{path.name}: must be a JSON object")

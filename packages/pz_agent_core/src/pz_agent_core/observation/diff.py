@@ -38,6 +38,17 @@ from ..protocol.messages import ProtocolError
 #: be reconstructed without ambiguity.
 REF_KEY: Final = "ref"
 
+#: The deepest a serialised delta may nest before :meth:`MappingDelta.from_dict`
+#: refuses it. A delta this deep cannot come from diffing two real observations
+#: — their structure is bounded a handful of levels — but ``from_dict`` recurses
+#: once per level, so a hostile document of a thousand nested ``nested`` objects
+#: would overflow the interpreter with a ``RecursionError`` the caller does not
+#: name. This mirrors the ``MAX_NESTING_DEPTH`` guard the RPC envelope applies
+#: before ``json.loads``; here the bytes are already parsed, so the bound is
+#: checked as the recursion descends and the refusal is the module's own typed
+#: :class:`DiffError`. 64 is far past any honest observation's nesting.
+MAX_DELTA_DEPTH: Final = 64
+
 
 class DiffError(ValueError):
     """A diff cannot be computed, or does not apply to the given snapshot."""
@@ -75,16 +86,18 @@ class MappingDelta:
         return out
 
     @classmethod
-    def from_dict(cls, payload: Mapping[str, Any]) -> MappingDelta:
+    def from_dict(cls, payload: Mapping[str, Any], *, _depth: int = 0) -> MappingDelta:
+        if _depth > MAX_DELTA_DEPTH:
+            raise DiffError(f"delta nests deeper than {MAX_DELTA_DEPTH}")
         return cls(
             assigned=dict(_object(payload.get("assigned", {}), "assigned")),
             removed=tuple(_string_list(payload.get("removed", []), "removed")),
             nested={
-                key: cls.from_dict(_object(value, f"nested.{key}"))
+                key: cls.from_dict(_object(value, f"nested.{key}"), _depth=_depth + 1)
                 for key, value in _object(payload.get("nested", {}), "nested").items()
             },
             lists={
-                key: ListDelta.from_dict(_object(value, f"lists.{key}"))
+                key: ListDelta.from_dict(_object(value, f"lists.{key}"), _depth=_depth + 1)
                 for key, value in _object(payload.get("lists", {}), "lists").items()
             },
         )
@@ -115,7 +128,9 @@ class ListDelta:
         return out
 
     @classmethod
-    def from_dict(cls, payload: Mapping[str, Any]) -> ListDelta:
+    def from_dict(cls, payload: Mapping[str, Any], *, _depth: int = 0) -> ListDelta:
+        if _depth > MAX_DELTA_DEPTH:
+            raise DiffError(f"delta nests deeper than {MAX_DELTA_DEPTH}")
         return cls(
             order=tuple(_string_list(payload.get("order", []), "order")),
             added={
@@ -124,7 +139,7 @@ class ListDelta:
             },
             removed=tuple(_string_list(payload.get("removed", []), "removed")),
             changed={
-                ref: MappingDelta.from_dict(_object(value, f"changed.{ref}"))
+                ref: MappingDelta.from_dict(_object(value, f"changed.{ref}"), _depth=_depth + 1)
                 for ref, value in _object(payload.get("changed", {}), "changed").items()
             },
         )

@@ -17,6 +17,7 @@ from itertools import count
 from pathlib import Path
 from typing import Any
 
+from ..jsonbytes import deepest_nesting
 from .layout import IpcLayout, temp_name
 
 # `temp_name` is re-exported deliberately: the scratch file it names is part of
@@ -24,6 +25,7 @@ from .layout import IpcLayout, temp_name
 # that file mid-write and has to recognise it.
 __all__ = [
     "MAX_DOCUMENT_BYTES",
+    "MAX_DOCUMENT_DEPTH",
     "DocumentError",
     "IpcLayout",
     "IpcPathError",
@@ -37,6 +39,20 @@ __all__ = [
 #: A document larger than this is a bug in the producer, not a big world. The
 #: cap keeps a corrupt or hostile file from being pulled entirely into memory.
 MAX_DOCUMENT_BYTES = 8 * 1024 * 1024
+
+#: Deepest array/object nesting a document may carry. These documents are
+#: session/heartbeat/pointer records and full snapshots; the deepest real
+#: structure is a nested inventory, itself bounded well under this by
+#: ``MAX_CONTAINER_DEPTH``. The bound exists because ``json.loads`` recurses once
+#: per nesting level, so a file of a few kilobytes of ``[`` — under
+#: :data:`MAX_DOCUMENT_BYTES` — overflows the interpreter with a
+#: ``RecursionError`` the byte cap cannot see. Measured on the raw bytes *before*
+#: parsing (see :mod:`pz_agent_core.jsonbytes`), so the parser is never handed a
+#: document that could make it recurse past here; catching ``RecursionError``
+#: after the fact is not safe, because the stack is already near its limit when
+#: it fires. Kept equal to the RPC and journal bounds so every JSON boundary in
+#: this package refuses the same depth.
+MAX_DOCUMENT_DEPTH = 64
 
 #: Serial for the temporary filename of §3.5. Together with the pid it makes
 #: every scratch file unique, so two writers aiming at the same target cannot
@@ -114,10 +130,22 @@ def read_json_document(path: Path) -> dict[str, Any]:
         raw = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as exc:
         raise DocumentError(f"{path.name}: {exc}") from exc
+    # Depth is measured on the raw bytes before parsing: the markers the scan
+    # counts are all ASCII, so re-encoding the already-decoded text costs a
+    # bounded pass and never miscounts a byte inside a multibyte character.
+    if deepest_nesting(raw.encode("utf-8")) > MAX_DOCUMENT_DEPTH:
+        raise DocumentError(f"{path.name}: nests deeper than {MAX_DOCUMENT_DEPTH}")
     try:
         parsed: Any = json.loads(raw)
     except json.JSONDecodeError as exc:
         raise DocumentError(f"{path.name}: malformed JSON at byte {exc.pos}") from exc
+    except ValueError as exc:
+        # A ``ValueError`` that is not a ``JSONDecodeError``: the parser's own
+        # refusal of a number too extreme to build, which on CPython is the
+        # integer-string-conversion ceiling firing on a literal of thousands of
+        # digits — inside the byte cap, outside what any real document carries.
+        # Named as malformed without echoing the digits.
+        raise DocumentError(f"{path.name}: carries a number the parser refuses") from exc
     if not isinstance(parsed, dict):
         raise DocumentError(f"{path.name}: expected a JSON object, got {type(parsed).__name__}")
     return parsed

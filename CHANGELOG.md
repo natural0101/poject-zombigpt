@@ -12,6 +12,22 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **Three more input-boundary crashes closed, on the heartbeat/session, the
+  observation diff, and the descriptor.** A third fuzz round found the same
+  depth/number gap in every remaining place that reads JSON another program
+  wrote: `ipc/atomic.py`'s `read_json_document` (the single boundary behind
+  `HeartbeatMonitor` and `SessionManager`) and `observation/diff.py`'s
+  `MappingDelta`/`ListDelta.from_dict` both recursed without bound and let a
+  bare `ValueError` through on an absurd integer, and the descriptor loader
+  could still overflow the parser on a file nested deep inside its byte cap.
+  All three now measure nesting depth before parsing (`MAX_DOCUMENT_DEPTH` /
+  `MAX_DESCRIPTOR_DEPTH`, both via the shared `pz_agent_core.jsonbytes`
+  primitive) and refuse with their own typed error. Two seeded fuzzers
+  (`test_session_handshake_fuzz.py`, `test_observation_model_fuzz.py`) join the
+  suite. Two deeper issues the fuzz surfaced in `protocol/messages.py::_as_float`
+  — an unguarded `float()` overflow and `allow_nan=True` letting `Infinity`/
+  `NaN` through — are recorded for the protocol owner, not silently patched.
+
 - **Five more crashes on hostile or corrupt input, across three boundaries,
   found by seeded fuzzers and all now typed refusals.** The same seeded-fuzz
   approach that hardened the RPC decoder was pointed at the other places that
