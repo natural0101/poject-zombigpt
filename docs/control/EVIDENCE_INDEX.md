@@ -37,8 +37,8 @@ about nothing.
 | Field | Value |
 | --- | --- |
 | archive | `pz-agent-windows-rc` (artifact 9015413488) |
-| archive sha256 | `076f3c6c9b62891d27575824577ac5fa9eb9438c2bf7fb680788a130bfe6f0af` |
-| source commit | `ff63b38b9cbb3731470e9097bb9df20af0da0751` |
-| workflow run | https://github.com/natural0101/poject-zombigpt/actions/runs/31251581990 |
+| archive sha256 | `482e11d09bbfd14f7518a7f081847202c60a5656644a3c407d774499d4449d56` |
+| source commit | `8b9d0bde708f95ecc3196d1931b33208237d4922` |
+| workflow run | https://github.com/natural0101/poject-zombigpt/actions/runs/31252766042 |
 | certified by | every step of `windows package` green, both executables answering with PATH reduced to the system directories |
 | current? | `docs/control/STATUS.json` → `release_candidate.status`; any code commit after the source commit makes it STALE until the workflow rebuilds it |
