@@ -88,9 +88,22 @@ from tests.fixtures.cli_worlds import make_world
 
 pytestmark = pytest.mark.contract
 
-#: Outer bound on every wait in this file. Long enough for a loaded CI runner,
-#: short enough that a hang fails the test rather than the suite's timeout.
-GRACE: Final = 15.0
+#: Outer bound on every wait in this file. Long enough for a loaded CI runner —
+#: the Windows package job has been observed running this suite five times
+#: slower than Linux, so a fifteen-second poll timed out mid-handshake there —
+#: short enough that a genuine hang still fails the test well under the suite's
+#: 300-second per-test cap rather than riding it to the ceiling.
+GRACE: Final = 30.0
+
+#: How many heartbeats the fake mod publishes before its own safety cap stops
+#: it. The real terminator is ``keeper_stop`` in the ``finally`` below; this cap
+#: only guards against a leak if that is never set, so it is sized to the
+#: suite's 300-second bound rather than to :data:`GRACE`. The earlier cap was
+#: ``GRACE * 4`` — about thirty seconds of beats — and on a five-times-slower
+#: Windows runner the test body outran it: the heartbeat lapsed, the loop read
+#: the game as gone, and it stopped asking its planner for the goal. That was
+#: the flake behind an intermittent "loop never asked its planner" on Windows.
+_KEEPER_MAX_BEATS: Final = int(280 / 0.5)
 
 #: The sequence number the fake mod chooses. Nothing defaults to it: the
 #: fixture default is 1, a fresh store holds none, so reading it back proves
@@ -192,12 +205,21 @@ def test_sidecar_serves_core(tmp_path: Path) -> None:
     planner = RecordingGoalPlanner()
     loop.planner = planner
 
+    # The loop's exception is captured rather than left to the thread excepthook:
+    # under ``filterwarnings=error`` an unhandled thread exception becomes an
+    # opaque ERROR that says nothing about *why* the loop died, and a dead loop
+    # reads downstream only as "it never asked its planner". Held here so a real
+    # crash is the failure the test reports, not a warning beside a timeout.
+    loop_failure: list[BaseException] = []
+
+    def _run_loop() -> None:
+        try:
+            loop.run(should_stop=stop.is_set)
+        except BaseException as exc:
+            loop_failure.append(exc)
+
     stop = threading.Event()
-    ticking = threading.Thread(
-        target=lambda: loop.run(should_stop=stop.is_set),
-        name="sidecar-loop",
-        daemon=True,
-    )
+    ticking = threading.Thread(target=_run_loop, name="sidecar-loop", daemon=True)
     ticking.start()
 
     # The fake mod keeps beating while the session is armed: a heartbeat that
@@ -209,7 +231,7 @@ def test_sidecar_serves_core(tmp_path: Path) -> None:
     def keep_beating() -> None:
         session = attach.session
         assert session is not None
-        for _ in range(int(GRACE * 4) + 1):
+        for _ in range(_KEEPER_MAX_BEATS):
             if keeper_stop.is_set():
                 return
             monitor.publish(
@@ -395,6 +417,10 @@ def test_sidecar_serves_core(tmp_path: Path) -> None:
         shutdown = loop.shutdown(reason="test finished")
         closed = supervisor.stop_rpc()
 
+    # A loop that died carries the real reason; surface it as the failure rather
+    # than letting a downstream "never asked its planner" stand in for it.
+    if loop_failure:
+        raise AssertionError("the sidecar loop thread died") from loop_failure[0]
     assert not ticking.is_alive(), "the loop did not stop inside the bound"
     assert shutdown.lock_released is True
     assert closed.descriptor_removed is True and closed.token_revoked is True
