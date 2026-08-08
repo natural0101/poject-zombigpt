@@ -72,6 +72,90 @@
       ],
       "tests": [],
       "status": "TESTING"
+    },
+    {
+      "agent": "AGENT-49",
+      "branch": "(in-tree, new file)",
+      "commit": "f4fa0b2",
+      "files": [
+        "tests/unit/test_windows_workflow_contract.py"
+      ],
+      "tests": [
+        "11 pass"
+      ],
+      "status": "MERGED"
+    },
+    {
+      "agent": "AGENT-44",
+      "branch": "(in-tree fix)",
+      "commit": "7ef3104",
+      "files": [
+        "pz-mod Movement.lua",
+        "tests/lua/test_movement_runtime.lua"
+      ],
+      "tests": [
+        "27 lua suites"
+      ],
+      "status": "MERGED"
+    },
+    {
+      "agent": "AGENT-32",
+      "branch": "(in-tree, new file)",
+      "commit": "6ad0b29",
+      "files": [
+        "tests/contract/test_mcp_adversarial_e2e.py"
+      ],
+      "tests": [
+        "6 pass"
+      ],
+      "status": "MERGED"
+    },
+    {
+      "agent": "AGENT-21/22",
+      "branch": "worktree 145ebd3",
+      "commit": "6b5ca25",
+      "files": [
+        "runtime.py",
+        "core_services.py",
+        "+4 test files"
+      ],
+      "tests": [
+        "117 pass across five suites; full gate green modulo STATUS regen"
+      ],
+      "status": "MERGED"
+    },
+    {
+      "agent": "B:wire-agreement",
+      "branch": "(in flight)",
+      "commit": null,
+      "files": [
+        "builtin.py",
+        "plan.py",
+        "ActionRuntime.lua",
+        "contract test"
+      ],
+      "tests": [],
+      "status": "TESTING"
+    },
+    {
+      "agent": "B:move-arrived",
+      "branch": "(worktree, in flight)",
+      "commit": null,
+      "files": [
+        "Movement.lua"
+      ],
+      "tests": [],
+      "status": "TESTING"
+    },
+    {
+      "agent": "B:game-api-doc",
+      "branch": "(in flight)",
+      "commit": null,
+      "files": [
+        "docs/GAME_API_VERIFICATION.md"
+      ],
+      "tests": [],
+      "status": "TESTING"
     }
   ]
 }
