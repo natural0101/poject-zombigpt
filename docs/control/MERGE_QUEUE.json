@@ -1,0 +1,42 @@
+{
+  "$comment": "Orchestrator-only. Entries: agent, branch, commit, files, tests, status in WAITING TESTING ACCEPTED REJECTED MERGED.",
+  "queue": [
+    {
+      "agent": "ORCHESTRATOR",
+      "branch": "(pre-swarm, carried)",
+      "commit": "d6a7bf0",
+      "files": [
+        "tests/contract/test_sidecar_serves_the_core.py",
+        "packaging/windows/prove_packaged_link.py",
+        "tests/unit/test_prove_packaged_link.py",
+        ".github/workflows/windows.yml",
+        "scripts/check_release.py",
+        "tests/unit/test_check_release.py",
+        "CHANGELOG.md"
+      ],
+      "tests": [
+        "tests/contract/test_sidecar_serves_the_core.py",
+        "tests/unit/test_prove_packaged_link.py",
+        "tests/unit/test_check_release.py"
+      ],
+      "status": "MERGED"
+    },
+    {
+      "agent": "ORCHESTRATOR",
+      "branch": "(pre-swarm, carried)",
+      "commit": "97c8e8c",
+      "files": [
+        "packages/pz_agent_core/src/pz_agent_core/rpc/transport.py",
+        "tests/unit/test_rpc_transport.py",
+        "tests/unit/test_livetest_evidence.py",
+        ".github/workflows/ci.yml",
+        ".github/workflows/windows.yml"
+      ],
+      "tests": [
+        "tests/unit/test_rpc_transport.py",
+        "tests/unit/test_livetest_evidence.py"
+      ],
+      "status": "MERGED"
+    }
+  ]
+}

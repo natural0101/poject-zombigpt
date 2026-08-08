@@ -1,0 +1,53 @@
+{
+  "$comment": "Per-subsystem live state, orchestrator-written after each merge wave.",
+  "subsystems": {
+    "control": {
+      "state": "UNKNOWN",
+      "last_verified_commit": null
+    },
+    "ci-linux": {
+      "state": "UNKNOWN",
+      "last_verified_commit": null
+    },
+    "ci-windows": {
+      "state": "UNKNOWN",
+      "last_verified_commit": null
+    },
+    "packaging": {
+      "state": "UNKNOWN",
+      "last_verified_commit": null
+    },
+    "rpc": {
+      "state": "UNKNOWN",
+      "last_verified_commit": null
+    },
+    "core-services": {
+      "state": "UNKNOWN",
+      "last_verified_commit": null
+    },
+    "mcp": {
+      "state": "UNKNOWN",
+      "last_verified_commit": null
+    },
+    "goal": {
+      "state": "UNKNOWN",
+      "last_verified_commit": null
+    },
+    "voice": {
+      "state": "UNKNOWN",
+      "last_verified_commit": null
+    },
+    "lua": {
+      "state": "UNKNOWN",
+      "last_verified_commit": null
+    },
+    "live-prep": {
+      "state": "UNKNOWN",
+      "last_verified_commit": null
+    },
+    "release-gate": {
+      "state": "UNKNOWN",
+      "last_verified_commit": null
+    }
+  }
+}

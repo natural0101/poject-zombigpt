@@ -1,0 +1,966 @@
+$comment: 'The 50-agent swarm registry for the today-finalization push. Statuses: QUEUED RUNNING BLOCKED
+  REVIEW REJECTED MERGED DONE. The ORCHESTRATOR (main session) is the only writer of this file and the
+  only merger into rescue/today-finalization. Runtime concurrency is bounded by the box (~2 subagents
+  per workflow); roles queue and rotate through slots, never serialize into one.'
+integration_branch: rescue/today-finalization
+base_sha: 8929434c01776e110031d0eb6f507a1a22bc98f9
+source_of_truth: docs/control/MASTER_PLAN.yaml on rescue/today-finalization
+agents:
+- id: AGENT-01
+  role: MASTER PLAN CONTROLLER
+  subsystem: control
+  branch: swarm/a01
+  worktree: null
+  owner_files:
+  - docs/control/MASTER_PLAN.yaml
+  - scripts/build_master_plan.py
+  - scripts/verify_carryover.py
+  task_ids: []
+  dependencies: []
+  status: QUEUED
+  wave: A
+  started_at: null
+  finished_at: null
+  commit: null
+  tests: []
+  evidence: null
+  blocked_reason: null
+  merge_status: null
+- id: AGENT-02
+  role: STATUS / PROVENANCE CONTROLLER
+  subsystem: control
+  branch: swarm/a02
+  worktree: null
+  owner_files:
+  - docs/control/STATUS.json
+  - scripts/reconcile_status.py
+  - scripts/check_master_plan.py
+  task_ids: []
+  dependencies: []
+  status: QUEUED
+  wave: A
+  started_at: null
+  finished_at: null
+  commit: null
+  tests: []
+  evidence: null
+  blocked_reason: null
+  merge_status: null
+- id: AGENT-03
+  role: EVIDENCE CONTROLLER
+  subsystem: control
+  branch: swarm/a03
+  worktree: null
+  owner_files:
+  - docs/control/EVIDENCE_INDEX.md
+  - docs/control/evidence/
+  task_ids: []
+  dependencies: []
+  status: QUEUED
+  wave: A
+  started_at: null
+  finished_at: null
+  commit: null
+  tests: []
+  evidence: null
+  blocked_reason: null
+  merge_status: null
+- id: AGENT-04
+  role: BLOCKER / CRITICAL PATH CONTROLLER
+  subsystem: control
+  branch: swarm/a04
+  worktree: null
+  owner_files:
+  - docs/control/BLOCKERS.md
+  - docs/control/TODAY_BLOCKERS.md
+  - docs/control/TODAY_CRITICAL_PATH.md
+  task_ids: []
+  dependencies: []
+  status: QUEUED
+  wave: A
+  started_at: null
+  finished_at: null
+  commit: null
+  tests: []
+  evidence: null
+  blocked_reason: null
+  merge_status: null
+- id: AGENT-05
+  role: LINUX CI OWNER
+  subsystem: ci
+  branch: swarm/a05
+  worktree: null
+  owner_files:
+  - .github/workflows/ci.yml
+  task_ids: []
+  dependencies: []
+  status: QUEUED
+  wave: A
+  started_at: null
+  finished_at: null
+  commit: null
+  tests: []
+  evidence: null
+  blocked_reason: null
+  merge_status: null
+- id: AGENT-06
+  role: WINDOWS CI OWNER
+  subsystem: ci
+  branch: swarm/a06
+  worktree: null
+  owner_files:
+  - .github/workflows/windows.yml
+  - tests/unit/test_rpc_transport.py
+  - tests/unit/test_livetest_evidence.py
+  task_ids: []
+  dependencies: []
+  status: QUEUED
+  wave: A
+  started_at: null
+  finished_at: null
+  commit: null
+  tests: []
+  evidence: null
+  blocked_reason: null
+  merge_status: null
+- id: AGENT-07
+  role: PYINSTALLER CLI OWNER
+  subsystem: packaging
+  branch: swarm/a07
+  worktree: null
+  owner_files:
+  - packaging/windows/pz-agent.spec
+  - packaging/windows/specutil.py
+  task_ids:
+  - E11-M02-T006
+  - E11-M02-T007
+  - E11-M02-T008
+  dependencies: []
+  status: QUEUED
+  wave: A
+  started_at: null
+  finished_at: null
+  commit: null
+  tests: []
+  evidence: null
+  blocked_reason: null
+  merge_status: null
+- id: AGENT-08
+  role: PYINSTALLER MCP OWNER
+  subsystem: packaging
+  branch: swarm/a08
+  worktree: null
+  owner_files:
+  - packaging/windows/pz-agent-mcp.spec
+  - packaging/windows/prove_packaged_link.py
+  task_ids:
+  - E11-M02-T005
+  dependencies: []
+  status: QUEUED
+  wave: A
+  started_at: null
+  finished_at: null
+  commit: null
+  tests: []
+  evidence: null
+  blocked_reason: null
+  merge_status: null
+- id: AGENT-09
+  role: INSTALLER OWNER
+  subsystem: packaging
+  branch: swarm/a09
+  worktree: null
+  owner_files:
+  - installer/
+  - packaging/windows/bat/
+  task_ids: []
+  dependencies: []
+  status: QUEUED
+  wave: A
+  started_at: null
+  finished_at: null
+  commit: null
+  tests: []
+  evidence: null
+  blocked_reason: null
+  merge_status: null
+- id: AGENT-10
+  role: RC / ARCHIVE OWNER
+  subsystem: packaging
+  branch: swarm/a10
+  worktree: null
+  owner_files:
+  - packaging/windows/build_rc.py
+  - scripts/check_release.py
+  task_ids:
+  - E11-M03-T003
+  - E11-M03-T004
+  - E11-M03-T005
+  - E11-M03-T006
+  - E11-M03-T007
+  - E11-M03-T008
+  - E11-M03-T009
+  dependencies: []
+  status: QUEUED
+  wave: A
+  started_at: null
+  finished_at: null
+  commit: null
+  tests: []
+  evidence: null
+  blocked_reason: null
+  merge_status: null
+- id: AGENT-11
+  role: RPC PROTOCOL OWNER
+  subsystem: rpc
+  branch: swarm/a11
+  worktree: null
+  owner_files:
+  - packages/pz_agent_core/src/pz_agent_core/rpc/wire.py
+  task_ids: []
+  dependencies: []
+  status: QUEUED
+  wave: A
+  started_at: null
+  finished_at: null
+  commit: null
+  tests: []
+  evidence: null
+  blocked_reason: null
+  merge_status: null
+- id: AGENT-12
+  role: RPC SERVER OWNER
+  subsystem: rpc
+  branch: swarm/a12
+  worktree: null
+  owner_files:
+  - packages/pz_agent_core/src/pz_agent_core/rpc/transport.py
+  task_ids: []
+  dependencies: []
+  status: QUEUED
+  wave: A
+  started_at: null
+  finished_at: null
+  commit: null
+  tests: []
+  evidence: null
+  blocked_reason: null
+  merge_status: null
+- id: AGENT-13
+  role: RPC CLIENT OWNER
+  subsystem: rpc
+  branch: swarm/a13
+  worktree: null
+  owner_files:
+  - packages/pz_agent_mcp/src/pz_agent_mcp/remote/client.py
+  task_ids:
+  - E06-M04-T002
+  - E06-M04-T003
+  dependencies: []
+  status: QUEUED
+  wave: A
+  started_at: null
+  finished_at: null
+  commit: null
+  tests: []
+  evidence: null
+  blocked_reason: null
+  merge_status: null
+- id: AGENT-14
+  role: WINDOWS AF_PIPE OWNER
+  subsystem: rpc
+  branch: swarm/a14
+  worktree: null
+  owner_files:
+  - packages/pz_agent_core/src/pz_agent_core/rpc/descriptor.py
+  task_ids: []
+  dependencies: []
+  status: QUEUED
+  wave: A
+  started_at: null
+  finished_at: null
+  commit: null
+  tests: []
+  evidence: null
+  blocked_reason: null
+  merge_status: null
+- id: AGENT-15
+  role: POSIX AF_UNIX OWNER
+  subsystem: rpc
+  branch: swarm/a15
+  worktree: null
+  owner_files:
+  - tests/unit/test_rpc_transport.py
+  task_ids: []
+  dependencies: []
+  status: QUEUED
+  wave: A
+  started_at: null
+  finished_at: null
+  commit: null
+  tests: []
+  evidence: null
+  blocked_reason: null
+  merge_status: null
+- id: AGENT-16
+  role: RPC AUTH OWNER
+  subsystem: rpc
+  branch: swarm/a16
+  worktree: null
+  owner_files:
+  - packages/pz_agent_core/src/pz_agent_core/rpc/token.py
+  task_ids:
+  - E12-M01-T001
+  - E12-M01-T002
+  - E12-M01-T003
+  dependencies: []
+  status: QUEUED
+  wave: A
+  started_at: null
+  finished_at: null
+  commit: null
+  tests: []
+  evidence: null
+  blocked_reason: null
+  merge_status: null
+- id: AGENT-17
+  role: RPC SECURITY OWNER
+  subsystem: rpc
+  branch: swarm/a17
+  worktree: null
+  owner_files:
+  - tests/security/
+  task_ids:
+  - E12-M02-T002
+  - E12-M02-T003
+  - E12-M02-T004
+  - E12-M02-T005
+  - E12-M02-T006
+  - E12-M02-T007
+  - E12-M02-T008
+  dependencies: []
+  status: QUEUED
+  wave: A
+  started_at: null
+  finished_at: null
+  commit: null
+  tests: []
+  evidence: null
+  blocked_reason: null
+  merge_status: null
+- id: AGENT-18
+  role: RPC FAILURE RECOVERY OWNER
+  subsystem: rpc
+  branch: swarm/a18
+  worktree: null
+  owner_files:
+  - tests/unit/test_rpc_transport.py
+  task_ids:
+  - E12-M03-T002
+  - E12-M03-T003
+  - E12-M03-T004
+  - E12-M03-T005
+  dependencies: []
+  status: QUEUED
+  wave: A
+  started_at: null
+  finished_at: null
+  commit: null
+  tests: []
+  evidence: null
+  blocked_reason: null
+  merge_status: null
+- id: AGENT-19
+  role: SESSION CORE SERVICES
+  subsystem: core
+  branch: swarm/a19
+  worktree: null
+  owner_files:
+  - packages/pz_agent_cli/src/pz_agent_cli/core_services.py
+  task_ids:
+  - E06-M04-T001
+  dependencies: []
+  status: QUEUED
+  wave: B
+  started_at: null
+  finished_at: null
+  commit: null
+  tests: []
+  evidence: null
+  blocked_reason: null
+  merge_status: null
+- id: AGENT-20
+  role: OBSERVATION CORE SERVICES
+  subsystem: core
+  branch: swarm/a20
+  worktree: null
+  owner_files:
+  - packages/pz_agent_cli/src/pz_agent_cli/core_services.py
+  task_ids: []
+  dependencies: []
+  status: QUEUED
+  wave: B
+  started_at: null
+  finished_at: null
+  commit: null
+  tests: []
+  evidence: null
+  blocked_reason: null
+  merge_status: null
+- id: AGENT-21
+  role: ACTION CORE SERVICES
+  subsystem: core
+  branch: swarm/a21
+  worktree: null
+  owner_files:
+  - packages/pz_agent_cli/src/pz_agent_cli/core_services.py
+  - packages/pz_agent_cli/src/pz_agent_cli/runtime.py
+  task_ids: []
+  dependencies: []
+  status: QUEUED
+  wave: B
+  started_at: null
+  finished_at: null
+  commit: null
+  tests: []
+  evidence: null
+  blocked_reason: null
+  merge_status: null
+- id: AGENT-22
+  role: PLAN CORE SERVICES
+  subsystem: core
+  branch: swarm/a22
+  worktree: null
+  owner_files:
+  - packages/pz_agent_cli/src/pz_agent_cli/core_services.py
+  task_ids: []
+  dependencies: []
+  status: QUEUED
+  wave: B
+  started_at: null
+  finished_at: null
+  commit: null
+  tests: []
+  evidence: null
+  blocked_reason: null
+  merge_status: null
+- id: AGENT-23
+  role: MEMORY CORE SERVICES
+  subsystem: core
+  branch: swarm/a23
+  worktree: null
+  owner_files:
+  - packages/pz_agent_cli/src/pz_agent_cli/core_services.py
+  task_ids: []
+  dependencies: []
+  status: QUEUED
+  wave: B
+  started_at: null
+  finished_at: null
+  commit: null
+  tests: []
+  evidence: null
+  blocked_reason: null
+  merge_status: null
+- id: AGENT-24
+  role: DIAGNOSTICS / CAPABILITIES CORE SERVICES
+  subsystem: core
+  branch: swarm/a24
+  worktree: null
+  owner_files:
+  - packages/pz_agent_cli/src/pz_agent_cli/core_services.py
+  task_ids:
+  - E06-M04-T004
+  - E06-M04-T005
+  dependencies: []
+  status: QUEUED
+  wave: B
+  started_at: null
+  finished_at: null
+  commit: null
+  tests: []
+  evidence: null
+  blocked_reason: null
+  merge_status: null
+- id: AGENT-25
+  role: MCP BOOTSTRAP / SDK2 OWNER
+  subsystem: mcp
+  branch: swarm/a25
+  worktree: null
+  owner_files:
+  - packages/pz_agent_mcp/src/pz_agent_mcp/__main__.py
+  task_ids: []
+  dependencies: []
+  status: QUEUED
+  wave: A
+  started_at: null
+  finished_at: null
+  commit: null
+  tests: []
+  evidence: null
+  blocked_reason: null
+  merge_status: null
+- id: AGENT-26
+  role: MCP TOOL CATALOGUE OWNER
+  subsystem: mcp
+  branch: swarm/a26
+  worktree: null
+  owner_files:
+  - packages/pz_agent_mcp/src/pz_agent_mcp/server.py
+  task_ids: []
+  dependencies: []
+  status: QUEUED
+  wave: B
+  started_at: null
+  finished_at: null
+  commit: null
+  tests: []
+  evidence: null
+  blocked_reason: null
+  merge_status: null
+- id: AGENT-27
+  role: MCP READ TOOLS OWNER
+  subsystem: mcp
+  branch: swarm/a27
+  worktree: null
+  owner_files:
+  - packages/pz_agent_mcp/src/pz_agent_mcp/
+  task_ids: []
+  dependencies: []
+  status: QUEUED
+  wave: B
+  started_at: null
+  finished_at: null
+  commit: null
+  tests: []
+  evidence: null
+  blocked_reason: null
+  merge_status: null
+- id: AGENT-28
+  role: MCP MUTATING TOOLS OWNER
+  subsystem: mcp
+  branch: swarm/a28
+  worktree: null
+  owner_files:
+  - packages/pz_agent_mcp/src/pz_agent_mcp/
+  task_ids: []
+  dependencies: []
+  status: QUEUED
+  wave: B
+  started_at: null
+  finished_at: null
+  commit: null
+  tests: []
+  evidence: null
+  blocked_reason: null
+  merge_status: null
+- id: AGENT-29
+  role: MCP RESOURCES OWNER
+  subsystem: mcp
+  branch: swarm/a29
+  worktree: null
+  owner_files:
+  - packages/pz_agent_mcp/src/pz_agent_mcp/
+  task_ids: []
+  dependencies: []
+  status: QUEUED
+  wave: B
+  started_at: null
+  finished_at: null
+  commit: null
+  tests: []
+  evidence: null
+  blocked_reason: null
+  merge_status: null
+- id: AGENT-30
+  role: MCP ERROR MAPPING OWNER
+  subsystem: mcp
+  branch: swarm/a30
+  worktree: null
+  owner_files:
+  - packages/pz_agent_mcp/src/pz_agent_mcp/remote/client.py
+  task_ids:
+  - E07-M03-T005
+  - E07-M03-T006
+  dependencies: []
+  status: QUEUED
+  wave: B
+  started_at: null
+  finished_at: null
+  commit: null
+  tests: []
+  evidence: null
+  blocked_reason: null
+  merge_status: null
+- id: AGENT-31
+  role: MCP SUBPROCESS E2E OWNER
+  subsystem: mcp
+  branch: swarm/a31
+  worktree: null
+  owner_files:
+  - tests/contract/test_mcp_subprocess_e2e.py
+  task_ids:
+  - E07-M03-T007
+  dependencies: []
+  status: QUEUED
+  wave: B
+  started_at: null
+  finished_at: null
+  commit: null
+  tests: []
+  evidence: null
+  blocked_reason: null
+  merge_status: null
+- id: AGENT-32
+  role: MCP ADVERSARIAL E2E OWNER
+  subsystem: mcp
+  branch: swarm/a32
+  worktree: null
+  owner_files:
+  - tests/contract/test_mcp_subprocess_e2e.py
+  task_ids: []
+  dependencies: []
+  status: QUEUED
+  wave: B
+  started_at: null
+  finished_at: null
+  commit: null
+  tests: []
+  evidence: null
+  blocked_reason: null
+  merge_status: null
+- id: AGENT-33
+  role: GOAL SCHEMA OWNER
+  subsystem: goal
+  branch: swarm/a33
+  worktree: null
+  owner_files:
+  - schemas/goal.schema.json
+  - packages/pz_agent_core/src/pz_agent_core/goals.py
+  task_ids: []
+  dependencies: []
+  status: QUEUED
+  wave: A
+  started_at: null
+  finished_at: null
+  commit: null
+  tests: []
+  evidence: null
+  blocked_reason: null
+  merge_status: null
+- id: AGENT-34
+  role: GOAL QUEUE OWNER
+  subsystem: goal
+  branch: swarm/a34
+  worktree: null
+  owner_files:
+  - packages/pz_agent_cli/src/pz_agent_cli/runtime.py
+  task_ids:
+  - E08-M03-T010
+  dependencies: []
+  status: QUEUED
+  wave: B
+  started_at: null
+  finished_at: null
+  commit: null
+  tests: []
+  evidence: null
+  blocked_reason: null
+  merge_status: null
+- id: AGENT-35
+  role: GOAL RPC OWNER
+  subsystem: goal
+  branch: swarm/a35
+  worktree: null
+  owner_files:
+  - packages/pz_agent_core/src/pz_agent_core/rpc/router.py
+  task_ids:
+  - E08-M03-T011
+  dependencies: []
+  status: QUEUED
+  wave: B
+  started_at: null
+  finished_at: null
+  commit: null
+  tests: []
+  evidence: null
+  blocked_reason: null
+  merge_status: null
+- id: AGENT-36
+  role: GOAL PLANNER OWNER
+  subsystem: goal
+  branch: swarm/a36
+  worktree: null
+  owner_files:
+  - packages/pz_agent_cli/src/pz_agent_cli/autonomy.py
+  task_ids: []
+  dependencies: []
+  status: QUEUED
+  wave: B
+  started_at: null
+  finished_at: null
+  commit: null
+  tests: []
+  evidence: null
+  blocked_reason: null
+  merge_status: null
+- id: AGENT-37
+  role: AUTONOMOUS SURVIVAL OWNER
+  subsystem: goal
+  branch: swarm/a37
+  worktree: null
+  owner_files:
+  - packages/pz_agent_cli/src/pz_agent_cli/autonomy.py
+  task_ids: []
+  dependencies: []
+  status: QUEUED
+  wave: B
+  started_at: null
+  finished_at: null
+  commit: null
+  tests: []
+  evidence: null
+  blocked_reason: null
+  merge_status: null
+- id: AGENT-38
+  role: VOICE INTENT OWNER
+  subsystem: voice
+  branch: swarm/a38
+  worktree: null
+  owner_files:
+  - packages/pz_agent_voice/src/pz_agent_voice/intents.py
+  task_ids: []
+  dependencies: []
+  status: QUEUED
+  wave: A
+  started_at: null
+  finished_at: null
+  commit: null
+  tests: []
+  evidence: null
+  blocked_reason: null
+  merge_status: null
+- id: AGENT-39
+  role: VOICE PLANPORT OWNER
+  subsystem: voice
+  branch: swarm/a39
+  worktree: null
+  owner_files:
+  - packages/pz_agent_voice/src/pz_agent_voice/
+  task_ids: []
+  dependencies: []
+  status: QUEUED
+  wave: B
+  started_at: null
+  finished_at: null
+  commit: null
+  tests: []
+  evidence: null
+  blocked_reason: null
+  merge_status: null
+- id: AGENT-40
+  role: TEAMON BRIDGE CLIENT OWNER
+  subsystem: voice
+  branch: swarm/a40
+  worktree: null
+  owner_files:
+  - packages/pz_agent_voice/src/pz_agent_voice/bridge.py
+  task_ids: []
+  dependencies: []
+  status: QUEUED
+  wave: B
+  started_at: null
+  finished_at: null
+  commit: null
+  tests: []
+  evidence: null
+  blocked_reason: null
+  merge_status: null
+- id: AGENT-41
+  role: TEAMON BRIDGE CONSOLIDATION OWNER
+  subsystem: voice
+  branch: swarm/a41
+  worktree: null
+  owner_files:
+  - packages/pz_agent_voice/src/pz_agent_voice/
+  task_ids: []
+  dependencies: []
+  status: QUEUED
+  wave: B
+  started_at: null
+  finished_at: null
+  commit: null
+  tests: []
+  evidence: null
+  blocked_reason: null
+  merge_status: null
+- id: AGENT-42
+  role: VOICE STOP FAST PATH OWNER
+  subsystem: voice
+  branch: swarm/a42
+  worktree: null
+  owner_files:
+  - packages/pz_agent_voice/src/pz_agent_voice/
+  task_ids: []
+  dependencies: []
+  status: QUEUED
+  wave: B
+  started_at: null
+  finished_at: null
+  commit: null
+  tests: []
+  evidence: null
+  blocked_reason: null
+  merge_status: null
+- id: AGENT-43
+  role: VOICE E2E OWNER
+  subsystem: voice
+  branch: swarm/a43
+  worktree: null
+  owner_files:
+  - tests/contract/test_voice_goal_e2e.py
+  task_ids: []
+  dependencies: []
+  status: QUEUED
+  wave: B
+  started_at: null
+  finished_at: null
+  commit: null
+  tests: []
+  evidence: null
+  blocked_reason: null
+  merge_status: null
+- id: AGENT-44
+  role: LUA ACTION RUNTIME AUDITOR
+  subsystem: lua
+  branch: swarm/a44
+  worktree: null
+  owner_files:
+  - pz-mod/
+  task_ids: []
+  dependencies: []
+  status: QUEUED
+  wave: A
+  started_at: null
+  finished_at: null
+  commit: null
+  tests: []
+  evidence: null
+  blocked_reason: null
+  merge_status: null
+- id: AGENT-45
+  role: LUA CAPABILITY / OBSERVATION AUDITOR
+  subsystem: lua
+  branch: swarm/a45
+  worktree: null
+  owner_files:
+  - pz-mod/
+  task_ids: []
+  dependencies: []
+  status: QUEUED
+  wave: A
+  started_at: null
+  finished_at: null
+  commit: null
+  tests: []
+  evidence: null
+  blocked_reason: null
+  merge_status: null
+- id: AGENT-46
+  role: GAME API VERIFICATION PREP OWNER
+  subsystem: lua
+  branch: swarm/a46
+  worktree: null
+  owner_files:
+  - docs/GAME_API_VERIFICATION.md
+  task_ids: []
+  dependencies: []
+  status: QUEUED
+  wave: A
+  started_at: null
+  finished_at: null
+  commit: null
+  tests: []
+  evidence: null
+  blocked_reason: null
+  merge_status: null
+- id: AGENT-47
+  role: LIVE TEST HARNESS OWNER
+  subsystem: live
+  branch: swarm/a47
+  worktree: null
+  owner_files:
+  - packages/pz_agent_cli/src/pz_agent_cli/livetest/
+  task_ids: []
+  dependencies: []
+  status: QUEUED
+  wave: A
+  started_at: null
+  finished_at: null
+  commit: null
+  tests: []
+  evidence: null
+  blocked_reason: null
+  merge_status: null
+- id: AGENT-48
+  role: FULL INTEGRATION TEST OWNER
+  subsystem: quality
+  branch: swarm/a48
+  worktree: null
+  owner_files:
+  - tests/contract/
+  - tests/integration/
+  task_ids: []
+  dependencies: []
+  status: QUEUED
+  wave: C
+  started_at: null
+  finished_at: null
+  commit: null
+  tests: []
+  evidence: null
+  blocked_reason: null
+  merge_status: null
+- id: AGENT-49
+  role: RELEASE GATE OWNER
+  subsystem: quality
+  branch: swarm/a49
+  worktree: null
+  owner_files:
+  - scripts/check_release.py
+  - tests/unit/test_check_release.py
+  task_ids:
+  - E11-M04-T001
+  - E11-M04-T002
+  - E11-M04-T003
+  - E11-M04-T004
+  - E11-M04-T005
+  - E11-M04-T006
+  - E11-M04-T007
+  dependencies: []
+  status: QUEUED
+  wave: C
+  started_at: null
+  finished_at: null
+  commit: null
+  tests: []
+  evidence: null
+  blocked_reason: null
+  merge_status: null
+- id: AGENT-50
+  role: INDEPENDENT RED TEAM / FINAL REVIEWER
+  subsystem: quality
+  branch: swarm/a50
+  worktree: null
+  owner_files: []
+  task_ids: []
+  dependencies: []
+  status: QUEUED
+  wave: A
+  started_at: null
+  finished_at: null
+  commit: null
+  tests: []
+  evidence: null
+  blocked_reason: null
+  merge_status: null
