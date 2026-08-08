@@ -259,8 +259,14 @@ class TestReadOnlyPorts:
 
 
 class TestUnservedSurfacesRefuseByName:
-    def test_action_submit_refuses_and_action_status_answers_none(self, tmp_path: Path) -> None:
+    def test_actions_over_a_loop_without_a_channel_refuse_by_name(self, tmp_path: Path) -> None:
+        """The default assembly serves actions over the loop's own channel
+        (``tests/unit/test_action_channel.py`` is that proof); a loop stripped
+        of the channel keeps the honest refusal, because admitting submissions
+        nothing would ever drain is the forbidden port.
+        """
         with attached_world(tmp_path) as world:
+            world.loop.actions = None
             services = _services(world)
 
             with pytest.raises(LoopError) as refused:

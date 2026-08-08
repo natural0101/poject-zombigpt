@@ -59,7 +59,7 @@ import pz_agent_mcp
 from pz_agent_cli.app import build_loop, build_supervisor
 from pz_agent_cli.config import default_config
 from pz_agent_cli.context import EXIT_OK, resolve_workspace
-from pz_agent_cli.core_services import REMOTE_ACTIONS_UNSERVED, serve_core_rpc
+from pz_agent_cli.core_services import serve_core_rpc
 from pz_agent_cli.doctor import run_checks
 from pz_agent_cli.runtime import LoopLimits
 from pz_agent_core.actions import ActionRequest
@@ -68,13 +68,18 @@ from pz_agent_core.ipc.clocks import system_clock_ms
 from pz_agent_core.ipc.journal import JournalWriter
 from pz_agent_core.planner import Goal as PlannerGoal
 from pz_agent_core.planner import GoalKind as PlannerGoalKind
-from pz_agent_core.protocol import ActionName, Observation, ReasonCode, SessionMode
+from pz_agent_core.protocol import (
+    ActionName,
+    ActionStatus,
+    Observation,
+    ReasonCode,
+    SessionMode,
+)
 from pz_agent_core.rpc.descriptor import DescriptorError, load_descriptor
 from pz_agent_core.session.heartbeat import HeartbeatMonitor, Peer
 from pz_agent_core.version import PRODUCT_VERSION, PROTOCOL_VERSION
 from pz_agent_mcp.remote.client import (
     SIDECAR_NOT_RUNNING,
-    CoreRefused,
     RemoteCoreServices,
     SidecarUnavailable,
 )
@@ -260,18 +265,32 @@ def test_sidecar_serves_core(tmp_path: Path) -> None:
         assert disarmed.armed is False
         assert disarmed.mode is SessionMode.OBSERVE
 
-        # A surface this build does not serve refuses with its named refusal —
-        # the honest answer, never a stub and never an invented success.
-        with pytest.raises(CoreRefused) as refused_action:
-            remote.actions.submit(
-                ActionRequest(
-                    action=ActionName.CONSUME_EAT,
-                    session_id=attach.session.session_id,
-                    idempotency_key="e2e-1",
-                    args={"item_ref": "i-1"},
-                )
+        # Remote actions are served now (TB-R2): a submission while disarmed
+        # is admitted — 'accepted' is the honest word for queued — and the
+        # loop's own tick ends it with the channel's NOT_ARMED refusal rather
+        # than parking a stale intent until authority someday returns. The
+        # armed dispatch, driven to the engine's own observed success over
+        # this same socket, is tests/contract/test_remote_actions_served.py.
+        submitted = remote.actions.submit(
+            ActionRequest(
+                action=ActionName.CONSUME_EAT,
+                session_id=attach.session.session_id,
+                idempotency_key="e2e-1",
+                args={"item_ref": "i-1"},
             )
-        assert REMOTE_ACTIONS_UNSERVED in str(refused_action.value)
+        )
+        assert submitted.status is ActionStatus.ACCEPTED
+
+        def action_ended() -> bool:
+            record = remote.actions.status(submitted.action_id)
+            return record is not None and record.terminal
+
+        _until(action_ended, message="the disarmed submission was never ended by the loop")
+        refused_record = remote.actions.status(submitted.action_id)
+        assert refused_record is not None
+        assert refused_record.status is ActionStatus.REJECTED
+        assert refused_record.result is not None
+        assert refused_record.result.reason_code is ReasonCode.NOT_ARMED
 
         # -- the typed goal channel, served by the real loop -----------------
         goals = remote.goals

@@ -50,12 +50,28 @@ lifecycle, and the five properties below are what it is responsible for:
   whole channel through :meth:`~pz_agent_core.goals.GoalQueue.panic_stop`. Two
   threads reach the queue — this loop's tick and the Core RPC serving thread —
   and both do so only under :attr:`SidecarLoop.goal_lock`; see that field.
+
+* **A remote action is dispatched by this loop's tick or not at all.** The Core
+  RPC serving thread never touches the engine: ``action.submit`` puts a request
+  into the loop's :class:`ActionChannel` — a bounded queue whose admission
+  refuses when full, never drops — and the tick thread drains at most one
+  submission per tick through the *same* funnel a planner proposal takes: the
+  same arming gate, the same action budget, the same
+  :meth:`~pz_agent_core.actions.engine.ActionEngine.execute` with its
+  capability check and permission machinery, so every dispatch happens on the
+  tick thread exactly as a local one does. Every state a submission passes
+  through is a frozen :class:`~pz_agent_mcp.ports.ActionRecord` replaced whole,
+  and the stop levers map the same way the goal channel's do: a disarm ends
+  what is still waiting as ``NOT_ARMED``, a panic sentinel as ``PANIC_STOP``,
+  a shutdown as ``CANCELLED_BY_REQUEST`` — a terminal record that says why,
+  never a submission that silently vanishes.
 """
 
 from __future__ import annotations
 
 import threading
 import time
+import uuid
 from collections import OrderedDict, deque
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -115,6 +131,15 @@ from pz_agent_core.session.handshake import SessionDescriptor, SessionManager
 from pz_agent_core.session.heartbeat import HeartbeatMonitor, Peer
 from pz_agent_core.session.lock import SidecarLock
 from pz_agent_core.version import PRODUCT_VERSION
+
+# The one boundary type this module borrows from the MCP package, and it is a
+# record rather than machinery: `ActionRecord` carries the project's honesty
+# rule in its own `__post_init__` (succeeded requires the terminal result and
+# its observed postcondition), and restating that shape here would be a second
+# copy of the rule — the copy that drifts is always the one on the side that
+# reports success. The dependency is one-way and cycle-free: `pz_agent_mcp`
+# never imports this package at module scope.
+from pz_agent_mcp.ports import ActionRecord
 
 from .supervisor import (
     CONTROL_MAX_AGE_MS,
@@ -909,6 +934,278 @@ class ControlDecision:
 
 
 # ---------------------------------------------------------------------------
+# the remote action channel
+# ---------------------------------------------------------------------------
+
+#: Remote submissions that may wait for the loop at once. Small on purpose, for
+#: the same reason the goal backlog is: an action is an imperative about the
+#: world *now*, and a deep backlog of them is a queue of stale intents by the
+#: time the loop gets to the fourth.
+DEFAULT_MAX_PENDING_ACTIONS: Final = 4
+
+#: Records kept so ``action.status`` can answer for an action that has already
+#: ended. Long enough that a client polling at a sane rate never loses the id
+#: it is waiting on; short enough to be a ring, not a log.
+DEFAULT_MAX_REMEMBERED_ACTIONS: Final = 32
+
+
+def mint_action_id() -> str:
+    """A fresh remote action id.
+
+    Minted here rather than accepted from the submitter for the same reason
+    :func:`~pz_agent_core.goals.model.mint_goal_id` is: the id comes back in
+    refusals and status answers, and an identifier a caller chose is an
+    identifier a caller could fill with text.
+    """
+    return str(uuid.uuid4())
+
+
+class ActionChannel:
+    """The bounded cross-thread submission path for remote actions.
+
+    The module docstring names the two halves this channel exists to provide —
+    a bounded queue the loop drains plus a record store for in-flight ids —
+    because anything less is a port that accepts work and invents its progress.
+    The shape mirrors :class:`~pz_agent_core.goals.GoalQueue`, the channel that
+    already crossed this seam, with one deliberate difference: the lock lives
+    *inside* this class rather than on the loop, because unlike the queue this
+    class was written for two threads from the start. Every touch of its state
+    happens under :attr:`_lock`, every hold is a handful of in-memory
+    dictionary operations — no IO, no engine call, no sleep — and the records
+    handed out are frozen :class:`~pz_agent_mcp.ports.ActionRecord` instances
+    replaced whole on every transition, so a reader holds a consistent record
+    or the next one, never half of each.
+
+    What each side does:
+
+    * The Core RPC serving thread calls :meth:`submit` and :meth:`status`.
+      Admission is non-blocking and honest three ways: a full queue is a raised
+      refusal naming the cap, never a silent drop; a resubmitted idempotency
+      key resolves to the record it already created, so a retried submission —
+      the ordinary consequence of a dropped answer — never runs twice; a key
+      reused for *different* content is refused, because that is a caller bug
+      and silently serving the first request would hide it.
+    * The tick thread calls :meth:`take_next` before it drives the engine and
+      :meth:`settle` with the engine's own terminal result afterwards, and
+      :meth:`clear_pending` when a stop lever ends what is still waiting. The
+      engine is never called under the lock — :meth:`take_next` marks the
+      record ``STARTED`` and releases before the loop touches the engine.
+
+    Bounds: at most :attr:`max_pending` submissions wait, at most
+    :attr:`max_remembered` records are held, and eviction only ever removes a
+    terminal record — forgetting an action that is still waiting or running
+    would lose the only handle its submitter has on it, so the constructor
+    requires ``max_remembered > max_pending`` to guarantee a terminal victim
+    exists whenever the cap is exceeded.
+    """
+
+    def __init__(
+        self,
+        *,
+        clock: Clock = system_clock_ms,
+        max_pending: int = DEFAULT_MAX_PENDING_ACTIONS,
+        max_remembered: int = DEFAULT_MAX_REMEMBERED_ACTIONS,
+        new_id: Callable[[], str] = mint_action_id,
+    ) -> None:
+        if max_pending < 1:
+            raise LoopError(f"max_pending must be positive, got {max_pending}")
+        if max_remembered <= max_pending:
+            # `<=` rather than `<`: beside a full queue one further record can
+            # be non-terminal (the submission the tick thread has taken and is
+            # driving), and eviction must still find a terminal victim then.
+            raise LoopError(
+                f"max_remembered must exceed max_pending ({max_pending}), got {max_remembered}"
+            )
+        self._clock = clock
+        self._new_id = new_id
+        self._max_pending = max_pending
+        self._max_remembered = max_remembered
+        self._lock = threading.Lock()
+        #: Every record this channel has minted and not yet evicted, oldest
+        #: first. Values are frozen and replaced whole; see the class docstring.
+        self._records: OrderedDict[str, ActionRecord] = OrderedDict()
+        #: The requests behind those records, kept in step with them (evicted
+        #: together) so a resubmitted key can be compared against what its
+        #: first use actually asked for.
+        self._requests: dict[str, ActionRequest] = {}
+        #: Submissions the tick thread has not taken yet, oldest first.
+        self._pending: OrderedDict[str, ActionRequest] = OrderedDict()
+        #: idempotency key -> action id, trimmed with the record store.
+        self._by_key: dict[str, str] = {}
+        #: Sequence numbers for the refusal results this channel synthesises
+        #: itself, kept apart from the mod's ack stream for the same reason the
+        #: engine keeps its own: a locally minted result never appeared there.
+        self._seq = 0
+
+    @property
+    def max_pending(self) -> int:
+        return self._max_pending
+
+    @property
+    def has_pending(self) -> bool:
+        """Whether a submission is waiting. A single read the tick thread polls."""
+        with self._lock:
+            return bool(self._pending)
+
+    @property
+    def pending_count(self) -> int:
+        with self._lock:
+            return len(self._pending)
+
+    @property
+    def remembered_count(self) -> int:
+        with self._lock:
+            return len(self._records)
+
+    def submit(self, request: ActionRequest) -> ActionRecord:
+        """Admit *request* to the queue, or refuse by name. Never waits.
+
+        Returns the record as admitted — ``accepted``, which is the honest word
+        for queued — or the record a resubmitted key already created.
+
+        Raises:
+            LoopError: the queue is full (the refusal names the cap), or the
+                idempotency key was already used for a different request.
+        """
+        with self._lock:
+            existing_id = self._by_key.get(request.idempotency_key)
+            if existing_id is not None:
+                existing = self._records.get(existing_id)
+                if existing is None:
+                    # The record was evicted while its key survived; there is
+                    # nothing left to hand back, so the key starts over.
+                    self._by_key.pop(request.idempotency_key, None)
+                elif self._requests.get(existing_id) == request:
+                    return existing
+                else:
+                    raise LoopError(
+                        "that idempotency key was already used for a different action "
+                        "request; mint a new key for new work"
+                    )
+            if len(self._pending) >= self._max_pending:
+                raise LoopError(
+                    f"the remote action queue already holds {self._max_pending} "
+                    "submission(s), which is its cap; wait for one to finish or check "
+                    "'action.status' before submitting more"
+                )
+            record = ActionRecord(
+                action_id=self._new_id(),
+                action=request.action,
+                status=ActionStatus.ACCEPTED,
+                idempotency_key=request.idempotency_key,
+            )
+            self._records[record.action_id] = record
+            self._requests[record.action_id] = request
+            self._pending[record.action_id] = request
+            self._by_key[request.idempotency_key] = record.action_id
+            self._evict()
+            return record
+
+    def status(self, action_id: str) -> ActionRecord | None:
+        """The record for *action_id*, or None for an id never minted or evicted."""
+        with self._lock:
+            return self._records.get(action_id)
+
+    def take_next(self) -> tuple[str, ActionRequest] | None:
+        """The oldest waiting submission, marked ``started``, for the tick thread.
+
+        The caller drives the engine *after* this returns — never under the
+        lock — and must follow up with :meth:`settle`, which is what turns the
+        ``started`` claim into the engine's own terminal answer.
+        """
+        with self._lock:
+            if not self._pending:
+                return None
+            action_id, request = self._pending.popitem(last=False)
+            self._records[action_id] = replace(
+                self._records[action_id], status=ActionStatus.STARTED
+            )
+            return action_id, request
+
+    def settle(self, action_id: str, result: ActionResult) -> ActionRecord:
+        """Record the engine's terminal *result* against *action_id*.
+
+        The status recorded is the result's own — the engine's success carries
+        the observed postcondition :class:`~pz_agent_mcp.ports.ActionRecord`
+        demands, and every refusal carries the engine's reason — so nothing is
+        decided here, only remembered.
+
+        Raises:
+            LoopError: *result* is not terminal (a record that says
+                ``succeeded``-later would be the early claim this project
+                forbids), or *action_id* was never minted, which is a loop bug
+                rather than a runtime condition.
+        """
+        if not result.is_terminal:
+            raise LoopError(f"only a terminal result settles an action; got {result.status.value}")
+        with self._lock:
+            record = self._records.get(action_id)
+            if record is None:
+                raise LoopError("settle was called for an action id this channel never minted")
+            settled = replace(record, status=result.status, result=result, progress=result.progress)
+            self._records[action_id] = settled
+            self._records.move_to_end(action_id)
+            self._evict()
+            return settled
+
+    def clear_pending(
+        self, reason_code: ReasonCode, *, status: ActionStatus, message: str
+    ) -> tuple[ActionRecord, ...]:
+        """End every waiting submission with a terminal record that says why.
+
+        The stop levers' half of the channel: a disarm, a panic sentinel and a
+        shutdown all land here, each with its own reason, mirroring
+        :meth:`~pz_agent_core.goals.GoalQueue.disarm` and
+        :meth:`~pz_agent_core.goals.GoalQueue.panic_stop`. Only *waiting*
+        submissions are touched — one the tick thread has already taken is the
+        engine's to finish, and the engine applies the same levers itself.
+        """
+        if status is ActionStatus.SUCCEEDED or not status.is_terminal:
+            raise LoopError(f"clearing must end submissions, not mark them {status.value}")
+        with self._lock:
+            ended: list[ActionRecord] = []
+            while self._pending:
+                action_id, request = self._pending.popitem(last=False)
+                self._seq += 1
+                refusal = ActionResult.failure(
+                    session_id=request.session_id,
+                    seq=self._seq,
+                    command_id=action_id,
+                    action=request.action.value,
+                    timestamp_ms=self._clock(),
+                    reason_code=reason_code,
+                    status=status,
+                    message=message,
+                )
+                settled = replace(self._records[action_id], status=status, result=refusal)
+                self._records[action_id] = settled
+                self._records.move_to_end(action_id)
+                ended.append(settled)
+            self._evict()
+            return tuple(ended)
+
+    def _evict(self) -> None:
+        """Drop the oldest terminal records until the store fits its cap.
+
+        Called under :attr:`_lock`. A waiting or running record is never the
+        victim — forgetting one would lose the submitter's only handle on it —
+        and the constructor's ``max_remembered > max_pending`` bound is what
+        guarantees a terminal victim exists whenever the cap is exceeded.
+        """
+        while len(self._records) > self._max_remembered:
+            victim = next(
+                (aid for aid, record in self._records.items() if record.terminal),
+                None,
+            )
+            if victim is None:
+                return
+            record = self._records.pop(victim)
+            self._requests.pop(victim, None)
+            if self._by_key.get(record.idempotency_key) == victim:
+                self._by_key.pop(record.idempotency_key, None)
+
+
+# ---------------------------------------------------------------------------
 # the loop
 # ---------------------------------------------------------------------------
 
@@ -952,6 +1249,14 @@ class SidecarLoop:
     #: with no channel — the Core RPC adapter then leaves ``goals`` unserved
     #: rather than admitting goals nothing would ever activate.
     goals: GoalQueue | None = None
+    #: The remote action channel, filled in by ``__post_init__`` when the
+    #: caller passes nothing: every loop owns an engine once attached, so every
+    #: loop can honestly serve this — unlike the goal channel, whose serving
+    #: needs a planner the assembly may not have. ``None`` remains expressible
+    #: (assign it after construction) and means what it says: the Core RPC
+    #: adapter then leaves ``actions`` as the named refusal rather than
+    #: admitting submissions nothing would ever drain.
+    actions: ActionChannel | None = None
     #: The one seam through which two threads reach :attr:`goals`.
     #: :class:`~pz_agent_core.goals.GoalQueue` is not thread-safe, so every
     #: touch of it — the tick thread's activation, settlement, tick, disarm and
@@ -996,6 +1301,8 @@ class SidecarLoop:
             self.sessions = SessionManager(self.layout, clock=self.clock, heartbeats=self.monitor)
         if self.control is None:
             self.control = ControlChannel(self.state_dir / "sidecar.control.json", clock=self.clock)
+        if self.actions is None:
+            self.actions = ActionChannel(clock=self.clock)
 
     # -- accessors ---------------------------------------------------------
 
@@ -1175,6 +1482,15 @@ class SidecarLoop:
             # its own disarm keeps the record honest for as long as it exists.
             with self.goal_lock:
                 self.goals.disarm()
+        if self.actions is not None:
+            # Same reasoning one channel over: a submission still waiting when
+            # the loop dies must end with a record that says so, because its
+            # submitter is still polling the id.
+            self.actions.clear_pending(
+                ReasonCode.CANCELLED_BY_REQUEST,
+                status=ActionStatus.CANCELLED,
+                message=f"the sidecar shut down while this submission waited: {reason}",
+            )
         if attached is not None:
             closed = attached.queue.close_in_flight(
                 ReasonCode.CANCELLED_BY_REQUEST,
@@ -1328,6 +1644,17 @@ class SidecarLoop:
         if self.goals is not None:
             with self.goal_lock:
                 self.goals.disarm()
+        if self.actions is not None:
+            # The action channel has no backlog worth keeping across a disarm:
+            # unlike a goal, a queued action is an imperative about the world
+            # right now, and running it whenever authority next returns would
+            # act on an intent nobody re-stated. It ends, and the record names
+            # the lever that ended it.
+            self.actions.clear_pending(
+                ReasonCode.NOT_ARMED,
+                status=ActionStatus.REJECTED,
+                message=f"the sidecar disarmed while this submission waited: {reason}",
+            )
         if self._attached is not None:
             self._publish_heartbeat()
         return ArmOutcome(
@@ -1369,7 +1696,15 @@ class SidecarLoop:
         # budgets and pending time-to-lives are applied by the queue's own
         # tick, so a goal ends for real rather than when somebody asks.
         self._tick_goals()
-        results = self._act(attached, now, events=events, panic=panic, game_alive=liveness.alive)
+        # The remote submission first, then the planner: an action a client
+        # asked for by name outranks the loop's own initiative, and both pass
+        # the same gates and spend the same budget.
+        served = self._serve_remote_action(
+            attached, now, events=events, panic=panic, game_alive=liveness.alive
+        )
+        results = served + self._act(
+            attached, now, events=events, panic=panic, game_alive=liveness.alive
+        )
         self._trace_results(results)
 
         self._publish_heartbeat()
@@ -1501,6 +1836,7 @@ class SidecarLoop:
             # edge: while the sentinel stays, every tick re-clears whatever
             # arrived in the meantime.
             self._panic_goals()
+            self._panic_actions()
             self.disarm(reason="panic stop")
         elif forcing:
             self.disarm(reason=", ".join(forcing))
@@ -1673,6 +2009,69 @@ class SidecarLoop:
             self._settle_goal_step(goal.goal_id, result)
         return (result,)
 
+    # -- the remote action channel -----------------------------------------
+
+    def _serve_remote_action(
+        self,
+        attached: _Attached,
+        now_ms: int,
+        *,
+        events: Sequence[SafetyEvent],
+        panic: bool,
+        game_alive: bool,
+    ) -> tuple[ActionResult, ...]:
+        """Drain at most one remote submission through the local action funnel.
+
+        The gates are :meth:`_act`'s, applied in the same order and for the
+        same reasons — the one difference is what a closed gate does. A planner
+        that is not consulted simply proposes nothing; a submission is real
+        work somebody is polling an id for, so the two gates that will not open
+        again on their own end it with a record that says why: no authority is
+        ``NOT_ARMED`` (a level — a submission that arrives while disarmed is
+        ended on the next tick, not parked until authority someday returns and
+        a stale intent runs), and the panic sentinel already emptied the queue
+        in :meth:`_apply_events`. The transient gates — a silent game the loop
+        is still deciding about, a guard event, a missing observation, a spent
+        budget — leave the submission waiting for a later tick, bounded by the
+        levers themselves: whatever holds those gates closed for long either
+        disarms the loop or ends the run.
+
+        The dispatch is the same one a planner proposal gets: one budget slot
+        spent, :meth:`~pz_agent_core.actions.engine.ActionEngine.execute`
+        driven to its own terminal result on this tick thread — capability
+        check, permission machinery, observed postcondition and all — and that
+        result recorded whole. Nothing about the outcome is decided here.
+        """
+        channel = self.actions
+        if channel is None or not channel.has_pending:
+            return ()
+        if not self._armed:
+            channel.clear_pending(
+                ReasonCode.NOT_ARMED,
+                status=ActionStatus.REJECTED,
+                message=(
+                    "the sidecar is not armed; arm it ('pz-agent arm' or session.arm) "
+                    "and submit again"
+                ),
+            )
+            return ()
+        if panic or not game_alive or events:
+            return ()
+        current = self._store.latest()
+        if current is None or not current.can_act:
+            return ()
+        if not self._budget.allows(now_ms):
+            return ()
+        taken = channel.take_next()
+        if taken is None:
+            return ()
+        action_id, request = taken
+        self._budget.spend(now_ms)
+        result = attached.engine.execute(request)
+        channel.settle(action_id, result)
+        self._confirm(request.action, result)
+        return (result,)
+
     # -- the typed goal channel --------------------------------------------
 
     def _goal_to_serve(self) -> GoalRecord | None:
@@ -1731,6 +2130,23 @@ class SidecarLoop:
             return
         with self.goal_lock:
             queue.panic_stop()
+
+    def _panic_actions(self) -> None:
+        """End every waiting remote submission as the panic stop's own casualty.
+
+        Called before the disarm on every panic tick — a level, not an edge,
+        exactly as :meth:`_panic_goals` is — so the record carries
+        ``PANIC_STOP`` rather than the disarm's ``NOT_ARMED``: the submitter is
+        told which lever was pulled, not merely that authority is gone.
+        """
+        channel = self.actions
+        if channel is None:
+            return
+        channel.clear_pending(
+            ReasonCode.PANIC_STOP,
+            status=ActionStatus.CANCELLED,
+            message="a panic stop cleared the remote action channel",
+        )
 
     def _confirm(self, action: ActionName, result: ActionResult) -> Capability | None:
         """Offer one outcome to the ledger as evidence about a capability.

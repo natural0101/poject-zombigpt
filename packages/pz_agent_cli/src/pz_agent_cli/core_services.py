@@ -63,23 +63,38 @@ main thread. Every port below states which side of that seam it stands on:
 What is served, what refuses, and why the refusals are honest
 -------------------------------------------------------------
 
-``session``, ``observations``, ``capabilities``, ``memory``, ``diagnostics``
-and — over a loop that holds a :class:`~pz_agent_core.goals.GoalQueue` beside a
-goal-capable planner — ``goals`` are served over the real subsystems. Two
-surfaces are not, and each refuses with a named reason rather than stubbing:
+``session``, ``observations``, ``capabilities``, ``memory``, ``diagnostics``,
+``goals`` (over a loop that holds a :class:`~pz_agent_core.goals.GoalQueue`
+beside a goal-capable planner) and ``actions`` are served over the real
+subsystems. One surface is not, and it refuses with a named reason rather than
+stubbing:
 
-* **Actions** (:data:`REMOTE_ACTIONS_UNSERVED`): the action engine drives each
-  command to its terminal result synchronously on the tick thread, polling the
-  one journal reader the process owns. A cross-thread submission path needs a
-  bounded queue the loop drains plus a record store for in-flight ids, and a
-  half of that — accepting a request and inventing its progress — would be the
-  fabricated success this project forbids. ``action.submit`` refuses;
-  ``action.status`` answers ``None``, which is true: this core has never
-  minted a remote action id.
-* **Plans** (:data:`REMOTE_PLANS_UNSERVED`): the same engine, one layer up.
-  ``plan.current`` answers ``None`` because no typed plan is ever running here,
-  which is a fact and not a placeholder.
-The goal channel is the surface that moved off that list: the loop now holds a
+* **Plans** (:data:`REMOTE_PLANS_UNSERVED`): ``plan.execute`` would drive many
+  engine calls to their terminal results inside one call, and the machinery
+  the loop actually has cannot do that honestly across this seam — see
+  :class:`UnservedPlanPort` for what was found. ``plan.current`` answers
+  ``None`` because no typed plan is ever running here, which is a fact and not
+  a placeholder.
+
+**Actions** moved off that list the way goals did, by building what the old
+refusal named as missing: a bounded cross-thread submission path. The loop owns
+an :class:`~pz_agent_cli.runtime.ActionChannel` — a capped queue whose
+admission refuses when full, plus a bounded record store of frozen
+:class:`~pz_agent_mcp.ports.ActionRecord` instances replaced whole on every
+transition — and drains at most one submission per tick through the *same*
+funnel a planner proposal takes (arming gate, action budget, the engine's own
+capability and permission machinery), so every dispatch still happens on the
+tick thread. :class:`LoopActionPort` is the serving-thread half: ``submit``
+admits and returns the queued record without waiting, ``status`` answers the
+channel's own record or ``None`` for an id it never minted. A disarm, a panic
+sentinel and a shutdown each end what is still waiting with a terminal record
+naming the lever (``NOT_ARMED``, ``PANIC_STOP``, ``CANCELLED_BY_REQUEST``).
+For a loop assembled *without* a channel the bundle keeps
+:class:`UnservedActionPort`'s named refusal (:data:`REMOTE_ACTIONS_UNSERVED`)
+— a port that admitted submissions nothing would ever drain is exactly the
+accepted-and-dropped port :mod:`pz_agent_mcp.ports` names as forbidden.
+
+The goal channel was the first surface to move off that list: the loop holds a
 :class:`~pz_agent_core.goals.GoalQueue` and, armed in ``AUTONOMOUS`` with a
 :class:`~pz_agent_cli.runtime.GoalPlanner`, activates admitted goals and hands
 each to its planner (see :meth:`~pz_agent_cli.runtime.SidecarLoop._act`). For a
@@ -135,7 +150,7 @@ from pz_agent_mcp.remote.server import NO_GOAL_CHANNEL, CoreRouter
 from .autonomy import AutonomyPlanner
 from .doctor import DoctorReport
 from .memory import SidecarMemory
-from .runtime import ControlDecision, GoalPlanner, LoopError, SidecarLoop
+from .runtime import ActionChannel, ControlDecision, GoalPlanner, LoopError, SidecarLoop
 from .supervisor import ControlChannel, ControlKind, RpcEndpoint, SidecarSupervisor
 
 __all__ = [
@@ -145,6 +160,7 @@ __all__ = [
     "MEMORY_KINDS",
     "REMOTE_ACTIONS_UNSERVED",
     "REMOTE_PLANS_UNSERVED",
+    "LoopActionPort",
     "LoopCapabilityPort",
     "LoopDiagnosticsPort",
     "LoopGoalPort",
@@ -168,19 +184,21 @@ DEFAULT_CONTROL_WAIT_S: Final = 2.0
 #: turn the deadline into a spin.
 CONTROL_POLL_S: Final = 0.02
 
-#: The named refusal ``action.submit`` answers. A refusal is honest; a queue
+#: The named refusal ``action.submit`` answers over a loop assembled without an
+#: :class:`~pz_agent_cli.runtime.ActionChannel`. A refusal is honest; a queue
 #: that accepted work nothing drains would not be.
 REMOTE_ACTIONS_UNSERVED: Final = (
-    "this sidecar does not accept remote actions yet: the action engine runs on the "
-    "loop's own thread and no bounded cross-thread submission path is wired. Arm the "
-    "sidecar and let its planner act, or submit a typed goal — this build serves the "
-    "goal channel"
+    "this sidecar was assembled without a remote action channel, so nothing would ever "
+    "drain a submission it accepted; restart the sidecar with its default assembly, or "
+    "submit a typed goal — this build serves the goal channel"
 )
 
-#: The named refusal ``plan.execute`` answers, for the same reason one layer up.
+#: The named refusal ``plan.execute`` answers; :class:`UnservedPlanPort` says why.
 REMOTE_PLANS_UNSERVED: Final = (
-    "this sidecar does not execute remote plans yet: plans reach the same engine "
-    "remote actions would, and that engine runs on the loop's own thread"
+    "this sidecar does not execute remote plans: a plan is many engine calls driven to "
+    "their terminal results in one request, and the loop's tick thread cannot hold "
+    "them without putting its own stop levers out of reach. Submit a typed goal — the "
+    "served channel that drives multi-step work one bounded step per tick"
 )
 
 #: The named refusal an ``arm`` without a backup confirmation gets. Refusing is
@@ -419,8 +437,12 @@ class LoopCapabilityPort:
 class UnservedActionPort:
     """:class:`~pz_agent_mcp.ports.ActionPort` that refuses, by name.
 
-    See the module docstring: the engine is single-threaded by design, and a
-    submission path that accepted work nothing drains would fabricate success.
+    The port a loop assembled *without* an
+    :class:`~pz_agent_cli.runtime.ActionChannel` gets. Nothing would drain a
+    submission such a loop accepted, and a channel that admits what it cannot
+    serve is the forbidden accepted-and-dropped port; the default assembly
+    (``SidecarLoop.__post_init__``) always builds a channel, so this refusal
+    is reserved for wiring that deliberately removed it.
     """
 
     def submit(self, request: ActionRequest) -> ActionRecord:
@@ -432,8 +454,77 @@ class UnservedActionPort:
 
 
 @dataclass(frozen=True)
+class LoopActionPort:
+    """:class:`~pz_agent_mcp.ports.ActionPort` over the loop's own action channel.
+
+    The serving-thread half of the seam :class:`~pz_agent_cli.runtime.ActionChannel`
+    documents. :meth:`submit` admits and returns as soon as the submission has
+    an id — ``accepted``, the honest word for queued, exactly as the port's
+    contract requires so a long action can never hold the transport the stop
+    tool needs. :meth:`status` answers the channel's real record — the queued
+    claim, the started claim, or the terminal record carrying the engine's own
+    result — and ``None`` only for an id the channel never minted or has
+    evicted after it ended. Every answer is the channel's; nothing is decided
+    on this side of its lock.
+    """
+
+    loop: SidecarLoop
+
+    def _channel(self) -> ActionChannel:
+        channel = self.loop.actions
+        if channel is None:
+            raise LoopError(REMOTE_ACTIONS_UNSERVED)
+        return channel
+
+    def submit(self, request: ActionRequest) -> ActionRecord:
+        """Admit *request* to the loop's queue, or relay the refusal. Never waits.
+
+        Raises:
+            LoopError: the loop is not attached — nothing would ever drain the
+                queue, so admitting to it would be the accepted-and-dropped
+                port — or the channel's own refusal: a full queue, or an
+                idempotency key reused for different work.
+        """
+        channel = self._channel()
+        if self.loop.session is None:
+            raise LoopError(
+                "the sidecar loop is not attached to an exchange directory, so a "
+                "submission would wait on a tick that never comes"
+            )
+        return channel.submit(request)
+
+    def status(self, action_id: str) -> ActionRecord | None:
+        return self._channel().status(action_id)
+
+
+@dataclass(frozen=True)
 class UnservedPlanPort:
-    """:class:`~pz_agent_mcp.ports.PlanPort`: execution refuses, ``current`` is honest."""
+    """:class:`~pz_agent_mcp.ports.PlanPort`: execution refuses, ``current`` is honest.
+
+    Kept a refusal on purpose after the action channel was built, because what
+    exists cannot honestly drive a remote plan, and the reasons are specific:
+
+    * The local plan machinery, :class:`~pz_agent_core.planner.PlanExecutor`,
+      runs a whole plan — replans, per-step retries and all — inside one call,
+      bounded only by its own budgets. On the tick thread that call would hold
+      the loop for the plan's whole wall budget, and the loop's stop levers
+      (the control channel's disarm, the panic sentinel's queue clear) are
+      consumed *between* ticks: a running plan would put them out of reach for
+      minutes, which is exactly the property the action channel was shaped to
+      avoid by dispatching one bounded action per tick.
+    * :class:`~pz_agent_mcp.ports.PlanRequest` carries a free-text ``goal``.
+      The only thing in this project that turns free text into a typed plan is
+      an LLM provider, and the deterministic loop must not be the place where
+      untrusted text is promoted into intent (AGENTS.md: the model may express
+      a goal; it never picks the sandwich).
+
+    The served shape for multi-step remote work already exists and is the goal
+    channel: a typed :class:`~pz_agent_core.goals.GoalRequest` from a closed
+    kind set, activated by the loop and driven one budgeted step per tick with
+    every stop lever applied between steps. A ``plan.execute`` that did less
+    would be a half-served plan; this refusal is the honest answer until a
+    step-per-tick plan runner exists on the loop's side of the seam.
+    """
 
     def execute(self, request: PlanRequest) -> PlanRecord:
         raise LoopError(REMOTE_PLANS_UNSERVED)
@@ -750,11 +841,15 @@ def core_services_over(
     memory = candidate if isinstance(candidate, SidecarMemory) else None
     waiter = _ControlWaiter(loop=loop, wait_s=control_wait_s, sleep=sleep, monotonic=monotonic)
     serves_goals = loop.goals is not None and isinstance(planner, GoalPlanner)
+    # ``actions`` follows the same rule as ``goals``, decided at this call site
+    # where the wiring is visible: served only over a loop that holds the
+    # channel its tick actually drains, refused by name otherwise.
+    serves_actions = loop.actions is not None
     return CoreServices(
         session=LoopSessionPort(loop=loop, waiter=waiter),
         observations=LoopObservationPort(loop),
         capabilities=LoopCapabilityPort(loop),
-        actions=UnservedActionPort(),
+        actions=LoopActionPort(loop=loop) if serves_actions else UnservedActionPort(),
         plans=UnservedPlanPort(),
         memory=LoopMemoryPort(memory),
         diagnostics=LoopDiagnosticsPort(doctor_source=doctor, log_file=log_file),
