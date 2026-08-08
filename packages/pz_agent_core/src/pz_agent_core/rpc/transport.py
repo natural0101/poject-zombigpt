@@ -575,6 +575,14 @@ class RpcClient:
         """
         if self._descriptor.family == FAMILY_PIPE:
             return Client(self._descriptor.address, family="AF_PIPE")
+        if not unix_socket_supported():
+            # A descriptor naming an AF_UNIX socket on a platform that has none
+            # is a sidecar this machine cannot reach — a mismatched or stale
+            # descriptor, not a bug here. Raised as OSError so `call` maps it to
+            # "the sidecar is not answering" (and the entry point to
+            # EXIT_NOT_WIRED) rather than crashing with the AttributeError that
+            # `socket.AF_UNIX` throws where the attribute does not exist.
+            raise OSError("the descriptor names an AF_UNIX socket and this platform has none")
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
             sock.settimeout(self._deadline)

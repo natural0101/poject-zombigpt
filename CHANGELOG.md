@@ -12,6 +12,25 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **Three Windows-only regressions from the goal-channel/transport iteration,
+  none reproducible on Linux, diagnosed from the CI log.** (1) The transport
+  rework hand-dialled its socket and referenced `socket.AF_UNIX`
+  unconditionally, so a Unix-family descriptor reaching the client on Windows
+  crashed with `AttributeError` instead of reporting the sidecar unreachable;
+  `_dial` now guards on `unix_socket_supported()` and raises the transport's
+  own not-answering error, which the entry point maps to `EXIT_NOT_WIRED`.
+  (2) The two new server-survival tests left the server's idle budget at 60 s,
+  but a Windows named-pipe read begun before the peer vanished has no hard
+  deadline — the documented asymmetry — so an abandoned handshake held the
+  single serving thread past the follow-up client's patience; both tests now
+  inject a short idle budget so recovery is observable on both platforms
+  without weakening the survival assertion. (3) The new account-name evidence
+  test buried a synthetic profile segment under pytest's temp directory, which
+  the floor redactor deliberately does not reach (it targets profile *leads*,
+  not mid-path `Users/` segments); the test now asserts the manifest carries
+  the floor-redacted spelling and that a genuinely profile-rooted path has its
+  account segment stripped.
+
 - **The remaining criterion-coverage gaps are closed — and four criteria were
   false in code, now true.** Fifteen audit entries across four fronts: secret
   hygiene now scans REAL writers (a real token issued into a real state dir,

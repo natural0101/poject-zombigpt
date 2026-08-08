@@ -26,6 +26,7 @@ from contextlib import closing, contextmanager, suppress
 from dataclasses import dataclass
 from multiprocessing.connection import Client, Connection, Listener
 from pathlib import Path
+from typing import Protocol
 from unittest import mock
 
 import pytest
@@ -34,6 +35,7 @@ import pz_agent_core.rpc.transport as transport_module
 from pz_agent_core.rpc.descriptor import FAMILY_PIPE, FAMILY_UNIX, RpcDescriptor
 from pz_agent_core.rpc.token import MIN_TOKEN_BYTES, issue_token, read_token
 from pz_agent_core.rpc.transport import (
+    IDLE_SECONDS,
     AddressTooLong,
     RpcClient,
     RpcServer,
@@ -53,8 +55,16 @@ from pz_agent_core.rpc.wire import (
 #: enough that a genuine hang ends the test rather than the suite's patience.
 GRACE: float = 10.0
 
-#: What the `serving` fixture hands back: start a server with this handler.
-Start = Callable[[Callable[[RpcRequest], RpcResponse]], "Harness"]
+
+class Start(Protocol):
+    """What the `serving` fixture hands back: start a server with this handler."""
+
+    def __call__(
+        self,
+        handler: Callable[[RpcRequest], RpcResponse],
+        *,
+        idle_seconds: float | None = None,
+    ) -> Harness: ...
 
 
 @dataclass
@@ -71,11 +81,26 @@ class Harness:
 def serving(tmp_path: Path) -> Iterator[Start]:
     started: list[Harness] = []
 
-    def start(handler: Callable[[RpcRequest], RpcResponse]) -> Harness:
+    def start(
+        handler: Callable[[RpcRequest], RpcResponse], *, idle_seconds: float | None = None
+    ) -> Harness:
         runtime = tmp_path / "runtime"
         runtime.mkdir(parents=True, exist_ok=True)
         key = issue_token(runtime)
-        server = RpcServer(new_address(runtime), authkey=key, handler=handler)
+        # idle_seconds is left at the server default unless a test needs the
+        # server to recover from an abandoned connection quickly. On a Unix
+        # socket a peer that hangs up is an immediate EOF, so recovery is
+        # instant either way; on a Windows named pipe a read started before the
+        # peer vanished has no hard deadline (the transport documents this), so
+        # the serving thread is freed only when the idle budget elapses — a
+        # test that asserts the server survives such a peer must shrink that
+        # budget below its own patience.
+        server = RpcServer(
+            new_address(runtime),
+            authkey=key,
+            handler=handler,
+            idle_seconds=IDLE_SECONDS if idle_seconds is None else idle_seconds,
+        )
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         harness = Harness(server=server, thread=thread, key=key)
@@ -935,7 +960,12 @@ class TestAnEstablishedLinkDroppedMidExchange:
         Without that guard the EOFError unwinds ``serve_forever`` and the
         follow-up call finds a dead sidecar.
         """
-        harness = serving(_echo)
+        # A short idle budget so the abandoned read frees the serving thread
+        # within this test's patience: on a Unix socket the peer's close is an
+        # immediate EOF, but on a Windows named pipe the read that was already
+        # waiting has no hard deadline (the transport documents this asymmetry),
+        # so the thread is freed only when the idle budget elapses.
+        harness = serving(_echo, idle_seconds=0.5)
         family = "AF_PIPE" if harness.server.family == FAMILY_PIPE else "AF_UNIX"
 
         connection = Client(harness.server.address, family=family, authkey=harness.key)
@@ -962,7 +992,7 @@ class TestAnEstablishedLinkDroppedMidExchange:
             assert gone.wait(GRACE), "the test never closed its connection"
             return RpcResponse(id=request.id, ok=True)
 
-        harness = serving(hold_until_the_drop)
+        harness = serving(hold_until_the_drop, idle_seconds=0.5)
         family = "AF_PIPE" if harness.server.family == FAMILY_PIPE else "AF_UNIX"
 
         connection = Client(harness.server.address, family=family, authkey=harness.key)

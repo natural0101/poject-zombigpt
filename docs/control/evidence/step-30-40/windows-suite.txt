@@ -127,3 +127,18 @@ held to the platform's six-hour ceiling.
 
 | 31235583344 | e75754e1 | 0 (green; the loop-free boundary tests and the 300 s per-test bound both in
 effect — the hang did not recur, and if it ever does, the bound names the test) |
+
+| 31246415811 | a82b8b53 | 6 (three causes, all from the goal-channel/transport iteration, none reproducible
+on Linux: (a) the transport rework's hand-dialled socket referenced socket.AF_UNIX
+unconditionally — a FAMILY_UNIX descriptor on Windows crashed with AttributeError
+instead of reporting the sidecar unreachable; (b) the two new server-survival tests
+left the server's idle budget at 60s, and a Windows named-pipe read that began
+before the peer vanished has no hard deadline, so the abandoned handshake held the
+single serving thread past the follow-up client's patience; (c) the new
+account-name evidence test buried a synthetic profile segment under pytest's temp,
+which the floor redactor targets profile *leads* not mid-path Users/ segments —
+correct behaviour, over-strict test). Fixes: an AF_UNIX-absence guard in _dial that
+raises the transport's own unreachable error; a short injected idle budget on the
+two server-survival tests; the evidence test rewritten to assert the floor-redacted
+spelling and a genuinely profile-rooted redaction rather than a temp-buried string.
+Diagnosed from the log on Linux, per the standing rule; the next run is the judge.) |

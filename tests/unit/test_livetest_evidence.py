@@ -326,9 +326,17 @@ class TestManifestEntries:
         ``digest_entry`` is what the manifest is assembled from, and its
         ``path`` field is the one place an outside-tree artefact's absolute
         spelling — profile directory, account name and all — used to land.
-        The sweep is over the entry's whole serialised form, not just the
-        path field, so a second field starting to carry the spelling would
-        fail here too.
+
+        The guarantee is asserted two ways, because the account name of
+        *whoever ran the suite* is a real-profile prefix, not a segment buried
+        under pytest's temp directory. First: every field of the serialised
+        entry is the floor-redacted spelling and never the raw absolute path —
+        the raw ``as_posix()`` (which on a CI runner carries the runner's own
+        profile) must not appear. Second: a genuinely profile-rooted path — the
+        shape a real Zomboid ``console.txt`` has — is redacted by the floor the
+        writer uses, so the account segment is gone. That second check runs
+        against the redactor directly, needing no file, so it does not depend on
+        where pytest happened to root its temporary tree.
         """
         outside = tmp_path / "Users" / CYRILLIC_USER / "Zomboid" / "console.txt"
         outside.parent.mkdir(parents=True)
@@ -338,8 +346,23 @@ class TestManifestEntries:
 
         assert entry.present, "the file exists; the entry must still hash it"
         assert entry.path.endswith("console.txt")
+        assert entry.path == layout.relative(outside), (
+            "the manifest path is not the floor-redacted spelling the writer promises"
+        )
         document = json.dumps(entry.to_dict(), ensure_ascii=False)
-        assert CYRILLIC_USER not in document, document
+        assert outside.as_posix() not in document, (
+            "the raw absolute spelling — profile and account name and all — reached the manifest"
+        )
+
+        # The account name of a real run is a profile prefix, and the floor the
+        # writer uses strips it. `windows_user_profile` / `posix_user_profile`
+        # both fire on a profile-rooted path; a mid-temp synthetic segment is
+        # not what the criterion is about.
+        for rooted in (
+            f"C:/Users/{CYRILLIC_USER}/Zomboid/console.txt",
+            f"/home/{CYRILLIC_USER}/Zomboid/console.txt",
+        ):
+            assert CYRILLIC_USER not in null_redactor().text(rooted), rooted
 
 
 def test_both_shipped_schemas_are_valid_draft_2020_12() -> None:
