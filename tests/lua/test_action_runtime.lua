@@ -434,6 +434,100 @@ do
   equal(agent.safety.armed, true, "cancelling is not disarming")
 end
 
+Harness.group("a targeted plan.cancel ends the named command and nothing else")
+do
+  local slow = Support.spyAdapter("movement.move_to", { polls = 99, evidence = { position = "0,0,0" } })
+  local agent, fs, runtime = Support.runtime(Mock, { slow }, { controls = true, maxWorkPerTick = 8 })
+  local first = Support.command({ action = "movement.move_to", args = {} })
+  local second = Support.command({ action = "movement.move_to", args = {} })
+  Support.publish(fs, {
+    first,
+    second,
+    Support.command({ action = "plan.cancel", args = { command_id = first.command_id } }),
+  })
+  runtime:tick(agent, NOW)
+
+  isNil(runtime:inFlight(), "the named in-flight command is gone")
+  equal(runtime:pendingCount(), 1, "and the queued command it did not name kept its turn")
+
+  local records = Support.acks(fs)
+  local cancelAck, firstTerminal = nil, nil
+  for index = 1, #records do
+    local record = records[index]
+    if record.action == "plan.cancel" then
+      cancelAck = record
+    elseif record.command_id == first.command_id and PZ.Protocol.isTerminalStatus(record.status) then
+      firstTerminal = record
+    end
+  end
+  equal(cancelAck.status, STATUS.SUCCEEDED, "the cancel succeeded")
+  equal(cancelAck.evidence.cancelled_command_id, first.command_id, "naming the command it ended")
+  equal(cancelAck.evidence.pending_left, 1, "and reporting the queued work it left alone")
+  equal(firstTerminal.status, STATUS.CANCELLED, "the named command ended cancelled")
+  equal(firstTerminal.reason_code, REASON.CANCELLED_BY_REQUEST, "by request")
+
+  runtime:tick(agent, NOW + 1)
+  equal(slow.starts, 2, "and the surviving command started on the next tick")
+end
+
+Harness.group("a targeted plan.cancel reaches a command still waiting in the queue")
+do
+  local slow = Support.spyAdapter("movement.move_to", { polls = 99, evidence = { position = "0,0,0" } })
+  local agent, fs, runtime = Support.runtime(Mock, { slow }, { controls = true, maxWorkPerTick = 8 })
+  local running = Support.command({ action = "movement.move_to", args = {} })
+  local waiting = Support.command({ action = "movement.move_to", args = {} })
+  Support.publish(fs, {
+    running,
+    waiting,
+    Support.command({ action = "plan.cancel", args = { command_id = waiting.command_id } }),
+  })
+  runtime:tick(agent, NOW)
+
+  ok(runtime:inFlight() ~= nil, "the running command was not touched")
+  equal(runtime:inFlight().command.command_id, running.command_id, "and it is still the same one")
+  equal(runtime:pendingCount(), 0, "while the named queued command is gone")
+
+  local records = Support.acks(fs)
+  local cancelAck, waitingTerminal = nil, nil
+  for index = 1, #records do
+    local record = records[index]
+    if record.action == "plan.cancel" then
+      cancelAck = record
+    elseif record.command_id == waiting.command_id and PZ.Protocol.isTerminalStatus(record.status) then
+      waitingTerminal = record
+    end
+  end
+  equal(cancelAck.status, STATUS.SUCCEEDED, "the cancel succeeded")
+  equal(cancelAck.evidence.cancelled_command_id, waiting.command_id, "naming the queued command")
+  equal(cancelAck.evidence.pending_before, 1, "on evidence of what the queue held")
+  equal(cancelAck.evidence.pending_after, 0, "and what it holds now")
+  equal(waitingTerminal.status, STATUS.CANCELLED, "the queued command ended cancelled")
+end
+
+Harness.group("a targeted plan.cancel that matches nothing cancels nothing and says so")
+do
+  local slow = Support.spyAdapter("movement.move_to", { polls = 99, evidence = { position = "0,0,0" } })
+  local agent, fs, runtime = Support.runtime(Mock, { slow }, { controls = true, maxWorkPerTick = 8 })
+  local running = Support.command({ action = "movement.move_to", args = {} })
+  Support.publish(fs, {
+    running,
+    Support.command({
+      action = "plan.cancel",
+      args = { command_id = "ffffffff-ffff-4fff-8fff-ffffffffffff" },
+    }),
+  })
+  runtime:tick(agent, NOW)
+
+  ok(runtime:inFlight() ~= nil, "the running command was not the one named, so it kept running")
+  equal(runtime:inFlight().command.command_id, running.command_id, "untouched")
+
+  local terminal = lastTerminal(fs)
+  equal(terminal.action, "plan.cancel", "the cancel itself is what ended")
+  equal(terminal.status, STATUS.FAILED, "as a failure, not a success over the wrong command")
+  equal(terminal.reason_code, REASON.PRECONDITION_FAILED, "because the named command is not here")
+  contains(terminal.message, "no in-flight or queued command", "and the message says so")
+end
+
 Harness.group("session.arm reports the mode it observed, not the one it was asked for")
 do
   local agent, fs, runtime = Support.runtime(Mock, {}, { controls = true, armed = false })
@@ -471,21 +565,36 @@ do
   equal(agent.safety.mode, Protocol.MODE.OFF, "the mode is OFF")
 end
 
-Harness.group("action.wait finishes on the clock it was given")
+Harness.group("action.wait refuses honestly when there is no world clock to observe")
 do
+  -- The wait is measured against the game's world clock, and this interpreter
+  -- has neither PZAgent.Observe nor getGameTime. Real milliseconds keep
+  -- passing between these ticks, and none of them may count: a wall-clock wait
+  -- would report success for a wait the paused world never saw. The full
+  -- behaviour against a readable clock lives in test_control_wait.lua.
+  local agent, fs, runtime = Support.runtime(Mock, {}, { controls = true })
+  Support.publish(fs, { Support.command({ action = "action.wait", args = { game_seconds = 30 } }) })
+  runtime:tick(agent, NOW)
+
+  local terminal = lastTerminal(fs)
+  equal(terminal.status, STATUS.FAILED, "the wait failed rather than counting real time")
+  equal(terminal.reason_code, REASON.CAPABILITY_UNAVAILABLE, "as a missing capability")
+  contains(terminal.message, "Observe", "naming what it could not read")
+end
+
+Harness.group("action.wait refuses the argument the wire no longer carries")
+do
+  -- `duration_ms` is the key the mod used to declare while the sidecar sent
+  -- `game_seconds`; every wait died on it. The dispatcher must refuse it
+  -- outright, so the old shape can never quietly come back.
   local agent, fs, runtime = Support.runtime(Mock, {}, { controls = true })
   Support.publish(fs, { Support.command({ action = "action.wait", args = { duration_ms = 500 } }) })
   runtime:tick(agent, NOW)
-  equal(#Support.terminalAcks(fs), 0, "nothing has finished yet")
 
-  runtime:tick(agent, NOW + 200)
-  equal(#Support.terminalAcks(fs), 0, "and not before the time has passed")
-
-  runtime:tick(agent, NOW + 500)
   local terminal = lastTerminal(fs)
-  equal(terminal.status, STATUS.SUCCEEDED, "the wait finished")
-  equal(terminal.evidence.waited_ms, 500, "having observed the clock advance")
-  equal(terminal.evidence.requested_ms, 500, "by what was asked for")
+  equal(terminal.status, STATUS.REJECTED, "the command was refused before any adapter ran")
+  equal(terminal.reason_code, REASON.INVALID_ARGUMENT, "with INVALID_ARGUMENT")
+  contains(terminal.message, "duration_ms", "naming the key the adapter does not declare")
 end
 
 Harness.group("world.inspect fails honestly when there is nothing to observe")

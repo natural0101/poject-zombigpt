@@ -61,7 +61,7 @@ function Support.command(fields)
     issued_at_ms = Support.NOW,
     lease_ms = 5000,
     action = "action.wait",
-    args = { duration_ms = 0 },
+    args = { game_seconds = 1 },
   }
   for key, value in pairs(fields) do
     envelope[key] = value

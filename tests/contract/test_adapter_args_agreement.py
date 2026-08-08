@@ -18,11 +18,24 @@ That is exactly what happened: ``inventory.transfer`` and
 ``inventory.ensure_main`` emitted an ``origin`` object that no adapter declared
 and no scalar declaration could ever have accepted. Every transfer the agent
 tried would have come back ``INVALID_ARGUMENT``.
+
+It then happened again, one blind spot over. This suite used to build its
+registry from the game adapters alone while the shipped app builds
+``register_game_adapters(register_builtins(...))``, and the Lua dumper walked
+only the published ``PZAgent.Adapters.ALL`` — never ActionRuntime's control
+adapters. ``action.wait`` and ``plan.cancel`` live exactly in that gap, and
+both disagreed: the sidecar sent ``game_seconds`` where the mod demanded
+``duration_ms`` (in a different unit, against a different clock), and the
+targeted cancel's ``command_id`` was a key the mod's adapter never declared.
+The registry here is now built the way ``pz_agent_cli.app`` builds it, the
+dumper reports both adapter families, and the coverage test closes with a
+two-way census so no family can slip out again.
 """
 
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -32,6 +45,7 @@ import pytest
 
 from pz_agent_core.actions.adapter import AdapterRegistry
 from pz_agent_core.actions.adapters import register_game_adapters
+from pz_agent_core.actions.builtin import register_builtins
 from pz_agent_core.protocol import ActionName, Command, Observation
 from pz_agent_core.protocol.refs import RefKind, ref_kind
 from tests.fixtures.adapter_worlds import (
@@ -52,6 +66,11 @@ REPO_ROOT: Final = Path(__file__).resolve().parents[2]
 DUMPER: Final = REPO_ROOT / "tests" / "lua" / "support" / "dump_adapter_args.lua"
 
 _INTERPRETERS: Final = ("lua5.4", "lua")
+
+#: The mod's default string-argument bound and token alphabet, mirrored from
+#: ``CommandDispatcher.checkString``.
+_MOD_MAX_STRING_BYTES: Final = 64
+_TOKEN_PATTERN: Final = re.compile(r"[A-Za-z0-9_.\-]+")
 
 #: A Lua declaration type, and what a JSON value must be to satisfy it. The mod
 #: refuses a table-valued argument outright, so every accepted value is scalar.
@@ -90,8 +109,22 @@ def declarations() -> dict[str, dict[str, Any]]:
     return document
 
 
+#: The actions the mod serves that have no adapter in the sidecar's registry:
+#: the control plane the CLI drives through its own session machinery rather
+#: than through ``build_args``. Named exactly, so a Lua adapter for anything
+#: else that appears without a Python half fails the census below.
+_CONTROL_PLANE_ONLY: Final = frozenset({"session.arm", "session.disarm", "safety.stop"})
+
+
 def _registry() -> AdapterRegistry:
-    return register_game_adapters(AdapterRegistry())
+    """The registry built exactly as ``pz_agent_cli.app`` builds it.
+
+    Builtins first, then the game adapters, imported from the same modules. A
+    test registry assembled any other way checks a sidecar that does not ship:
+    the builtin ``action.wait`` and ``plan.cancel`` were invisible here for
+    precisely that reason, while both disagreed with the mod.
+    """
+    return register_game_adapters(register_builtins(AdapterRegistry()))
 
 
 #: One realistic command per action the sidecar can build arguments for, with
@@ -168,6 +201,74 @@ def _cases() -> list[tuple[ActionName, Command, Observation]]:
             a_command(ActionName.MOVEMENT_MOVE_NEAR, {"object_ref": crate_object.ref}),
             world,
         ),
+        (
+            ActionName.WORLD_INSPECT,
+            a_command(ActionName.WORLD_INSPECT, {"ref": square_ref(1201, 3401), "radius": 1}),
+            world,
+        ),
+        (
+            ActionName.CONTAINER_INSPECT,
+            a_command(ActionName.CONTAINER_INSPECT, {"container_ref": CRATE_REF}),
+            world,
+        ),
+        (
+            ActionName.CONTAINER_OPEN_NEARBY,
+            a_command(ActionName.CONTAINER_OPEN_NEARBY, {"container_ref": CRATE_REF}),
+            world,
+        ),
+        (
+            ActionName.INVENTORY_SEARCH,
+            a_command(ActionName.INVENTORY_SEARCH, {"full_type": "Base.Apple"}),
+            world,
+        ),
+        (
+            ActionName.EQUIPMENT_EQUIP,
+            a_command(ActionName.EQUIPMENT_EQUIP, {"item_ref": shirt.ref, "hand": "primary"}),
+            world,
+        ),
+        (
+            ActionName.EQUIPMENT_UNEQUIP,
+            a_command(ActionName.EQUIPMENT_UNEQUIP, {"item_ref": shirt.ref}),
+            world,
+        ),
+        (
+            ActionName.MEDICAL_BANDAGE,
+            a_command(
+                ActionName.MEDICAL_BANDAGE,
+                {"body_part": "Hand_L", "item_ref": bandage.ref},
+            ),
+            world,
+        ),
+        # The defaults are the payload for the two survival actions: an empty
+        # args table still ships target, posture and wait bounds, and each of
+        # those defaults must sit inside the mod's declared range.
+        (
+            ActionName.SURVIVAL_REST,
+            a_command(ActionName.SURVIVAL_REST, {}),
+            world,
+        ),
+        (
+            ActionName.SURVIVAL_SLEEP,
+            a_command(ActionName.SURVIVAL_SLEEP, {}),
+            world,
+        ),
+        # The two builtins the shipped registry carries. ``action.wait`` is the
+        # agreed wire shape itself — game seconds against the world clock — and
+        # the targeted cancel exercises the one argument ``plan.cancel`` may
+        # send; the untargeted form sends no arguments at all.
+        (
+            ActionName.ACTION_WAIT,
+            a_command(ActionName.ACTION_WAIT, {"game_seconds": 30}),
+            world,
+        ),
+        (
+            ActionName.PLAN_CANCEL,
+            a_command(
+                ActionName.PLAN_CANCEL,
+                {"command_id": "0f0e0d0c-0b0a-4009-8807-060504030201"},
+            ),
+            world,
+        ),
     ]
 
 
@@ -197,6 +298,21 @@ def _check_payload(
                 f"but the adapter declares it as {spec['type']}"
             )
             continue
+        if spec["type"] == "string":
+            # The mod's checkString: a plain token, bounded in bytes. A value
+            # that fits the declared type but not the token alphabet is refused
+            # just as hard as an undeclared key.
+            assert isinstance(value, str)
+            limit = int(spec.get("max_bytes", _MOD_MAX_STRING_BYTES))
+            if not value or len(value.encode()) > limit:
+                problems.append(
+                    f"{action.value} sends {key}={value!r}, outside the 1..{limit} byte bound"
+                )
+            elif _TOKEN_PATTERN.fullmatch(value) is None:
+                problems.append(
+                    f"{action.value} sends {key}={value!r}, which is not a plain token "
+                    f"the mod's string check accepts"
+                )
         if spec["type"] == "enum" and value not in spec.get("values", []):
             problems.append(
                 f"{action.value} sends {key}={value!r}, outside the declared values "
@@ -244,35 +360,43 @@ def test_every_adapter_declares_the_arguments_its_python_half_sends(
     assert checked, "the case table is empty, so this test proved nothing"
 
 
-def test_the_case_table_covers_every_action_that_builds_arguments() -> None:
+def test_the_case_table_covers_every_action_that_builds_arguments(
+    declarations: dict[str, dict[str, Any]],
+) -> None:
     """A case table that quietly stops covering an action proves less each release.
 
-    The exemptions are named rather than inferred: an action whose adapter takes
-    no arguments has nothing to disagree about, and a read-only action's payload
-    is checked by its own contract test.
+    There is no exemption left: every action the shipped registry publishes —
+    game adapter or builtin — has a case, so the payload check above sees each
+    one's real ``build_args``. The set used to carry ten names, excused as
+    read-only or as lacking a world, and ``plan.cancel`` sat among them while
+    its targeted form was refused by the mod; a happy-path world turned out to
+    be enough for every one of them, so none gets to stand aside again.
+
+    The census is two-way, so a whole adapter *family* cannot slip out the way
+    the builtins and the control adapters once did: every Python-published
+    action must be declared by the dumped Lua registry, and a Lua action with
+    no Python adapter must be one of the named control-plane commands the CLI
+    drives without ``build_args``.
     """
     registry = _registry()
     covered = {action for action, _, _ in _cases()}
     published = set(registry.names())
 
-    #: Read-only and no-argument actions, and the ones whose Python adapter
-    #: builds its payload from a reference the case table has no world for.
-    exempt = {
-        ActionName.WORLD_INSPECT,
-        ActionName.CONTAINER_INSPECT,
-        ActionName.CONTAINER_OPEN_NEARBY,
-        ActionName.INVENTORY_SEARCH,
-        ActionName.EQUIPMENT_EQUIP,
-        ActionName.EQUIPMENT_UNEQUIP,
-        ActionName.MEDICAL_BANDAGE,
-        ActionName.SURVIVAL_REST,
-        ActionName.SURVIVAL_SLEEP,
-        ActionName.PLAN_CANCEL,
-    }
-
-    missing = published - covered - exempt
+    missing = published - covered
     assert not missing, (
         f"these actions build arguments nothing checks: {sorted(a.value for a in missing)}"
+    )
+
+    undeclared = {action.value for action in published} - set(declarations)
+    assert not undeclared, (
+        f"the sidecar publishes adapters the mod declares nothing for — either the "
+        f"dumper lost an adapter family or the mod lost an action: {sorted(undeclared)}"
+    )
+
+    lua_only = set(declarations) - {action.value for action in published}
+    assert lua_only == set(_CONTROL_PLANE_ONLY), (
+        f"the mod declares actions this registry does not publish, beyond the named "
+        f"control plane: {sorted(lua_only - _CONTROL_PLANE_ONLY)}"
     )
 
 

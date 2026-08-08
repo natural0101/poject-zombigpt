@@ -1160,12 +1160,90 @@ local StopAdapter = {
   end,
 }
 
+--- Cancel the one pending command whose id is `target`. Returns its id, or nil
+--- when nothing in the queue carries it. Bounded by MAX_PENDING, so the scan is
+--- never long.
+local function cancelPendingById(runtime, agent, nowMs, target)
+  for index = 1, #runtime.pending do
+    local work = runtime.pending[index]
+    if work.command.command_id == target then
+      table.remove(runtime.pending, index)
+      runtime:finish(agent, work, ActionRuntime.PHASE.CANCELLED, PZAgent.Protocol.REASON.CANCELLED_BY_REQUEST, nowMs, {
+        detail = "cancelled by request while it waited",
+      })
+      return work.command.command_id
+    end
+  end
+  return nil
+end
+
+--- One targeted cancel: end the named command and nothing else.
+---
+--- The match is against this runtime's own record of what it is driving --
+--- never against an observation, because observations do not carry an action
+--- id and a field that never arrives must not be what a cancel depends on. A
+--- target that matches neither the in-flight command nor a queued one gets the
+--- truthful answer -- there is no such command here -- rather than a cancel of
+--- whatever happened to be running.
+local function cancelOne(context, target)
+  local Protocol = PZAgent.Protocol
+  local runtime = context.runtime
+  local inflight = runtime:inFlight()
+  local inflightId = inflight ~= nil and inflight.command.command_id or nil
+  if inflightId == target then
+    local cancelled = runtime:cancelInFlight(
+      context.agent,
+      context.now_ms,
+      Protocol.REASON.CANCELLED_BY_REQUEST,
+      ActionRuntime.PHASE.CANCELLED
+    )
+    return {
+      done = true,
+      evidence = {
+        target_command_id = target,
+        cancelled_command_id = cancelled,
+        in_flight_before = true,
+        in_flight_after = runtime:inFlight() ~= nil,
+        -- Deliberately untouched: a targeted cancel aims at one command, and a
+        -- queued one it did not name keeps its turn.
+        pending_left = runtime:pendingCount(),
+      },
+    }
+  end
+  local pendingBefore = runtime:pendingCount()
+  local cancelled = cancelPendingById(runtime, context.agent, context.now_ms, target)
+  if cancelled ~= nil then
+    return {
+      done = true,
+      evidence = {
+        target_command_id = target,
+        cancelled_command_id = cancelled,
+        pending_before = pendingBefore,
+        pending_after = runtime:pendingCount(),
+      },
+    }
+  end
+  return {
+    failed = true,
+    reason_code = Protocol.REASON.PRECONDITION_FAILED,
+    detail = string.format("no in-flight or queued command has id %s", tostring(target)),
+    evidence = {
+      target_command_id = target,
+      in_flight_command_id = inflightId,
+      pending = pendingBefore,
+    },
+  }
+end
+
 local CancelAdapter = {
   action = "plan.cancel",
   required_symbols = {},
   start = function(context)
     local Protocol = PZAgent.Protocol
     local runtime = context.runtime
+    if context.args.command_id ~= nil then
+      return cancelOne(context, context.args.command_id)
+    end
     local pendingBefore = runtime:pendingCount()
     local inFlightBefore = runtime:inFlight() ~= nil
     local cancelled = runtime:cancelInFlight(
@@ -1200,36 +1278,125 @@ local CancelAdapter = {
   end,
 }
 
+--- One reading of the in-game clock, or nil plus the reason there is none.
+---
+--- Read through PZAgent.Observe.gameFields, which already probes getGameTime
+--- and formats the reading with ObserveModel.worldTime -- the very string
+--- observations carry as `game.world_time` and the sidecar verifies a wait
+--- against. Reading it the same way is what keeps the two halves of the wire
+--- measuring the same clock.
+local function readWorldClock()
+  local Observe = PZAgent.Observe
+  if type(Observe) ~= "table" or type(Observe.gameFields) ~= "function" then
+    return nil, "PZAgent.Observe.gameFields is not loaded in this build"
+  end
+  local fields = Observe.gameFields()
+  local text = type(fields) == "table" and fields.world_time or nil
+  if type(text) ~= "string" then
+    return nil, "the game did not report a readable world clock"
+  end
+  local year, month, day, hour, minute = text:match("^(%d+)%-(%d+)%-(%d+)T(%d+):(%d+)$")
+  if year == nil then
+    return nil, string.format("the world clock reading %q is not a timestamp", text)
+  end
+  return {
+    text = text,
+    date = string.format("%s-%s-%s", year, month, day),
+    minute_of_day = tonumber(hour) * 60 + tonumber(minute),
+  }
+end
+
+--- Game seconds between two clock readings, or nil when unmeasurable.
+---
+--- A clock that went backwards is a reload, not a wait, and is reported as
+--- unmeasurable rather than as zero progress so it can never accumulate
+--- towards success -- the same rule the sidecar's WaitAdapter applies. The
+--- worldTime string is fixed-width, so string order is time order.
+---
+--- Across a date change the count assumes exactly one midnight passed. That is
+--- a lower bound -- more midnights mean more elapsed time, never less -- so a
+--- wait can finish late against a clock that jumped, but never early. A wait is
+--- bounded at one in-game hour, which crosses at most one midnight on its own.
+local function elapsedGameSeconds(before, after)
+  if after.text == before.text then
+    return 0
+  end
+  if after.text < before.text then
+    return nil
+  end
+  if after.date == before.date then
+    return (after.minute_of_day - before.minute_of_day) * 60
+  end
+  return ((1440 - before.minute_of_day) + after.minute_of_day) * 60
+end
+
 -- Declared before it is filled in: `start` calls `poll`, and a name is only in
 -- scope for a closure written after the local exists.
+--
+-- The wait is measured in *game* seconds against the world clock, never in
+-- real milliseconds against the tick clock: real time passes while the game is
+-- paused or in a menu, and a wall-clock wait would report success for a wait
+-- that never happened in the world the player is in. `timeout_ms` stays a
+-- real-time bound -- it is what ends a wait whose world clock is paused or
+-- crawling, as ACTION_TIMEOUT rather than as an invented success.
 local WaitAdapter = {}
 WaitAdapter.action = "action.wait"
 WaitAdapter.required_symbols = {}
 WaitAdapter.timeout_ms = 300000
 WaitAdapter.start = function(context)
-  context.state.requested_ms = context.args.duration_ms
-  context.state.started_at_ms = context.now_ms
-  context.state.deadline_ms = context.now_ms + context.args.duration_ms
+  local Protocol = PZAgent.Protocol
+  local requested = context.args.game_seconds
+  if requested <= 0 then
+    -- The declaration's min is inclusive and zero must stay declared-valid for
+    -- the range to read honestly, so the exclusive bound lives here.
+    return {
+      failed = true,
+      reason_code = Protocol.REASON.INVALID_ARGUMENT,
+      detail = "game_seconds must be greater than zero",
+    }
+  end
+  local reading, reason = readWorldClock()
+  if reading == nil then
+    return {
+      failed = true,
+      reason_code = Protocol.REASON.CAPABILITY_UNAVAILABLE,
+      detail = reason,
+    }
+  end
+  context.state.requested_game_seconds = requested
+  context.state.clock_before = reading
   return WaitAdapter.poll(context)
 end
 WaitAdapter.poll = function(context)
-  local elapsed = context.now_ms - context.state.started_at_ms
-  if context.now_ms >= context.state.deadline_ms then
+  local requested = context.state.requested_game_seconds
+  local reading, reason = readWorldClock()
+  if reading == nil then
+    -- The clock stopped being readable mid-wait. Without it there is no way to
+    -- observe the postcondition, and waiting on without one would end in a
+    -- timeout that blames the duration rather than the missing clock.
+    return {
+      failed = true,
+      reason_code = PZAgent.Protocol.REASON.CAPABILITY_UNAVAILABLE,
+      detail = reason,
+    }
+  end
+  local before = context.state.clock_before
+  local elapsed = elapsedGameSeconds(before, reading)
+  if elapsed ~= nil and elapsed >= requested then
     return {
       done = true,
-      -- The clock is the only thing a wait can observe, and it is what the
-      -- postcondition is about: time passed.
+      -- The world clock is the only thing a wait can observe, and it is what
+      -- the postcondition is about: game time passed.
       evidence = {
-        requested_ms = context.state.requested_ms,
-        waited_ms = elapsed,
-        started_at_ms = context.state.started_at_ms,
-        finished_at_ms = context.now_ms,
+        world_time_before = before.text,
+        world_time_after = reading.text,
+        elapsed_game_seconds = elapsed,
+        requested_game_seconds = requested,
       },
     }
   end
-  local requested = context.state.requested_ms
   local progress = nil
-  if requested > 0 then
+  if elapsed ~= nil then
     progress = elapsed / requested
     if progress > 1 then
       progress = 1
@@ -1288,6 +1455,11 @@ local RUNTIME_OWNED = {
   ["plan.cancel"] = true,
 }
 
+--- Published so the declaration dumper the contract suite runs can mirror the
+--- precedence `install` applies, instead of keeping a copy of this table that
+--- would drift.
+ActionRuntime.RUNTIME_OWNED = RUNTIME_OWNED
+
 --- The adapters this file ships, in registration order.
 ---
 --- The argument declarations are filled in here rather than at load time: the
@@ -1311,14 +1483,22 @@ function ActionRuntime.controlAdapters()
     },
   }
   WaitAdapter.args = {
-    duration_ms = {
+    game_seconds = {
       type = ARG.NUMBER,
       required = true,
-      integer = true,
+      -- Inclusive by the checker's nature; the adapter itself refuses zero.
       min = 0,
-      -- The protocol's own lease ceiling: a wait that outlives every possible
-      -- lease could never finish inside one.
-      max = 300000,
+      -- One in-game hour, the sidecar's MAX_WAIT_GAME_SECONDS: a longer wait is
+      -- a plan step, not a single action.
+      max = 3600,
+    },
+  }
+  CancelAdapter.args = {
+    command_id = {
+      type = ARG.STRING,
+      required = false,
+      -- A command id is a UUID, and a UUID is 36 bytes.
+      max_bytes = 36,
     },
   }
   return { ArmAdapter, DisarmAdapter, StopAdapter, CancelAdapter, WaitAdapter, InspectAdapter }
