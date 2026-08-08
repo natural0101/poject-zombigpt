@@ -2,6 +2,16 @@
 
 The handover point between work sessions: read it first, update it last.
 
+> **2026-08-08, the today-finalization push.** The integration branch of
+> record is `rescue/today-finalization`; `docs/control/TODAY_SWARM.yaml`,
+> `TODAY_EVIDENCE.md` and `MERGE_QUEUE.json` carry the swarm's ledger. Every
+> remotely-completable band reads 100.0 (`scripts/master_report.py`: 74.3%
+> overall, 2305/3104), the tree is green on both platforms at `ff63b38`, and
+> that Windows run certified `v1.0.0-rc1` — including the packaged pair
+> completing an MCP initialize over the real RPC link. What remains is
+> LIVE_GAME_VALIDATION (599) and FINAL_RELEASE (200), which need a machine
+> with Project Zomboid; `docs/LOCAL_AGENT_PROMPT.md` is the handoff.
+
 > **This file is no longer where progress is decided.** The plan of record is
 > [`docs/control/MASTER_PLAN.yaml`](https://github.com/natural0101/poject-zombigpt/blob/main/docs/control/MASTER_PLAN.yaml), and the current figure
 > comes from `.venv/bin/python scripts/master_report.py`, never from a number

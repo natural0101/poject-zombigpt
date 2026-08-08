@@ -12,6 +12,44 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Added
 
+- **Remote actions are served over the link.** `action.submit` no longer
+  refuses: a bounded `ActionChannel` (explicit caps, idempotent resubmission,
+  frozen whole-replaced records) is drained one submission per tick on the
+  loop's own thread through the real `ActionEngine` and its full safety
+  machinery — a disarmed submission terminates as the engine's own refusal,
+  a panic clears pending work naming the lever, and `action.status` answers
+  the real record over the socket. Plans remain a *reasoned* refusal,
+  recorded on the port: a synchronous multi-step plan on the tick thread
+  would hold the stop levers hostage for its whole wall budget, and the
+  served multi-step shape is the goal channel.
+- **The wire speaks one language.** `action.wait` was unusable end to end
+  (Python sent `game_seconds`, the mod demanded integer `duration_ms`, the
+  units disagreed); the mod now measures the same world clock observations
+  carry, counting a date change as exactly one midnight so a wait can finish
+  late but never early. `plan.cancel` with a `command_id` cancels exactly
+  the named command — in flight or queued — and refuses by name when nothing
+  matches. The agreement contract that let both live now builds its registry
+  the way `app.py` does, dumps the control adapters from the runtime's own
+  table, carries zero exempt actions, and runs a two-way family census.
+- **Movement survives reality.** Every walk that had ground to cover died
+  `INTERNAL_ERROR` on its first poll (the bypassed declare-wrapper's
+  `"running"` vocabulary), and an already-satisfied move failed its own
+  postcondition (all-unchanged evidence with no way to say arrival is
+  success). Both fixed at the adapter, both pinned by a runtime-level Lua
+  suite that drives the real adapters through the real `ActionRuntime`.
+- **Adversarial coverage across the stack.** Hostile RPC frames, replays,
+  stale and wrong-server descriptors, mid-call death, restarts with key
+  rotation, partial frames and dead-pid descriptors (15 new transport
+  tests); six MCP adversarial paths driven against a live `pz-agent-mcp`
+  child, each ending with a healthy follow-up call on the same process; and
+  eleven executable pins over the Windows workflow, both PyInstaller specs
+  and the evidence index, mutation-verified in both directions.
+- **The map for the local agent matches the mod.** `GAME_API_VERIFICATION.md`
+  rebuilt against the code: 195 swept symbols, zero missing rows, the five
+  wrong rows (queue reader, `onSleep` argument order, `ISReadABook` arity,
+  `getBodyParts`, `PlayerStats` spellings) now match their call sites, every
+  row still `requires_live`.
+
 - **The link is now proven across a real process boundary, three ways.**
   (1) `tests/contract/test_sidecar_serves_the_core.py` hands a genuine child
   interpreter nothing but the state directory; the child dials the descriptor
