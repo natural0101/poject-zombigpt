@@ -10,6 +10,27 @@ drift out of sync with `pz_agent_core.version`.
 
 ## [Unreleased]
 
+### Added
+
+- **The link is now proven across a real process boundary, three ways.**
+  (1) `tests/contract/test_sidecar_serves_the_core.py` hands a genuine child
+  interpreter nothing but the state directory; the child dials the descriptor
+  cold and prints back the session id the loop's own attach minted in that run
+  and the observation sequence number that travelled journal → store → link —
+  facts an in-process client could have read from shared memory, and a second
+  process cannot invent. Its negative companion runs the identical child with
+  nothing serving and watches it refuse by name. (2) The Windows workflow
+  gained `packaging/windows/prove_packaged_link.py`: the packaged
+  `pz-agent.exe` serves the Core RPC link for real and the packaged
+  `pz-agent-mcp.exe` answers a JSON-RPC `initialize` through it, driven with
+  shipped flags only, every wait bounded, success only on the observed
+  `serverInfo` result; the driver is exercised on Linux against the module
+  entry points, both directions. (3) `scripts/check_release.py` now requires
+  the MCP end-to-end suite by name in the JUnit report it certifies from —
+  a report where `tests/contract/test_mcp_subprocess_e2e.py` never ran, or
+  ran as skips, is refused, because aggregate counters cannot tell a full run
+  from one where the suite that crosses the seam was deselected.
+
 ### Fixed
 
 - **Three Windows-only regressions from the goal-channel/transport iteration,

@@ -83,6 +83,17 @@ jobs:
           packaging\windows\dist\pz-agent.exe --version
           packaging\windows\dist\pz-agent-mcp.exe --describe > pz-agent-mcp-catalogue.json
 
+      - name: The packaged pair completes an MCP initialize over the link
+        # --version proves each binary imports its own bundle; only this step
+        # proves the two of them can talk — the packaged sidecar serving the
+        # Core RPC link for real, and the packaged MCP executable answering a
+        # JSON-RPC initialize through it.
+        run: >
+          python packaging/windows/prove_packaged_link.py
+          --pz-agent packaging/windows/dist/pz-agent.exe
+          --pz-agent-mcp packaging/windows/dist/pz-agent-mcp.exe
+          --scratch link-proof
+
       - name: Assemble the archive
         run: python packaging/windows/build_rc.py
 

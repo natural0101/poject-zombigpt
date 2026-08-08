@@ -36,10 +36,37 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 build_rc = importlib.import_module("build_rc")
 check_release = importlib.import_module("check_release")
 
+_E2E_CLASS: Final = check_release.E2E_MODULE + ".TestTheProtocol"
+
+# The green report carries E2E testcases because the gate now requires them by
+# name: a report of green counters with the E2E suite absent is exactly the
+# shape ``tests.mcp-e2e`` exists to refuse, so it cannot also be the fixture
+# every passing path runs through.
 _GREEN_JUNIT: Final = (
     '<?xml version="1.0" encoding="utf-8"?>\n'
     '<testsuites><testsuite name="pytest" errors="0" failures="0" skipped="0" '
-    'tests="812" time="41.0"/></testsuites>\n'
+    'tests="812" time="41.0">'
+    f'<testcase classname="{_E2E_CLASS}" name="test_initialize_answers" time="0.2"/>'
+    f'<testcase classname="{_E2E_CLASS}" name="test_tools_list_matches" time="0.2"/>'
+    "</testsuite></testsuites>\n"
+)
+
+_GREEN_BUT_NO_E2E_JUNIT: Final = (
+    '<?xml version="1.0" encoding="utf-8"?>\n'
+    '<testsuites><testsuite name="pytest" errors="0" failures="0" skipped="0" '
+    'tests="812" time="41.0">'
+    '<testcase classname="tests.unit.test_config" name="test_defaults" time="0.1"/>'
+    "</testsuite></testsuites>\n"
+)
+
+_GREEN_BUT_E2E_SKIPPED_JUNIT: Final = (
+    '<?xml version="1.0" encoding="utf-8"?>\n'
+    '<testsuites><testsuite name="pytest" errors="0" failures="0" skipped="2" '
+    'tests="812" time="41.0">'
+    f'<testcase classname="{_E2E_CLASS}" name="test_initialize_answers" time="0.0">'
+    '<skipped message="platform"/></testcase>'
+    f'<testcase classname="{_E2E_CLASS}" name="test_tools_list_matches" time="0.2"/>'
+    "</testsuite></testsuites>\n"
 )
 
 _RED_JUNIT: Final = (
@@ -253,6 +280,46 @@ def test_a_red_suite_is_not_a_candidate(tmp_path: Path) -> None:
 def test_a_report_with_no_tests_in_it_proves_nothing(tmp_path: Path) -> None:
     findings = _run(tmp_path, junit=_junit(tmp_path, _EMPTY_JUNIT))
     assert "no tests at all" in _failures(findings)["tests"]
+
+
+class TestTheE2ESuiteIsObserved:
+    """The gate requires ``tests/contract/test_mcp_subprocess_e2e.py`` by name.
+
+    Green aggregate counters cannot distinguish a full run from one where the
+    E2E suite was deselected or skipped wholesale — and that suite is the one
+    proof that a second process reaches a served core on the platform the
+    report came from. Both directions are pinned: absence and skips refuse,
+    and the ordinary green fixture (which carries ran E2E cases) passes.
+    """
+
+    def test_a_green_report_without_the_e2e_suite_is_refused(self, tmp_path: Path) -> None:
+        findings = _run(tmp_path, junit=_junit(tmp_path, _GREEN_BUT_NO_E2E_JUNIT))
+        failures = _failures(findings)
+        assert set(failures) == {"tests.mcp-e2e"}
+        assert check_release.E2E_MODULE in failures["tests.mcp-e2e"]
+        remediation = next(f.remediation for f in findings if f.check == "tests.mcp-e2e")
+        assert "test_mcp_subprocess_e2e" in remediation
+
+    def test_a_skipped_e2e_case_is_refused(self, tmp_path: Path) -> None:
+        findings = _run(tmp_path, junit=_junit(tmp_path, _GREEN_BUT_E2E_SKIPPED_JUNIT))
+        assert "1 of 2" in _failures(findings)["tests.mcp-e2e"]
+
+    def test_a_report_with_ran_e2e_cases_satisfies_the_check(self, tmp_path: Path) -> None:
+        findings = _run(tmp_path)
+        observed = next(f for f in findings if f.check == "tests.mcp-e2e")
+        assert observed.ok
+        assert "2 testcase(s)" in observed.detail
+
+    def test_the_real_suite_matches_the_name_the_gate_requires(self) -> None:
+        """The constant names a module that exists and yields that classname.
+
+        If the E2E suite is ever moved or renamed, the gate would refuse every
+        honest report while this constant kept pointing at nothing. The tie is
+        pinned from the gate's side: the path derived from ``E2E_MODULE`` must
+        be a real test file in this repository.
+        """
+        parts = check_release.E2E_MODULE.split(".")
+        assert (REPO_ROOT.joinpath(*parts[:-1]) / f"{parts[-1]}.py").is_file()
 
 
 def test_a_missing_archive_says_how_to_build_one(tmp_path: Path) -> None:

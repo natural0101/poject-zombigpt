@@ -27,14 +27,25 @@ the channel's real lifecycle, ``goal.cancel`` the real lever applied by the
 loop's next tick, and a disarm leaves no goal in flight, through the queue's
 own vocabulary.
 
+One proof the tests above cannot make closes the file. Their client is the real
+:class:`RemoteCoreServices`, but it runs in the server's own interpreter — the
+``sys.path`` pytest assembled, the parent's already-imported modules, one
+process's memory. ``test_a_second_process_reaches_the_real_core`` hands a
+genuine child interpreter the state directory and nothing else, and reads back
+facts only the real core holds; its negative companion runs the same child with
+nothing serving and watches it refuse rather than invent.
+
 Everything is bounded: the loop by a tick budget and a stop flag, every wait by
 a deadline and a poll count, the heartbeat keeper by an iteration cap, the
-thread joins by timeouts.
+thread joins by timeouts, the child interpreter by a hard subprocess timeout.
 """
 
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 import threading
 import time
 from dataclasses import replace
@@ -43,6 +54,8 @@ from typing import Final
 
 import pytest
 
+import pz_agent_core
+import pz_agent_mcp
 from pz_agent_cli.app import build_loop, build_supervisor
 from pz_agent_cli.config import default_config
 from pz_agent_cli.context import EXIT_OK, resolve_workspace
@@ -58,8 +71,9 @@ from pz_agent_core.planner import GoalKind as PlannerGoalKind
 from pz_agent_core.protocol import ActionName, Observation, ReasonCode, SessionMode
 from pz_agent_core.rpc.descriptor import DescriptorError, load_descriptor
 from pz_agent_core.session.heartbeat import HeartbeatMonitor, Peer
-from pz_agent_core.version import PRODUCT_VERSION
+from pz_agent_core.version import PRODUCT_VERSION, PROTOCOL_VERSION
 from pz_agent_mcp.remote.client import (
+    SIDECAR_NOT_RUNNING,
     CoreRefused,
     RemoteCoreServices,
     SidecarUnavailable,
@@ -403,3 +417,213 @@ def test_the_start_command_itself_serves_the_link(tmp_path: Path) -> None:
     assert "rpc.refused" not in events, "the link was attempted and refused, not served"
     with pytest.raises(DescriptorError):
         load_descriptor(workspace.state_dir)
+
+
+#: Hard bound on the child interpreter. Generous, because a cold interpreter on
+#: a loaded CI runner pays import costs the parent paid long ago; hard, because
+#: a hung child must fail this test rather than the suite's outer timeout.
+CHILD_DEADLINE: Final = 60.0
+
+#: How the child learns where the core lives: one environment variable carrying
+#: the state directory — the same single fact an MCP client hands
+#: ``pz-agent-mcp``, and deliberately nothing more.
+STATE_DIR_VARIABLE: Final = "PZ_AGENT_TEST_STATE_DIR"
+
+#: The whole second process. It knows the state directory and nothing else —
+#: not the session id, not the chosen sequence number, not that a loop exists —
+#: so every fact it prints had to cross the link. ``dict(...)`` rather than a
+#: dict literal so the f-string needs no doubled braces.
+CHILD_SCRIPT: Final = f"""\
+import json
+import os
+import sys
+from pathlib import Path
+
+from pz_agent_mcp.remote.client import RemoteCoreServices
+
+snapshot = RemoteCoreServices.from_state_dir(
+    Path(os.environ[{STATE_DIR_VARIABLE!r}])
+).session.status()
+json.dump(
+    dict(
+        pid=os.getpid(),
+        session_id=snapshot.session_id,
+        mode=snapshot.mode.value,
+        armed=snapshot.armed,
+        protocol_version=snapshot.protocol_version,
+        observation_seq=snapshot.observation_seq,
+    ),
+    sys.stdout,
+)
+"""
+
+
+def _child_env(state_dir: Path) -> dict[str, str]:
+    """The environment the child needs: the import roots, and where the core is.
+
+    The parent's interpreter finds these packages through pytest's
+    ``pythonpath`` setting, which no child inherits, so the roots are put on
+    ``PYTHONPATH`` — derived from where the packages were actually imported
+    from rather than hard-coded, for the same reason
+    ``test_mcp_subprocess_e2e`` derives them: a hard-coded ``packages/*/src``
+    would pass here and tell an installed distribution nothing.
+    """
+    roots = {
+        str(Path(module.__file__ or "").resolve().parents[1])
+        for module in (pz_agent_mcp, pz_agent_core)
+    }
+    env = dict(os.environ)
+    existing = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = os.pathsep.join([*sorted(roots), *([existing] if existing else [])])
+    env[STATE_DIR_VARIABLE] = str(state_dir)
+    return env
+
+
+def test_a_second_process_reaches_the_real_core(tmp_path: Path) -> None:
+    """The criterion taken literally: a second OS process reaches the real core.
+
+    ``test_sidecar_serves_core`` above drives the shipped client against the
+    shipped server, and still falls one step short of the criterion's words:
+    its client runs in the server's own interpreter. The same ``sys.path``
+    pytest assembled, the same already-imported modules, one process whose
+    memory holds the loop — so a wiring mistake that only exists across a real
+    process boundary passes it. An import that resolves only under pytest, a
+    descriptor published somewhere no other process looks, a token a second
+    process cannot read: none of them can fail an in-process test, and any of
+    them would strand a real MCP client.
+
+    So this test hands a genuine child interpreter the state directory and
+    nothing else, exactly the hand-off an MCP client performs when it launches
+    ``pz-agent-mcp``. The child dials the link cold — descriptor and token off
+    disk, socket from the descriptor — asks ``session.status``, and prints the
+    answer. What the parent then pins are facts nothing but the real core
+    holds: the session id the loop's own attach minted in *this* run, which no
+    fixture defaults to because it is minted fresh per attach, and the
+    observation sequence number the fake mod chose (:data:`CHOSEN_SEQ`), which
+    travelled journal -> store -> link -> child. Remove ``serve_core_rpc``,
+    or put anything but the real loop behind it, and the child either refuses
+    (a dead link exits non-zero) or answers different facts; either way the
+    assertions below go red.
+    """
+    world = make_world(tmp_path, username="u")
+    # The state directory is pinned short because a POSIX socket path must fit
+    # sun_path, exactly as in the tests above.
+    ctx = replace(world.ctx, clock_ms=system_clock_ms, state_dir_override=tmp_path / "s")
+    workspace = resolve_workspace(ctx)
+    assert workspace.ipc_root is not None
+
+    # -- the real loop and the real link, the same wiring as above -----------
+    limits = LoopLimits(tick_interval_ms=10, tick_budget=6_000)
+    loop = build_loop(ctx, workspace, limits=limits)
+    attach = loop.attach()
+    assert attach.attached, attach.detail
+    assert attach.session is not None
+    session_id = attach.session.session_id
+
+    monitor = HeartbeatMonitor(loop.layout, clock=system_clock_ms)
+    monitor.publish(
+        Peer.GAME,
+        session_id=session_id,
+        nonce="fake-mod-nonce",
+        version=PRODUCT_VERSION,
+        build="42.20",
+        player_present=True,
+    )
+    written = make_observation(
+        session_id=session_id,
+        seq=CHOSEN_SEQ,
+        timestamp_ms=system_clock_ms(),
+    )
+    writer = JournalWriter(loop.layout, loop.layout.observation_events)
+    try:
+        writer.append(written.to_dict())
+    finally:
+        writer.close()
+
+    supervisor = build_supervisor(ctx, workspace)
+    endpoint = serve_core_rpc(
+        supervisor,
+        loop,
+        doctor=lambda: run_checks(ctx, workspace),
+        log_file=workspace.logs_dir / "pz-agent.jsonl",
+    )
+    assert endpoint.descriptor_file.is_file(), "the link was not published"
+
+    stop = threading.Event()
+    ticking = threading.Thread(
+        target=lambda: loop.run(should_stop=stop.is_set),
+        name="sidecar-loop-for-child",
+        daemon=True,
+    )
+    ticking.start()
+    try:
+        # The chosen observation must be in the loop's store before the child
+        # asks, or a slow first tick would read as a broken link. Waited for on
+        # the store itself — the parent owns the loop, so it may look — while
+        # the child is handed nothing but the state directory.
+        _until(
+            lambda: loop.store.latest() is not None,
+            message="the loop never ingested the fake mod's observation",
+        )
+
+        # No heartbeat keeper thread here, on purpose: everything the child
+        # reads — mode, armed, the session id, the stored observation —
+        # survives the fake mod's single heartbeat going stale mid-call. Only
+        # `connected` would flip, and nothing below pins it.
+        child = subprocess.run(
+            [sys.executable, "-c", CHILD_SCRIPT],
+            capture_output=True,
+            text=True,
+            timeout=CHILD_DEADLINE,
+            env=_child_env(workspace.state_dir),
+            check=False,
+        )
+    finally:
+        stop.set()
+        ticking.join(timeout=GRACE)
+        shutdown = loop.shutdown(reason="test finished")
+        closed = supervisor.stop_rpc()
+
+    assert not ticking.is_alive(), "the loop did not stop inside the bound"
+    assert shutdown.lock_released is True
+    assert closed.descriptor_removed is True and closed.token_revoked is True
+
+    # The child's stderr is the whole diagnosis when this goes red — a refusal,
+    # an import error, a traceback — so it is quoted in the failure message.
+    assert child.returncode == 0, (
+        f"the child exited {child.returncode}; its stderr:\n{child.stderr}"
+    )
+    answer = json.loads(child.stdout)
+    assert answer["pid"] != os.getpid(), "the 'child' answered from this process"
+    assert answer["session_id"] == session_id, answer
+    assert answer["observation_seq"] == CHOSEN_SEQ, answer
+    assert answer["mode"] == SessionMode.OBSERVE.value
+    assert answer["armed"] is False
+    assert answer["protocol_version"] == PROTOCOL_VERSION
+
+
+def test_the_same_child_refuses_when_nothing_serves_the_link(tmp_path: Path) -> None:
+    """The negative that keeps the proof above honest.
+
+    A child that printed a canned answer would pass the test above, so the
+    identical script is run against a state directory nobody has ever served —
+    no descriptor, no token, no socket. It must refuse the way the shipped
+    client refuses: exit non-zero, say :data:`SIDECAR_NOT_RUNNING`'s sentence
+    on stderr, and print no answer at all, because a success invented over a
+    dead link is exactly what this project forbids.
+    """
+    state_dir = tmp_path / "s"
+    state_dir.mkdir()
+
+    child = subprocess.run(
+        [sys.executable, "-c", CHILD_SCRIPT],
+        capture_output=True,
+        text=True,
+        timeout=CHILD_DEADLINE,
+        env=_child_env(state_dir),
+        check=False,
+    )
+
+    assert child.returncode != 0, "the child answered with nothing serving the link"
+    assert child.stdout == "", f"the child printed an answer anyway: {child.stdout!r}"
+    assert SIDECAR_NOT_RUNNING in child.stderr, child.stderr

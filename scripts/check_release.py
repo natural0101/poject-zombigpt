@@ -61,6 +61,11 @@ from pz_agent_core.version import PRODUCT_VERSION  # noqa: E402  (path set up ab
 #: What ``pz_agent_cli.livetest.runner`` stamps on a manifest it wrote.
 LIVETEST_MANIFEST_FORMAT: Final = "pz-agent/livetest-manifest/1"
 
+#: The JUnit classname prefix of the suite that proves a second process reaches
+#: a served core. ``check_tests`` requires it by name: aggregate counters alone
+#: cannot tell a full run from one where this suite never ran.
+E2E_MODULE: Final = "tests.contract.test_mcp_subprocess_e2e"
+
 DEFAULT_MANIFEST: Final = REPO_ROOT / "release" / "evidence-manifest.json"
 
 DEFAULT_EVIDENCE_ROOT: Final = REPO_ROOT / "evidence"
@@ -438,8 +443,59 @@ def check_tests(report: Path | None) -> list[Finding]:
             check="tests",
             ok=True,
             detail=detail,
-        )
+        ),
+        _e2e_observed(suites),
     ]
+
+
+def _e2e_observed(suites: Sequence[ElementTree.Element]) -> Finding:
+    """The MCP end-to-end suite ran in *this* report, not merely somewhere.
+
+    The aggregate counters above cannot tell a full run from one where the E2E
+    suite was deselected or skipped wholesale: a report of six thousand green
+    unit tests certifies nothing about whether a packaged client ever reached a
+    served core on the platform this gate runs on. So the suite that crosses
+    that seam is required by name — its testcases must appear, and none of them
+    may be a skip, because the suite has no legitimate skip today and a gate
+    that tolerates one is how an all-skip run creeps back in.
+    """
+    cases = [
+        case
+        for suite in suites
+        for case in suite.iter("testcase")
+        if (classname := case.get("classname", "")) == E2E_MODULE
+        or classname.startswith(E2E_MODULE + ".")
+    ]
+    if not cases:
+        return Finding(
+            check="tests.mcp-e2e",
+            ok=False,
+            detail=f"no testcase from {E2E_MODULE} appears in the report",
+            remediation=(
+                "run the full suite on this platform; a report that never "
+                "collected tests/contract/test_mcp_subprocess_e2e.py proves "
+                "nothing about the served link"
+            ),
+        )
+    e2e_skipped = sum(1 for case in cases if case.find("skipped") is not None)
+    if e2e_skipped:
+        return Finding(
+            check="tests.mcp-e2e",
+            ok=False,
+            detail=(
+                f"{e2e_skipped} of {len(cases)} testcase(s) from {E2E_MODULE} "
+                "were skipped rather than run"
+            ),
+            remediation=(
+                "a skipped E2E case observed nothing; make the suite runnable "
+                "on this platform before certifying from its report"
+            ),
+        )
+    return Finding(
+        check="tests.mcp-e2e",
+        ok=True,
+        detail=f"{len(cases)} testcase(s) from {E2E_MODULE} ran and passed",
+    )
 
 
 # ---------------------------------------------------------------------------
