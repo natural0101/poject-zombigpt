@@ -65,6 +65,13 @@ DESCRIPTOR_FORMAT: Final = "pz-agent-core-rpc-descriptor/1"
 FAMILY_PIPE: Final = "AF_PIPE"
 FAMILY_UNIX: Final = "AF_UNIX"
 
+#: The largest process id that can name a real process. ``pid_t`` is a signed
+#: 32-bit integer on the platforms this runs on, so a value past this is not a
+#: stale pid but an impossible one — and handing it to the liveness probe makes
+#: ``os.kill`` raise a bare ``OverflowError`` rather than report the process
+#: absent. Bounded here so the loader answers with its own refusal instead.
+MAX_PID: Final = 2**31 - 1
+
 #: The most this file can be and still be a descriptor.
 #:
 #: A descriptor is six fields, five of them fixed in shape and short: the format
@@ -289,10 +296,22 @@ def load_descriptor(state_dir: Path, *, check_alive: bool = True) -> RpcDescript
     pid = document.get("pid")
     if not isinstance(address, str) or not address:
         raise DescriptorError(f"{path.name}: has no address")
-    if family not in {FAMILY_PIPE, FAMILY_UNIX}:
+    # ``isinstance`` before the membership test, not only for tidiness: a
+    # ``family`` that JSON delivered as a list or an object is unhashable, and
+    # ``x in {a, b}`` raises a bare ``TypeError`` on an unhashable ``x`` before
+    # any refusal is built. The type check turns that into the same named
+    # refusal a wrong family string already gets.
+    if not isinstance(family, str) or family not in {FAMILY_PIPE, FAMILY_UNIX}:
         raise DescriptorError(f"{path.name}: family {family!r} is not one this build speaks")
     if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
         raise DescriptorError(f"{path.name}: has no process id")
+    # A pid past the platform's ``pid_t`` cannot name a real process, and it is
+    # not inert: ``os.kill(pid, 0)`` on a value beyond a C ``long`` raises a
+    # bare ``OverflowError`` from inside the liveness probe below, where the
+    # loader promises only its own typed refusals. Refused here as the
+    # impossible id it is.
+    if pid > MAX_PID:
+        raise DescriptorError(f"{path.name}: process id is beyond the platform maximum")
 
     if check_alive:
         if not _alive(pid):

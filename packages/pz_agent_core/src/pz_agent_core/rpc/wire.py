@@ -32,6 +32,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Final
 
+from pz_agent_core.jsonbytes import deepest_nesting
 from pz_agent_core.protocol import JsonDict
 from pz_agent_core.version import RPC_PROTOCOL_VERSION, protocol_major
 
@@ -219,43 +220,14 @@ def encode_response(response: RpcResponse) -> bytes:
     return data
 
 
-def _nesting_within_bound(data: bytes, what: str) -> None:
-    """Refuse a frame that nests deeper than the parser can safely recurse.
-
-    Walked on the raw bytes so nothing recurses: brackets and braces outside a
-    string move a counter, a string is skipped with its backslash escapes
-    honoured (a ``"`` after a ``\\`` does not close it), and the running depth
-    is checked against the bound as it climbs. This runs before ``json.loads``,
-    which is the point — the parser must never be given a document that could
-    take it past :data:`MAX_NESTING_DEPTH`, because a ``RecursionError`` fires
-    with the stack already spent and catching it is not a safe recovery.
-    """
-    depth = 0
-    in_string = False
-    escaped = False
-    for byte in data:
-        if in_string:
-            if escaped:
-                escaped = False
-            elif byte == 0x5C:  # backslash
-                escaped = True
-            elif byte == 0x22:  # closing quote
-                in_string = False
-            continue
-        if byte == 0x22:  # opening quote
-            in_string = True
-        elif byte in (0x5B, 0x7B):  # '[' or '{'
-            depth += 1
-            if depth > MAX_NESTING_DEPTH:
-                raise RpcError(f"{what} nests deeper than {MAX_NESTING_DEPTH}")
-        elif byte in (0x5D, 0x7D) and depth > 0:  # ']' or '}'
-            depth -= 1
-
-
 def _loaded(data: bytes, cap: int, what: str) -> dict[str, Any]:
     if len(data) > cap:
         raise TooLarge(f"{what} is {len(data)} bytes, cap is {cap}")
-    _nesting_within_bound(data, what)
+    # Depth is measured on the raw bytes before parsing — see
+    # :mod:`pz_agent_core.jsonbytes` for why catching the ``RecursionError``
+    # afterwards is not a safe recovery.
+    if deepest_nesting(data) > MAX_NESTING_DEPTH:
+        raise RpcError(f"{what} nests deeper than {MAX_NESTING_DEPTH}")
     try:
         document: Any = json.loads(data.decode("utf-8"))
     except UnicodeDecodeError as exc:

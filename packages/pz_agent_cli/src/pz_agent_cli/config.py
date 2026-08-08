@@ -333,8 +333,44 @@ def _toml_scalar(value: Any) -> str:
         # and makes the support bundle's copy of the file disagree with the
         # user's. What this method renders has to load again as what went in.
         return "[" + ", ".join(_toml_scalar(item) for item in value) + "]"
-    escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
-    return f'"{escaped}"'
+    return _toml_basic_string(str(value))
+
+
+#: The control characters TOML's basic-string grammar gives a short escape.
+#: Any other control character has to travel as ``\uXXXX``; a raw one — a
+#: newline inside ``game.install_dir``, say — is a byte TOML forbids in a basic
+#: string, so a config that validated could not be loaded back from its own
+#: rendering. Backslash and quote lead because the later passes must not double
+#: an escape they introduced.
+_TOML_SHORT_ESCAPES: Final = {
+    "\\": "\\\\",
+    '"': '\\"',
+    "\b": "\\b",
+    "\t": "\\t",
+    "\n": "\\n",
+    "\f": "\\f",
+    "\r": "\\r",
+}
+
+
+def _toml_basic_string(text: str) -> str:
+    """Render *text* as a TOML basic string that loads back as itself.
+
+    Every control character is escaped — the seven with a short form by name,
+    the rest as ``\\uXXXX`` — because ``to_toml`` feeds the support bundle a
+    copy of the config that has to parse, and a literal control byte in a basic
+    string does not.
+    """
+    out: list[str] = []
+    for char in text:
+        short = _TOML_SHORT_ESCAPES.get(char)
+        if short is not None:
+            out.append(short)
+        elif char < " " or char == "\x7f":
+            out.append(f"\\u{ord(char):04x}")
+        else:
+            out.append(char)
+    return '"' + "".join(out) + '"'
 
 
 @dataclass(frozen=True, slots=True)

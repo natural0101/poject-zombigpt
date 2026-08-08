@@ -12,6 +12,27 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **Five more crashes on hostile or corrupt input, across three boundaries,
+  found by seeded fuzzers and all now typed refusals.** The same seeded-fuzz
+  approach that hardened the RPC decoder was pointed at the other places that
+  read bytes another program produced. (1) The **journal reader** — fed by the
+  mod writing to disk — crashed with a `RecursionError` on a deeply nested line
+  and a bare `ValueError` on an absurd integer literal, both under its line
+  cap, where §3.5 promises a skipped "corrupt record"; it now bounds nesting
+  depth before parsing and catches the broader `ValueError`, skipping the line
+  with a diagnostic. (2) The **descriptor loader** — read at startup from the
+  state directory — raised a bare `OverflowError` when a corrupt descriptor
+  carried a pid past the platform's `pid_t` (`os.kill` overflowed), and a bare
+  `TypeError` when `family` arrived as a JSON array or object (`x in {…}` on an
+  unhashable value); both are now the loader's own `DescriptorError`. (3)
+  `AgentConfig.to_toml` did not escape control characters, so a config with a
+  newline in a free-form string field validated but could not re-load from the
+  support bundle's rendered copy; it now escapes every control character. The
+  depth-scan primitive is shared between the RPC decoder and the journal reader
+  in the new `pz_agent_core.jsonbytes` module — one source of truth for the
+  "measure depth before parsing, because catching `RecursionError` after the
+  fact is not a recovery" rule.
+
 - **Two decoder crashes on hostile RPC frames, both under the byte cap, both
   now typed refusals.** A seeded fuzz over `decode_request`/`decode_response`
   found that a frame of a thousand nested brackets (thirty-two times under the

@@ -19,11 +19,13 @@ the interpreter refuses, no ``RecursionError`` from nesting — because the
 caller is a server loop that answers refusals, and any other exception is a
 denial of service one frame wide.
 
-Writing this file found two real escapes. They are recorded at the bottom as
-``finds_``-prefixed functions, deliberately outside pytest's collection:
-fixing :mod:`pz_agent_core.rpc.wire` is outside this task's grant. The
-collected corpus steers under both known holes (nesting depth, integer digits)
-so the suite stays green while the record stays executable by hand.
+Writing this file found two real escapes — a ``RecursionError`` from deep
+nesting and a ``ValueError`` from an absurd integer literal, both under the
+byte cap. Both are now fixed in :mod:`pz_agent_core.rpc.wire` (a depth scan
+before parsing and a widened ``except``), and each has its own regression test
+at the bottom of this file. The broad corpus steers under both boundaries so
+that its property covers the general shape while those two tests pin the exact
+edges.
 
 The corpus is sized to finish in a few seconds; the repository-wide 300-second
 pytest cap is the enforcement, not an assertion here — asserting wall time
@@ -83,10 +85,10 @@ _ALPHABETS: Final = (
 #: Protocol spellings a compatible peer may use: same major, any minor.
 _MINOR_VERSIONS: Final = (RPC_PROTOCOL_VERSION, "1.1", "1.7", "1.999")
 
-#: Deeper than anything honest, shallower than the recursion limit. The bound
-#: is not a claim that deeper is safe — deeper is *known broken*, see
-#: :func:`finds_deep_nesting_escapes_as_recursion_error` — it is the edge of
-#: the region the collected suite can honestly call green.
+#: Deeper than anything honest, at the decoder's own ``MAX_NESTING_DEPTH``. The
+#: broad corpus stays at or under this so its property is about the general
+#: shape; the exact edge — where the decoder now refuses rather than crashing —
+#: is pinned by :func:`test_deep_nesting_is_refused_not_a_recursion_error`.
 _NESTING_BOUND: Final = 64
 
 
@@ -339,10 +341,10 @@ class TestEveryMutationIsRefusedOrDecodedNeverACrash:
         # declared-versus-supplied mismatch this format can actually express.
         cases.append(b'{"format":"pz-agent-core-rpc/1","protocol":"1.0","id":"' + b"a" * 1_000)
         # Absurd numeric literals. One thousand digits parses to a big int and
-        # must be *survived*; anything past the interpreter's 4300-digit
-        # ceiling is a known escape recorded in
-        # finds_huge_integer_literal_escapes_as_value_error, so the collected
-        # corpus stops under it.
+        # must be *survived*; the edge past the interpreter's 4300-digit ceiling
+        # — where the decoder now refuses rather than raising a bare ValueError
+        # — is pinned by test_a_huge_integer_literal_is_refused_not_a_value_error,
+        # so this broad corpus stops under it.
         big_digits = b'"params":{"n":' + b"9" * 1_000 + b"}"
         cases.append(_raw_request(b"n").replace(b'"params":{}', big_digits))
         cases.append(_raw_request(b"n").replace(b'"params":{}', b'"params":{"n":1e400000}'))
@@ -407,9 +409,9 @@ class TestEveryMutationIsRefusedOrDecodedNeverACrash:
 
     def test_deep_nesting_up_to_the_bounded_depth(self) -> None:
         """Nesting to :data:`_NESTING_BOUND`, inside params and as the whole
-        document. The bound is the edge of honesty, not of interest: past the
-        interpreter's recursion limit the decoder crashes for real, and that
-        case lives in finds_deep_nesting_escapes_as_recursion_error.
+        document — the depth the decoder accepts. One level past it, where the
+        decoder now refuses rather than overflowing, is pinned by
+        :func:`test_deep_nesting_is_refused_not_a_recursion_error`.
         """
         rng = random.Random(REFUSAL_SEED + 5)
         for depth in range(1, _NESTING_BOUND + 1):

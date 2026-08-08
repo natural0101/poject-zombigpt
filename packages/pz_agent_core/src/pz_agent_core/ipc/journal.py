@@ -26,6 +26,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import IO, Any, Final
 
+from ..jsonbytes import deepest_nesting
 from .atomic import encode_json_line, guard_managed
 from .clocks import Clock, system_clock_ms
 from .layout import IpcLayout
@@ -48,6 +49,14 @@ MAX_LINE_BYTES: Final = 256 * 1024
 
 #: Upper bound on the bytes one read syscall pulls into memory.
 MAX_READ_BYTES: Final = 4 * MAX_LINE_BYTES
+
+#: Deepest array/object nesting a record line may carry. A record is a flat
+#: object with at most a small nested structure, so this is generous; it exists
+#: because the mod writes these lines and a corrupt one nested a thousand deep —
+#: a few kilobytes, under :data:`MAX_LINE_BYTES` — overflows ``json.loads`` with
+#: a ``RecursionError`` that the corrupt-record guard below cannot catch after
+#: the fact. Measured on the raw bytes before parsing, so nothing recurses.
+MAX_RECORD_DEPTH: Final = 64
 
 
 class JournalError(ValueError):
@@ -606,13 +615,28 @@ def _parse_lines(
                 )
             )
             continue
-        try:
-            parsed: Any = json.loads(stripped.decode("utf-8"))
-        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        if deepest_nesting(stripped) > MAX_RECORD_DEPTH:
             diagnostics.append(
                 JournalDiagnostic(
                     offset=line_offset,
-                    detail=f"corrupt record: {exc}",
+                    detail=f"corrupt record: nests deeper than {MAX_RECORD_DEPTH}",
+                    excerpt=_excerpt(raw),
+                )
+            )
+            continue
+        try:
+            parsed: Any = json.loads(stripped.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError) as exc:
+            # ``ValueError`` rather than only ``json.JSONDecodeError``: a bare
+            # integer literal of thousands of digits trips CPython's
+            # integer-string-conversion ceiling, which raises a plain
+            # ``ValueError`` from inside ``json.loads`` that the subclass would
+            # miss. The detail names the parser's own reason without quoting
+            # the line — the excerpt is separately truncated.
+            diagnostics.append(
+                JournalDiagnostic(
+                    offset=line_offset,
+                    detail=f"corrupt record: {type(exc).__name__}",
                     excerpt=_excerpt(raw),
                 )
             )
