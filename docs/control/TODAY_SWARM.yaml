@@ -17,7 +17,7 @@ agents:
   - scripts/verify_carryover.py
   task_ids: []
   dependencies: []
-  status: QUEUED
+  status: RUNNING
   wave: A
   started_at: null
   finished_at: null
@@ -37,13 +37,13 @@ agents:
   - scripts/check_master_plan.py
   task_ids: []
   dependencies: []
-  status: QUEUED
+  status: DONE
   wave: A
   started_at: null
   finished_at: null
   commit: null
   tests: []
-  evidence: null
+  evidence: STATUS regenerated per-branch, commit 1876821
   blocked_reason: null
   merge_status: null
 - id: AGENT-03
@@ -56,7 +56,7 @@ agents:
   - docs/control/evidence/
   task_ids: []
   dependencies: []
-  status: QUEUED
+  status: RUNNING
   wave: A
   started_at: null
   finished_at: null
@@ -76,13 +76,13 @@ agents:
   - docs/control/TODAY_CRITICAL_PATH.md
   task_ids: []
   dependencies: []
-  status: QUEUED
+  status: DONE
   wave: A
   started_at: null
   finished_at: null
   commit: null
   tests: []
-  evidence: null
+  evidence: TODAY_BLOCKERS/TODAY_CRITICAL_PATH written at bd8e864
   blocked_reason: null
   merge_status: null
 - id: AGENT-05
@@ -94,13 +94,13 @@ agents:
   - .github/workflows/ci.yml
   task_ids: []
   dependencies: []
-  status: QUEUED
+  status: DONE
   wave: A
   started_at: null
   finished_at: null
   commit: null
   tests: []
-  evidence: null
+  evidence: Linux CI green on 1876821 (run 31249218486)
   blocked_reason: null
   merge_status: null
 - id: AGENT-06
@@ -114,7 +114,7 @@ agents:
   - tests/unit/test_livetest_evidence.py
   task_ids: []
   dependencies: []
-  status: QUEUED
+  status: RUNNING
   wave: A
   started_at: null
   finished_at: null
@@ -339,12 +339,13 @@ agents:
   - E12-M02-T007
   - E12-M02-T008
   dependencies: []
-  status: QUEUED
+  status: MERGED
   wave: A
   started_at: null
-  finished_at: null
-  commit: null
-  tests: []
+  finished_at: '2026-08-08T09:20:00Z'
+  commit: 7c34519
+  tests:
+  - tests/unit/test_rpc_adversarial.py
   evidence: null
   blocked_reason: null
   merge_status: null
@@ -361,12 +362,13 @@ agents:
   - E12-M03-T004
   - E12-M03-T005
   dependencies: []
-  status: QUEUED
+  status: MERGED
   wave: A
   started_at: null
-  finished_at: null
-  commit: null
-  tests: []
+  finished_at: '2026-08-08T09:20:00Z'
+  commit: 7c34519
+  tests:
+  - tests/unit/test_rpc_recovery.py
   evidence: null
   blocked_reason: null
   merge_status: null
@@ -417,9 +419,9 @@ agents:
   - packages/pz_agent_cli/src/pz_agent_cli/runtime.py
   task_ids: []
   dependencies: []
-  status: QUEUED
+  status: RUNNING
   wave: B
-  started_at: null
+  started_at: '2026-08-08T09:20:00Z'
   finished_at: null
   commit: null
   tests: []
@@ -435,9 +437,9 @@ agents:
   - packages/pz_agent_cli/src/pz_agent_cli/core_services.py
   task_ids: []
   dependencies: []
-  status: QUEUED
+  status: RUNNING
   wave: B
-  started_at: null
+  started_at: '2026-08-08T09:20:00Z'
   finished_at: null
   commit: null
   tests: []
@@ -620,9 +622,9 @@ agents:
   - tests/contract/test_mcp_subprocess_e2e.py
   task_ids: []
   dependencies: []
-  status: QUEUED
+  status: RUNNING
   wave: B
-  started_at: null
+  started_at: '2026-08-08T09:20:00Z'
   finished_at: null
   commit: null
   tests: []
@@ -839,9 +841,9 @@ agents:
   - pz-mod/
   task_ids: []
   dependencies: []
-  status: QUEUED
+  status: RUNNING
   wave: A
-  started_at: null
+  started_at: '2026-08-08T09:20:00Z'
   finished_at: null
   commit: null
   tests: []
@@ -857,13 +859,14 @@ agents:
   - pz-mod/
   task_ids: []
   dependencies: []
-  status: QUEUED
+  status: DONE
   wave: A
   started_at: null
-  finished_at: null
+  finished_at: '2026-08-08T09:20:00Z'
   commit: null
   tests: []
-  evidence: null
+  evidence: 'audit findings routed: action_id never written by the mod (dead cancel-verify branch) — minor,
+    recorded'
   blocked_reason: null
   merge_status: null
 - id: AGENT-46
@@ -875,9 +878,9 @@ agents:
   - docs/GAME_API_VERIFICATION.md
   task_ids: []
   dependencies: []
-  status: QUEUED
+  status: RUNNING
   wave: A
-  started_at: null
+  started_at: '2026-08-08T09:20:00Z'
   finished_at: null
   commit: null
   tests: []
@@ -938,9 +941,9 @@ agents:
   - E11-M04-T006
   - E11-M04-T007
   dependencies: []
-  status: QUEUED
+  status: RUNNING
   wave: C
-  started_at: null
+  started_at: '2026-08-08T09:20:00Z'
   finished_at: null
   commit: null
   tests: []
@@ -955,9 +958,9 @@ agents:
   owner_files: []
   task_ids: []
   dependencies: []
-  status: QUEUED
+  status: RUNNING
   wave: A
-  started_at: null
+  started_at: '2026-08-08T09:20:00Z'
   finished_at: null
   commit: null
   tests: []

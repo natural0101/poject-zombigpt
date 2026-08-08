@@ -37,6 +37,41 @@
         "tests/unit/test_livetest_evidence.py"
       ],
       "status": "MERGED"
+    },
+    {
+      "agent": "AGENT-17",
+      "branch": "(in-tree, disjoint new file)",
+      "commit": "7c34519",
+      "files": [
+        "tests/unit/test_rpc_adversarial.py"
+      ],
+      "tests": [
+        "tests/unit/test_rpc_adversarial.py (10 pass)"
+      ],
+      "status": "MERGED"
+    },
+    {
+      "agent": "AGENT-18",
+      "branch": "(in-tree, disjoint new file)",
+      "commit": "7c34519",
+      "files": [
+        "tests/unit/test_rpc_recovery.py"
+      ],
+      "tests": [
+        "tests/unit/test_rpc_recovery.py (5 pass)"
+      ],
+      "status": "MERGED"
+    },
+    {
+      "agent": "AGENT-44",
+      "branch": "(fix in flight)",
+      "commit": null,
+      "files": [
+        "pz-mod/ Movement.lua",
+        "tests/lua/"
+      ],
+      "tests": [],
+      "status": "TESTING"
     }
   ]
 }
