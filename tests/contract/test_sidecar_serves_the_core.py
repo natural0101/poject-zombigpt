@@ -18,8 +18,18 @@ is the one the fake mod chose (down to a sequence number no default produces),
 and the surfaces this build does not serve refuse with their *named* refusals —
 never an invented success, never silence.
 
+The typed goal channel is served here too, end to end: the client submits a
+goal with fixture-chosen parameters (``satisfy_to=0.73`` — no default produces
+it), and the recording planner injected into the real loop proves the plan the
+planner is asked for is the goal the queue activated — same minted id, same
+kind, over a record whose parameters are the client's own. ``goal.status`` is
+the channel's real lifecycle, ``goal.cancel`` the real lever applied by the
+loop's next tick, and a disarm leaves no goal in flight, through the queue's
+own vocabulary.
+
 Everything is bounded: the loop by a tick budget and a stop flag, every wait by
-a deadline, the thread joins by timeouts.
+a deadline and a poll count, the heartbeat keeper by an iteration cap, the
+thread joins by timeouts.
 """
 
 from __future__ import annotations
@@ -40,9 +50,12 @@ from pz_agent_cli.core_services import REMOTE_ACTIONS_UNSERVED, serve_core_rpc
 from pz_agent_cli.doctor import run_checks
 from pz_agent_cli.runtime import LoopLimits
 from pz_agent_core.actions import ActionRequest
+from pz_agent_core.goals import GoalKind, GoalParams, GoalRequest, GoalState
 from pz_agent_core.ipc.clocks import system_clock_ms
 from pz_agent_core.ipc.journal import JournalWriter
-from pz_agent_core.protocol import ActionName, Observation, SessionMode
+from pz_agent_core.planner import Goal as PlannerGoal
+from pz_agent_core.planner import GoalKind as PlannerGoalKind
+from pz_agent_core.protocol import ActionName, Observation, ReasonCode, SessionMode
 from pz_agent_core.rpc.descriptor import DescriptorError, load_descriptor
 from pz_agent_core.session.heartbeat import HeartbeatMonitor, Peer
 from pz_agent_core.version import PRODUCT_VERSION
@@ -51,7 +64,6 @@ from pz_agent_mcp.remote.client import (
     RemoteCoreServices,
     SidecarUnavailable,
 )
-from pz_agent_mcp.remote.server import NO_GOAL_CHANNEL_REASON
 from tests.fixtures import make_observation
 from tests.fixtures.cli_worlds import make_world
 
@@ -65,6 +77,33 @@ GRACE: Final = 15.0
 #: fixture default is 1, a fresh store holds none, so reading it back proves
 #: the value travelled from the journal through the real store over the link.
 CHOSEN_SEQ: Final = 47
+
+#: The goal parameter the client chooses. No default produces it — the channel
+#: has no default ``satisfy_to`` at all — so reading it back off the activated
+#: record proves the parameter travelled from the client into the queue whose
+#: goal the loop's planner was asked for.
+CHOSEN_SATISFY_TO: Final = 0.73
+
+
+class RecordingGoalPlanner:
+    """The planner injected into the real loop: records the goals it is asked for.
+
+    It answers ``None`` to everything, which keeps every submitted goal active
+    (nothing serves it this tick) so the test can read the lifecycle over the
+    link at its own pace. ``asked`` is appended on the loop's tick thread and
+    read from the test thread; a list append under the GIL and a bounded
+    ``_until`` poll on the reading side are the whole synchronisation needed.
+    """
+
+    def __init__(self) -> None:
+        self.asked: list[PlannerGoal] = []
+
+    def propose(self, observation: Observation) -> ActionRequest | None:
+        return None
+
+    def propose_for_goal(self, goal: PlannerGoal, observation: Observation) -> ActionRequest | None:
+        self.asked.append(goal)
+        return None
 
 
 def _until(predicate: object, *, message: str) -> None:
@@ -127,6 +166,13 @@ def test_sidecar_serves_core(tmp_path: Path) -> None:
     )
     assert endpoint.descriptor_file.is_file(), "the link was not published"
 
+    # The recording planner goes in AFTER the shipped wiring built the port
+    # bundle over the real AutonomyPlanner (which is what proves a goal-capable
+    # planner was assembled); the loop reads its planner every tick, so from
+    # here on the goals the loop serves are recorded where the test can see.
+    planner = RecordingGoalPlanner()
+    loop.planner = planner
+
     stop = threading.Event()
     ticking = threading.Thread(
         target=lambda: loop.run(should_stop=stop.is_set),
@@ -134,6 +180,31 @@ def test_sidecar_serves_core(tmp_path: Path) -> None:
         daemon=True,
     )
     ticking.start()
+
+    # The fake mod keeps beating while the session is armed: a heartbeat that
+    # went stale mid-test would be a *real* disarm (GAME_DISCONNECTED), and the
+    # goal assertions below would be reading that instead of the levers under
+    # test. Bounded by an iteration cap as well as by the stop event.
+    keeper_stop = threading.Event()
+
+    def keep_beating() -> None:
+        session = attach.session
+        assert session is not None
+        for _ in range(int(GRACE * 4) + 1):
+            if keeper_stop.is_set():
+                return
+            monitor.publish(
+                Peer.GAME,
+                session_id=session.session_id,
+                nonce="fake-mod-nonce",
+                version=PRODUCT_VERSION,
+                build="42.20",
+                player_present=True,
+            )
+            keeper_stop.wait(0.5)
+
+    beating = threading.Thread(target=keep_beating, name="fake-mod-heartbeat", daemon=True)
+    beating.start()
     try:
         # -- the second process's exact client path --------------------------
         remote = RemoteCoreServices.from_state_dir(workspace.state_dir, deadline=GRACE)
@@ -188,13 +259,105 @@ def test_sidecar_serves_core(tmp_path: Path) -> None:
             )
         assert REMOTE_ACTIONS_UNSERVED in str(refused_action.value)
 
+        # -- the typed goal channel, served by the real loop -----------------
         goals = remote.goals
         assert goals is not None
-        with pytest.raises(CoreRefused) as refused_goal:
-            goals.status()
-        assert NO_GOAL_CHANNEL_REASON in str(refused_goal.value)
+
+        # Arm AUTONOMOUS through the shipped control channel: the loop's own
+        # judgement, waited for and relayed, exactly as a second process gets.
+        armed = remote.session.arm(SessionMode.AUTONOMOUS, confirm_backup=True)
+        assert armed.armed is True
+        assert armed.mode is SessionMode.AUTONOMOUS
+
+        admission = goals.submit(
+            GoalRequest(
+                kind=GoalKind.SATISFY_HUNGER,
+                idempotency_key="e2e-goal-1",
+                params=GoalParams(satisfy_to=CHOSEN_SATISFY_TO),
+            )
+        )
+        assert admission.refusal is None
+        assert admission.goal is not None
+        goal_id = admission.goal.goal_id
+        assert admission.goal.params == GoalParams(satisfy_to=CHOSEN_SATISFY_TO)
+
+        # A resubmitted key resolves to the same goal, marked duplicate — the
+        # queue's real admission crossing the link, not an invented ack.
+        again = goals.submit(
+            GoalRequest(
+                kind=GoalKind.SATISFY_HUNGER,
+                idempotency_key="e2e-goal-1",
+                params=GoalParams(satisfy_to=CHOSEN_SATISFY_TO),
+            )
+        )
+        assert again.duplicate is True
+        assert again.goal is not None and again.goal.goal_id == goal_id
+
+        # THE assertion: the plan the loop's planner is asked for is the goal
+        # the queue activated — the id the queue minted for the client's
+        # submission and the client's kind, over the record whose parameters
+        # are the client's own (asserted on `status` just below).
+        _until(lambda: planner.asked, message="the loop never asked its planner for the goal")
+        asked = planner.asked[0]
+        assert asked.goal_id == goal_id
+        assert asked.kind is PlannerGoalKind.SATISFY_HUNGER
+
+        # goal.status is the real channel state: the submitted goal is the
+        # active one, still carrying the fixture-chosen parameter.
+        status = goals.status(goal_id)
+        assert status.active is not None and status.active.goal_id == goal_id
+        assert status.named is not None
+        assert status.named.state is GoalState.ACTIVE
+        assert status.named.kind is GoalKind.SATISFY_HUNGER
+        assert status.named.params == GoalParams(satisfy_to=CHOSEN_SATISFY_TO)
+
+        # goal.cancel is the real lever: requested now, applied by the loop's
+        # next tick, reported in the queue's own vocabulary.
+        cancellation = goals.cancel(goal_id)
+        assert cancellation.requested is True
+
+        def cancelled() -> bool:
+            named = goals.status(goal_id).named
+            return named is not None and named.state is GoalState.CANCELLED
+
+        _until(cancelled, message="the cancel was never applied by the loop's tick")
+        ended = goals.status(goal_id).named
+        assert ended is not None
+        assert ended.reason_code is ReasonCode.CANCELLED_BY_REQUEST
+
+        # Disarm leaves no goal in flight: a second goal is activated for
+        # real, then ends through the queue's own disarm when the session
+        # drops back to OBSERVE.
+        second = goals.submit(
+            GoalRequest(kind=GoalKind.SATISFY_THIRST, idempotency_key="e2e-goal-2")
+        )
+        assert second.goal is not None
+        second_id = second.goal.goal_id
+
+        def second_active() -> bool:
+            active = goals.status().active
+            return active is not None and active.goal_id == second_id
+
+        _until(second_active, message="the second goal was never activated")
+
+        dropped = remote.session.disarm()
+        assert dropped.armed is False
+
+        def nothing_in_flight() -> bool:
+            channel = goals.status(second_id)
+            named = channel.named
+            return (
+                channel.active is None and named is not None and named.state is GoalState.CANCELLED
+            )
+
+        _until(nothing_in_flight, message="disarm left a goal in flight")
+        after_disarm = goals.status(second_id).named
+        assert after_disarm is not None
+        assert after_disarm.reason_code is ReasonCode.NOT_ARMED
     finally:
+        keeper_stop.set()
         stop.set()
+        beating.join(timeout=GRACE)
         ticking.join(timeout=GRACE)
         shutdown = loop.shutdown(reason="test finished")
         closed = supervisor.stop_rpc()

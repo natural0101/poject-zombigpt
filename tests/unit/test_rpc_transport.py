@@ -14,17 +14,23 @@ than assuming.
 
 from __future__ import annotations
 
+import os
 import secrets
+import socket
+import struct
 import sys
 import threading
 import time
 from collections.abc import Callable, Iterator
+from contextlib import closing, contextmanager, suppress
 from dataclasses import dataclass
+from multiprocessing.connection import Client, Connection, Listener
 from pathlib import Path
 from unittest import mock
 
 import pytest
 
+import pz_agent_core.rpc.transport as transport_module
 from pz_agent_core.rpc.descriptor import FAMILY_PIPE, FAMILY_UNIX, RpcDescriptor
 from pz_agent_core.rpc.token import MIN_TOKEN_BYTES, issue_token, read_token
 from pz_agent_core.rpc.transport import (
@@ -35,7 +41,13 @@ from pz_agent_core.rpc.transport import (
     local_family,
     new_address,
 )
-from pz_agent_core.rpc.wire import ErrorCode, RpcError, RpcRequest, RpcResponse
+from pz_agent_core.rpc.wire import (
+    ErrorCode,
+    RpcError,
+    RpcRequest,
+    RpcResponse,
+    encode_request,
+)
 
 #: Long enough that a loaded CI runner does not fail the happy path, short
 #: enough that a genuine hang ends the test rather than the suite's patience.
@@ -462,6 +474,411 @@ def test_an_unknown_method_is_the_handlers_business_not_the_transports(serving: 
     refused = harness.client().call("invented")
     assert refused.ok is False
     assert refused.error_code == ErrorCode.UNKNOWN_METHOD
+
+
+class TestEveryWaitOnThePeerIsBounded:
+    """AGENTS.md: bounded everything — observed here, not assumed.
+
+    The criterion audit found the waits below either unbounded or unwatched.
+    Each test is failing-capable: remove the bound it observes and the fake
+    peer holds the wait past GRACE, which the elapsed assertions catch. The
+    fakes that need a raw file descriptor are AF_UNIX sockets, so those skip
+    on Windows; what Windows genuinely cannot bound is pinned by the
+    docstring test at the end rather than left silently untested.
+    """
+
+    def test_a_peer_that_trickles_the_payload_hits_the_deadline(self, tmp_path: Path) -> None:
+        """``poll`` passes on the first byte; the bound must hold for the rest.
+
+        The fake authenticates honestly, then sends a frame header claiming a
+        megabyte, sixteen bytes of payload, and nothing more, holding the
+        connection open. Every per-poll check is satisfied, so only a real
+        deadline on the read itself can end this call.
+        """
+        if sys.platform == "win32":
+            pytest.skip("the fake trickling peer is an AF_UNIX socket")
+        runtime = tmp_path / "runtime"
+        runtime.mkdir(parents=True)
+        key = secrets.token_bytes(32)
+        address = new_address(runtime)
+        listener = Listener(address, family="AF_UNIX", authkey=key)
+        hold = threading.Event()
+
+        def trickle() -> None:
+            with suppress(Exception), closing(listener.accept()) as victim:
+                os.write(victim.fileno(), struct.pack("!i", 1_000_000) + b"x" * 16)
+                hold.wait(GRACE * 3)
+
+        thread = threading.Thread(target=trickle, daemon=True)
+        thread.start()
+        client = RpcClient(
+            RpcDescriptor(address=address, family=FAMILY_UNIX, pid=os.getpid()),
+            authkey=key,
+            deadline=1.0,
+        )
+        started = time.monotonic()
+        try:
+            with pytest.raises(RpcUnavailable, match="no answer within"):
+                client.call("session.status")
+            elapsed = time.monotonic() - started
+        finally:
+            hold.set()
+            listener.close()
+            thread.join(timeout=GRACE)
+
+        assert elapsed < GRACE, f"the read outlived the deadline; waited {elapsed:.1f}s"
+
+    def test_a_peer_that_accepts_and_never_authenticates_is_given_up_on(
+        self, tmp_path: Path
+    ) -> None:
+        """The stdlib handshake would block in ``recv`` forever here; the guard must not."""
+        if sys.platform == "win32":
+            pytest.skip("the fake mute peer is an AF_UNIX socket")
+        runtime = tmp_path / "runtime"
+        runtime.mkdir(parents=True)
+        address = new_address(runtime)
+        mute = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        mute.bind(address)
+        mute.listen(1)
+        taken: list[socket.socket] = []
+        hold = threading.Event()
+
+        def swallow() -> None:
+            with suppress(OSError):
+                accepted, _ = mute.accept()
+                taken.append(accepted)
+                hold.wait(GRACE * 3)
+
+        thread = threading.Thread(target=swallow, daemon=True)
+        thread.start()
+        client = RpcClient(
+            RpcDescriptor(address=address, family=FAMILY_UNIX, pid=os.getpid()),
+            authkey=b"k" * 32,
+            deadline=1.0,
+        )
+        started = time.monotonic()
+        try:
+            with pytest.raises(RpcUnavailable, match="handshake"):
+                client.call("session.status")
+            elapsed = time.monotonic() - started
+        finally:
+            hold.set()
+            mute.close()
+            thread.join(timeout=GRACE)
+            for accepted in taken:
+                accepted.close()
+
+        assert elapsed < GRACE, f"the handshake outlived the deadline; waited {elapsed:.1f}s"
+
+    def test_an_authenticated_connection_that_sends_nothing_is_dropped_after_the_idle_budget(
+        self, tmp_path: Path
+    ) -> None:
+        """Shrunk via injection; the mechanism is the same poll that defaults to a minute.
+
+        Change the server's idle wait to ``poll(None)`` and this fails: the
+        drop never comes, ``_dropped_within`` runs out of GRACE, and the
+        elapsed floor separately proves the drop is the budget expiring
+        rather than the connection being refused outright.
+        """
+        runtime = tmp_path / "runtime"
+        runtime.mkdir(parents=True)
+        key = issue_token(runtime)
+        server = RpcServer(new_address(runtime), authkey=key, handler=_echo, idle_seconds=0.5)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            family = "AF_PIPE" if server.family == FAMILY_PIPE else "AF_UNIX"
+            connection = Client(server.address, family=family, authkey=key)
+            started = time.monotonic()
+            with closing(connection):
+                dropped = _dropped_within(connection, GRACE)
+            elapsed = time.monotonic() - started
+
+            assert dropped, "the idle connection was never dropped"
+            assert elapsed < GRACE, f"the drop took {elapsed:.1f}s"
+            assert elapsed >= 0.3, "dropped before the idle budget rather than after it"
+            assert RpcClient(server.descriptor(), authkey=key, deadline=GRACE).call("after").ok
+        finally:
+            server.close()
+            thread.join(timeout=GRACE)
+
+    def test_a_peer_that_connects_and_never_speaks_cannot_hold_the_server(
+        self, tmp_path: Path
+    ) -> None:
+        """The challenge runs outside ``accept`` now, against the idle budget.
+
+        The stdlib runs it inside ``accept`` with unbounded reads, so a peer
+        that connects and stays silent would wedge the accept loop — and with
+        it every later client — forever.
+        """
+        if sys.platform == "win32":
+            pytest.skip("the mute peer is a raw AF_UNIX connect")
+        runtime = tmp_path / "runtime"
+        runtime.mkdir(parents=True)
+        key = issue_token(runtime)
+        server = RpcServer(new_address(runtime), authkey=key, handler=_echo, idle_seconds=0.5)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            mute = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            started = time.monotonic()
+            with closing(mute):
+                mute.settimeout(GRACE)
+                mute.connect(server.address)
+                while True:
+                    try:
+                        chunk = mute.recv(4096)
+                    except OSError:
+                        break
+                    if not chunk:
+                        break
+            elapsed = time.monotonic() - started
+
+            assert elapsed < GRACE, f"the server humoured the mute peer for {elapsed:.1f}s"
+            assert RpcClient(server.descriptor(), authkey=key, deadline=GRACE).call("after").ok
+        finally:
+            server.close()
+            thread.join(timeout=GRACE)
+
+    def test_an_over_cap_request_frame_is_refused_without_reading_a_payload(
+        self, tmp_path: Path
+    ) -> None:
+        """``recv_bytes(maxlength=...)`` refuses at the header, before any allocation.
+
+        Only the four header bytes are ever sent, so the refusal cannot have
+        come from reading the claimed gigabyte. The idle budget is left at
+        its one-minute default, so a drop inside half of GRACE cannot be the
+        idle path either — delete the ``maxlength`` and this fails, because
+        the server then sits waiting for a payload that never comes.
+        """
+        if sys.platform == "win32":
+            pytest.skip("raw frame injection needs a socket file descriptor")
+        runtime = tmp_path / "runtime"
+        runtime.mkdir(parents=True)
+        key = issue_token(runtime)
+        server = RpcServer(new_address(runtime), authkey=key, handler=_echo)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            connection = Client(server.address, family="AF_UNIX", authkey=key)
+            started = time.monotonic()
+            with closing(connection):
+                os.write(connection.fileno(), struct.pack("!i", 1 << 30))
+                dropped = _dropped_within(connection, GRACE)
+            elapsed = time.monotonic() - started
+
+            assert dropped, "the server accepted a frame claiming a gigabyte"
+            assert elapsed < GRACE / 2, f"the refusal was not at the recv layer ({elapsed:.1f}s)"
+            assert RpcClient(server.descriptor(), authkey=key, deadline=GRACE).call("after").ok
+        finally:
+            server.close()
+            thread.join(timeout=GRACE)
+
+    def test_an_over_cap_answer_frame_is_refused_without_reading_a_payload(
+        self, tmp_path: Path
+    ) -> None:
+        """The client's ``maxlength`` cap, observed from the other direction."""
+        if sys.platform == "win32":
+            pytest.skip("the fake over-claiming peer is an AF_UNIX socket")
+        runtime = tmp_path / "runtime"
+        runtime.mkdir(parents=True)
+        key = secrets.token_bytes(32)
+        address = new_address(runtime)
+        listener = Listener(address, family="AF_UNIX", authkey=key)
+        hold = threading.Event()
+
+        def overclaim() -> None:
+            with suppress(Exception), closing(listener.accept()) as victim:
+                os.write(victim.fileno(), struct.pack("!i", 1 << 30))
+                hold.wait(GRACE * 3)
+
+        thread = threading.Thread(target=overclaim, daemon=True)
+        thread.start()
+        client = RpcClient(
+            RpcDescriptor(address=address, family=FAMILY_UNIX, pid=os.getpid()),
+            authkey=key,
+            deadline=GRACE,
+        )
+        started = time.monotonic()
+        try:
+            with pytest.raises(RpcUnavailable, match="bad message length"):
+                client.call("session.status")
+            elapsed = time.monotonic() - started
+        finally:
+            hold.set()
+            listener.close()
+            thread.join(timeout=GRACE)
+
+        assert elapsed < GRACE / 2, f"the refusal was not at the recv layer ({elapsed:.1f}s)"
+
+    def test_the_poll_guard_alone_bounds_the_handshake_when_no_watchdog_can_cut(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The pipe family's only handshake bound, exercised on the family we have.
+
+        On Windows :func:`_cut_at` yields without arming anything, so the poll
+        guard in ``_Guarded`` is the one thing standing between a mute peer
+        and an unbounded handshake — and on this platform the watchdog would
+        mask its removal. Replace ``_cut_at`` with exactly the shape its
+        ``win32`` branch has and the guard must still end the wait: delete the
+        guard's poll and this test fails instead of the watchdog covering for
+        it.
+        """
+        if sys.platform == "win32":
+            pytest.skip("the fake mute peer is an AF_UNIX socket")
+
+        @contextmanager
+        def pipe_shaped_cut(
+            connection: Connection, deadline_at: float
+        ) -> Iterator[threading.Event]:
+            yield threading.Event()
+
+        monkeypatch.setattr(transport_module, "_cut_at", pipe_shaped_cut)
+        runtime = tmp_path / "runtime"
+        runtime.mkdir(parents=True)
+        address = new_address(runtime)
+        mute = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        mute.bind(address)
+        mute.listen(1)
+        taken: list[socket.socket] = []
+        hold = threading.Event()
+
+        def swallow() -> None:
+            with suppress(OSError):
+                accepted, _ = mute.accept()
+                taken.append(accepted)
+                hold.wait(GRACE * 3)
+                # An unbounded wait then fails as "closed the connection" at
+                # the hold's end instead of parking the whole suite.
+                accepted.close()
+
+        thread = threading.Thread(target=swallow, daemon=True)
+        thread.start()
+        client = RpcClient(
+            RpcDescriptor(address=address, family=FAMILY_UNIX, pid=os.getpid()),
+            authkey=b"k" * 32,
+            deadline=1.0,
+        )
+        started = time.monotonic()
+        try:
+            with pytest.raises(RpcUnavailable, match="handshake"):
+                client.call("session.status")
+            elapsed = time.monotonic() - started
+        finally:
+            hold.set()
+            mute.close()
+            thread.join(timeout=GRACE)
+            for accepted in taken:
+                accepted.close()
+
+        assert elapsed < GRACE, f"the poll guard did not bound the wait; waited {elapsed:.1f}s"
+
+    def test_a_peer_that_trickles_a_request_frame_is_cut_at_the_idle_budget(
+        self, tmp_path: Path
+    ) -> None:
+        """The server-side twin of the client trickle: ``_cut_at`` around the read.
+
+        The peer authenticates honestly, sends an under-cap frame header and
+        sixteen bytes of the payload, and holds. The server's ``poll`` is
+        satisfied and the cap is not exceeded, so only the watchdog around
+        ``recv_bytes`` can end the read — delete it and the single serving
+        thread blocks for as long as the peer cares to hold, which the
+        follow-up call at the end then observes.
+        """
+        if sys.platform == "win32":
+            pytest.skip("raw frame injection needs a socket file descriptor")
+        runtime = tmp_path / "runtime"
+        runtime.mkdir(parents=True)
+        key = issue_token(runtime)
+        server = RpcServer(new_address(runtime), authkey=key, handler=_echo, idle_seconds=0.5)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            connection = Client(server.address, family="AF_UNIX", authkey=key)
+            started = time.monotonic()
+            with closing(connection):
+                os.write(connection.fileno(), struct.pack("!i", 32_768) + b"x" * 16)
+                dropped = _dropped_within(connection, GRACE)
+            elapsed = time.monotonic() - started
+
+            assert dropped, "the mid-frame stall was never cut"
+            assert elapsed < GRACE, f"the cut took {elapsed:.1f}s"
+            assert elapsed >= 0.3, "dropped before the idle budget rather than after it"
+            assert RpcClient(server.descriptor(), authkey=key, deadline=GRACE).call("after").ok
+        finally:
+            server.close()
+            thread.join(timeout=GRACE)
+
+    def test_a_peer_that_never_reads_its_answer_cannot_hold_the_server(
+        self, tmp_path: Path
+    ) -> None:
+        """``_reply``'s watchdog: an unread answer must not park the serving thread.
+
+        The answer is made bigger than every buffer between the processes, so
+        the server's ``send_bytes`` genuinely blocks once the peer stops
+        reading. Delete the ``_cut_at`` in ``_reply`` and the single serving
+        thread stays parked in the send for as long as the peer holds the
+        connection — which the follow-up call then observes as its own
+        deadline error.
+        """
+        if sys.platform == "win32":
+            pytest.skip("the non-reading peer holds an AF_UNIX socket")
+        runtime = tmp_path / "runtime"
+        runtime.mkdir(parents=True)
+        key = issue_token(runtime)
+
+        def wide(request: RpcRequest) -> RpcResponse:
+            return RpcResponse(id=request.id, ok=True, result={"blob": "x" * 3_000_000})
+
+        server = RpcServer(new_address(runtime), authkey=key, handler=wide, idle_seconds=0.5)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            connection = Client(server.address, family="AF_UNIX", authkey=key)
+            with closing(connection):
+                connection.send_bytes(encode_request(RpcRequest(id="r1", method="wide", params={})))
+                # Never read the 3 MB answer: the server's send fills the
+                # socket buffers and blocks until its watchdog cuts the link.
+                after = RpcClient(server.descriptor(), authkey=key, deadline=GRACE)
+                assert after.call("after").ok, "the unread reply held the serving thread"
+        finally:
+            server.close()
+            thread.join(timeout=GRACE)
+
+    def test_a_non_positive_idle_budget_is_a_programming_error(self, tmp_path: Path) -> None:
+        runtime = tmp_path / "runtime"
+        runtime.mkdir(parents=True)
+
+        with pytest.raises(ValueError, match="idle_seconds"):
+            RpcServer(new_address(runtime), authkey=b"k" * 32, handler=_echo, idle_seconds=0)
+
+    def test_the_pipe_familys_weaker_read_bound_is_documented_not_denied(self) -> None:
+        """Where the bound cannot hold, the module must say so, in those words.
+
+        On a Windows named pipe there is no socket to shut down under a
+        blocked read, so a read that has started cannot be given a hard
+        deadline through ``multiprocessing``'s public surface. The rule from
+        the audit is: never claim a bound that does not hold. This pins the
+        claim the module actually makes, so a rewrite that silently drops the
+        caveat — or silently drops the poll guard the caveat leans on — fails
+        here.
+        """
+        doc = " ".join((transport_module.__doc__ or "").split())
+
+        assert "no hard deadline on Windows" in doc
+        assert "poll guard" in doc
+        assert "never reads its answer" in doc, "the write-side residue lost its mention"
+
+
+def _dropped_within(connection: Connection, budget: float) -> bool:
+    """Whether the peer closes *connection* within *budget* seconds."""
+    try:
+        if not connection.poll(budget):
+            return False
+        connection.recv_bytes()
+    except (OSError, EOFError):
+        return True
+    return False
 
 
 def test_an_answer_for_a_different_request_is_refused(serving: Start) -> None:

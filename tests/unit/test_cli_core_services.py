@@ -23,6 +23,7 @@ from pz_agent_cli.core_services import (
     REMOTE_ACTIONS_UNSERVED,
     REMOTE_PLANS_UNSERVED,
     LoopDiagnosticsPort,
+    LoopGoalPort,
     LoopMemoryPort,
     core_services_over,
 )
@@ -31,8 +32,10 @@ from pz_agent_cli.memory import SidecarMemory
 from pz_agent_cli.runtime import CapabilityLedger, LoopError
 from pz_agent_core.actions import ActionRequest
 from pz_agent_core.diagnostics import DiagnosticLog
+from pz_agent_core.goals import GoalKind, GoalQueue, GoalRequest
 from pz_agent_core.memory import MemoryStore, Square
-from pz_agent_core.protocol import ActionName, SessionMode
+from pz_agent_core.planner import Goal as PlannerGoal
+from pz_agent_core.protocol import ActionName, Observation, SessionMode
 from pz_agent_mcp.ports import CoreServices, PlanRequest
 from tests.fixtures.ipc_builders import BASE_TIME_MS
 from tests.fixtures.mcp_doubles import make_report
@@ -71,6 +74,20 @@ def _services(world: SidecarWorld, *, ticking: bool = True, step: float = 0.0001
 
 def _empty_doctor() -> DoctorReport:
     return DoctorReport(checks=(), generated_at="2026-08-08T00:00:00+00:00")
+
+
+class _PlainPlanner:
+    """A planner with no goal seam: goals must then not be served at all."""
+
+    def propose(self, observation: Observation) -> ActionRequest | None:
+        return None
+
+
+class _GoalCapablePlanner(_PlainPlanner):
+    """The narrowest thing `GoalPlanner` accepts, for the wiring assertion."""
+
+    def propose_for_goal(self, goal: PlannerGoal, observation: Observation) -> ActionRequest | None:
+        return None
 
 
 def _an_action() -> ActionRequest:
@@ -269,10 +286,35 @@ class TestUnservedSurfacesRefuseByName:
             assert REMOTE_PLANS_UNSERVED in str(refused.value)
             assert services.plans.current() is None
 
-    def test_the_bundle_carries_no_goal_channel(self, tmp_path: Path) -> None:
+    def test_a_loop_without_a_queue_carries_no_goal_channel(self, tmp_path: Path) -> None:
         """`None` is the honest value: the router's NO_GOAL_CHANNEL answers for it."""
         with attached_world(tmp_path) as world:
             assert _services(world).goals is None
+
+    def test_a_queue_beside_a_planner_that_cannot_serve_goals_is_not_served(
+        self, tmp_path: Path
+    ) -> None:
+        """Admitting goals nothing would ever activate is the forbidden port."""
+        with attached_world(tmp_path) as world:
+            world.loop.goals = GoalQueue(clock=world.clock, armed=False)
+            world.loop.planner = _PlainPlanner()
+
+            assert _services(world).goals is None
+
+    def test_a_queue_beside_a_goal_planner_is_served_over_that_queue(self, tmp_path: Path) -> None:
+        with attached_world(tmp_path) as world:
+            world.loop.goals = GoalQueue(clock=world.clock, armed=False)
+            world.loop.planner = _GoalCapablePlanner()
+            services = _services(world)
+
+            goals = services.goals
+            assert isinstance(goals, LoopGoalPort)
+            admission = goals.submit(
+                GoalRequest(kind=GoalKind.SATISFY_HUNGER, idempotency_key="svc-key")
+            )
+
+            assert admission.goal is not None, "the queue's own admission crossed the port"
+            assert goals.status(admission.goal.goal_id).named == admission.goal
 
 
 class TestMemoryPort:

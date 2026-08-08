@@ -135,8 +135,10 @@ at **59.66%** — after a criterion-coverage audit of the 75 heaviest claims
 reopened 22 whose tests pass without observing their criteria (R-009), and
 found that the shipped sidecar never served the Core RPC router (R-008,
 critical — closed the same day: `pz-agent start` now serves the link over
-the real loop, with actions/plans/goals refusing by name until their
-cross-thread paths exist). Before the audit the figure read 74.26%; the drop is the
+the real loop; the goal channel is served for real the day after — a
+client's goal reaches the loop's planner over the link — and the RPC
+transport's every wait on the peer is bounded per family, the Windows
+pipe asymmetry documented rather than denied). Before the audit the figure read 74.26%; the drop is the
 audit working. Earlier it stood at 53.25%, with MCP_OPERABILITY, VOICE_OPERABILITY and the goal channel now
 counted because their tests ran, not because their code exists. Still at zero
 and honestly so: LIVE_GAME_VALIDATION (599 weight, needs a machine with the

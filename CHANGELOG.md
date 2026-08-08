@@ -12,6 +12,35 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **The typed goal channel is served by the real sidecar.** `SidecarLoop` owns
+  a `GoalQueue` ticked every loop tick (budgets and TTLs expire for real);
+  armed and AUTONOMOUS, the loop activates the oldest admissible goal and asks
+  the planner for a plan for *that* goal; a succeeded action with observed
+  evidence ends it, anything else charges a step; a guard-forced disarm, an
+  RPC disarm and shutdown all end the active goal through the queue's own
+  vocabulary, and the panic sentinel empties the whole channel as a level.
+  The goals port serves the queue's real admissions, statuses and
+  cancellations under one documented lock seam — no IO, planner or engine
+  call ever under the lock. Proven over the link: a client submits
+  `satisfy_to=0.73` through `from_state_dir` and the loop's planner is asked
+  for exactly that goal, lifecycle, duplicate detection, cancel and
+  disarm-leaves-nothing all asserted with bounded waits.
+- **Every wait on the peer process in the RPC transport is bounded — for
+  real, per family.** The audit's finding that the criterion was partly false
+  is fixed: a poll-guarded handshake on both families; on the Unix socket a
+  deadline watchdog that severs the link mid-read, so a header-then-trickle
+  peer ends within the call's budget; connect under `settimeout`; the
+  server's accept-side handshake — an unbounded wait the audit had not even
+  flagged, where a silent peer wedged the accept loop forever — now runs
+  under the injectable idle budget; request read, reply write and idle wait
+  each bounded; both `maxlength` caps now observed by tests that claim 1 GiB
+  and send four bytes. On Windows named pipes a started read has no hard
+  deadline — documented in the module docstring and pinned by a test, never
+  claimed. An adversarial verifier mutation-tested every bound, found three
+  claimed-but-unobserved ones and a per-family docstring overstatement, and
+  fixed all four. The forbidden-pattern gate's eval/exec/pickle rules are now
+  exercised over planted snippets and the shipped tree is swept unfiltered.
+
 - **R-008 closed: the shipped sidecar now serves the Core RPC router over its
   real subsystems.** `pz_agent_cli/core_services.py` adapts the running
   `SidecarLoop` onto the CoreServices ports — session status, observations,

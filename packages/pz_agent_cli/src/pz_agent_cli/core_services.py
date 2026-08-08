@@ -27,6 +27,21 @@ main thread. Every port below states which side of that seam it stands on:
   Heartbeat liveness and the log tail are file reads with no shared state at
   all. Nothing here iterates a container the tick thread mutates.
 
+* **The goal channel crosses on one lock, held short, with no IO under it.**
+  :class:`~pz_agent_core.goals.GoalQueue` is not thread-safe, so its seam is
+  designed rather than assumed: every touch of the queue — this serving
+  thread's ``goal.submit`` / ``goal.status`` / ``goal.cancel`` and the tick
+  thread's activation, settlement, expiry tick, disarm and panic clear — takes
+  :attr:`~pz_agent_cli.runtime.SidecarLoop.goal_lock` and nothing else. Every
+  hold is bounded by construction: the queue's operations are pure in-memory
+  transitions over at most ``max_remembered`` records, and the tick thread
+  releases the lock before it consults the planner or drives the engine, so no
+  planner call, no engine call, no file and no sleep ever happens under it. No
+  cross-thread mutation of the queue exists outside this seam, and every
+  answer :class:`LoopGoalPort` returns is the queue's own — the real admission
+  with its duplicate detection, the real channel state, the real cancellation
+  — never fabricated here.
+
 * **Writes go through the shipped control channel, never into loop state.**
   ``session.arm`` and ``session.disarm`` publish the same one-slot request file
   ``pz-agent arm``/``disarm`` write, and then wait — bounded by
@@ -48,9 +63,10 @@ main thread. Every port below states which side of that seam it stands on:
 What is served, what refuses, and why the refusals are honest
 -------------------------------------------------------------
 
-``session``, ``observations``, ``capabilities``, ``memory`` and
-``diagnostics`` are served over the real subsystems. Three surfaces are not,
-and each refuses with a named reason rather than stubbing:
+``session``, ``observations``, ``capabilities``, ``memory``, ``diagnostics``
+and — over a loop that holds a :class:`~pz_agent_core.goals.GoalQueue` beside a
+goal-capable planner — ``goals`` are served over the real subsystems. Two
+surfaces are not, and each refuses with a named reason rather than stubbing:
 
 * **Actions** (:data:`REMOTE_ACTIONS_UNSERVED`): the action engine drives each
   command to its terminal result synchronously on the tick thread, polling the
@@ -63,12 +79,15 @@ and each refuses with a named reason rather than stubbing:
 * **Plans** (:data:`REMOTE_PLANS_UNSERVED`): the same engine, one layer up.
   ``plan.current`` answers ``None`` because no typed plan is ever running here,
   which is a fact and not a placeholder.
-* **Goals**: the loop holds no :class:`~pz_agent_core.goals.GoalQueue` and
-  nothing that would ever activate an admitted goal, and a channel that
-  admitted goals it can never serve is exactly the accepted-and-dropped port
-  :mod:`pz_agent_mcp.ports` names as forbidden. So the bundle's ``goals`` stays
-  ``None`` and the router's own :data:`~pz_agent_mcp.remote.server
-  .NO_GOAL_CHANNEL` answers the three goal methods with its named refusal.
+The goal channel is the surface that moved off that list: the loop now holds a
+:class:`~pz_agent_core.goals.GoalQueue` and, armed in ``AUTONOMOUS`` with a
+:class:`~pz_agent_cli.runtime.GoalPlanner`, activates admitted goals and hands
+each to its planner (see :meth:`~pz_agent_cli.runtime.SidecarLoop._act`). For a
+loop assembled *without* both halves the bundle's ``goals`` still stays
+``None`` — a channel that admitted goals it can never serve is exactly the
+accepted-and-dropped port :mod:`pz_agent_mcp.ports` names as forbidden — and
+the router's own :data:`~pz_agent_mcp.remote.server.NO_GOAL_CHANNEL` answers
+the three goal methods with its named refusal.
 
 ``confirm_backup=False`` on ``session.arm`` is refused here
 (:data:`ARM_NEEDS_BACKUP`) because this wiring *is* the core side of that
@@ -87,6 +106,7 @@ from typing import Final
 from pz_agent_core.actions import ActionRequest
 from pz_agent_core.capabilities.model import CapabilityReport
 from pz_agent_core.diagnostics import read_records
+from pz_agent_core.goals import GoalAdmission, GoalQueue, GoalRequest
 from pz_agent_core.ipc.atomic import guard_managed
 from pz_agent_core.memory.store import SaveMemory
 from pz_agent_core.protocol import (
@@ -101,6 +121,8 @@ from pz_agent_mcp.ports import (
     ActionRecord,
     CoreServices,
     DoctorCheck,
+    GoalCancellation,
+    GoalChannelStatus,
     LogRecord,
     MemoryRecord,
     PlanRecord,
@@ -113,7 +135,7 @@ from pz_agent_mcp.remote.server import NO_GOAL_CHANNEL, CoreRouter
 from .autonomy import AutonomyPlanner
 from .doctor import DoctorReport
 from .memory import SidecarMemory
-from .runtime import ControlDecision, LoopError, SidecarLoop
+from .runtime import ControlDecision, GoalPlanner, LoopError, SidecarLoop
 from .supervisor import ControlChannel, ControlKind, RpcEndpoint, SidecarSupervisor
 
 __all__ = [
@@ -125,6 +147,7 @@ __all__ = [
     "REMOTE_PLANS_UNSERVED",
     "LoopCapabilityPort",
     "LoopDiagnosticsPort",
+    "LoopGoalPort",
     "LoopMemoryPort",
     "LoopObservationPort",
     "LoopSessionPort",
@@ -150,7 +173,8 @@ CONTROL_POLL_S: Final = 0.02
 REMOTE_ACTIONS_UNSERVED: Final = (
     "this sidecar does not accept remote actions yet: the action engine runs on the "
     "loop's own thread and no bounded cross-thread submission path is wired. Arm the "
-    "sidecar and let its planner act, or use the typed goal channel once a build serves it"
+    "sidecar and let its planner act, or submit a typed goal — this build serves the "
+    "goal channel"
 )
 
 #: The named refusal ``plan.execute`` answers, for the same reason one layer up.
@@ -420,6 +444,61 @@ class UnservedPlanPort:
 
 
 @dataclass(frozen=True)
+class LoopGoalPort:
+    """:class:`~pz_agent_mcp.ports.GoalPort` over the loop's own goal queue.
+
+    Every answer is the queue's: :meth:`submit` returns the real admission —
+    including the duplicate a resubmitted idempotency key resolves to and the
+    refusal a reused-with-different-content key earns — :meth:`status` the real
+    channel state, :meth:`cancel` the real cancellation, which is a *request*
+    the loop's next tick applies, exactly as
+    :class:`~pz_agent_mcp.ports.GoalCancellation` documents. Nothing is
+    fabricated on this side of the lock.
+
+    The seam (see the module docstring): the queue is only ever touched under
+    :attr:`~pz_agent_cli.runtime.SidecarLoop.goal_lock`, shared with the tick
+    thread; every hold below is a handful of in-memory dictionary operations,
+    no IO, no waiting.
+    """
+
+    loop: SidecarLoop
+
+    def _queue(self) -> GoalQueue:
+        queue = self.loop.goals
+        if queue is None:
+            raise LoopError("this sidecar was assembled without a goal queue")
+        return queue
+
+    def submit(self, request: GoalRequest) -> GoalAdmission:
+        """Admit *request*, or relay the queue's own refusal. Never waits."""
+        queue = self._queue()
+        with self.loop.goal_lock:
+            return queue.submit(request)
+
+    def status(self, goal_id: str | None = None) -> GoalChannelStatus:
+        """The channel as the queue holds it right now, one consistent read.
+
+        ``named`` is ``None`` both for "no id asked about" and for an id this
+        channel never minted or has forgotten; the router knows which it
+        passed and turns the second into its own refusal.
+        """
+        queue = self._queue()
+        with self.loop.goal_lock:
+            named = queue.record(goal_id) if goal_id is not None else None
+            return GoalChannelStatus(active=queue.active, pending=queue.pending, named=named)
+
+    def cancel(self, goal_id: str) -> GoalCancellation:
+        """Ask the queue to end *goal_id*; report what the ask did, nothing more."""
+        queue = self._queue()
+        with self.loop.goal_lock:
+            goal = queue.record(goal_id)
+            if goal is None:
+                return GoalCancellation(goal=None, requested=False)
+            requested = queue.request_cancel(goal_id)
+            return GoalCancellation(goal=queue.record(goal_id) or goal, requested=requested)
+
+
+@dataclass(frozen=True)
 class LoopMemoryPort:
     """:class:`~pz_agent_mcp.ports.MemoryPort` over the loop's real save memory.
 
@@ -657,14 +736,20 @@ def core_services_over(
     the same way ``build_loop`` verifies its wiring: the memory the port serves
     is provably the memory the planner honours, not one that stopped short.
 
-    ``goals`` stays ``None`` on purpose — see the module docstring; the router
-    resolves that into :data:`~pz_agent_mcp.remote.server.NO_GOAL_CHANNEL` at
-    the call site in :func:`serve_core_rpc`, where the decision is visible.
+    ``goals`` is served only over a loop that can actually serve goals — a
+    :class:`~pz_agent_core.goals.GoalQueue` *and* a planner the loop can hand
+    an activated goal to (:class:`~pz_agent_cli.runtime.GoalPlanner`). Either
+    half missing leaves it ``None``, which the router resolves into
+    :data:`~pz_agent_mcp.remote.server.NO_GOAL_CHANNEL` at the call site in
+    :func:`serve_core_rpc`, where the decision is visible; a channel that
+    admitted goals nothing would ever activate is the accepted-and-dropped
+    port this module refuses to build.
     """
     planner = loop.planner
     candidate = planner.memory if isinstance(planner, AutonomyPlanner) else None
     memory = candidate if isinstance(candidate, SidecarMemory) else None
     waiter = _ControlWaiter(loop=loop, wait_s=control_wait_s, sleep=sleep, monotonic=monotonic)
+    serves_goals = loop.goals is not None and isinstance(planner, GoalPlanner)
     return CoreServices(
         session=LoopSessionPort(loop=loop, waiter=waiter),
         observations=LoopObservationPort(loop),
@@ -673,7 +758,7 @@ def core_services_over(
         plans=UnservedPlanPort(),
         memory=LoopMemoryPort(memory),
         diagnostics=LoopDiagnosticsPort(doctor_source=doctor, log_file=log_file),
-        goals=None,
+        goals=LoopGoalPort(loop=loop) if serves_goals else None,
     )
 
 

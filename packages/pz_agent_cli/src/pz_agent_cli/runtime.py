@@ -39,17 +39,29 @@ lifecycle, and the five properties below are what it is responsible for:
   on actions started per window, a bounded observation ring, a bounded number of
   retained safety events, and a bounded number of observation records ingested
   per tick. Nothing here sleeps except through the injected sleeper.
+
+* **A goal is served by the queue's rules or not at all.** When the loop holds a
+  :class:`~pz_agent_core.goals.GoalQueue`, every transition a goal makes goes
+  through that queue — activation only armed in ``AUTONOMOUS`` with a
+  :class:`GoalPlanner`, one step charged per action outcome, success only on the
+  engine's own observed evidence, and the stop levers mapped one-to-one: a
+  disarm (the user's, the guard's, a silent game's) ends the active goal through
+  :meth:`~pz_agent_core.goals.GoalQueue.disarm`, a panic sentinel empties the
+  whole channel through :meth:`~pz_agent_core.goals.GoalQueue.panic_stop`. Two
+  threads reach the queue — this loop's tick and the Core RPC serving thread —
+  and both do so only under :attr:`SidecarLoop.goal_lock`; see that field.
 """
 
 from __future__ import annotations
 
+import threading
 import time
 from collections import OrderedDict, deque
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Final, Protocol, TypeAlias
+from typing import Any, Final, Protocol, TypeAlias, runtime_checkable
 
 from pz_agent_core.actions.adapter import AdapterRegistry
 from pz_agent_core.actions.engine import (
@@ -72,6 +84,7 @@ from pz_agent_core.capabilities import (
     save_report,
 )
 from pz_agent_core.diagnostics import DiagnosticsError, TraceError, TraceWriter
+from pz_agent_core.goals import GoalQueue, GoalRecord, to_planner_goal
 from pz_agent_core.ipc.clocks import Clock, system_clock_ms
 from pz_agent_core.ipc.journal import JournalReader
 from pz_agent_core.ipc.layout import IpcLayout
@@ -79,6 +92,7 @@ from pz_agent_core.ipc.queue import CommandQueue
 from pz_agent_core.ipc.snapshot import SnapshotMiss, SnapshotReader
 from pz_agent_core.observation.diff import DiffError
 from pz_agent_core.observation.store import DEFAULT_WINDOW, ObservationStore
+from pz_agent_core.planner import Goal as PlannerGoal
 from pz_agent_core.protocol import (
     ActionName,
     ActionResult,
@@ -198,6 +212,30 @@ class Planner(Protocol):
 
     def propose(self, observation: Observation) -> ActionRequest | None:
         """The next action to attempt, or None when there is nothing to do."""
+        ...
+
+
+@runtime_checkable
+class GoalPlanner(Planner, Protocol):
+    """A planner that can also serve one explicitly stated goal.
+
+    The typed goal channel needs a planner the loop can hand *the* goal to —
+    the plan asked for must be the goal the queue activated, not whatever the
+    planner's own initiative would have picked. The goal crosses this seam as
+    the planner package's :class:`~pz_agent_core.planner.Goal`, widened by
+    :func:`~pz_agent_core.goals.to_planner_goal` from the record the queue
+    holds, which is the same one-line bridge the core-side contract test
+    (``tests/contract/test_goal_reaches_the_planner.py``) proves total.
+
+    ``runtime_checkable`` because the loop must not activate a goal its planner
+    has no way to serve: :meth:`SidecarLoop._act` checks this protocol before
+    it activates anything, so a loop assembled with a plain :class:`Planner`
+    leaves admitted goals pending until their own time-to-live expires them —
+    a bounded, reported end rather than a silent drop.
+    """
+
+    def propose_for_goal(self, goal: PlannerGoal, observation: Observation) -> ActionRequest | None:
+        """The next action in service of *goal*, or None when nothing serves it now."""
         ...
 
 
@@ -905,6 +943,19 @@ class SidecarLoop:
     #: Where this run is recorded for ``pz-agent replay``. Optional, because the
     #: loop drives a character and a diagnostic is never a reason not to.
     trace: TraceWriter | None = None
+    #: The typed goal channel, when this sidecar serves one. ``None`` is a loop
+    #: with no channel — the Core RPC adapter then leaves ``goals`` unserved
+    #: rather than admitting goals nothing would ever activate.
+    goals: GoalQueue | None = None
+    #: The one seam through which two threads reach :attr:`goals`.
+    #: :class:`~pz_agent_core.goals.GoalQueue` is not thread-safe, so every
+    #: touch of it — the tick thread's activation, settlement, tick, disarm and
+    #: panic clear; the Core RPC serving thread's submit, status and cancel —
+    #: happens under this lock and under nothing else. Every hold is short and
+    #: bounded by construction: the queue's operations are pure in-memory
+    #: transitions over at most ``max_remembered`` records, and no IO, no
+    #: sleep, no planner call and no engine call ever happens while it is held.
+    goal_lock: threading.Lock = field(default_factory=threading.Lock)
     _attached: _Attached | None = field(default=None, init=False)
     _mode: SessionMode = field(default=SessionMode.OBSERVE, init=False)
     _armed: bool = field(default=False, init=False)
@@ -1099,6 +1150,11 @@ class SidecarLoop:
         attached = self._attached
         self._armed = False
         self._mode = SessionMode.OBSERVE
+        if self.goals is not None:
+            # The queue dies with this process; ending the active goal through
+            # its own disarm keeps the record honest for as long as it exists.
+            with self.goal_lock:
+                self.goals.disarm()
         if attached is not None:
             closed = attached.queue.close_in_flight(
                 ReasonCode.CANCELLED_BY_REQUEST,
@@ -1159,6 +1215,12 @@ class SidecarLoop:
         manager.mark_rearmed()
         self._mode = mode
         self._armed = True
+        if self.goals is not None:
+            # The channel arms and disarms with the session: activation is an
+            # authority, and the queue's own NOT_ARMED refusal is what answers
+            # an activation nothing granted.
+            with self.goal_lock:
+                self.goals.arm()
         self._publish_heartbeat()
         return ArmOutcome(
             armed=True,
@@ -1206,10 +1268,20 @@ class SidecarLoop:
         return None
 
     def disarm(self, *, reason: str = "requested") -> ArmOutcome:
-        """Drop back to ``OBSERVE``. Always succeeds; disarming is never gated."""
+        """Drop back to ``OBSERVE``. Always succeeds; disarming is never gated.
+
+        The goal channel disarms through its own lever: whatever forced this —
+        a user request, a reflex guard event, a silent game — the active goal
+        ends in the queue's own vocabulary (``CANCELLED`` / ``NOT_ARMED``,
+        E08-M02-T007) and the backlog stays, exactly as
+        :meth:`~pz_agent_core.goals.GoalQueue.disarm` documents.
+        """
         changed = self._armed or self._mode is not SessionMode.OBSERVE
         self._armed = False
         self._mode = SessionMode.OBSERVE
+        if self.goals is not None:
+            with self.goal_lock:
+                self.goals.disarm()
         if self._attached is not None:
             self._publish_heartbeat()
         return ArmOutcome(
@@ -1246,6 +1318,10 @@ class SidecarLoop:
 
         control = self._consume_control(now, attached.attached_at_ms)
         stop = self._apply_control(control, events)
+        # After the stop levers, before any acting: cancellations, wall-clock
+        # budgets and pending time-to-lives are applied by the queue's own
+        # tick, so a goal ends for real rather than when somebody asks.
+        self._tick_goals()
         results = self._act(attached, now, events=events, panic=panic, game_alive=liveness.alive)
         self._trace_results(results)
 
@@ -1345,6 +1421,13 @@ class SidecarLoop:
                     lost.append(closed)
         forcing = sorted({e.reason_code.value for e in events if e.forces_disarm})
         if panic:
+            # §8.1/§8.12 and E08-M02-T008: a panic stop leaves *nothing* in
+            # flight in the goal channel — no active goal, no backlog, no
+            # pending cancel — through the queue's own lever, before the disarm
+            # below (whose queue-side disarm is then a no-op). A level, not an
+            # edge: while the sentinel stays, every tick re-clears whatever
+            # arrived in the meantime.
+            self._panic_goals()
             self.disarm(reason="panic stop")
         elif forcing:
             self.disarm(reason=", ".join(forcing))
@@ -1462,8 +1545,17 @@ class SidecarLoop:
         Every gate here is a refusal to start work, never a way to stop work
         already running — that is what :meth:`_apply_events` did, above, before
         this method was reached.
+
+        The typed goal channel is served here and only here: armed in
+        ``AUTONOMOUS`` with a :class:`GoalPlanner`, the loop activates the
+        oldest admissible goal when none is active and asks the planner for a
+        plan *for that goal* — the same join
+        ``tests/contract/test_goal_reaches_the_planner.py`` proves on the core
+        side, made true of the running loop. With no goal to serve, the
+        planner's own initiative proposes exactly as before.
         """
-        if self.planner is None or not self._armed:
+        planner = self.planner
+        if planner is None or not self._armed:
             return ()
         if panic or not game_alive or events:
             return ()
@@ -1472,13 +1564,86 @@ class SidecarLoop:
             return ()
         if not self._budget.allows(now_ms):
             return ()
-        request = self.planner.propose(current)
+        request: ActionRequest | None
+        goal: GoalRecord | None = None
+        if (
+            self.goals is not None
+            and self._mode is SessionMode.AUTONOMOUS
+            and isinstance(planner, GoalPlanner)
+        ):
+            goal = self._goal_to_serve()
+        if goal is not None:
+            assert isinstance(planner, GoalPlanner)  # narrowed above; restated for the type
+            request = planner.propose_for_goal(to_planner_goal(goal), current)
+        else:
+            request = planner.propose(current)
         if request is None:
             return ()
         self._budget.spend(now_ms)
         result = attached.engine.execute(request)
         self._confirm(request.action, result)
+        if goal is not None:
+            self._settle_goal_step(goal.goal_id, result)
         return (result,)
+
+    # -- the typed goal channel --------------------------------------------
+
+    def _goal_to_serve(self) -> GoalRecord | None:
+        """The active goal, activating the oldest admissible one when none is.
+
+        Reached only armed, in ``AUTONOMOUS``, with a goal-capable planner.
+        Every refusal :meth:`~pz_agent_core.goals.GoalQueue.activate_next` can
+        answer — a disarmed channel, every waiting goal already cancelled —
+        means the same thing here: nothing to serve this tick, so the planner's
+        own initiative is consulted instead and the queue's next tick reports
+        what the refusal already knew.
+        """
+        queue = self.goals
+        if queue is None:
+            return None
+        with self.goal_lock:
+            active = queue.active
+            if active is not None:
+                return active
+            if not queue.pending:
+                return None
+            return queue.activate_next().goal
+
+    def _settle_goal_step(self, goal_id: str, result: ActionResult) -> None:
+        """Fold one action's terminal result into the goal it served.
+
+        A success with observed postcondition evidence ends the goal through
+        :meth:`~pz_agent_core.goals.GoalQueue.succeed` — the one route to a
+        ``SUCCEEDED`` goal, and it refuses without evidence. Everything else
+        spends one step through
+        :meth:`~pz_agent_core.goals.GoalQueue.note_step`, which applies an
+        outstanding cancellation first and expires the goal when that was its
+        last step. Both answers are the queue's own; nothing here invents one.
+        """
+        queue = self.goals
+        if queue is None:
+            return
+        with self.goal_lock:
+            if result.status is ActionStatus.SUCCEEDED and result.evidence:
+                queue.succeed(goal_id, result)
+            else:
+                queue.note_step(goal_id)
+
+    def _tick_goals(self) -> None:
+        """Run the queue's own tick, so every bound expires whether or not asked."""
+        queue = self.goals
+        if queue is None:
+            return
+        with self.goal_lock:
+            queue.tick()
+
+    def _panic_goals(self) -> None:
+        """Empty the channel through its own panic lever; see :meth:`_apply_events`."""
+        queue = self.goals
+        if queue is None:
+            return
+        with self.goal_lock:
+            queue.panic_stop()
 
     def _confirm(self, action: ActionName, result: ActionResult) -> Capability | None:
         """Offer one outcome to the ledger as evidence about a capability.

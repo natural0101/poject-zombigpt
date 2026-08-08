@@ -152,6 +152,73 @@ def test_ctypes_outside_the_audited_probe_is_rejected(tmp_path: Path) -> None:
     assert "ctypes-outside-the-probe" in kinds
 
 
+@pytest.mark.parametrize(
+    "source",
+    [
+        "def f(s):\n    return eval(s)\n",
+        "def f(s):\n    exec(s)\n",
+        "def f(s):\n    return compile(s, '<s>', 'exec')\n",
+    ],
+    ids=["eval", "exec", "compile"],
+)
+def test_an_arbitrary_code_execution_call_is_rejected(source: str, tmp_path: Path) -> None:
+    """The LLM boundary must not be able to reach a code-execution primitive.
+
+    These rules existed and were never exercised: no planted snippet, and the
+    real-tree scan filtered them out. A rule nobody has ever seen fire is a
+    claim, not a gate.
+    """
+    kinds = _scan(tmp_path, source)
+
+    assert "banned-call" in kinds
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "import os\n\n\ndef f(c):\n    return os.system(c)\n",
+        "import os\n\n\ndef f(c):\n    return os.popen(c)\n",
+        "import pickle\n\n\ndef f(b):\n    return pickle.loads(b)\n",
+        "import pickle\n\n\ndef f(fh):\n    return pickle.load(fh)\n",
+        "import subprocess\n\n\ndef f(c):\n    return subprocess.getoutput(c)\n",
+    ],
+    ids=["os.system", "os.popen", "pickle.loads", "pickle.load", "subprocess.getoutput"],
+)
+def test_a_shell_or_unpickling_attribute_call_is_rejected(source: str, tmp_path: Path) -> None:
+    """`pickle.loads` is the one that matters most: the transport's whole
+    security argument is that no code path in the shipped tree unpickles."""
+    kinds = _scan(tmp_path, source)
+
+    assert "banned-call" in kinds
+
+
+def test_a_subprocess_call_with_shell_true_is_rejected(tmp_path: Path) -> None:
+    kinds = _scan(
+        tmp_path, "import subprocess\n\n\ndef f(c):\n    return subprocess.run(c, shell=True)\n"
+    )
+
+    assert "banned-call" in kinds
+
+
+def test_the_shipped_tree_is_clean_under_the_full_rule_set() -> None:
+    """The sweep `main()` runs in CI, run here where deleting it fails a test.
+
+    The previous real-tree scan filtered findings to the process-tampering and
+    ctypes rules, so the eval/exec/pickle/os.system rules were never exercised
+    against the shipped tree by any test — a scanner change that broke them
+    would have stayed green. This sweep keeps *no* rule filtered: whatever
+    `check_python` can find, the shipped tree must be free of.
+    """
+    checker = _checker()
+    findings = [
+        finding
+        for shipped in checker._iter_files(checker.SHIPPED_ROOTS, (".py",))
+        for finding in checker.check_python(shipped)
+    ]
+
+    assert findings == [], [finding.render() for finding in findings]
+
+
 def test_the_one_audited_ctypes_use_is_the_one_the_allowlist_names() -> None:
     """The exemption is exactly the descriptor's liveness probe, nothing more.
 

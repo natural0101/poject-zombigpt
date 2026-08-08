@@ -762,6 +762,62 @@ class AutonomyPlanner:
             return None
         return self._compose(decision, observation, memory)
 
+    def propose_for_goal(self, goal: Goal, observation: Observation) -> ActionRequest | None:
+        """The next action in service of *goal*, or None when nothing serves it now.
+
+        The half of :class:`~pz_agent_cli.runtime.GoalPlanner` this class adds
+        to :meth:`propose`: the goal arrives already minted by the typed goal
+        channel, so the :class:`~pz_agent_core.policy.autonomy.AutonomyGate` is
+        deliberately not consulted — it owns "should I start something
+        *unasked*", and a channel goal is asked. What is never skipped is the
+        review: the provider's answer is a proposal, and the critic examines it
+        on ``USER`` initiative (§7.5 grants the explicit-goal ceiling, not the
+        self-directed one) against the same memory-scoped home the gate would
+        have used. Only the plan's first step becomes a request, for the same
+        reason :meth:`_compose` takes only the first: the loop re-observes
+        between actions, and the next step is composed next tick against a
+        world that has moved.
+
+        A None here leaves the goal active; the channel's own budgets — wall
+        clock, step count — are what bound how long that may go on.
+        """
+        memory = self._memory_for(observation)
+        proposal = self.provider.propose(
+            PlanRequest(
+                goal=goal,
+                observation=observation,
+                capabilities=self.capabilities,
+                policy=self.policy,
+                max_steps=self.max_steps,
+            )
+        )
+        plan = proposal.plan
+        if plan is None:
+            self._hold(f"{self.provider.name} proposed nothing for the goal: {proposal.detail}")
+            return None
+        verdict = PlanCritic(
+            session_id=observation.session_id,
+            registry=self.registry,
+            capabilities=self.capabilities,
+            initiative=Initiative.USER,
+            home=memory.home_point(),
+            home_radius=self.config.home_radius,
+            max_steps=self.max_steps,
+        ).review(plan, observation)
+        if verdict.refused:
+            self._hold(f"the critic refused the goal's plan: {verdict.detail}")
+            return None
+        step = plan.steps[0]
+        self._detail = f"serving goal {goal.goal_id}: {plan.summary}"
+        return ActionRequest(
+            action=step.action,
+            # The observation's session, for the same reason `_compose` reads it
+            # there: it is the earliest and only honest source.
+            session_id=observation.session_id,
+            idempotency_key=f"goal:{goal.goal_id}:{step.step_id}",
+            args=step.args.to_payload(),
+        )
+
     def _memory_for(self, observation: Observation) -> AutonomyMemory:
         """What is remembered about the save *this* observation names.
 

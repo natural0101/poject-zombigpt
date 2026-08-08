@@ -38,6 +38,7 @@ from pz_agent_core.actions.adapter import AdapterRegistry
 from pz_agent_core.actions.adapters import register_game_adapters
 from pz_agent_core.actions.builtin import register_builtins
 from pz_agent_core.diagnostics import DiagnosticLog, LogLevel, TraceWriter
+from pz_agent_core.goals import GoalQueue
 from pz_agent_core.ipc.layout import IpcLayout
 from pz_agent_core.protocol import JsonDict, SessionMode
 from pz_agent_core.version import PRODUCT_VERSION
@@ -555,6 +556,12 @@ def build_loop(
         capabilities=capabilities,
         planner=planner,
         trace=trace,
+        # The typed goal channel, on the loop's own clock and born disarmed —
+        # SidecarLoop.arm is the only thing that arms it, the same rule the
+        # loop applies to itself. Built beside the AutonomyPlanner because that
+        # planner serves goals (GoalPlanner.propose_for_goal); a queue beside a
+        # planner that could not would admit goals nothing ever activates.
+        goals=GoalQueue(clock=ctx.clock_ms, armed=False),
     )
     publish_planner_record(
         workspace.state_dir / PLANNER_FILE_NAME,
