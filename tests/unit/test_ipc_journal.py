@@ -566,3 +566,66 @@ class TestATruncatedJournalRefusesToArm:
 
             assert outcome.armed is False
             assert world.loop.armed is False
+
+
+class TestRotationWaitsOutAWindowsReader:
+    """Rotation survives a reader holding the file open, briefly, and no longer.
+
+    On POSIX a rename succeeds under any open handle, so the seam cannot be
+    driven by a real reader here. On Windows it cannot be *avoided*: the reader
+    opens the journal for every poll, and ``os.replace`` on a file with an open
+    handle raises ``PermissionError`` (WinError 32) — which took the CI soak
+    down when a rotation raced a poll. The writer now retries each move with a
+    bounded budget, so a reader mid-poll is a brief wait; a reader that never
+    lets go is the writer's own :class:`JournalError`, not a bare crash. The
+    seam is pinned directly by making ``Path.replace`` speak the Windows
+    refusal for a controlled number of attempts.
+    """
+
+    def test_a_reader_mid_poll_is_waited_out(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        writer, reader = _writer(tmp_path)
+        writer.append({"type": "probe", "n": 1})
+
+        real_replace = Path.replace
+        refusals = {"left": 3}
+
+        def windows_shaped(self: Path, target: object) -> object:
+            if refusals["left"] > 0:
+                refusals["left"] -= 1
+                raise PermissionError(32, "The process cannot access the file")
+            return real_replace(self, target)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(Path, "replace", windows_shaped)
+        monkeypatch.setattr("pz_agent_core.ipc.journal._REPLACE_PAUSE_SECONDS", 0.001)
+
+        serial = writer.rotate()
+
+        assert serial == 1, "the rotation did not complete once the reader let go"
+        assert refusals["left"] == 0, "the Windows refusals were never consumed"
+        # The first record moved into the rotated generation; the new live file
+        # takes the next append and reads back cleanly — the rotation completed
+        # rather than crashing under the reader's hold.
+        assert rotated_path(writer._path, 1).exists(), "the old generation was not retired"
+        writer.append({"type": "probe", "n": 2})
+        writer.close()
+        read = reader.read()
+        assert [r.payload["n"] for r in read.records] == [2], (
+            "the new live file did not survive the waited-out rotation"
+        )
+
+    def test_a_reader_that_never_lets_go_is_a_named_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        writer, _ = _writer(tmp_path)
+        writer.append({"type": "probe", "n": 1})
+
+        def always_held(self: Path, target: object) -> object:
+            raise PermissionError(32, "The process cannot access the file")
+
+        monkeypatch.setattr(Path, "replace", always_held)
+        monkeypatch.setattr("pz_agent_core.ipc.journal._REPLACE_PAUSE_SECONDS", 0.001)
+
+        with pytest.raises(JournalError, match="held it open past the"):
+            writer.rotate()

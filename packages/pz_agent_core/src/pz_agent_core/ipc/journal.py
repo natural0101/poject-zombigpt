@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -130,6 +131,49 @@ def rotated_path(path: Path, index: int) -> Path:
     if index < 1:
         raise ValueError(f"rotation index must be >= 1, got {index}")
     return path.with_name(f"{path.name}.{index}")
+
+
+#: How rotation waits out a reader mid-poll on Windows, and for how long. On
+#: POSIX a rename succeeds under any number of open handles, but Windows
+#: refuses to move or delete a file another handle holds open — and the reader
+#: on the far side of every journal opens the file for each poll. That poll is
+#: itself bounded and short, so the honest translation of "a reader is mid-poll"
+#: is a brief wait, not a crash: each move retries on ``PermissionError`` up to
+#: this many times with this pause between, half a second in the worst case,
+#: and only then raises the writer's own error naming the file. Zero cost on
+#: POSIX, where the first attempt always wins.
+_REPLACE_ATTEMPTS: Final = 10
+_REPLACE_PAUSE_SECONDS: Final = 0.05
+
+
+def _replace_with_patience(source: Path, target: Path) -> None:
+    """``Path.replace`` that waits out a reader mid-poll instead of crashing."""
+    for attempt in range(_REPLACE_ATTEMPTS):
+        try:
+            source.replace(target)
+            return
+        except PermissionError as exc:
+            if attempt == _REPLACE_ATTEMPTS - 1:
+                raise JournalError(
+                    f"{source.name}: could not be rotated; a reader held it open "
+                    f"past the {_REPLACE_ATTEMPTS * _REPLACE_PAUSE_SECONDS:g}s budget"
+                ) from exc
+            time.sleep(_REPLACE_PAUSE_SECONDS)
+
+
+def _remove_with_patience(path: Path) -> None:
+    """``unlink`` with the same Windows patience as the rename above."""
+    for attempt in range(_REPLACE_ATTEMPTS):
+        try:
+            path.unlink(missing_ok=True)
+            return
+        except PermissionError as exc:
+            if attempt == _REPLACE_ATTEMPTS - 1:
+                raise JournalError(
+                    f"{path.name}: could not be removed; a reader held it open "
+                    f"past the {_REPLACE_ATTEMPTS * _REPLACE_PAUSE_SECONDS:g}s budget"
+                ) from exc
+            time.sleep(_REPLACE_PAUSE_SECONDS)
 
 
 def probe_header(path: Path) -> tuple[JournalHeader | None, str | None]:
@@ -357,15 +401,15 @@ class JournalWriter:
     def _retire_current(self) -> None:
         """Move the live file into the rotated set, or drop it when keep is 0."""
         if not self._keep:
-            self._path.unlink(missing_ok=True)
+            _remove_with_patience(self._path)
             return
         oldest = rotated_path(self._path, self._keep)
-        oldest.unlink(missing_ok=True)
+        _remove_with_patience(oldest)
         for index in range(self._keep - 1, 0, -1):
             source = rotated_path(self._path, index)
             if source.exists():
-                source.replace(rotated_path(self._path, index + 1))
-        self._path.replace(rotated_path(self._path, 1))
+                _replace_with_patience(source, rotated_path(self._path, index + 1))
+        _replace_with_patience(self._path, rotated_path(self._path, 1))
 
     def close(self) -> None:
         if not self._handle.closed:

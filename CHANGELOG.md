@@ -12,6 +12,20 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **Journal rotation no longer crashes on Windows when a reader is mid-poll.**
+  `JournalWriter.rotate` moved and deleted files with `os.replace`/`unlink`,
+  which on POSIX succeed under any open handle but on Windows raise
+  `PermissionError` (WinError 32) when another handle holds the file — and the
+  reader on the far side of every journal opens it for each poll. A rotation
+  racing a poll took the CI soak down (`test_loop_soak`, and the second-process
+  sidecar test through the same path). Rotation now retries each move on
+  `PermissionError` with a small bounded budget (half a second worst case, zero
+  cost on POSIX where the first attempt always wins), and a reader that never
+  lets go becomes the writer's own `JournalError` naming the file rather than a
+  bare crash. This is a real Windows defect, not a test-timing flake: the same
+  identical tree was green on an earlier run only because no rotation happened
+  to race a poll that time.
+
 - **Three more input-boundary crashes closed, on the heartbeat/session, the
   observation diff, and the descriptor.** A third fuzz round found the same
   depth/number gap in every remaining place that reads JSON another program
