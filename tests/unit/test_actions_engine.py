@@ -541,6 +541,30 @@ def test_no_observation_at_all_is_a_disconnect() -> None:
     assert harness.sink.sent == []
 
 
+def test_the_game_dying_mid_action_ends_it_as_game_disconnected_never_succeeded() -> None:
+    """E12-M03-T002: a command was dispatched, and then the game went away.
+
+    One observation is the entire supply — enough to pass the pre-flight checks
+    and ship the command, after which the source answers None forever, which is
+    exactly what the engine sees when the game stops writing. The first attempt
+    can only time out (retryable); the retry then stops at the missing
+    observation, and what the caller holds is ``GAME_DISCONNECTED`` — never a
+    success, because nobody observed an outcome, and never an endless retry
+    against a mod that is gone.
+    """
+    harness = make_harness(StubAdapter(verify_after=None, timeout_ms=1_000))
+    harness.source.push(make_observation(seq=1))
+
+    result = harness.engine.execute(a_request(retries=1))
+
+    assert len(harness.sink.sent) == 1, "the command was in flight when the game went"
+    assert result.status is not ActionStatus.SUCCEEDED
+    assert result.reason_code is ReasonCode.GAME_DISCONNECTED
+    assert result.attempt == 2, "the retry budget was spent on discovering the disconnect"
+    # The in-flight command was withdrawn rather than abandoned to a dead mod.
+    assert harness.sink.cancelled == [(harness.sink.last.command_id, ReasonCode.ACTION_TIMEOUT)]
+
+
 def test_manual_action_in_the_queue_blocks_the_send() -> None:
     harness = make_harness(StubAdapter(verify_after=1))
     harness.source.push(

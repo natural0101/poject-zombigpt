@@ -870,6 +870,111 @@ class TestEveryWaitOnThePeerIsBounded:
         assert "never reads its answer" in doc, "the write-side residue lost its mention"
 
 
+class TestAnEstablishedLinkDroppedMidExchange:
+    """E12-M03-T003: the link drops after authentication; the client reports it
+    and the sidecar keeps serving.
+
+    Every earlier failure test breaks the link *before* it is established — a
+    wrong key, a mute peer, a server that never answers in time. These three
+    drop a connection that authenticated honestly, one per recovery path: the
+    client's closed-connection guard around its send and read, the server's
+    recv-drop guard in ``_exchange``, and the server's send suppression in
+    ``_reply``. Delete any one of those and its test here fails — either the
+    client surfaces a raw ``EOFError`` instead of the transport's own answer,
+    or the single serving thread dies with the first rude peer and the
+    follow-up call finds nobody listening.
+    """
+
+    def test_a_server_that_hangs_up_after_the_request_is_reported_not_raised(
+        self, tmp_path: Path
+    ) -> None:
+        """The client's half: mid-call, after auth and send, the peer vanishes.
+
+        The fake authenticates honestly and reads the whole request, so the
+        drop lands between the client's ``send_bytes`` and its answer — the
+        exact window transport.py's "closed the connection" guard covers. What
+        must come back is ``RpcUnavailable`` in the transport's own words, not
+        the bare ``EOFError`` the socket produced.
+        """
+        if sys.platform == "win32":
+            pytest.skip("the fake dropping peer is an AF_UNIX listener")
+        runtime = tmp_path / "runtime"
+        runtime.mkdir(parents=True)
+        key = secrets.token_bytes(32)
+        address = new_address(runtime)
+        listener = Listener(address, family="AF_UNIX", authkey=key)
+
+        def hang_up() -> None:
+            with suppress(Exception), closing(listener.accept()) as victim:
+                victim.recv_bytes()
+                # The request arrived; the connection is dropped without an
+                # answer when `closing` runs.
+
+        thread = threading.Thread(target=hang_up, daemon=True)
+        thread.start()
+        client = RpcClient(
+            RpcDescriptor(address=address, family=FAMILY_UNIX, pid=os.getpid()),
+            authkey=key,
+            deadline=GRACE,
+        )
+        try:
+            with pytest.raises(RpcUnavailable, match="closed the connection"):
+                client.call("session.status")
+        finally:
+            listener.close()
+            thread.join(timeout=GRACE)
+
+    def test_a_client_that_vanishes_after_authenticating_leaves_the_server_serving(
+        self, serving: Start
+    ) -> None:
+        """The server's receive half: an authenticated peer hangs up unasked.
+
+        The drop lands in ``_exchange``: the peer passed the challenge, so the
+        server is past ``_authenticate`` and waiting for a request that will
+        never come — its read ends in the EOF the recv-drop guard exists for.
+        Without that guard the EOFError unwinds ``serve_forever`` and the
+        follow-up call finds a dead sidecar.
+        """
+        harness = serving(_echo)
+        family = "AF_PIPE" if harness.server.family == FAMILY_PIPE else "AF_UNIX"
+
+        connection = Client(harness.server.address, family=family, authkey=harness.key)
+        connection.close()
+
+        assert harness.client().call("after").ok, (
+            "one client hanging up mid-exchange took the sidecar down with it"
+        )
+
+    def test_a_client_that_hangs_up_before_its_answer_leaves_the_server_serving(
+        self, serving: Start
+    ) -> None:
+        """The server's send half: the peer asked, then hung up before reading.
+
+        The handler holds its answer until the test has really closed the
+        connection, so the server's ``send_bytes`` in ``_reply`` runs against a
+        peer that is guaranteed gone and fails with a broken pipe. Dropping
+        that answer is the smaller loss; without the suppression the send error
+        unwinds the serving thread and the follow-up call finds nobody.
+        """
+        gone = threading.Event()
+
+        def hold_until_the_drop(request: RpcRequest) -> RpcResponse:
+            assert gone.wait(GRACE), "the test never closed its connection"
+            return RpcResponse(id=request.id, ok=True)
+
+        harness = serving(hold_until_the_drop)
+        family = "AF_PIPE" if harness.server.family == FAMILY_PIPE else "AF_UNIX"
+
+        connection = Client(harness.server.address, family=family, authkey=harness.key)
+        with closing(connection):
+            connection.send_bytes(encode_request(RpcRequest(id="r1", method="drop", params={})))
+        gone.set()
+
+        assert harness.client().call("after").ok, (
+            "an unreadable reply took the sidecar down with it"
+        )
+
+
 def _dropped_within(connection: Connection, budget: float) -> bool:
     """Whether the peer closes *connection* within *budget* seconds."""
     try:

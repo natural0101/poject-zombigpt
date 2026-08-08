@@ -34,7 +34,19 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
 
+from pz_agent_core.diagnostics.redaction import Redactor, null_redactor
 from pz_agent_core.protocol import JsonDict
+
+#: The floor redactor, applied to every *absolute* path this module records —
+#: the outside-tree fallback of :meth:`EvidenceLayout.relative` and the
+#: ``source`` spelling in a collection report. An in-tree path is recorded
+#: relative and needs nothing; an absolute one carries the profile directory
+#: and with it the account name, and the evidence tree is committed to the
+#: repository, so an absolute spelling written here is published. The floor
+#: keeps the shape and the basename ("which file") and strikes the directories
+#: that name a person ("where they keep their files"), same as every
+#: diagnostic writer in :mod:`pz_agent_core.diagnostics`.
+_FLOOR_REDACTOR: Final[Redactor] = null_redactor()
 
 #: Largest single artefact the tree accepts. A game log past this is a runaway
 #: error loop, and copying it would bury the evidence rather than provide it.
@@ -242,13 +254,18 @@ class EvidenceLayout:
     def relative(self, path: Path) -> str:
         """A path as it appears in the manifest: POSIX, relative to the root.
 
-        Falls back to the absolute path when *path* is outside the tree, which
-        is worth seeing in a manifest rather than hiding behind an exception.
+        A path outside the tree is still shown rather than hidden behind an
+        exception — but through :data:`_FLOOR_REDACTOR`, never as the raw
+        absolute spelling. The manifest is a committed, published artefact,
+        and an absolute path carries the profile directory and the account
+        name of whoever ran the suite; the redacted form still says plainly
+        that the file was outside the tree and which file it was, which is
+        the diagnostic content, without naming the person.
         """
         try:
             return path.relative_to(self.root).as_posix()
         except ValueError:
-            return path.as_posix()
+            return _FLOOR_REDACTOR.text(path.as_posix())
 
     def ensure_tree(self, scenario_ids: Sequence[str]) -> tuple[Path, ...]:
         """Create the directories and their ``.gitkeep`` markers.
@@ -396,7 +413,13 @@ def validate_document(document: Mapping[str, Any], schema_path: Path) -> None:
 
 @dataclass(frozen=True, slots=True)
 class CollectedFile:
-    """One file copied into a scenario directory."""
+    """One file copied into a scenario directory.
+
+    ``source`` is the redacted spelling of where the file came from: the
+    typical source is the game console under the user's profile, this record
+    is written into ``collected.json`` inside the committed evidence tree,
+    and an unredacted spelling would publish the account name with it.
+    """
 
     source: str
     destination: str
@@ -439,22 +462,27 @@ def collect_files(
     A source that is absent, unreadable or oversized is *skipped by name*
     rather than dropped: "console.txt was not where it should be" is the single
     most useful line in a failed collection, and a silent skip would leave the
-    operator to notice the gap at finalize time instead.
+    operator to notice the gap at finalize time instead. Source spellings —
+    in the report and in every skip line — go through :data:`_FLOOR_REDACTOR`:
+    the report is written into the committed evidence tree, the sources live
+    under the user's profile, and the basename the redactor keeps is the part
+    of the spelling that diagnoses anything.
     """
     copied: list[CollectedFile] = []
     skipped: list[str] = []
     for source, destination in sources:
+        shown = _FLOOR_REDACTOR.text(str(source))
         if len(copied) >= limit:
             skipped.append(f"{source.name}: the {limit} file collection cap was reached")
             continue
         if not source.is_file():
-            skipped.append(f"{source}: not found")
+            skipped.append(f"{shown}: not found")
             continue
         try:
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source, destination)
         except OSError as exc:
-            skipped.append(f"{source}: could not be copied: {exc}")
+            skipped.append(f"{shown}: could not be copied: {_FLOOR_REDACTOR.text(str(exc))}")
             continue
         try:
             digest, size = sha256_file(destination)
@@ -464,7 +492,7 @@ def collect_files(
             continue
         copied.append(
             CollectedFile(
-                source=str(source),
+                source=shown,
                 destination=destination.name,
                 sha256=digest,
                 size_bytes=size,

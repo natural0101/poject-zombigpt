@@ -343,6 +343,12 @@ def _recorded_digests(
             continue
         if _sha256_bytes(bundle.read(path)) != recorded:
             problems.append(f"{path}: content does not match the recorded digest")
+    # The other direction: a member the index never recorded. Hashing what the
+    # manifest claims proves the claims; it says nothing about a file smuggled
+    # in beside them, which no per-entry loop can see.
+    recorded_names = {str(entry.get("path", "")) for entry in entries} | {build_rc.MANIFEST_NAME}
+    for name in sorted(names - recorded_names):
+        problems.append(f"{name}: in the archive but recorded in no manifest entry")
     if problems:
         return Finding(
             check="archive.digests",

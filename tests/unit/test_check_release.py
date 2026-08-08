@@ -284,6 +284,49 @@ def test_an_edited_archive_contradicts_its_own_manifest(tmp_path: Path) -> None:
     assert "install.bat" in _failures(findings)["archive.digests"]
 
 
+def test_a_same_size_edit_of_a_member_is_caught_by_its_digest(tmp_path: Path) -> None:
+    """An edit that keeps a member's size is caught by re-hashing its bytes.
+
+    The size comparison cannot see this one — the tampered body is exactly as
+    long as the recorded one — so the only thing standing between the edit and
+    a certification is the ``_sha256_bytes(...) != recorded`` comparison in
+    ``_recorded_digests``. Deleting that comparison must fail this test.
+    """
+    original = _archive(tmp_path)
+    edited = tmp_path / "edited-same-size.zip"
+    with zipfile.ZipFile(original) as source, zipfile.ZipFile(edited, "w") as destination:
+        for info in source.infolist():
+            body = source.read(info.filename)
+            if info.filename == "install.bat":
+                # Flip the last byte: different content, identical length.
+                body = body[:-1] + bytes([body[-1] ^ 0xFF])
+                assert len(body) == info.file_size
+            destination.writestr(info, body)
+    findings = _run(tmp_path, archive=edited)
+    detail = _failures(findings)["archive.digests"]
+    assert "install.bat: content does not match the recorded digest" in detail
+
+
+def test_a_member_the_index_never_recorded_is_refused(tmp_path: Path) -> None:
+    """The other direction of the digest check: a file smuggled in beside them.
+
+    Hashing what the manifest claims proves the claims and nothing more — the
+    per-entry loop cannot see a member the index never mentions, so the gate
+    used to certify an archive carrying an extra file. The sweep over
+    ``names - recorded`` is what this test observes; deleting it must fail
+    here while every recorded member still verifies.
+    """
+    original = _archive(tmp_path)
+    padded = tmp_path / "padded.zip"
+    with zipfile.ZipFile(original) as source, zipfile.ZipFile(padded, "w") as destination:
+        for info in source.infolist():
+            destination.writestr(info, source.read(info.filename))
+        destination.writestr("extra.bin", b"unrecorded")
+    findings = _run(tmp_path, archive=padded)
+    detail = _failures(findings)["archive.digests"]
+    assert "extra.bin: in the archive but recorded in no manifest entry" in detail
+
+
 # ---------------------------------------------------------------------------
 # the evidence, when there is some
 # ---------------------------------------------------------------------------
@@ -311,6 +354,28 @@ def test_one_scenario_short_of_twenty_is_named(tmp_path: Path) -> None:
     detail = _failures(findings)["evidence.scenarios"]
     assert f"{SCENARIO_IDS[6]} is FAIL" in detail
     assert "1 of 20" in detail
+
+
+def test_a_manifest_of_scenarios_that_never_ran_certifies_nothing(tmp_path: Path) -> None:
+    """Twenty literal NOT_RUN verdicts refuse the gate, each named as NOT_RUN.
+
+    ``finalize`` refuses to write such a manifest, but the gate accepts an
+    arbitrary ``--manifest`` path, so a hand-built all-NOT_RUN manifest is a
+    reachable input. It must be treated as what it is — no scenario passed —
+    not special-cased as a benign "has not run yet". If ``_scenario_verdicts``
+    ever accepted NOT_RUN, the evidence.scenarios finding would come back ok
+    and this test would fail on the missing refusal.
+    """
+    manifest, evidence = _evidence(tmp_path / "tree")
+    document = json.loads(manifest.read_text(encoding="utf-8"))
+    for entry in document["scenarios"]:
+        entry["state"] = "NOT_RUN"
+    manifest.write_text(json.dumps(document), encoding="utf-8")
+    findings = _run(tmp_path, release=True, manifest=manifest, evidence_dir=evidence)
+    detail = _failures(findings)["evidence.scenarios"]
+    assert f"{len(SCENARIO_IDS)} of {len(SCENARIO_IDS)} scenario(s) did not pass" in detail
+    for scenario_id in SCENARIO_IDS:
+        assert f"{scenario_id} is NOT_RUN" in detail
 
 
 def test_an_edited_result_is_caught_by_its_digest(tmp_path: Path) -> None:

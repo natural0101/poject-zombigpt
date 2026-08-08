@@ -86,7 +86,7 @@ from pz_agent_core.capabilities import (
 from pz_agent_core.diagnostics import DiagnosticsError, TraceError, TraceWriter
 from pz_agent_core.goals import GoalQueue, GoalRecord, to_planner_goal
 from pz_agent_core.ipc.clocks import Clock, system_clock_ms
-from pz_agent_core.ipc.journal import JournalReader
+from pz_agent_core.ipc.journal import JournalReader, probe_truncation
 from pz_agent_core.ipc.layout import IpcLayout
 from pz_agent_core.ipc.queue import CommandQueue
 from pz_agent_core.ipc.snapshot import SnapshotMiss, SnapshotReader
@@ -842,6 +842,11 @@ class TickOutcome:
     disarmed: bool = False
     stop: StopCause | None = None
     detail: str = ""
+    #: State-directory writes that failed during this tick (E12-M03-T004). The
+    #: session outranks its own bookkeeping, so these are reported here rather
+    #: than raised — and they must be *somewhere*, because a pid record that
+    #: quietly stops refreshing reads as a dead sidecar to everything else.
+    state_problems: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -966,6 +971,8 @@ class SidecarLoop:
     _events: deque[SafetyEvent] = field(init=False)
     _shipped: OrderedDict[str, Command] = field(init=False)
     _traced: Observation | None = field(default=None, init=False)
+    _state_problems: deque[str] = field(init=False)
+    _fresh_problems: list[str] = field(init=False)
 
     def __post_init__(self) -> None:
         if self.capabilities is not None:
@@ -981,6 +988,8 @@ class SidecarLoop:
         self._store = ObservationStore(capacity=self.limits.observation_window)
         self._events = deque(maxlen=MAX_RETAINED_EVENTS)
         self._shipped = OrderedDict()
+        self._state_problems = deque(maxlen=MAX_RETAINED_EVENTS)
+        self._fresh_problems = []
         if self.monitor is None:
             self.monitor = HeartbeatMonitor(self.layout, clock=self.clock)
         if self.sessions is None:
@@ -1011,6 +1020,17 @@ class SidecarLoop:
     def recent_events(self) -> tuple[SafetyEvent, ...]:
         """The last safety events, oldest first. Bounded ring."""
         return tuple(self._events)
+
+    @property
+    def state_problems(self) -> tuple[str, ...]:
+        """State-directory writes that failed mid-session, oldest first. Bounded ring.
+
+        E12-M03-T004: when the state directory stops accepting writes, the
+        session continues and the condition is reported — here, and on the
+        :class:`TickOutcome` of every tick it happened in — rather than the
+        loop dying on its own bookkeeping.
+        """
+        return tuple(self._state_problems)
 
     @property
     def session(self) -> SessionDescriptor | None:
@@ -1208,6 +1228,9 @@ class SidecarLoop:
                 mode=self._mode,
                 detail=f"the game is not writing a heartbeat ({liveness.detail}); nothing to arm",
             )
+        torn = self._journal_refusal()
+        if torn is not None:
+            return ArmOutcome(armed=False, mode=self._mode, detail=torn)
         refusal = self._multiplayer_refusal()
         if refusal is not None:
             return ArmOutcome(armed=False, mode=self._mode, detail=refusal)
@@ -1228,6 +1251,29 @@ class SidecarLoop:
             detail=f"armed in {mode.value} on session {attached.session.session_id}",
             changed=True,
         )
+
+    def _journal_refusal(self) -> str | None:
+        """Why this session may not be armed, when a damaged journal is the reason.
+
+        E12-M03-T005: a truncated journal is detected and the session refuses
+        to arm. A stream that ends mid-record has lost its last record — a
+        producer died mid-write, or something cut the file — and every judgement
+        an armed session makes (acks consumed, observations folded in, commands
+        sequenced) reads these streams. Granting authority over a stream whose
+        most recent record is known to be missing would act on a world one
+        record behind the one the mod described. The refusal is recoverable and
+        says how: the tear heals when the producer finishes the line or the
+        stream is rewritten, and disarming is never gated on it.
+        """
+        for stream in self.layout.journals():
+            problem = probe_truncation(stream)
+            if problem is not None:
+                return (
+                    f"the exchange journal is damaged ({problem}); arming over a "
+                    "truncated stream is refused. Restart the game so the mod "
+                    "rewrites its journals, then ask again"
+                )
+        return None
 
     def _multiplayer_refusal(self) -> str | None:
         """Why this session may not be armed, when multiplayer is the reason.
@@ -1301,6 +1347,7 @@ class SidecarLoop:
         """Read the world, run the guard, and only then consider acting."""
         attached = self._require_attached()
         self._tick += 1
+        self._fresh_problems = []
         now = self.clock()
         panic = self.panic_engaged()
         liveness = self._heartbeats().liveness(Peer.GAME, now)
@@ -1326,8 +1373,7 @@ class SidecarLoop:
         self._trace_results(results)
 
         self._publish_heartbeat()
-        if self.pid_file is not None:
-            self.pid_file.refresh()
+        self._refresh_pid_record()
         return TickOutcome(
             tick=self._tick,
             now_ms=now,
@@ -1342,7 +1388,34 @@ class SidecarLoop:
             disarmed=disarmed_by_guard,
             stop=stop,
             detail=liveness.detail,
+            state_problems=tuple(self._fresh_problems),
         )
+
+    def _note_state_problem(self, problem: str) -> None:
+        """Record one failed state-directory write, for this tick and the ring."""
+        self._fresh_problems.append(problem)
+        self._state_problems.append(problem)
+
+    def _refresh_pid_record(self) -> None:
+        """Prove this process is still ticking, without dying when it cannot.
+
+        E12-M03-T004: the state directory becoming unwritable mid-session is
+        reported rather than fatal. The session outranks its own status record
+        — raising here would end a session that is driving a character over a
+        file whose only job is to describe that session — but silence would be
+        the opposite lie, because an unrefreshed pid record reads as a stopped
+        sidecar to ``pz-agent status`` and to a second ``start``.
+        """
+        if self.pid_file is None:
+            return
+        try:
+            self.pid_file.refresh()
+        except OSError as exc:
+            self._note_state_problem(
+                f"the pid record could not be refreshed ({exc.strerror or exc}); the "
+                "state directory is not accepting writes, and until it does "
+                "'pz-agent status' will read this still-running sidecar as stopped"
+            )
 
     def _run_guard(
         self, attached: _Attached, now_ms: int, *, panic: bool, game_alive: bool
@@ -1462,7 +1535,21 @@ class SidecarLoop:
         request = channel.read()
         if request is None:
             return None
-        channel.clear()
+        try:
+            channel.clear()
+        except OSError as exc:
+            # Discarding the unlink failure itself: the state directory has
+            # stopped accepting writes (E12-M03-T004), and ending the session
+            # over an unremovable request file would be the larger loss. The
+            # request is still applied this tick; a leftover file is re-judged
+            # next tick, where the staleness rules below bound what a
+            # non-consumable arm can do (a stop or disarm only ever takes
+            # authority away), and the condition is reported.
+            self._note_state_problem(
+                f"the control request file could not be removed ({exc.strerror or exc}); "
+                "the state directory is not accepting writes, so this request may be "
+                "seen again on later ticks"
+            )
         if request.kind is not ControlKind.ARM:
             return request
         if request.issued_at_ms < attached_at_ms:

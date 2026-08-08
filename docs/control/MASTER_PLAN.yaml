@@ -6622,8 +6622,8 @@ epics:
       implementation_commit: ce70711967e1be6cd5a0096e5bbfec554bb2eda3
       verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
       commit: ce70711967e1be6cd5a0096e5bbfec554bb2eda3
-      ci_url: null
-      reason: ''
+      ci_url: https://github.com/natural0101/poject-zombigpt/actions/runs/31235583344
+      reason: ' [witnessing run recorded when the spec-alone gate rule landed]'
     - id: E11-M03-T003
       subsystem: packaging
       action: Verify each member's digest independently of the index

@@ -18,10 +18,14 @@ from pz_agent_core.ipc.journal import (
     JournalError,
     JournalReader,
     JournalWriter,
+    probe_truncation,
     read_header,
     rotated_path,
 )
+from pz_agent_core.ipc.layout import IpcLayout
+from pz_agent_core.protocol import SessionMode
 from tests.fixtures.ipc_builders import FakeClock, make_layout
+from tests.fixtures.sidecar_worlds import attached_world
 
 
 def _writer(tmp_path: Path, **kwargs: object) -> tuple[JournalWriter, JournalReader]:
@@ -455,3 +459,110 @@ def test_header_carries_the_writer_clock(tmp_path: Path) -> None:
     writer.close()
     first_line = layout.command_ack.read_text(encoding="utf-8").splitlines()[0]
     assert str(clock.now) in first_line
+
+
+# ---------------------------------------------------------------------------
+# a truncated journal is detected and the session refuses to arm (E12-M03-T005)
+# ---------------------------------------------------------------------------
+
+
+def _truncate_last_record(layout: IpcLayout) -> bytes:
+    """Cut the ack journal mid-record, the way a producer dying mid-write does.
+
+    Returns the whole file as it was before the cut, so a test can also show
+    the condition healing.
+    """
+    writer = JournalWriter(layout, layout.command_ack)
+    try:
+        writer.append({"type": "ack.first", "n": 1})
+        writer.append({"type": "ack.torn", "n": 2})
+    finally:
+        writer.close()
+    whole = layout.command_ack.read_bytes()
+    assert whole.endswith(b"\n")
+    layout.command_ack.write_bytes(whole[: -len(b'"n":2}\n')])
+    return whole
+
+
+class TestATruncatedJournalRefusesToArm:
+    def test_a_torn_tail_is_detected(self, tmp_path: Path) -> None:
+        layout = make_layout(tmp_path)
+        _truncate_last_record(layout)
+
+        problem = probe_truncation(layout.command_ack)
+
+        assert problem is not None
+        assert "mid-record" in problem
+        assert layout.command_ack.name in problem
+
+    def test_a_healthy_journal_probes_clean(self, tmp_path: Path) -> None:
+        """The control: without it, a probe that always accuses would pass above."""
+        layout = make_layout(tmp_path)
+        writer = JournalWriter(layout, layout.command_ack)
+        try:
+            writer.append({"type": "ack.first", "n": 1})
+        finally:
+            writer.close()
+
+        assert probe_truncation(layout.command_ack) is None
+
+    def test_a_journal_that_does_not_exist_is_not_an_accusation(self, tmp_path: Path) -> None:
+        """A stream that has not started is a different fact from a damaged one."""
+        layout = make_layout(tmp_path)
+
+        assert probe_truncation(layout.command_ack) is None
+
+    def test_a_complete_first_line_that_is_not_a_header_is_also_detected(
+        self, tmp_path: Path
+    ) -> None:
+        """The other unusable shape: committed lines the reader can never consume."""
+        layout = make_layout(tmp_path)
+        layout.command_ack.write_text('{"n": 1}\n', encoding="utf-8")
+
+        problem = probe_truncation(layout.command_ack)
+
+        assert problem is not None
+        assert "header" in problem
+
+    def test_the_session_refuses_to_arm_over_a_truncated_journal(self, tmp_path: Path) -> None:
+        """The criterion itself, on the real loop over a real exchange directory.
+
+        The same world arms cleanly before the tear and again once the stream
+        is whole — so the refusal observed in the middle is the truncation
+        being detected, not an arm gate that always refuses.
+        """
+        with attached_world(tmp_path) as world:
+            world.beat_game()
+            granted = world.loop.arm(SessionMode.ASSISTED)
+            assert granted.armed, f"the healthy control did not arm: {granted.detail}"
+            world.loop.disarm()
+
+            whole = _truncate_last_record(world.layout)
+            world.beat_game()
+
+            refused = world.loop.arm(SessionMode.ASSISTED)
+
+            assert refused.armed is False
+            assert world.loop.armed is False
+            assert "truncated" in refused.detail
+            assert "mid-record" in refused.detail, (
+                f"the refusal must name what was detected: {refused.detail}"
+            )
+
+            # Recovery: the journal healed (here, rewritten whole), so the
+            # refusal lifts — it was about the tear, not about the file.
+            world.layout.command_ack.write_bytes(whole)
+            world.beat_game()
+            assert world.loop.arm(SessionMode.ASSISTED).armed is True
+
+    def test_disarming_is_never_gated_on_a_damaged_journal(self, tmp_path: Path) -> None:
+        """Taking authority away must work exactly when things are broken."""
+        with attached_world(tmp_path) as world:
+            world.beat_game()
+            assert world.loop.arm(SessionMode.ASSISTED).armed
+            _truncate_last_record(world.layout)
+
+            outcome = world.loop.disarm()
+
+            assert outcome.armed is False
+            assert world.loop.armed is False

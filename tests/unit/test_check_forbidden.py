@@ -219,6 +219,50 @@ def test_the_shipped_tree_is_clean_under_the_full_rule_set() -> None:
     assert findings == [], [finding.render() for finding in findings]
 
 
+@pytest.mark.parametrize(
+    ("label", "secret"),
+    [
+        # Assembled at runtime, never written out whole: the scanner under
+        # test walks every tracked text file, this one included, and a literal
+        # key shape here would be a real finding — correctly.
+        ("Anthropic API key", "sk-ant-" + "A0" * 10),
+        ("OpenAI-style API key", "sk-" + "a1" * 16),
+        ("GitHub personal access token", "ghp_" + "Z9" * 15),
+        ("AWS access key id", "AKIA" + "0123456789ABCDEF"),
+        ("private key", "-----BEGIN " + "PRIVATE KEY-----"),
+    ],
+    ids=["anthropic", "openai", "github", "aws", "pem"],
+)
+def test_a_planted_secret_of_each_shape_is_found(label: str, secret: str, tmp_path: Path) -> None:
+    """Each secret rule, seen firing once — the only proof a scanner still scans.
+
+    ``check_secrets`` walks the module-level ``REPO_ROOT``, so the scan is
+    pointed at a planted tree by rebinding that on a freshly imported copy of
+    the script. Every shape in ``SECRET_PATTERNS`` is exercised, because a
+    pattern nobody has ever watched match is a claim, not a gate — the exact
+    state every one of these rules was in.
+    """
+    checker = _checker()
+    checker.REPO_ROOT = tmp_path
+    (tmp_path / "notes.md").write_text(f"value: {secret}\n", encoding="utf-8")
+
+    findings = checker.check_secrets()
+
+    assert [(found.rule, found.detail) for found in findings] == [("secret", label)]
+
+
+def test_no_tracked_file_carries_a_secret() -> None:
+    """The criterion itself: the repository's own tree scans clean.
+
+    This is the half CI observes by running ``main()``; here it is a test, so
+    deleting ``check_secrets`` from the script — or a key landing in a tracked
+    file — fails the suite rather than only the separate gate.
+    """
+    findings = _checker().check_secrets()
+
+    assert findings == [], [finding.render() for finding in findings]
+
+
 def test_the_one_audited_ctypes_use_is_the_one_the_allowlist_names() -> None:
     """The exemption is exactly the descriptor's liveness probe, nothing more.
 

@@ -38,12 +38,14 @@ import pytest
 import pz_agent_core
 import pz_agent_mcp
 import pz_agent_mcp.__main__ as entry
+from pz_agent_core.goals import GoalKind, GoalState
 from pz_agent_core.protocol import (
     ActionName,
     ActionStatus,
     ContainerKind,
     InventoryView,
     JsonDict,
+    ReasonCode,
     SessionMode,
 )
 from pz_agent_core.rpc.descriptor import descriptor_path, runtime_dir, write_descriptor
@@ -133,8 +135,15 @@ def sidecar(tmp_path: Path) -> Iterator[Sidecar]:
     runtime_dir(state_dir).mkdir(parents=True)
     key = issue_token(runtime_dir(state_dir))
     core = Doubles()
+    # The goal channel is passed alongside the bundle, exactly as a sidecar
+    # that owns one wires it (`CoreRouter`'s own docstring). Leaving it off
+    # would serve `NO_GOAL_CHANNEL` and every `goal.*` route would refuse —
+    # which is how the goal lifecycle went unobserved end to end until a test
+    # below drove it and met exactly that refusal.
     server = RpcServer(
-        new_address(runtime_dir(state_dir)), authkey=key, handler=CoreRouter(core.services)
+        new_address(runtime_dir(state_dir)),
+        authkey=key,
+        handler=CoreRouter(core.services, goals=core.goals),
     )
     write_descriptor(state_dir, server.descriptor())
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -398,7 +407,7 @@ class TestTheCatalogueMatchesWhatIsServed:
 # is enough for a refusal, whose whole answer is an exit code and a line of
 # stderr, and it is not enough for anything that only exists once a client has
 # completed a handshake: `initialize`, `tools/list`, `tools/call`,
-# `resources/list`, `resources/read`. Those are the fourteen behaviours below.
+# `resources/list`, `resources/read`. Those are the sixteen behaviours below.
 #
 # Each one launches `python -m pz_agent_mcp` and speaks MCP to it with the
 # SDK's own client, against the `sidecar` fixture — a real `RpcServer` carrying
@@ -635,7 +644,7 @@ def _disarm(sidecar: Sidecar) -> None:
 
 
 class TestTheProtocol:
-    """The fourteen things that only exist once a client has said hello.
+    """The sixteen things that only exist once a client has said hello.
 
     The `sidecar` fixture is a real core behind a real socket, and the child is
     a real process. What is *not* real is the game: the ports are doubles, so
@@ -1183,6 +1192,190 @@ class TestTheProtocol:
                     "the raw save id reached the client; it is a directory fragment "
                     "that can carry the player's profile name"
                 )
+
+    @_HAS_SDK
+    def test_a_goal_is_submitted_polled_and_cancelled_against_the_real_queue(
+        self, sidecar: Sidecar
+    ) -> None:
+        """The goal channel's whole lifecycle, driven by a real client.
+
+        `pz_goal_submit`, `pz_goal_status`, `pz_goal_cancel` — every other test
+        of these three is in-process, so until here nothing observed that a
+        goal survives the trip: client -> stdio -> MCP server -> Core RPC ->
+        the genuine `GoalQueue` behind `FakeGoalPort`, and back. Each leg is
+        asserted from the side that owns the fact:
+
+        * the admission's id is the one the queue minted — pinned against the
+          counter's first value, so an adapter inventing ids of its own would
+          answer a plausible UUID and fail here;
+        * the status poll uses *the id the admission returned*, and the answer
+          places the goal where the queue holds it: named, in the backlog,
+          nothing active;
+        * the cancel reports `cancel_requested` without claiming the goal is
+          over — the channel applies it on its next tick, and `state` stays
+          `pending` because that is what the goal still is;
+        * the queue's next tick really does end it as `CANCELLED`, which is
+          the postcondition of the cancel the client sent. Without this, a
+          boundary that answered `cancel_requested: true` and dropped the
+          request on the floor would pass everything above.
+        """
+
+        async def script(session: Any, initialised: Any) -> Any:
+            admitted = _tool_payload(
+                await session.call_tool(
+                    "pz_goal_submit",
+                    {
+                        "kind": "satisfy_hunger",
+                        "satisfy_to": 0.25,
+                        "idempotency_key": "goal-e2e:attempt-1",
+                    },
+                )
+            )
+            goal_id = str(admitted["data"]["goal_id"])
+            polled = _tool_payload(await session.call_tool("pz_goal_status", {"goal_id": goal_id}))
+            cancelled = _tool_payload(
+                await session.call_tool(
+                    "pz_goal_cancel",
+                    {"goal_id": goal_id, "idempotency_key": "goal-e2e:cancel:attempt-1"},
+                )
+            )
+            after = _tool_payload(await session.call_tool("pz_goal_status", {"goal_id": goal_id}))
+            return admitted, polled, cancelled, after
+
+        admitted, polled, cancelled, after = _drive(sidecar.state_dir, script)
+
+        assert admitted["ok"] is True, admitted
+        assert admitted["tool"] == "pz_goal_submit"
+        assert admitted["replayed"] is False
+        goal_id = str(admitted["data"]["goal_id"])
+        # The doubles' CountingGoalIds mints 0x60A1 + 1 first. Anything else
+        # here means the id did not come from the queue.
+        assert goal_id == "00000000-0000-0000-0000-0000000060a2"
+        # The whole document, because it is the wire shape a client learns.
+        assert admitted["data"] == {
+            "goal_id": goal_id,
+            "kind": "satisfy_hunger",
+            "state": "pending",
+            "terminal": False,
+            "reason_code": None,
+            "retryable": False,
+            "params": {"satisfy_to": 0.25},
+            "budget": {"max_wall_ms": 120_000, "max_steps": 4, "pending_ttl_ms": 60_000},
+            "steps_used": 0,
+            "steps_left": 4,
+            "submitted_at_ms": 0,
+            "started_at_ms": None,
+            "finished_at_ms": None,
+            "deadline_ms": None,
+            "evidence_keys": [],
+            "duplicate": False,
+        }
+
+        assert polled["ok"] is True, polled
+        named = polled["data"]["goal"]
+        assert named is not None and named["goal_id"] == goal_id
+        assert named["state"] == "pending"
+        assert polled["data"]["active"] is None
+        assert [record["goal_id"] for record in polled["data"]["pending"]] == [goal_id]
+        assert polled["data"]["pending_truncated"] is False
+
+        assert cancelled["ok"] is True, cancelled
+        assert cancelled["data"]["goal_id"] == goal_id
+        assert cancelled["data"]["cancel_requested"] is True
+        # Not "cancelled": the channel applies a cancellation on its next tick,
+        # and the answer must not claim the goal is already over.
+        assert cancelled["data"]["state"] == "pending"
+        assert cancelled["data"]["terminal"] is False
+
+        assert after["ok"] is True, after
+        assert after["data"]["goal"]["state"] == "pending"
+
+        # What the core was actually asked, not inferred from the answers.
+        [request] = sidecar.core.goals.submitted
+        assert request.kind is GoalKind.SATISFY_HUNGER
+        assert request.idempotency_key == "goal-e2e:attempt-1"
+        assert request.params.satisfy_to == 0.25
+        assert sidecar.core.goals.status_calls == [goal_id, goal_id]
+        assert sidecar.core.goals.cancelled == [goal_id]
+
+        # The cancellation registered in the real queue: its next tick ends the
+        # goal, with the code a user's cancel is promised.
+        [transition] = sidecar.core.goals.queue.tick()
+        assert transition.goal_id == goal_id
+        assert transition.previous is GoalState.PENDING
+        assert transition.state is GoalState.CANCELLED
+        assert transition.reason_code is ReasonCode.CANCELLED_BY_REQUEST
+        ended = sidecar.core.goals.queue.record(goal_id)
+        assert ended is not None and ended.state is GoalState.CANCELLED
+
+    @_HAS_SDK
+    def test_a_sidecar_lost_mid_session_is_an_error_payload_and_the_child_survives(
+        self, sidecar: Sidecar
+    ) -> None:
+        """The core dies under an established connection; the boundary does not.
+
+        `CoreLink` holds no connection — every call resolves the descriptor and
+        dials afresh — and `ToolRouter.call` never raises, so the architecture's
+        promise for a sidecar that goes away *mid-session* is specific: the next
+        tool call answers the error document naming the link (`STALE_SESSION`,
+        with the sentence and the remedy), the MCP connection stays up, and the
+        child goes on serving. That is the observable pinned here, in one
+        conversation:
+
+        * a positive control first, so "the link was up" is a fact and not an
+          assumption;
+        * the sidecar stops — its descriptor stays behind, which is exactly
+          what a killed sidecar leaves;
+        * the same connection's next call comes back as a *payload*, not a
+          transport error and not a dead pipe — a child that crashed would fail
+          this line with a closed-stream error from the SDK, and one that
+          answered a JSON-RPC error would fail `_tool_payload`;
+        * the code is `STALE_SESSION` and not retryable, the message says the
+          sidecar stopped and names the command that starts it, and a second
+          tool answers the same way — one bad call did not poison the router;
+        * `resources/list` still answers the full published set afterwards,
+          which is the surviving child speaking, since a hung or dead server
+          answers nothing.
+
+        The conversation then ends the ordinary way — stdin closes inside
+        `_drive`, under its deadline — so returning at all is the clean
+        shutdown half rather than a kill.
+        """
+
+        async def script(session: Any, initialised: Any) -> Any:
+            alive = _tool_payload(await session.call_tool("pz_session_status", {}))
+            sidecar.stop()
+            lost = _tool_payload(await session.call_tool("pz_session_status", {}))
+            second = _tool_payload(
+                await session.call_tool("pz_observe_snapshot", {"detail": "standard"})
+            )
+            catalogue = await session.list_resources()
+            return alive, lost, second, catalogue
+
+        alive, lost, second, catalogue = _drive(sidecar.state_dir, script)
+
+        assert alive["ok"] is True, "the positive control failed; the link never worked"
+
+        assert lost["ok"] is False, lost
+        assert lost["tool"] == "pz_session_status"
+        assert lost["reason_code"] == "STALE_SESSION"
+        assert lost["retryable"] is False, "no number of retries starts a process"
+        # Hand-written, not imported: this sentence and this command are what a
+        # user is shown, and a constant renamed in both halves at once is the
+        # change a round trip cannot see.
+        assert "the sidecar is not running or has stopped answering" in lost["message"]
+        assert "pz-agent start" in lost["message"]
+
+        assert second["ok"] is False, second
+        assert second["reason_code"] == "STALE_SESSION"
+
+        assert (
+            tuple(
+                (str(resource.uri), resource.name, resource.mime_type)
+                for resource in catalogue.resources
+            )
+            == _PUBLISHED_RESOURCES
+        ), "the child stopped serving after the link failure"
 
     @_HAS_SDK
     def test_describe_agrees_with_a_running_servers_tools_list(self, sidecar: Sidecar) -> None:

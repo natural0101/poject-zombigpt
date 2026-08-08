@@ -28,6 +28,8 @@ from pz_agent_cli.livetest.evidence import (
     sha256_text,
     write_document,
 )
+from pz_agent_core.diagnostics.redaction import null_redactor
+from tests.fixtures.platform_trees import CYRILLIC_USER
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_SOURCE = REPO_ROOT / "evidence" / "schema"
@@ -118,12 +120,34 @@ class TestLayout:
     def test_relative_renders_manifest_paths_as_posix(self, layout: EvidenceLayout) -> None:
         assert layout.relative(layout.result_path(SCENARIO)) == f"{SCENARIO}/result.json"
 
-    def test_a_path_outside_the_tree_is_shown_rather_than_hidden(
+    def test_a_path_outside_the_tree_is_shown_redacted_rather_than_hidden_or_raw(
         self, layout: EvidenceLayout, tmp_path: Path
     ) -> None:
-        outside = tmp_path / "elsewhere" / "thing.log"
+        """Reconciled from ``== outside.as_posix()``: shown, but never the account name.
 
-        assert layout.relative(outside) == outside.as_posix()
+        The previous pin recorded the raw absolute spelling, and that spelling
+        flows into manifest artefact entries — a committed, published document
+        — carrying the profile directory and with it the account name of
+        whoever ran the suite (E12-M01-T008). The two halves of the old
+        behaviour that were worth keeping are kept and asserted separately:
+        an outside-tree path is still *visible* as one (it is not silently
+        relativised into a fake in-tree path, and not an exception), and the
+        basename still says which file it was. What changed is the spelling:
+        the floor redactor's placeholders replace the directories that name a
+        machine and a person, which is not a lie about where the file is —
+        "an absolute path elsewhere, ending in thing.log" is exactly what the
+        placeholder form states.
+        """
+        outside = tmp_path / "Users" / CYRILLIC_USER / "elsewhere" / "thing.log"
+
+        shown = layout.relative(outside)
+
+        assert shown == null_redactor().text(outside.as_posix())
+        assert shown != outside.as_posix(), "the raw absolute spelling reached the manifest"
+        assert CYRILLIC_USER not in shown
+        assert shown.endswith("thing.log"), "the basename is the diagnostic half; keep it"
+        # Still visibly not an in-tree relative path: the placeholder marks it.
+        assert "<" in shown and ">" in shown
 
 
 class TestValidatedWriting:
@@ -225,6 +249,40 @@ class TestCollection:
         assert len(report.skipped) == 3
         assert all("collection cap" in entry for entry in report.skipped)
 
+    def test_a_collection_report_never_carries_the_account_name(
+        self, layout: EvidenceLayout, tmp_path: Path
+    ) -> None:
+        """The evidence half of E12-M01-T008: ``collected.json`` is committed.
+
+        The realistic sources — the game console, the IPC journals — live
+        under the user's profile, and this report is written verbatim into
+        the evidence tree, so a ``source`` or skip line spelled absolutely
+        publishes the account name. Both shapes are exercised: a source that
+        copies (its spelling lands in ``copied``) and one that is absent (its
+        spelling lands in ``skipped``), and the sweep runs over the whole
+        serialised report. The skip line must still name the file — the
+        basename is the diagnostic part and the redactor keeps it.
+        """
+        profile = tmp_path / "Users" / CYRILLIC_USER / "Zomboid"
+        profile.mkdir(parents=True)
+        console = profile / "console.txt"
+        console.write_text("a lua error", encoding="utf-8")
+        absent = profile / "queue.jsonl"
+
+        report = collect_files(
+            [
+                (console, layout.logs_dir(SCENARIO) / "console.txt"),
+                (absent, layout.journals_dir(SCENARIO) / "queue.jsonl"),
+            ],
+            scenario_id=SCENARIO,
+        )
+
+        assert len(report.copied) == 1, report.skipped
+        assert report.copied[0].source.endswith("console.txt")
+        assert any("queue.jsonl" in line and "not found" in line for line in report.skipped)
+        document = json.dumps(report.to_dict(), ensure_ascii=False)
+        assert CYRILLIC_USER not in document, document
+
 
 class TestManifestEntries:
     def test_a_present_file_is_hashed(self, layout: EvidenceLayout) -> None:
@@ -259,6 +317,29 @@ class TestManifestEntries:
         assert not entry.present
         assert entry.problem == "missing"
         assert entry.path.endswith("logs/absent.txt")
+
+    def test_no_manifest_entry_for_an_outside_tree_file_carries_the_account_name(
+        self, layout: EvidenceLayout, tmp_path: Path
+    ) -> None:
+        """The manifest half of E12-M01-T008, observed over a real entry.
+
+        ``digest_entry`` is what the manifest is assembled from, and its
+        ``path`` field is the one place an outside-tree artefact's absolute
+        spelling — profile directory, account name and all — used to land.
+        The sweep is over the entry's whole serialised form, not just the
+        path field, so a second field starting to carry the spelling would
+        fail here too.
+        """
+        outside = tmp_path / "Users" / CYRILLIC_USER / "Zomboid" / "console.txt"
+        outside.parent.mkdir(parents=True)
+        outside.write_text("a lua error", encoding="utf-8")
+
+        entry = digest_entry(layout, scenario_id=SCENARIO, kind="log", path=outside, required=False)
+
+        assert entry.present, "the file exists; the entry must still hash it"
+        assert entry.path.endswith("console.txt")
+        document = json.dumps(entry.to_dict(), ensure_ascii=False)
+        assert CYRILLIC_USER not in document, document
 
 
 def test_both_shipped_schemas_are_valid_draft_2020_12() -> None:

@@ -15,12 +15,14 @@ different process's silence as the core's state.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
 from pathlib import Path
 
 import pytest
 
+from pz_agent_cli.supervisor import SidecarRpc
 from pz_agent_core.rpc import token as token_module
 from pz_agent_core.rpc.descriptor import (
     DESCRIPTOR_FILENAME,
@@ -44,6 +46,8 @@ from pz_agent_core.rpc.token import (
     read_token,
     revoke_token,
 )
+from pz_agent_core.rpc.transport import RpcClient
+from pz_agent_core.rpc.wire import RpcRequest, RpcResponse
 from pz_agent_core.version import RPC_PROTOCOL_VERSION
 
 
@@ -211,6 +215,79 @@ class TestTheToken:
 
         assert token.hex() not in str(caught.value)
         assert token[:8].hex() not in str(caught.value)
+
+
+class _CapturingHandler(logging.Handler):
+    """Keeps every spelling a log record could smuggle a value out in."""
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.NOTSET)
+        self.texts: list[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.texts.append(f"{record.msg!r} {record.args!r} {record.getMessage()}")
+
+
+class TestNoLogRecordCarriesTheToken:
+    def test_a_real_publish_dial_answer_shutdown_logs_the_token_nowhere(self, state: Path) -> None:
+        """E12-M01-T002: observed over log records, not inferred from exceptions.
+
+        The writers this exercises are the real ones — ``issue_token`` into the
+        real runtime directory, the real transport authenticating with the key,
+        the sidecar's publish/serve/unpublish lifecycle — while every Python
+        log record they could emit is captured: the root logger catches all
+        propagating loggers, and ``multiprocessing``'s own logger is tapped
+        directly because it does not propagate. The state directory's files
+        are swept for the token and its hex as well, since "the sidecar's log"
+        is a file before it is anything else. A ``logging.info("issued %s",
+        token.hex())`` added to any of these paths fails here; before this
+        test, it failed nothing.
+        """
+        capture = _CapturingHandler()
+        root = logging.getLogger()
+        mp_logger = logging.getLogger("multiprocessing")
+        previous_levels = (root.level, mp_logger.level)
+        root.addHandler(capture)
+        mp_logger.addHandler(capture)
+        root.setLevel(logging.DEBUG)
+        mp_logger.setLevel(logging.DEBUG)
+
+        def echo(request: RpcRequest) -> RpcResponse:
+            return RpcResponse(id=request.id, ok=True, result={"method": request.method})
+
+        rpc = SidecarRpc(state_dir=state, handler=echo)
+        try:
+            rpc.start()
+            token = read_token(runtime_dir(state))
+            # The canary proves the trap is armed: a capture that silently
+            # caught nothing would make every absence below vacuous.
+            logging.getLogger("pz_agent_core.rpc").debug("canary %s", "record")
+            answer = RpcClient(load_descriptor(state), authkey=token, deadline=10.0).call(
+                "session.status"
+            )
+            assert answer.ok
+
+            swept = {
+                path.name: path.read_bytes()
+                for path in state.rglob("*")
+                if path.is_file() and path.name != TOKEN_FILENAME
+            }
+            rpc.close()
+        finally:
+            root.removeHandler(capture)
+            mp_logger.removeHandler(capture)
+            root.setLevel(previous_levels[0])
+            mp_logger.setLevel(previous_levels[1])
+
+        assert any("canary" in text for text in capture.texts), "the capture caught nothing"
+        assert DESCRIPTOR_FILENAME in swept, "the published files were not swept"
+        spellings = (token.hex(), token.hex().upper(), repr(token), token.decode("latin-1"))
+        for text in capture.texts:
+            for spelling in spellings:
+                assert spelling not in text, f"a log record carries the token: {text[:80]!r}"
+        for name, raw in swept.items():
+            assert token not in raw, f"{name} carries the token bytes"
+            assert token.hex().encode() not in raw, f"{name} carries the token hex"
 
 
 class TestFindingAServer:

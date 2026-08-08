@@ -15,6 +15,7 @@ from pz_agent_cli.supervisor import (
     CONTROL_FILE_NAME,
     DEFAULT_STALE_AFTER_MS,
     PID_FILE_NAME,
+    ControlChannel,
     ControlKind,
     ControlRequest,
     GameRunning,
@@ -36,6 +37,7 @@ from pz_agent_core.protocol import SessionMode
 from pz_agent_core.session.heartbeat import Heartbeat, Peer, PeerLiveness
 from pz_agent_core.version import PRODUCT_VERSION
 from tests.fixtures.ipc_builders import BASE_TIME_MS, FakeClock
+from tests.fixtures.sidecar_worlds import attached_world
 
 
 class SpawnRecorder:
@@ -576,3 +578,104 @@ class TestTheChildIsConfirmedAlive:
         assert not outcome.started
         assert "exit code 4" in outcome.detail
         assert supervisor.status().state is SupervisorState.NEVER_STARTED
+
+
+# ---------------------------------------------------------------------------
+# the state directory becomes unwritable mid-session (E12-M03-T004)
+# ---------------------------------------------------------------------------
+
+
+class BreakingChannel(ControlChannel):
+    """A control channel on a state directory that stopped accepting writes.
+
+    Reads still work — files already there stay readable — but the unlink that
+    consumes a request fails, which is what an unwritable directory does to
+    ``ControlChannel.clear``. A double rather than ``chmod`` because the tests
+    may run as root, where directory permissions do not refuse anything.
+    """
+
+    def clear(self) -> bool:
+        raise PermissionError(13, "Permission denied")
+
+
+class TestAnUnwritableStateDirectoryMidSession:
+    """The sidecar reports the condition rather than losing the session.
+
+    Before this was pinned, the tick loop died on the first failed pid-record
+    write: ``PidFile.refresh`` raised straight through ``SidecarLoop.tick``,
+    ending a session that was driving a character over a file whose only job
+    is to describe that session. The wrecks here are root-proof — the scratch
+    file the write needs is taken by a directory — because a ``chmod``-based
+    wreck silently holds nothing when the suite runs as root.
+    """
+
+    def test_the_failed_pid_refresh_is_reported_and_the_session_survives(
+        self, tmp_path: Path
+    ) -> None:
+        with attached_world(tmp_path, with_pid_file=True) as world:
+            pid_file = world.loop.pid_file
+            assert pid_file is not None
+            pid_file.claim(os.getpid())
+            world.beat_game()
+            assert world.loop.tick().state_problems == ()
+
+            # The wreck: the scratch file `_write_json` writes through is taken
+            # by a directory, so every pid-record write now fails.
+            pid_path = world.state_dir / PID_FILE_NAME
+            scratch = pid_path.with_name(f"{pid_path.name}.tmp.{os.getpid()}")
+            scratch.mkdir()
+            # Negative control: the wreck really does break the write, and the
+            # record's own refresh stays honest about it.
+            with pytest.raises(OSError):
+                pid_file.refresh()
+
+            world.beat_game()
+            outcome = world.loop.tick()
+
+            assert any("pid record" in problem for problem in outcome.state_problems), (
+                f"the failed refresh went unreported: {outcome.state_problems}"
+            )
+            assert any("status" in problem for problem in outcome.state_problems), (
+                "the report must say what the lost record costs"
+            )
+            assert world.loop.session is not None, "the session was lost over its bookkeeping"
+
+            # The condition persists, so every affected tick reports it, and
+            # the loop's bounded ring retains it for the end-of-run log.
+            world.beat_game()
+            assert world.loop.tick().state_problems != ()
+            assert world.loop.state_problems != ()
+
+            # Repair: writes resume and the report stops.
+            scratch.rmdir()
+            world.beat_game()
+            recovered = world.loop.tick()
+            assert recovered.state_problems == ()
+            assert pid_file.read() is not None, "the record was not re-established"
+
+    def test_a_control_request_that_cannot_be_consumed_is_reported_not_fatal(
+        self, tmp_path: Path
+    ) -> None:
+        """The other mid-session state write: the request file's consuming unlink.
+
+        The request is still applied — a disarm only ever takes authority away
+        — but the failure to remove its file is reported, because a request
+        that will be seen again is a fact the operator needs, not a silence.
+        """
+        with attached_world(tmp_path) as world:
+            broken = BreakingChannel(world.state_dir / CONTROL_FILE_NAME, clock=world.clock)
+            world.loop.control = broken
+            ControlChannel(broken.path, clock=world.clock).write(ControlKind.DISARM)
+            world.beat_game()
+
+            outcome = world.loop.tick()
+
+            assert any("control request" in problem for problem in outcome.state_problems)
+            decision = world.loop.control_decision
+            assert decision is not None
+            assert decision.kind is ControlKind.DISARM
+            assert decision.applied, "the request itself must still be obeyed"
+            assert world.loop.session is not None
+            # The loop keeps ticking; the unconsumed file does not wedge it.
+            world.beat_game()
+            assert world.loop.tick().tick == 2

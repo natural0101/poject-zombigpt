@@ -735,6 +735,73 @@ class TestAnEpicDoesNotCloseOnACount:
 class TestTheRealPlanIsWellFormed:
     """The model has to survive meeting its own data."""
 
+    def test_the_archive_tasks_require_the_per_member_verification(
+        self, real_plan: dict[str, Any]
+    ) -> None:
+        """E11-M04-T007's criterion, asserted on the wiring that makes it true.
+
+        "A ZIP whose contents were never checked is not counted" is realised
+        by nothing but the ordering: every archive task must depend, directly
+        or transitively, on E11-M03-T003 — the per-member digest verification.
+        The criterion-coverage audit found this chain asserted nowhere, so
+        deleting one link would have silently unmade the guarantee.
+        """
+        by_id = {
+            task["id"]: task
+            for epic in real_plan["epics"]
+            for milestone in epic["milestones"]
+            for task in milestone["tasks"]
+        }
+
+        def reaches_verification(identifier: str, seen: frozenset[str]) -> bool:
+            if identifier == "E11-M03-T003":
+                return True
+            if identifier in seen:
+                return False
+            return any(
+                reaches_verification(dep, seen | {identifier})
+                for dep in by_id[identifier].get("depends_on") or []
+            )
+
+        unverified = [
+            identifier
+            for identifier in by_id
+            if identifier.startswith("E11-M03-T")
+            and identifier > "E11-M03-T003"
+            and not reaches_verification(identifier, frozenset())
+        ]
+        assert unverified == [], (
+            "these archive tasks no longer require the per-member verification "
+            f"to have run: {unverified}"
+        )
+
+    def test_a_build_task_cannot_pass_on_a_spec_alone(self, real_plan: dict[str, Any]) -> None:
+        """E11-M04-T006's criterion, in the form the plan can actually enforce.
+
+        A PyInstaller spec exists whether or not any executable was ever
+        built, and so does the CI-log evidence file — so the evidence-exists
+        check cannot tell a built tree from a described one. What can: every
+        PASS build task must carry a ci_url naming the run that produced and
+        answered the executables. Flipping one to PASS with only a spec on
+        disk fails here.
+        """
+        build_tasks = [
+            task
+            for epic in real_plan["epics"]
+            for milestone in epic["milestones"]
+            if milestone["id"] in {"E11-M02", "E11-M03"}
+            for task in milestone["tasks"]
+        ]
+        assert build_tasks, "the build milestones have vanished from the plan"
+        unwitnessed = [
+            task["id"]
+            for task in build_tasks
+            if task["status"] == "PASS" and not (task.get("ci_url") or "").startswith("https://")
+        ]
+        assert unwitnessed == [], (
+            f"these build tasks are PASS with no run to witness the build: {unwitnessed}"
+        )
+
     def test_every_task_carries_every_field(self, real_plan: dict[str, Any]) -> None:
         required = {
             "id",

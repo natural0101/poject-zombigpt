@@ -235,6 +235,38 @@ def test_a_key_shaped_token_is_removed_even_without_a_label() -> None:
     assert null_redactor().text(f"value {token}") == f"value {SECRET_PLACEHOLDER}"
 
 
+@pytest.mark.parametrize(
+    ("rule", "secret"),
+    [
+        # Assembled at runtime: the repository's own secret scanner walks every
+        # tracked file, and a literal key shape here would be a finding.
+        ("openai_key", "sk-" + "a1B2" * 4),
+        ("github_token", "ghp_" + "Z9x8" * 4),
+        ("github_token", "gho_" + "Z9x8" * 4),
+        ("aws_key_id", "AKIA" + "0123456789ABCDEF"),
+    ],
+    ids=["openai-bare", "github-pat", "github-oauth", "aws-key-id"],
+)
+def test_each_bare_key_shape_is_removed_by_its_own_rule(rule: str, secret: str) -> None:
+    """The three ``SECRET_RULES`` no other test reaches, each pinned by label.
+
+    The samples carry **no** ``api_key=`` label on purpose: a labelled sample
+    is matched by ``credential_assignment``, so every earlier test of these
+    shapes was exercising that rule while the shape rules themselves could rot
+    unobserved (E12-M01-T005). Three claims per shape, because each fails to a
+    different regression: the label in ``findings`` fails if the *pattern*
+    breaks; "the secret left" fails if the *replacement* changes to annotate
+    rather than remove; the placeholder appearing fails if the rule is dropped.
+    """
+    sample = f"saw {secret} in a log line"
+
+    redacted = null_redactor().text(sample)
+
+    assert rule in null_redactor().findings(sample), "the shape's own rule no longer matches"
+    assert secret not in redacted, redacted
+    assert SECRET_PLACEHOLDER in redacted, redacted
+
+
 # ---------------------------------------------------------------------------
 # bounds
 # ---------------------------------------------------------------------------

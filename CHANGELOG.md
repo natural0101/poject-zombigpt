@@ -12,6 +12,28 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **The remaining criterion-coverage gaps are closed — and four criteria were
+  false in code, now true.** Fifteen audit entries across four fronts: secret
+  hygiene now scans REAL writers (a real token issued into a real state dir,
+  the real support bundle built and every member's bytes swept; a full
+  SidecarRpc lifecycle with all loggers captured; the three untested key
+  shapes each removed by its own rule; `verify_bundle` over a
+  credential-carrying archive); recovery now observed (the game dying
+  mid-action ends GAME_DISCONNECTED; an established link dropped mid-exchange
+  is survived on both ends; an unwritable state directory is *reported* — it
+  used to raise and lose the session; a truncated journal now *refuses to
+  arm* — it used to arm right over the tear); the release gate gained its
+  missing teeth (an all-NOT_RUN manifest certifies nothing; a same-size
+  member edit is caught by its digest; a member the index never recorded is
+  refused — the gate used to certify an archive carrying an extra file); and
+  the MCP subprocess E2E gained its two missing journeys (a real client
+  submits, polls and cancels a goal against the real queue — which also
+  found the fixture never passed its goal channel to the router; a sidecar
+  lost mid-session is an error payload and the child survives). The plan
+  gate itself gained two rules: archive tasks must transitively require the
+  per-member verification, and no build task may PASS without a run to
+  witness the build — the second caught a real instance the moment it ran.
+
 - **The typed goal channel is served by the real sidecar.** `SidecarLoop` owns
   a `GoalQueue` ticked every loop tick (budgets and TTLs expire for real);
   armed and AUTONOMOUS, the loop activates the oldest admissible goal and asks

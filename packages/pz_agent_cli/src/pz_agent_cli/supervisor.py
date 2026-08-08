@@ -161,7 +161,12 @@ def _write_json(path: Path, document: Mapping[str, Any]) -> None:
             os.fsync(handle.fileno())
         os.replace(scratch, path)
     except OSError:
-        scratch.unlink(missing_ok=True)
+        # Discarding the cleanup's own failure: on a state directory that has
+        # stopped accepting writes, the unlink fails for the same reason the
+        # write did, and letting it raise here would replace the write error —
+        # the one the caller has to report — with the cleanup's.
+        with suppress(OSError):
+            scratch.unlink(missing_ok=True)
         raise
 
 

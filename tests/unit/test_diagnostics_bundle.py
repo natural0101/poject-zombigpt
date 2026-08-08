@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pytest
 
+from pz_agent_cli.context import resolve_workspace
+from pz_agent_cli.support import build_support_bundle
 from pz_agent_core.diagnostics.bundle import (
     MANIFEST_NAME,
     BundleBuilder,
@@ -21,7 +23,9 @@ from pz_agent_core.diagnostics.redaction import (
     build_redactor,
     null_redactor,
 )
-from tests.fixtures.cli_worlds import StepDatetime
+from pz_agent_core.rpc.descriptor import runtime_dir
+from pz_agent_core.rpc.token import TOKEN_FILENAME, issue_token
+from tests.fixtures.cli_worlds import StepDatetime, make_world
 from tests.fixtures.platform_trees import CYRILLIC_USER
 
 
@@ -193,6 +197,42 @@ def test_verify_flags_a_member_that_reached_the_archive_unredacted(tmp_path: Pat
     assert "REVIEW BEFORE SHARING" in rendered
 
 
+@pytest.mark.parametrize(
+    ("member_text", "expected_finding"),
+    [
+        # Key shapes assembled at runtime so the repository's own secret
+        # scanner does not — correctly — flag this file.
+        ("2026-08-05 INFO auth with " + "sk-ant-" + "A1b2C3d4E5f6G7h8" + "\n", "anthropic_key"),
+        ('{"api_key": "9f8e7d6c5b4a3210"}\n', "credential_assignment"),
+    ],
+    ids=["bare-key", "labelled-assignment"],
+)
+def test_verify_of_an_archive_carrying_a_credential_produces_findings(
+    tmp_path: Path, member_text: str, expected_finding: str
+) -> None:
+    """The composed claim of E12-M01-T006, asserted end to end.
+
+    Redactor-flags-credential and findings-reach-VerifiedEntry were each
+    tested alone, but never the composition the criterion actually makes:
+    ``verify_bundle`` over an archive whose member carries a token or key
+    returns non-empty findings. A verifier that scanned members with an empty
+    rule list — or dropped credential findings on the way into the entry —
+    would have passed both halves and failed the whole.
+    """
+    archive_path = tmp_path / "leaky.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("logs/pz-agent.log", member_text)
+
+    verification = verify_bundle(archive_path, redactor=null_redactor())
+
+    assert not verification.clean
+    entry = verification.entries[0]
+    assert entry.findings, "a member carrying a credential must be flagged"
+    assert expected_finding in entry.findings
+    rendered = "\n".join(verification.render_lines())
+    assert "REVIEW BEFORE SHARING" in rendered
+
+
 def test_verify_reports_a_member_it_could_not_scan(tmp_path: Path) -> None:
     archive_path = tmp_path / "binary.zip"
     with zipfile.ZipFile(archive_path, "w") as archive:
@@ -210,6 +250,41 @@ def test_verify_refuses_a_file_that_is_not_an_archive(tmp_path: Path) -> None:
 
     with pytest.raises(BundleError, match="not a readable support bundle"):
         verify_bundle(path)
+
+
+def test_no_member_of_the_real_support_bundle_carries_the_rpc_token(tmp_path: Path) -> None:
+    """The whole chain, not the redactor component: E12-M01-T003.
+
+    A real token is issued into the workspace's real runtime directory — the
+    place a running sidecar keeps it — a real log is left where ``logs``
+    collects from, and the bundle is the one ``pz-agent logs --bundle``
+    builds: versions, doctor, capabilities, config, log tails. Then every
+    member's bytes are scanned for the token and for its hex. The component
+    tests could all stay green while a future member (a doctor field, a new
+    tail) started carrying the key; this is the assertion that fails then.
+    """
+    world = make_world(tmp_path)
+    workspace = resolve_workspace(world.ctx)
+    token = issue_token(runtime_dir(workspace.state_dir))
+    workspace.logs_dir.mkdir(parents=True, exist_ok=True)
+    (workspace.logs_dir / "pz-agent.log").write_text(
+        "2026-08-05 INFO rpc.published family=AF_UNIX\n", encoding="utf-8"
+    )
+
+    bundle = build_support_bundle(world.ctx, workspace, tmp_path / "support.zip")
+
+    # Guards against a vacuous pass: the secret is really on disk inside the
+    # workspace the bundle was built from, and the bundle really has members,
+    # including the log directory the runtime directory lives beside.
+    assert (runtime_dir(workspace.state_dir) / TOKEN_FILENAME).read_bytes() == token
+    assert {"versions.json", "doctor.json", "logs/pz-agent.log"} <= set(bundle.names)
+    spellings = (token, token.hex().encode(), token.hex().upper().encode())
+    with zipfile.ZipFile(bundle.path) as archive:
+        for name in archive.namelist():
+            data = archive.read(name)
+            assert data, f"{name}: an empty member scans clean vacuously"
+            for spelling in spellings:
+                assert spelling not in data, f"{name} carries the RPC token"
 
 
 def test_the_manifest_records_the_creation_time_and_totals(tmp_path: Path) -> None:

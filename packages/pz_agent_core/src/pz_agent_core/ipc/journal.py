@@ -164,6 +164,42 @@ def read_header(path: Path) -> JournalHeader | None:
     return probe_header(path)[0]
 
 
+def probe_truncation(path: Path) -> str | None:
+    """Why the journal at *path* cannot currently be trusted whole, or None.
+
+    A journal whose last bytes have no terminating newline ends mid-record:
+    either its producer is one syscall away from committing the line, or the
+    producer died — or the file was cut — and the tail is a record that was
+    lost. The reader already withholds that tail (§3.5), which is the right
+    behaviour for *reading*; this probe exists for the caller deciding whether
+    to grant authority over the stream, where "the last thing written here may
+    be missing" is a reason to refuse rather than a diagnostic to skip past.
+
+    A missing or empty file is None: a stream that has not started is not a
+    damaged one. A first line that is complete but is not a header is reported,
+    because such a file cannot be read at all (see :func:`probe_header`).
+    """
+    try:
+        with path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            if size == 0:
+                return None
+            handle.seek(size - 1)
+            last = handle.read(1)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        return f"journal is unreadable: {exc}"
+    if last != b"\n":
+        return (
+            f"{path.name} ends mid-record at byte {size}: the bytes after the last "
+            "newline were never committed, so the final record is truncated"
+        )
+    problem = probe_header(path)[1]
+    return None if problem is None else f"{path.name}: {problem}"
+
+
 def _file_size(path: Path) -> int:
     try:
         return path.stat().st_size
