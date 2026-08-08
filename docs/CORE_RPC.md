@@ -132,13 +132,19 @@ tick. Serving goes through `SidecarSupervisor.serve_rpc`, which owns the
 descriptor and token lifecycle below, and comes down in the same `finally` that
 shuts the loop down, so the descriptor is gone before the process is.
 
-Session, observations, capabilities, memory and diagnostics are answered from
-the live loop. Actions, plans and the goal channel are not served by this build:
-those methods answer `CORE_REFUSED` with a named reason (see the module
-docstring of `core_services.py`), which a client can read verbatim — a refusal,
-not a stub. `tests/contract/test_sidecar_serves_the_core.py` proves the whole
-path from a second process's client (`RemoteCoreServices.from_state_dir`) to
-the real core and back.
+Session, observations, capabilities, memory, diagnostics, the goal channel and
+actions are answered from the live loop. `action.submit` admits into a bounded
+queue and returns the queued record without waiting; the tick thread drains at
+most one submission per tick through the same funnel a planner proposal takes,
+and `action.status` reads the channel's own record back. Plans are the one
+surface not served: `plan.execute` answers `CORE_REFUSED` with a named reason
+(see the module docstring of `core_services.py`), which a client can read
+verbatim — a refusal, not a stub — and the goal channel is the served
+multi-step shape. `tests/contract/test_sidecar_serves_the_core.py` proves the
+whole path from a second process's client (`RemoteCoreServices.from_state_dir`)
+to the real core and back, and `tests/contract/test_remote_actions_served.py`
+proves a submitted action is drained by the real loop to its own terminal
+result.
 
 ## Finding a running server
 

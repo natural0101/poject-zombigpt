@@ -96,9 +96,12 @@ of them is a typo this document is entitled to correct:
 `min(config planner.max_steps, 5)` and says so in a comment. The MCP path's `8`
 is *not* clamped anywhere this document could find, and
 `PlanRequest.__post_init__` (`pz_agent_core.planner.provider`) raises
-`ValueError` for a `max_steps` above 5. What a client actually gets back from `pz_plan_execute` with the default
-limits has **not been verified here** — it needs a running sidecar, which no
-test in this tree stands up for that call.
+`ValueError` for a `max_steps` above 5. What a client actually gets back from
+`pz_plan_execute` against a running sidecar is the link's named refusal —
+`plan.execute` is deliberately not served over Core RPC
+(`REMOTE_PLANS_UNSERVED` in `pz_agent_cli/core_services.py`) — so the collision
+is reachable only in an embedded run, where `main()` is handed a services
+bundle in-process.
 
 ---
 

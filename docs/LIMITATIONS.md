@@ -99,25 +99,27 @@ which is precisely why it is forbidden.
 These are not design trades. They are places where a component exists, is
 tested, and is not connected to the thing that would use it.
 
-**The sidecar does not publish a Core RPC endpoint.**
-`SidecarSupervisor.serve_rpc` exists, is tested
-(`tests/unit/test_rpc_sidecar_lifecycle.py`), and is called by nothing on the
-shipped path: `pz-agent start --foreground` attaches, claims the pid record and
-runs the loop without ever standing the server up. So `pz-agent-mcp` launched
-against a running sidecar finds no `runtime/core-rpc.json` and exits **1**
-(`EXIT_NOT_WIRED`). The whole MCP surface is exercised end to end
-(`tests/contract/test_mcp_subprocess_e2e.py`) against an `RpcServer` the test
-stands up itself over fake core services, which proves the executable and the
-protocol and says nothing about the sidecar serving them.
+**`plan.execute` is not served over the Core RPC link.** An earlier revision of
+this entry said the sidecar published no Core RPC endpoint at all; that gap is
+closed — `pz-agent start --foreground` builds `CoreServices` over the running
+loop and calls `serve_core_rpc(...)` after a successful attach and before the
+first tick, so `pz-agent-mcp` finds `runtime/core-rpc.json` and serves. Session,
+observations, capabilities, memory, diagnostics, the goal channel and actions
+are answered from the live loop
+(`tests/contract/test_sidecar_serves_the_core.py`,
+`tests/contract/test_remote_actions_served.py`). What remains unserved is
+plans: `plan.execute` over the link answers `CORE_REFUSED` with a named reason
+(`REMOTE_PLANS_UNSERVED` in `pz_agent_cli/core_services.py`), and the goal
+channel is the multi-step shape the link serves.
 
 Check it yourself, in one command:
 
 ```
-grep -rn "serve_rpc" packages/ tests/
+grep -rn "serve_core_rpc" packages/ tests/
 ```
 
-If the only production hit is the definition in `supervisor.py`, this paragraph
-is still true.
+If `app.py` no longer calls it, the closed half of this paragraph has gone
+stale again.
 
 **`voice run` cannot start a TeamON session.** `select_adapter` refuses with the
 install step when the SDK is absent, and refuses with a different message when
@@ -143,9 +145,10 @@ a plan at 5 steps; `pz_plan_execute` publishes — and *defaults to* — 8;
 `planner.max_steps` in `config.toml` accepts up to 32. The CLI clamps the
 configured value to 5 explicitly. The MCP path's 8 is not clamped anywhere this
 document could find, and the core planner's `PlanRequest.__post_init__` raises
-`ValueError` above 5. **What a client actually gets back from `pz_plan_execute` with default
-limits is unverified**: it needs a sidecar serving the call, which the point
-above says nothing stands up.
+`ValueError` above 5. **What a client actually gets back from `pz_plan_execute`
+against a running sidecar is the link's named refusal** — `plan.execute` is not
+served over Core RPC (see above) — so the 8-versus-5 collision is reachable
+only in an embedded run, where `main()` is handed a services bundle in-process.
 
 **`safety.manual_takeover` is read by nothing.** It is a validated boolean with
 a default of `true` and no reader anywhere in `packages/`. Takeover *detection*

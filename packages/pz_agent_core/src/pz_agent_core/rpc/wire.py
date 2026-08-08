@@ -71,6 +71,18 @@ MAX_ID_CHARS: Final = 64
 
 _ENVELOPE_FORMAT: Final = "pz-agent-core-rpc/1"
 
+#: Deepest nesting of arrays and objects a frame may carry. The envelope is
+#: shallow — five top-level fields, whose ``params`` is one object of scalars
+#: and at most a small structure — so a bound this generous never refuses a
+#: real message. It exists because ``json.loads`` recurses once per nesting
+#: level, and a frame of ``[`` repeated a thousand times, well under the byte
+#: cap, overflows the interpreter's stack with a ``RecursionError`` the byte
+#: cap cannot see. The depth is measured on the raw bytes *before* parsing, so
+#: the parser is never handed a document that could make it recurse past here —
+#: catching ``RecursionError`` after the fact is not safe, because the stack is
+#: already near its limit when it fires.
+MAX_NESTING_DEPTH: Final = 64
+
 
 class ErrorCode:
     """The closed set of failures the envelope itself can report.
@@ -207,9 +219,43 @@ def encode_response(response: RpcResponse) -> bytes:
     return data
 
 
+def _nesting_within_bound(data: bytes, what: str) -> None:
+    """Refuse a frame that nests deeper than the parser can safely recurse.
+
+    Walked on the raw bytes so nothing recurses: brackets and braces outside a
+    string move a counter, a string is skipped with its backslash escapes
+    honoured (a ``"`` after a ``\\`` does not close it), and the running depth
+    is checked against the bound as it climbs. This runs before ``json.loads``,
+    which is the point — the parser must never be given a document that could
+    take it past :data:`MAX_NESTING_DEPTH`, because a ``RecursionError`` fires
+    with the stack already spent and catching it is not a safe recovery.
+    """
+    depth = 0
+    in_string = False
+    escaped = False
+    for byte in data:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif byte == 0x5C:  # backslash
+                escaped = True
+            elif byte == 0x22:  # closing quote
+                in_string = False
+            continue
+        if byte == 0x22:  # opening quote
+            in_string = True
+        elif byte in (0x5B, 0x7B):  # '[' or '{'
+            depth += 1
+            if depth > MAX_NESTING_DEPTH:
+                raise RpcError(f"{what} nests deeper than {MAX_NESTING_DEPTH}")
+        elif byte in (0x5D, 0x7D) and depth > 0:  # ']' or '}'
+            depth -= 1
+
+
 def _loaded(data: bytes, cap: int, what: str) -> dict[str, Any]:
     if len(data) > cap:
         raise TooLarge(f"{what} is {len(data)} bytes, cap is {cap}")
+    _nesting_within_bound(data, what)
     try:
         document: Any = json.loads(data.decode("utf-8"))
     except UnicodeDecodeError as exc:
@@ -218,6 +264,13 @@ def _loaded(data: bytes, cap: int, what: str) -> dict[str, Any]:
         # `exc` carries a position, never the text, which is why it is safe to
         # name here at all.
         raise RpcError(f"{what} is not JSON (at char {exc.pos})") from None
+    except ValueError as exc:
+        # A ``ValueError`` that is not a ``JSONDecodeError``: the parser's own
+        # refusal of a number too extreme to build, which on CPython is the
+        # integer-string-conversion ceiling firing on a literal of thousands of
+        # digits — inside the byte cap, outside what any real parameter carries.
+        # Named as malformed without echoing the digits.
+        raise RpcError(f"{what} carries a number the parser refuses") from exc
     if not isinstance(document, dict):
         raise RpcError(f"{what} must be a JSON object")
     # The first thing that separates our bytes from anything else that happens

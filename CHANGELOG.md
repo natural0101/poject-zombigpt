@@ -10,7 +10,39 @@ drift out of sync with `pz_agent_core.version`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Two decoder crashes on hostile RPC frames, both under the byte cap, both
+  now typed refusals.** A seeded fuzz over `decode_request`/`decode_response`
+  found that a frame of a thousand nested brackets (thirty-two times under the
+  64 KiB request cap) overflowed the interpreter with a bare `RecursionError`,
+  and an integer literal of five thousand digits raised a plain `ValueError`
+  from CPython's integer-string-conversion ceiling — neither caught by the
+  decoder, both reaching the serving loop raw. `_loaded` now measures nesting
+  depth on the raw bytes *before* parsing and refuses past
+  `MAX_NESTING_DEPTH` (so the parser is never handed a document that could
+  recurse past the bound — catching `RecursionError` after the fact is not a
+  safe recovery), and widens its catch to the `ValueError` the absurd number
+  raises, naming both as `MALFORMED` without echoing the payload. The two
+  reproducers are promoted from the fuzz suite's `finds_` markers to real
+  regression tests.
+
 ### Added
+
+- **A seeded, deterministic wire fuzzer and a bounded loop soak.**
+  `tests/unit/test_wire_fuzz.py` drives thousands of structured mutations
+  (truncation at every boundary, type swaps, absurd lengths, unicode and
+  surrogate garbage, bounded deep nesting, duplicate keys) through both
+  decoders, asserting every input either round-trips or raises a typed
+  `RpcError` and nothing else — the property that surfaced the two crashes
+  above. `tests/unit/test_loop_soak.py` runs a real `SidecarLoop` for
+  thousands of ticks under a deterministic interleaving of observations, goal
+  and action submissions, disarm/re-arm and panic, and asserts the design's
+  boundedness invariants from the outside: the action record store never
+  exceeds its cap and never evicts an in-flight record, the goal queue's
+  pending stays within its cap, and the thread set returns to its start after
+  a clean shutdown.
+
 
 - **Remote actions are served over the link.** `action.submit` no longer
   refuses: a bounded `ActionChannel` (explicit caps, idempotent resubmission,
