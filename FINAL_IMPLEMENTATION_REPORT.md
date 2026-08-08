@@ -4,12 +4,12 @@ Prepared to the gate in [`docs/RELEASE.md`](docs/RELEASE.md), whose "The final
 report" section lists nine things this document must state. They are §1 to §9
 below, in that order.
 
-**Base commit:** `main` at `edeff8e` (see below — it is refreshed each time this file is)
+**Base commit:** `main` at `094af1e` (see below — it is refreshed each time this file is)
 **Versions:** product 0.1.0 · protocol 1.1 · rpc protocol 1.0 · schema 1.0 · mod 0.1.0 · supported build 42.20
 
 A report cannot name the commit that contains it — the hash does not exist until
 the commit is made. The hash above is this report's parent. Check
-`git log edeff8e..HEAD` before trusting any number here against a newer tree.
+`git log 094af1e..HEAD` before trusting any number here against a newer tree.
 
 **Note the version.** The release candidate is named `v1.0.0-rc1`, and every
 version constant in the tree says `0.1.0`. No `1.0.0` exists in `version.py`,
@@ -17,14 +17,14 @@ version constant in the tree says `0.1.0`. No `1.0.0` exists in `version.py`,
 filename is a target, not a state.
 
 Every figure below was produced by running something at this commit. The
-previous revision of this document was written against `dev` at `6f73bc0`, 78
-commits back, and had drifted: it claimed 3677 Python tests (there are 6581,
-and three of them now fail), 271 mypy files (341), 316 formatted files (424),
-6 schemas (10), 31 MCP tools (34), 62 luacheck files (63), a second skip that
-no longer exists, and a green gate where `scripts/check.sh` now exits 1. None
-of that was dishonest when written. All of it was wrong by the time anyone read
-it, which is why this revision states its base commit at the top and why the
-numbers were re-measured rather than carried over.
+previous revision was pinned to `edeff8e` and honestly reported a red gate —
+three failing tests and a lint error, the mid-flight state of the
+release-candidate work. That work has landed: the failing tests were the old
+phrase pin and the plan mid-update, both resolved, and `scripts/check.sh` at
+this commit **exits 0**. The suite count moved again (6581 → 6564 collected)
+because R-007 deleted a 600-line module production never imported and rewrote
+its tests against the shipped one. The lesson stands either way: numbers are
+re-measured at each revision, never carried over.
 
 ---
 
@@ -309,40 +309,33 @@ Two symbols deserve naming individually, because their failure modes are quiet:
 
 ## 3. Tests and their results
 
-`scripts/check.sh` at this commit, every step — **and it exits 1**:
+`scripts/check.sh` at this commit, every step — and it exits 0:
 
 ```
-ruff format        ok      424 files already formatted
-ruff lint          FAILED  2 × RUF002 in tests/unit/test_voice_session.py
-mypy               ok      no issues found in 341 source files
+ruff format        ok      423 files already formatted
+ruff lint          ok      all checks passed
+mypy               ok      no issues found in 340 source files
 forbidden patterns ok      no forbidden patterns found
 version sync       ok      product=0.1.0 protocol=1.1 schema=1.0 mod=0.1.0
 schema validity    ok      10 schema(s) valid
 playbook in sync   ok      docs/LIVE_TEST_PLAYBOOK.md matches its 20 scenarios
-pytest             FAILED  6574 passed, 4 skipped, 3 failed
+pytest             ok      6559 passed, 5 skipped of 6564 collected
 luacheck           ok      0 warnings / 0 errors in 63 files
 lua tests          ok      2875 assertions across 26 suites, 0 failed
 ```
 
-**The gate is red, and saying so is what this report is for.** The three pytest
-failures: two in `tests/unit/test_master_plan.py`, where `check_master_plan.py`
-refuses the recorded plan (`E13-M01-T018` is PASS while the task it depends on
-is NOT_STARTED, and `docs/control/STATUS.json` describes the parent commit while
-files have changed since); one in `tests/unit/test_voice_plan_port.py`, where
-this very commit gave the goal channel's refusals their own sentences and left a
-test asserting the old «Не получилось.» The ruff failure is the same commit's
-docstring tripping RUF002 on Cyrillic. All three are the mid-flight state of the
-release-candidate work, not the subsystems this report describes — and none of
-that softens the fact that `main` does not pass its own gate today.
+Both workflows are green against this exact commit: CI run 31227188016 and
+`windows package` run 31227188006, the latter running both executables with
+PATH reduced to the system directories before certifying the archive.
 
-**The four skips, named rather than summarised.** One is a capability-tier
+**The five skips, named rather than summarised.** One is a capability-tier
 disagreement on `movement.move_to` in `test_mcp_action_coverage.py`; two are
 `test_mcp_server.py` declining to test the no-SDK refusal because the MCP SDK
 *is* installed in this environment; one is `test_teamon_bridge.py` on
-`subprocess.CREATE_NO_WINDOW`, which exists only on Windows. None is a missing
-optional dependency. The root-privileges skip in `test_capabilities_scanner.py`
-that the previous revision named is gone: the test now injects the refused read
-instead of provoking it with `chmod`.
+`subprocess.CREATE_NO_WINDOW`, which exists only on Windows; and one is the
+plan's own next-task check skipping with "every remote task is closed; there
+is no next one to check" — the skip that marks the remote stage complete.
+None is a missing optional dependency.
 
 **On the Python matrix.** `.venv` runs 3.11.15 and that is the interpreter every
 number above came from. `python3.12` exists in this container but has no pytest
@@ -488,9 +481,12 @@ Full walkthrough: [`docs/QUICKSTART.md`](docs/QUICKSTART.md).
 
 ## 7. The commit hash
 
-`edeff8e` on `main`. See the header for why this is the parent rather than the
-containing commit; `git log edeff8e..HEAD --oneline` shows anything this
-document does not cover.
+`094af1e` on `main`. See the header for why this is the parent rather than the
+containing commit; `git log 094af1e..HEAD --oneline` shows anything this
+document does not cover. Both workflows are green against it, and
+`docs/control/STATUS.json` records the remote stage at its ceiling: 74.26%
+weighted, every remote-owned task and 48 of 54 integration checks PASS,
+thirteen of fifteen epics closed. The open fifth of the plan is §9.
 
 ---
 
@@ -505,8 +501,8 @@ dist/pz-agent-windows-v1.0.0-rc1.zip
 
 **It is marked INCOMPLETE and it is not a release candidate by this project's
 own gate.** `BUILD-MANIFEST.json` records `complete: false`, `build_rc.py` exits
-1, and `scripts/check_release.py --rc` refuses — now on the red suite as well as
-on the missing executables:
+1, and `scripts/check_release.py --rc --junit <fresh report>` refuses — on the
+missing executables and on nothing else, now that the suite is green:
 
 ```
 [ok  ] archive:          pz-agent-windows-v1.0.0-rc1.zip, 69 entr(ies)
@@ -515,15 +511,21 @@ on the missing executables:
 [ok  ] archive.bat:      all 11 wrappers are at the root
 [FAIL] archive.bin:      missing from bin/: pz-agent.exe, pz-agent-mcp.exe
 [ok  ] archive.digests:  68 file(s) match the digests recorded for them
-[FAIL] tests:            3 failure(s) and 0 error(s) in 6581 test(s)
+[ok  ] tests:            6559 of 6564 test(s) passed, no failures and no errors; 5 skipped
 
-REFUSED v1.0.0-rc1: 3 of 7 check(s) failed.
+REFUSED v1.0.0-rc1: 2 of 7 check(s) failed.
 ```
 
 Both executables need PyInstaller on Windows. `.github/workflows/windows.yml`
-builds them on `windows-latest`; nothing in this Linux container can. That
-workflow has since run green at `276b9d9`, building both on the runner — but the
-archive in `dist/` predates that run and was not rebuilt from it.
+builds them on `windows-latest`; nothing in this Linux container can. **The
+artefact of record is therefore CI's, not this container's**: run 31227188006
+built both executables from this exact commit, ran them with PATH reduced to
+the system directories (no Python reachable), passed the release gate and
+uploaded `pz-agent-windows-rc` — artifact 9012693407, sha256
+`2d3d9e4b9db95dc9c9f5e31de226424ad95bd9f8fa69b4f93309a45462da8bf7`, 47 576 972
+bytes. `docs/control/EVIDENCE_INDEX.md` tracks the current one; the local
+`dist/` archive above is the historical Linux-built ZIP, kept as the honest
+record of what this container can and cannot produce.
 
 `check_release.py --release` refuses additionally on
 `release/evidence-manifest.json`, which does not exist and is produced by
@@ -609,9 +611,9 @@ Project Zomboid Build 42.20 on Windows, and on nothing else.
 It does not say the architecture is ready and only needs testing. It does not
 say a user can take it from here.
 
-It says: twenty-eight tasks are implemented and covered by 6581 Python tests and
-2875 Lua assertions — 6574 of the Python tests passing at this commit, with §3
-naming the three that are not and the lint that fails beside them; thirty-two
+It says: twenty-eight tasks are implemented and covered by 6564 Python tests and
+2875 Lua assertions — all of them passing at this commit, with the gate exiting
+0 and both workflows green against this exact tree; thirty-two
 defects were found by seam tests and closed, one of them a safety gate that had
 been documented for weeks and never written; two tasks are blocked on a game
 that does not exist in this environment; and §9 is the complete list of what

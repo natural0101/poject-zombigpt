@@ -12,6 +12,16 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Changed
 
+- **FINAL_IMPLEMENTATION_REPORT.md re-pinned to a green tree.** The report now
+  states what `094af1e` actually measures: `scripts/check.sh` exits 0 (6559 of
+  6564 tests passing, five named skips — one of them the plan's own "every
+  remote task is closed"), both workflows green against the exact commit, and
+  the artefact of record is CI's PATH-stripped, gate-certified archive
+  (run 31227188006, sha256 `2d3d9e4b...`) rather than the incomplete
+  Linux-built ZIP, which stays documented as what this container can and
+  cannot produce. The release gate's refusal is now down to exactly the two
+  missing executables — the boundary §9 exists to name.
+
 - **The remote stage is complete: every remote-owned task and 48 of 54
   integration checks PASS; thirteen of fifteen epics close.** Each runnable
   check's command was executed and its outcome recorded with the observation
