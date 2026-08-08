@@ -89,6 +89,7 @@ from pz_agent_core.rpc.wire import (
 )
 
 __all__ = [
+    "ACCEPT_FAILURE_BUDGET",
     "DEFAULT_DEADLINE_SECONDS",
     "AddressTooLong",
     "RpcClient",
@@ -124,6 +125,19 @@ DEFAULT_DEADLINE_SECONDS: Final = 10.0
 #: and either way it must not hold a thread. Injectable per server
 #: (``idle_seconds``) so a test can observe the drop without waiting a minute.
 IDLE_SECONDS: Final = 60.0
+
+#: How many *consecutive* failed accepts the server tolerates before it
+#: concludes the listener itself is dead and stops. One accept-time error must
+#: not stop the sidecar: some platforms surface a connection-level failure out
+#: of ``accept`` itself — a Windows named-pipe client that connects and slams
+#: the door mid-accept raises there, where a Unix socket hands the dead
+#: connection over and lets the challenge fail instead — and that is one rude
+#: client, not a shutdown. But "keep serving" with no bound would spin hot on
+#: a listener whose accept fails instantly forever, so the tolerance is this
+#: small explicit budget, reset by every successful accept: a listener that
+#: fails eight accepts in a row is not serving anyone, and stopping honestly
+#: beats spinning.
+ACCEPT_FAILURE_BUDGET: Final = 8
 
 #: The socket file's name length matters on POSIX: `sun_path` is 108 bytes on
 #: Linux and 104 on macOS, and a state directory under a long profile path eats
@@ -328,6 +342,7 @@ class RpcServer:
         )
         self._served = _Served(address=str(self._listener.address), family=self._family)
         self._stopping = threading.Event()
+        self._accept_failures = 0
 
     @property
     def address(self) -> str:
@@ -344,21 +359,50 @@ class RpcServer:
     def serve_once(self) -> bool:
         """Accept one connection, authenticate it, answer it, close it.
 
-        Returns whether the loop should continue. A failed accept — which is
-        what :meth:`close` looks like from in here — returns ``False`` rather
-        than raising, so the loop below ends quietly on shutdown instead of
-        logging a traceback every time the sidecar stops.
+        Returns whether the loop should continue. An accept that fails during
+        shutdown ends the loop quietly rather than raising — :meth:`close`
+        sets the stop flag before it touches the listener, so that is what
+        shutdown looks like from in here — instead of logging a traceback
+        every time the sidecar stops. An accept that fails while nothing has
+        asked the server to stop is a different event, a rude client rather
+        than a shutdown, and is survived up to :data:`ACCEPT_FAILURE_BUDGET`
+        consecutive times.
         """
         try:
             connection = self._listener.accept()
         except (OSError, EOFError):
-            return False
+            # Not automatically shutdown. `close` sets the stop flag *before*
+            # it closes the listener, so a real shutdown always sees the flag
+            # here; an accept-time error without the flag is a platform
+            # surfacing one rude client out of `accept` itself (a Windows
+            # named-pipe peer that connects and vanishes mid-accept), and
+            # stopping the whole sidecar for it would hand one bad client a
+            # denial of service against the good ones. EOFError is grouped
+            # with OSError deliberately rather than kept as a shutdown
+            # signal: this listener has no authkey, so the stdlib challenge —
+            # the only EOFError source inside `accept` — never runs there,
+            # and `_wake` unblocks a parked accept by *completing* it with a
+            # bare connect, never by making it raise. The flag, not the
+            # exception type, is what says "shutdown".
+            #
+            # The budget is the hot-loop guard: a dead listener with no stop
+            # request would fail every accept instantly, and an unconditional
+            # "keep serving" would spin. A listener that fails eight accepts
+            # in a row is not serving anyone; stopping honestly beats
+            # spinning.
+            if self._stopping.is_set():
+                return False
+            self._accept_failures += 1
+            return self._accept_failures < ACCEPT_FAILURE_BUDGET
         except Exception:
             # Anything else out of `accept` is a caller's malformed approach,
             # not an event worth stopping the server for; it is also not
             # worth logging in detail, because the interesting field would be
             # the key.
             return not self._stopping.is_set()
+        # The budget counts *consecutive* failures only: a listener that can
+        # still hand over a connection is alive, whatever came before.
+        self._accept_failures = 0
         with closing(connection):
             if self._stopping.is_set():
                 # The connection `close` opened to unblock this accept.

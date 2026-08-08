@@ -407,7 +407,7 @@ class TestTheCatalogueMatchesWhatIsServed:
 # is enough for a refusal, whose whole answer is an exit code and a line of
 # stderr, and it is not enough for anything that only exists once a client has
 # completed a handshake: `initialize`, `tools/list`, `tools/call`,
-# `resources/list`, `resources/read`. Those are the sixteen behaviours below.
+# `resources/list`, `resources/read`. Those are the seventeen behaviours below.
 #
 # Each one launches `python -m pz_agent_mcp` and speaks MCP to it with the
 # SDK's own client, against the `sidecar` fixture — a real `RpcServer` carrying
@@ -644,7 +644,7 @@ def _disarm(sidecar: Sidecar) -> None:
 
 
 class TestTheProtocol:
-    """The sixteen things that only exist once a client has said hello.
+    """The seventeen things that only exist once a client has said hello.
 
     The `sidecar` fixture is a real core behind a real socket, and the child is
     a real process. What is *not* real is the game: the ports are doubles, so
@@ -897,6 +897,56 @@ class TestTheProtocol:
         assert stopped["ok"] is True, stopped
         assert stopped["data"] == {"cleared": 2, "disarmed": True, "mode": "OBSERVE"}
         assert sidecar.core.session.stops == 1
+
+    @_HAS_SDK
+    def test_a_goal_cannot_be_submitted_while_disarmed(self, sidecar: Sidecar) -> None:
+        """The arming gate covers the goal channel's one write.
+
+        `pz_goal_submit` needs no capability, so — exactly as with
+        `pz_action_wait` above — nothing but the gate can be refusing it. What
+        makes this a separate test rather than a variation is where the refusal
+        has to fall: the genuine `GoalQueue` behind the fixture keeps a backlog
+        whether or not anything serves it, so a boundary that admitted the goal
+        and *then* said `NOT_ARMED` would leave a disarmed session with work
+        that starts moving the moment somebody arms. Refused-before-admission
+        is therefore asserted from the queue's side, which the wire answer
+        alone cannot distinguish from admitted-and-apologised.
+
+        `pz_goal_status` on the same disarmed connection is the other half of
+        the design and not a bonus: reading the channel is how a disarmed
+        session is understood, so it is deliberately ungated — and its answer
+        showing nothing active and nothing pending is the refusal's
+        postcondition, spoken by the queue itself.
+        """
+        _disarm(sidecar)
+
+        async def script(session: Any, initialised: Any) -> Any:
+            refused = _tool_payload(
+                await session.call_tool(
+                    "pz_goal_submit",
+                    {
+                        "kind": "satisfy_hunger",
+                        "satisfy_to": 0.25,
+                        "idempotency_key": "goal-gate:attempt-1",
+                    },
+                )
+            )
+            readable = _tool_payload(await session.call_tool("pz_goal_status", {}))
+            return refused, readable
+
+        refused, readable = _drive(sidecar.state_dir, script)
+
+        assert refused["ok"] is False, refused
+        assert refused["reason_code"] == "NOT_ARMED"
+        assert refused["retryable"] is False
+        assert "pz_session_arm" in refused["message"]
+        assert sidecar.core.goals.submitted == [], "a disarmed session submitted a goal"
+        assert sidecar.core.goals.queue.active is None
+        assert sidecar.core.goals.queue.pending == ()
+
+        assert readable["ok"] is True, readable
+        assert readable["data"]["active"] is None
+        assert readable["data"]["pending"] == []
 
     @_HAS_SDK
     def test_a_replayed_key_answers_with_the_original_result(self, sidecar: Sidecar) -> None:

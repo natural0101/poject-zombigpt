@@ -306,7 +306,7 @@ machine without the SDK.
 # The TeamON bridge contract
 
 Everything below is what an implementer needs. It is a complete statement of the
-wire: `packages/pz_agent_voice/src/pz_agent_voice/bridge/protocol.py` is the
+wire: `packages/pz_agent_voice/src/pz_agent_voice/teamon.py` is the
 authority, and this section is a reading of it.
 
 ## The process
@@ -319,7 +319,7 @@ byte budget and a kill switch.
 - The bridge program links against the vendor SDK. This build never does.
 - It reads messages on **stdin** and writes them on **stdout**, one JSON object
   per line. Anything it wants to log goes on stderr, or anywhere but stdout.
-- `JsonlBridge` in `bridge/client.py` supervises it: a reader thread drains
+- `JsonlBridge` in `teamon.py` supervises it: a reader thread drains
   stdout into bounded queues, a writer thread drains a bounded outbox into
   stdin. Neither is the caller's thread, so a bridge that has stopped reading
   its stdin cannot wedge the companion's event loop — the pipe fills, the writer

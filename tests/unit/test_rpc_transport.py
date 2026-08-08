@@ -35,6 +35,7 @@ import pz_agent_core.rpc.transport as transport_module
 from pz_agent_core.rpc.descriptor import FAMILY_PIPE, FAMILY_UNIX, RpcDescriptor
 from pz_agent_core.rpc.token import MIN_TOKEN_BYTES, issue_token, read_token
 from pz_agent_core.rpc.transport import (
+    ACCEPT_FAILURE_BUDGET,
     IDLE_SECONDS,
     AddressTooLong,
     RpcClient,
@@ -386,6 +387,146 @@ class TestShutdown:
 
         with pytest.raises(RpcUnavailable):
             client.call("cold")
+
+
+class TestAcceptTimeFailures:
+    """The accept itself failing is a different event from shutdown.
+
+    On a Unix socket a rude client fails *after* accept — the challenge or the
+    read sees the hang-up — but a Windows named pipe can surface the same
+    client as an ``OSError`` out of ``accept`` itself, and treating every
+    accept-time ``OSError`` as "``close`` was called" stopped the whole
+    sidecar for one bad peer. The distinction the code must draw is the stop
+    flag, which ``close`` sets before it touches the listener; and because
+    "keep serving" would spin hot on a listener whose accept fails instantly
+    forever, survival is bounded by a budget of consecutive failures. Both
+    halves are observed here on the real family this machine binds, with the
+    failure injected at the exact seam — the listener's ``accept``.
+    """
+
+    def test_one_connection_level_error_out_of_accept_leaves_the_server_serving(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """One rude client at accept time must not be a shutdown.
+
+        The listener's ``accept`` raises a connection-level ``OSError`` once —
+        the shape a Windows named pipe gives a peer that connects and vanishes
+        mid-accept — and then delegates to the real accept. Under the old
+        blanket ``return False`` the serving thread ends on that first raise
+        and the follow-up call finds nobody; with the flag drawing the line,
+        the follow-up call must succeed.
+        """
+        runtime = tmp_path / "runtime"
+        runtime.mkdir(parents=True)
+        key = issue_token(runtime)
+        server = RpcServer(new_address(runtime), authkey=key, handler=_echo)
+        real_accept = server._listener.accept
+        tripped = threading.Event()
+
+        def accept_rudely_once() -> Connection:
+            if not tripped.is_set():
+                tripped.set()
+                raise ConnectionAbortedError("a peer connected and vanished mid-accept")
+            return real_accept()
+
+        monkeypatch.setattr(server._listener, "accept", accept_rudely_once)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            response = RpcClient(server.descriptor(), authkey=key, deadline=GRACE).call("after")
+        finally:
+            server.close()
+            thread.join(timeout=GRACE)
+
+        assert tripped.is_set(), "the fake never raised, so nothing was proven"
+        assert response.ok, "one accept-time error took the sidecar down with it"
+        assert not thread.is_alive(), "serve_forever did not return after close"
+
+    def test_a_listener_that_cannot_accept_at_all_stops_within_the_budget(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A dead listener must stop the server, boundedly, not spin it hot.
+
+        Every ``accept`` raises instantly and nothing has asked the server to
+        stop, so "keep serving" with no bound would burn a core forever. The
+        loop must give up on its own: ``serve_forever`` returns within the
+        test's patience, and the attempt count shows it spent exactly the
+        budget of consecutive failures — no fewer (it did try) and no more
+        (it did not spin past its own limit).
+        """
+        runtime = tmp_path / "runtime"
+        runtime.mkdir(parents=True)
+        key = issue_token(runtime)
+        server = RpcServer(new_address(runtime), authkey=key, handler=_echo)
+        attempts: list[int] = []
+
+        def dead_accept() -> Connection:
+            attempts.append(1)
+            raise OSError("the listener is dead and every accept fails at once")
+
+        monkeypatch.setattr(server._listener, "accept", dead_accept)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        started = time.monotonic()
+        thread.start()
+        try:
+            thread.join(timeout=GRACE)
+            elapsed = time.monotonic() - started
+
+            assert not thread.is_alive(), (
+                f"serve_forever kept spinning on a dead listener past {GRACE:g}s"
+            )
+            assert len(attempts) == ACCEPT_FAILURE_BUDGET, (
+                f"expected exactly the budget of {ACCEPT_FAILURE_BUDGET} consecutive "
+                f"attempts, saw {len(attempts)}"
+            )
+            assert elapsed < GRACE, f"stopping took {elapsed:.1f}s"
+        finally:
+            server.close()
+
+    def test_a_successful_accept_resets_the_failure_budget(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Consecutive is the load-bearing word: a served client wipes the slate.
+
+        A listener that alternates bursts of failures with real connections is
+        alive, however long it runs; only an unbroken run of failures means
+        the listener is dead. The fake raises one failure short of the budget,
+        hands over a real connection — which must reset the counter — and
+        re-arms the next burst *inside itself*, before returning, so no test
+        thread races the serving loop back into ``accept``. Two such bursts
+        total more than the budget: a counter that merely accumulated across
+        successes would cross it during the second burst and the second call
+        would find a stopped server.
+        """
+        runtime = tmp_path / "runtime"
+        runtime.mkdir(parents=True)
+        key = issue_token(runtime)
+        server = RpcServer(new_address(runtime), authkey=key, handler=_echo)
+        real_accept = server._listener.accept
+        remaining = [ACCEPT_FAILURE_BUDGET - 1]
+
+        def accept_in_bursts() -> Connection:
+            if remaining[0] > 0:
+                remaining[0] -= 1
+                raise ConnectionResetError("a rude client in a burst of them")
+            connection = real_accept()
+            remaining[0] = ACCEPT_FAILURE_BUDGET - 1
+            return connection
+
+        monkeypatch.setattr(server._listener, "accept", accept_in_bursts)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            client = RpcClient(server.descriptor(), authkey=key, deadline=GRACE)
+            assert client.call("first").ok, "the first burst alone stopped the server"
+            assert client.call("second").ok, (
+                "the budget accumulated across a successful accept instead of resetting"
+            )
+        finally:
+            server.close()
+            thread.join(timeout=GRACE)
+
+        assert not thread.is_alive(), "serve_forever did not return after close"
 
 
 class TestNothingIsPickled:

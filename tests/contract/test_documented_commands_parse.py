@@ -29,9 +29,26 @@ from typing import Final
 
 import pytest
 
+from pz_agent_cli import voice as cli_voice
 from pz_agent_cli.app import build_parser
+from pz_agent_cli.config import SCHEMA, SUPPORTED_VOICE_ADAPTERS
 from pz_agent_core.platform.paths import portable_relative_path
 from pz_agent_mcp.__main__ import build_parser as mcp_parser
+from pz_agent_voice import plan_port
+from pz_agent_voice.config import DEFAULT_VOICE_CONFIG, MAX_PLAN_REAL_SECONDS, MAX_PLAN_STEPS
+from pz_agent_voice.intent import STOP_WORDS
+from pz_agent_voice.messages import MAX_TEXT_CHARS, MAX_TRANSCRIPT_CHARS, IntentRefusal, VoiceGoal
+from pz_agent_voice.teamon import (
+    BRIDGE_PROTOCOL_VERSION,
+    BRIDGE_UNAVAILABLE_PHRASE,
+    MAX_LINE_BYTES,
+    MAX_MESSAGE_BYTES,
+    MESSAGE_DIRECTIONS,
+    BridgeConfig,
+    BridgeDirection,
+    BridgeFaultCode,
+    OutcomeStatus,
+)
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[2]
 
@@ -221,3 +238,135 @@ def test_the_server_parser_accepts_what_the_document_names(
         mcp_parser().parse_args(argv)
     except SystemExit:
         pytest.fail(f"{where} says to run `pz-agent-mcp {raw}`, and its parser rejects it")
+
+
+# ---------------------------------------------------------------------------
+# docs/VOICE.md, beyond its command lines
+# ---------------------------------------------------------------------------
+#
+# The scan above already runs VOICE.md's `voice ...` invocations through the
+# parser. That page also prints names and numbers — configuration keys, closed
+# refusal vocabularies, the bridge contract's constants — and each of those is
+# an instruction in the same sense a command line is: a user copies the key, a
+# bridge implementer branches on the code, and a value the runtime does not
+# hold is the `--redact` defect wearing a number. Pinned here are exactly the
+# claims whose ground truth is importable. Behaviour the page describes ("stop
+# is tested first", the queue's eviction rules) is the voice suites' job, and
+# prose stays prose — this must not become a document linter.
+
+
+class TestVoiceMdNamesTheRuntime:
+    """The importable claims of ``docs/VOICE.md``, value for value."""
+
+    def test_the_voice_config_keys_exist_in_the_validator_with_the_stated_choices(self) -> None:
+        """The ``[voice]`` sample: three keys, the adapter set, the variable name.
+
+        The validator refuses unknown keys as typos, so a key the page prints
+        must be in the schema or following the page is an error. The sample's
+        ``api_key_env`` value is pinned too, because the page is where a user
+        learns which environment variable to export.
+        """
+        assert set(SCHEMA["voice"]) == {"enabled", "adapter", "api_key_env"}
+        assert SUPPORTED_VOICE_ADAPTERS == ("teamon", "none")
+        assert SCHEMA["voice"]["adapter"].choices == SUPPORTED_VOICE_ADAPTERS
+        assert SCHEMA["voice"]["api_key_env"].default == "PZ_AGENT_TEAMON_API_KEY"
+
+    def test_the_bounds_table_is_the_shipped_default_config(self) -> None:
+        """The table in § Configuration, against ``DEFAULT_VOICE_CONFIG``.
+
+        These are the loop's own limits, published so a user can reason about
+        what the companion may do; a table that drifted from the constants
+        would have them reasoning about a different program.
+        """
+        assert DEFAULT_VOICE_CONFIG.wake_words == frozenset({"агент", "ассистент", "agent"})
+        assert DEFAULT_VOICE_CONFIG.wake_ttl_ms == 30_000
+        assert DEFAULT_VOICE_CONFIG.require_wake_word is True
+        assert DEFAULT_VOICE_CONFIG.min_confidence == 0.6
+        assert DEFAULT_VOICE_CONFIG.max_clarifications == 1
+        assert DEFAULT_VOICE_CONFIG.plan_max_steps == MAX_PLAN_STEPS == 8
+        assert DEFAULT_VOICE_CONFIG.plan_max_real_seconds == 120
+        assert MAX_PLAN_REAL_SECONDS == 600
+        assert MAX_TRANSCRIPT_CHARS == 400
+        assert MAX_TEXT_CHARS == 240
+
+    def test_the_refusal_vocabularies_are_the_documented_closed_sets(self) -> None:
+        """Every code the page lists, and no other.
+
+        These sets are what the page calls closed, so equality is the honest
+        assertion in both directions: a member missing from the page is a
+        refusal nobody can look up, and a member missing from the runtime is
+        the page telling an implementer to handle a code that never comes.
+        """
+        assert {member.value for member in IntentRefusal} == {
+            "not_a_goal",
+            "ambiguous_goal",
+            "skill_not_named",
+            "parameter_out_of_range",
+            "parameter_not_accepted",
+            "capability_unavailable",
+            "internal",
+        }
+        assert {member.value for member in VoiceGoal} == {"eat", "drink", "read", "resume"}
+        assert {member.value for member in OutcomeStatus} == {
+            "ended",
+            "failed",
+            "refused",
+            "cancelled",
+        }
+        assert {member.value for member in BridgeFaultCode} == {
+            "audio_device",
+            "recogniser",
+            "synthesis",
+            "network",
+            "internal",
+            "unknown",
+        }
+        # "There is one stop vocabulary, `intent.STOP_WORDS`". Its members are
+        # deliberately not restated in the page, so only existence is a claim.
+        assert STOP_WORDS, "the one stop vocabulary must exist and must not be empty"
+
+    def test_the_bridge_contract_constants_are_what_the_page_prints(self) -> None:
+        """The wire numbers an implementer copies into another program.
+
+        The bridge program is written from this page, in another language,
+        against another SDK — so a number here that disagrees with the runtime
+        is a bridge that framed correctly against a contract this build does
+        not speak.
+        """
+        assert BRIDGE_PROTOCOL_VERSION == "1.0"
+        assert MAX_MESSAGE_BYTES == MAX_LINE_BYTES == 16_384
+
+        defaults = BridgeConfig(command=("a-bridge",))
+        assert (defaults.startup_timeout, defaults.reply_timeout) == (5.0, 5.0)
+        assert (defaults.speech_timeout, defaults.stop_timeout) == (30.0, 1.0)
+        assert (defaults.max_restarts, defaults.max_pending) == (3, 64)
+
+        # The closed message set: eight types, each travelling the stated way.
+        to_bridge = {"hello", "speak", "interrupt", "goal"}
+        directions = {kind.value: direction for kind, direction in MESSAGE_DIRECTIONS.items()}
+        assert set(directions) == to_bridge | {"ready", "transcript", "outcome", "error"}
+        sent = {name for name, way in directions.items() if way is BridgeDirection.TO_BRIDGE}
+        assert sent == to_bridge
+
+        assert BRIDGE_UNAVAILABLE_PHRASE == "Голосовой мост не работает."
+
+    def test_the_spoken_goal_route_is_the_one_the_page_describes(self) -> None:
+        """VOICE.md's own verification grep, made of imports instead.
+
+        The page says a spoken goal now travels ``services_over_core_rpc`` and
+        that ``UnroutedPlanPort`` is gone, and prints a grep to prove it. The
+        same facts from the import system: the CLI wires the builder the page
+        names, the retired refusal port is nowhere to be imported, and the
+        deadlines the page quotes — including ``voice check``'s two-second
+        probe — are the shipped values.
+        """
+        # Via the module namespace, not attribute access: the CLI imports the
+        # builder for its own wiring rather than re-exporting it, and mypy's
+        # no-implicit-reexport rule is right to hold the distinction.
+        assert vars(cli_voice).get("services_over_core_rpc") is plan_port.services_over_core_rpc
+        for retired in ("UnroutedPlanPort", "GoalUnroutable"):
+            assert not hasattr(plan_port, retired), f"{retired} has come back"
+            assert not hasattr(cli_voice, retired), f"{retired} has come back"
+        assert plan_port.VOICE_PLAN_DEADLINE_SECONDS == 3.0
+        assert plan_port.MAX_VOICE_PLAN_DEADLINE_SECONDS == 10.0
+        assert cli_voice.GOAL_CHANNEL_PROBE_SECONDS == 2.0

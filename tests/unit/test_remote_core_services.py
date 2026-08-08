@@ -628,6 +628,15 @@ class TestEveryPortReachesTheCore:
         assert sidecar.doubles.actions.submitted == [request]
         assert record.action is ActionName.CONSUME_EAT
         assert record.idempotency_key == "key-1"
+        # "Returns as soon as the action has an id": the id is already on the
+        # answer to *this* call, and it is the one the core minted rather than
+        # something this side filled in — checked against the double's own
+        # record store, since an id invented by the client would not be there.
+        [minted] = sidecar.doubles.actions.records
+        assert record.action_id == minted
+        assert record.terminal is False, "submit's answer is 'accepted', not a finished action"
+        # One exchange, and it was the submit: the id did not arrive by way of
+        # a status poll this port made behind the caller's back.
         assert sidecar.methods == [Method.ACTION_SUBMIT]
 
     def test_action_status_answers_none_for_an_id_the_core_never_saw(self, start: Start) -> None:
