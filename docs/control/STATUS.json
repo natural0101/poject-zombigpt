@@ -13,7 +13,7 @@
     "NOT_STARTED": 80,
     "PASS": 400
   },
-  "head_commit": "a8bdadbd0ac17beba1474372ff2a3c689fabb9b1",
+  "head_commit": "4bdc96863adc9e4f9b8b647dbd000937b6cfbce7",
   "linux_ci": {
     "commit": "a8bdadbd08e4640571be0a67e0d97e767eb9b6bb",
     "describes_current_head": false,
@@ -77,6 +77,6 @@
   "windows_ci": {
     "commit": "a8bdadbd08e4640571be0a67e0d97e767eb9b6bb",
     "describes_current_head": false,
-    "status": "STALE:GREEN"
+    "status": "STALE:RED"
   }
 }
