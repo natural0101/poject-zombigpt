@@ -6530,8 +6530,8 @@ epics:
       depends_on:
       - E11-M02-T005
       pass_criterion: both run on a runner with no project venv on PATH
-      verify_command: read the windows workflow run
-      regression_test: ''
+      verify_command: .venv/bin/pytest tests/unit/test_windows_workflow_contract.py -q
+      regression_test: tests/unit/test_windows_workflow_contract.py
       evidence: docs/control/evidence/step-30-40/windows-suite.txt
       status: IN_PROGRESS
       implementation_commit: 7d4a110d2019e2fbadc2ebb064985cc26c5f822a
@@ -6549,8 +6549,8 @@ epics:
       depends_on:
       - E11-M02-T006
       pass_criterion: console=True in both specs
-      verify_command: read the specs
-      regression_test: ''
+      verify_command: .venv/bin/pytest tests/unit/test_windows_workflow_contract.py -q
+      regression_test: tests/unit/test_windows_workflow_contract.py
       evidence: packaging/windows/pz-agent-mcp.spec
       status: IN_PROGRESS
       implementation_commit: 7d4a110d2019e2fbadc2ebb064985cc26c5f822a
@@ -6568,8 +6568,8 @@ epics:
       depends_on:
       - E11-M02-T007
       pass_criterion: upx=False and strip=False, because a packed unsigned binary reads as malware
-      verify_command: read the specs
-      regression_test: ''
+      verify_command: .venv/bin/pytest tests/unit/test_windows_workflow_contract.py -q
+      regression_test: tests/unit/test_windows_workflow_contract.py
       evidence: packaging/windows/pz-agent.spec
       status: IN_PROGRESS
       implementation_commit: 7d4a110d2019e2fbadc2ebb064985cc26c5f822a
@@ -6731,8 +6731,8 @@ epics:
       depends_on:
       - E11-M03-T007
       pass_criterion: a red gate stops the upload step
-      verify_command: read the windows workflow
-      regression_test: ''
+      verify_command: .venv/bin/pytest tests/unit/test_windows_workflow_contract.py -q
+      regression_test: tests/unit/test_windows_workflow_contract.py
       evidence: .github/workflows/windows.yml
       status: IN_PROGRESS
       implementation_commit: df79d65340c481028e0781632bda158232418794
@@ -6750,8 +6750,8 @@ epics:
       depends_on:
       - E11-M03-T008
       pass_criterion: the recorded sha256 matches the uploaded artefact
-      verify_command: read the windows workflow run
-      regression_test: ''
+      verify_command: .venv/bin/pytest tests/unit/test_packaging_rc.py -q
+      regression_test: tests/unit/test_packaging_rc.py
       evidence: docs/control/MASTER_PLAN.yaml
       status: IN_PROGRESS
       implementation_commit: cd1d21085671780a9c68441507c1887450c12737
@@ -6819,8 +6819,8 @@ epics:
       depends_on:
       - E11-M04-T002
       pass_criterion: the RC cannot be produced from a red Windows run
-      verify_command: read the windows workflow
-      regression_test: ''
+      verify_command: .venv/bin/pytest tests/unit/test_windows_workflow_contract.py -q
+      regression_test: tests/unit/test_windows_workflow_contract.py
       evidence: .github/workflows/windows.yml
       status: IN_PROGRESS
       implementation_commit: df79d65340c481028e0781632bda158232418794
@@ -6838,8 +6838,8 @@ epics:
       depends_on:
       - E11-M04-T003
       pass_criterion: the artefact and its sha256 are both recorded
-      verify_command: read the windows workflow run
-      regression_test: ''
+      verify_command: .venv/bin/pytest tests/unit/test_windows_workflow_contract.py -q
+      regression_test: tests/unit/test_windows_workflow_contract.py
       evidence: docs/control/MASTER_PLAN.yaml
       status: IN_PROGRESS
       implementation_commit: df79d65340c481028e0781632bda158232418794
@@ -6857,8 +6857,8 @@ epics:
       depends_on:
       - E11-M04-T004
       pass_criterion: the index carries the artefact digest
-      verify_command: cat docs/control/EVIDENCE_INDEX.md
-      regression_test: ''
+      verify_command: .venv/bin/pytest tests/unit/test_windows_workflow_contract.py -q
+      regression_test: tests/unit/test_windows_workflow_contract.py
       evidence: docs/control/EVIDENCE_INDEX.md
       status: IN_PROGRESS
       implementation_commit: cd1d21085671780a9c68441507c1887450c12737
@@ -7199,8 +7199,8 @@ epics:
       depends_on:
       - E12-M02-T004
       pass_criterion: no code reads or writes another process's memory
-      verify_command: grep -rn 'ReadProcessMemory\|WriteProcessMemory\|ptrace' packages installer
-      regression_test: ''
+      verify_command: .venv/bin/pytest tests/unit/test_check_forbidden.py -q
+      regression_test: tests/unit/test_check_forbidden.py
       evidence: docs/SAFETY.md
       status: IN_PROGRESS
       implementation_commit: 743115cb144951c326cf7203dc6890ff5959280c
@@ -7218,8 +7218,8 @@ epics:
       depends_on:
       - E12-M02-T005
       pass_criterion: no DLL injection anywhere
-      verify_command: grep -rn 'CreateRemoteThread\|LoadLibrary' packages installer
-      regression_test: ''
+      verify_command: .venv/bin/pytest tests/unit/test_check_forbidden.py -q
+      regression_test: tests/unit/test_check_forbidden.py
       evidence: docs/SAFETY.md
       status: IN_PROGRESS
       implementation_commit: 743115cb144951c326cf7203dc6890ff5959280c
@@ -7237,8 +7237,8 @@ epics:
       depends_on:
       - E12-M02-T006
       pass_criterion: no such code path exists
-      verify_command: read docs/SAFETY.md
-      regression_test: ''
+      verify_command: .venv/bin/pytest tests/unit/test_check_forbidden.py -q
+      regression_test: tests/unit/test_check_forbidden.py
       evidence: docs/SAFETY.md
       status: IN_PROGRESS
       implementation_commit: 743115cb144951c326cf7203dc6890ff5959280c

@@ -290,16 +290,20 @@ class TestCollection:
 
         assert len(report.copied) == 1, report.skipped
         floor = null_redactor()
-        assert report.copied[0].source == floor.text(console.as_posix()), (
+        # ``collect_files`` redacts ``str(source)`` — the platform's own
+        # spelling, backslashed on Windows — so the pin compares against that
+        # exact input, not a posix normalisation the module never performs.
+        assert report.copied[0].source == floor.text(str(console)), (
             "the copied source is not the floor redactor's spelling"
         )
         assert report.copied[0].source.endswith("console.txt")
-        missing = floor.text(absent.as_posix())
+        missing = floor.text(str(absent))
         assert any(missing in line and "not found" in line for line in report.skipped), (
             report.skipped
         )
         document = json.dumps(report.to_dict(), ensure_ascii=False)
-        assert console.as_posix() not in document, "a raw absolute source reached the report"
+        for raw in {str(console), console.as_posix()}:
+            assert raw not in document, "a raw absolute source reached the report"
         # The real consoles and journals are profile-rooted, and there the
         # floor's promise does hold the account name back — both spellings.
         for rooted in (

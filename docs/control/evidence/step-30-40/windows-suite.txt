@@ -161,3 +161,10 @@ socket cannot raise from poll, so the Windows spelling is driven directly); both
 sibling tests rewritten to pin the report's spelling to the floor redactor's exactly,
 plus direct profile-rooted probes for the account-name promise. The next run is the
 judge — now on rescue/today-finalization, the swarm integration branch.) |
+
+| 31249218489 | 18768218 | 1 (down from 3+1e: the poll-guard fix and the TestLayout rewrite held.
+The last failure was the round-2 rewrite's own: the TestCollection pin compared the
+report against the redaction of the POSIX spelling while collect_files redacts
+str(source) — the platform's own spelling, backslashed on Windows. The pin now
+compares against floor.text(str(source)) exactly, and sweeps both raw spellings out
+of the document. One-line cause, one-line fix; the next run is the judge.) |
