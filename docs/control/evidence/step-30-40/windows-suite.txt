@@ -124,3 +124,6 @@ loop-free — what they test is one except clause, which needs no event loop —
 and the suite itself gained the bound it preached (pytest-timeout, 300 s per
 test, thread method), so the next hang is a named failure instead of a runner
 held to the platform's six-hour ceiling.
+
+| 31235583344 | e75754e1 | 0 (green; the loop-free boundary tests and the 300 s per-test bound both in
+effect — the hang did not recur, and if it ever does, the bound names the test) |
