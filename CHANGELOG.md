@@ -12,6 +12,17 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **The R-002 boundary tests hung windows-latest, and the suite gained the
+  bound it preached.** The two new tests raised their exceptions through
+  `asyncio.run` over a monkeypatched coroutine — Linux tolerated it, the
+  Windows Tests step ran half an hour and never finished. They are rewritten
+  loop-free: what they test is one `except` clause, which needs no event loop.
+  And because a suite with no per-test bound violates the project's own
+  "everything bounded" rule in the one place nobody had applied it,
+  `pytest-timeout` (300 s per test, thread method) now turns any future hang
+  into a named failure instead of a runner held to the platform's six-hour
+  ceiling.
+
 - **R-002, the last open remote blocker: a server crash is now a diagnosis,
   not a traceback.** An exception escaping the MCP server's build or serve
   loop — a catalogue defect, or an SDK that keeps its constructor signature

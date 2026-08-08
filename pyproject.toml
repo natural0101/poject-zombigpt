@@ -36,6 +36,7 @@ dev = [
   "mypy>=1.9",
   "pytest>=8.0",
   "pytest-asyncio>=0.23",
+  "pytest-timeout>=2.3",
   "ruff>=0.4",
   "types-PyYAML>=6.0",
   "PyYAML>=6.0",
@@ -129,7 +130,7 @@ pythonpath = [
   "packages/pz_agent_cli/src",
   "packages/pz_agent_voice/src",
 ]
-addopts = "-q --strict-markers --strict-config"
+addopts = "-q --strict-markers --strict-config --timeout=300 --timeout-method=thread"
 markers = [
   "contract: wire-format conformance against schemas/",
   "integration: exercises more than one subsystem end to end",

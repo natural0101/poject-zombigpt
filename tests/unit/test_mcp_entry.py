@@ -615,12 +615,19 @@ class TestTheSdkGate:
         one stderr line and :data:`~pz_agent_mcp.__main__.EXIT_SERVER_FAILED`.
         The message carries the exception's type and its text — bounded — and
         stdout stays empty, because it belongs to the protocol even in death.
-        """
 
-        async def explode(_services: CoreServices) -> None:
+        The exception is raised at the boundary itself rather than from inside
+        a coroutine under a real event loop: the first version of this test
+        drove ``asyncio.run`` over a raising coroutine, passed here, and hung
+        the ``windows-latest`` Tests step for half an hour. What is under test
+        is one ``except`` clause, and it needs no loop to be exercised.
+        """
+        monkeypatch.setattr(entry, "run_stdio", lambda services: ("unstarted", services))
+
+        def explode(_would_serve: object) -> None:
             raise RuntimeError("the SDK kept the signature and changed behind it")
 
-        monkeypatch.setattr(entry, "run_stdio", explode)
+        monkeypatch.setattr("asyncio.run", explode)
 
         run = run_main(services=Doubles().services)
 
@@ -637,13 +644,15 @@ class TestTheSdkGate:
 
         ``KeyboardInterrupt`` is not an ``Exception``, so the crash boundary
         must let it pass: reporting the user's own hand as a server failure
-        would send them debugging a healthy install.
+        would send them debugging a healthy install. Loop-free for the same
+        reason as the crash test above.
         """
+        monkeypatch.setattr(entry, "run_stdio", lambda services: ("unstarted", services))
 
-        async def interrupted(_services: CoreServices) -> None:
+        def interrupted(_would_serve: object) -> None:
             raise KeyboardInterrupt
 
-        monkeypatch.setattr(entry, "run_stdio", interrupted)
+        monkeypatch.setattr("asyncio.run", interrupted)
 
         with pytest.raises(KeyboardInterrupt):
             run_main(services=Doubles().services)

@@ -114,3 +114,13 @@ a run nobody read is listed as its conclusion, not as a guess.
 
 Every red run between 31127833879 and 31155356132 belongs to the descent from
 24: each fixed a subset of the six causes and the next run measured the rest.
+
+| 31231766866 | f8624bb6 | hang (the Tests step ran 30+ minutes and never finished: the two new R-002
+boundary tests raised through asyncio.run over a monkeypatched coroutine, which
+Linux tolerated and windows-latest did not; cancelled by the next push) |
+
+The lesson became structure twice over: the boundary tests are rewritten
+loop-free — what they test is one except clause, which needs no event loop —
+and the suite itself gained the bound it preached (pytest-timeout, 300 s per
+test, thread method), so the next hang is a named failure instead of a runner
+held to the platform's six-hour ceiling.
