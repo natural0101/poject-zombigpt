@@ -142,3 +142,22 @@ raises the transport's own unreachable error; a short injected idle budget on th
 two server-survival tests; the evidence test rewritten to assert the floor-redacted
 spelling and a genuinely profile-rooted redaction rather than a temp-buried string.
 Diagnosed from the log on Linux, per the standing rule; the next run is the judge.) |
+
+| 31247921064 | 8929434c | 3+1e (the judge's verdict on the row above: fixes (a) and half of (c)
+held — the two mcp-entry AttributeErrors and the manifest account-name test are gone.
+What remained: (b) was misdiagnosed as an idle-budget problem when it was a guard-shape
+problem — with the short budget the vanished peer now DOES end the server's wait on
+Windows, but as BrokenPipeError raised from connection.poll itself, which sat outside
+the recv-drop guard in _exchange; the exception unwound serve_forever (the run's one
+ERROR: unhandled thread exception) and the follow-up client timed out against a link
+nobody served. On Unix the same hang-up answers the poll and raises EOFError from the
+recv, inside the guard — one fact, two platform spellings, one of them unguarded. And
+(c) recurred in the two sibling tests the first rewrite missed: TestLayout's
+outside-tree test and TestCollection's account-name test planted the same
+Users/<name> segment under pytest's temp, which on Windows lives under the runner's
+profile, so the planted segment sat mid-path past the stripped lead. Fixes: the idle
+poll moved inside _exchange's drop guard, with a seam-pinning test (a real Unix
+socket cannot raise from poll, so the Windows spelling is driven directly); both
+sibling tests rewritten to pin the report's spelling to the floor redactor's exactly,
+plus direct profile-rooted probes for the account-name promise. The next run is the
+judge — now on rescue/today-finalization, the swarm integration branch.) |

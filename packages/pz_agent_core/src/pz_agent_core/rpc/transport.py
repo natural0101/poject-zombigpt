@@ -397,9 +397,16 @@ class RpcServer:
         return True
 
     def _exchange(self, connection: Connection) -> None:
-        if not connection.poll(self._idle_seconds):
-            return
         try:
+            # The idle poll sits inside the guard because a hang-up surfaces
+            # from it directly on Windows: a named pipe whose peer vanished
+            # raises ``BrokenPipeError`` out of ``poll``, where a Unix socket
+            # answers the poll and raises ``EOFError`` from the recv below.
+            # One fact, two spellings — with the poll outside the guard, the
+            # Windows spelling unwound ``serve_forever`` and one abandoned
+            # client took the sidecar down with it.
+            if not connection.poll(self._idle_seconds):
+                return
             with _cut_at(connection, time.monotonic() + self._idle_seconds):
                 data = connection.recv_bytes(maxlength=MAX_REQUEST_BYTES)
         except (OSError, EOFError):

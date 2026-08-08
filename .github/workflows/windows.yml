@@ -10,7 +10,7 @@ name: windows package
 
 on:
   push:
-    branches: [main, dev, "feature/**", "claude/**", "fix/**"]
+    branches: [main, dev, "feature/**", "claude/**", "fix/**", "rescue/**", "swarm/**"]
   pull_request:
     branches: [main, dev]
   workflow_dispatch:

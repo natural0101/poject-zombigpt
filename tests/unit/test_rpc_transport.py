@@ -26,7 +26,7 @@ from contextlib import closing, contextmanager, suppress
 from dataclasses import dataclass
 from multiprocessing.connection import Client, Connection, Listener
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, cast
 from unittest import mock
 
 import pytest
@@ -1003,6 +1003,38 @@ class TestAnEstablishedLinkDroppedMidExchange:
         assert harness.client().call("after").ok, (
             "an unreadable reply took the sidecar down with it"
         )
+
+    def test_a_drop_that_surfaces_from_the_idle_poll_is_the_same_drop(self, tmp_path: Path) -> None:
+        """The Windows spelling of the vanish above, pinned at its seam.
+
+        On a Unix socket a vanished peer answers the idle poll and the recv
+        raises ``EOFError``, which the recv-drop guard catches — that is the
+        path the test above exercises for real. On a Windows named pipe the
+        same hang-up surfaces from ``poll`` itself as ``BrokenPipeError``,
+        and with the poll outside the guard that spelling unwound
+        ``serve_forever``: one abandoned client, a dead sidecar, and the
+        follow-up caller timing out against a link nobody served. A real
+        Unix socket cannot be made to raise from ``poll``, so the seam is
+        exercised directly: a connection whose ``poll`` raises the Windows
+        spelling must be absorbed by ``_exchange`` exactly like the Unix one.
+        """
+
+        class _VanishedPipe:
+            """The two calls ``_exchange`` may make against a gone peer."""
+
+            def poll(self, timeout: float | None = None) -> bool:
+                raise BrokenPipeError("the pipe has been ended, as Windows spells a hang-up")
+
+            def recv_bytes(self, maxlength: int | None = None) -> bytes:
+                raise AssertionError("a poll that raised must not be followed by a read")
+
+        runtime = tmp_path / "runtime"
+        runtime.mkdir(parents=True)
+        server = RpcServer(new_address(runtime), authkey=issue_token(runtime), handler=_echo)
+        try:
+            server._exchange(cast(Connection, _VanishedPipe()))
+        finally:
+            server.close()
 
 
 def _dropped_within(connection: Connection, budget: float) -> bool:

@@ -123,7 +123,7 @@ class TestLayout:
     def test_a_path_outside_the_tree_is_shown_redacted_rather_than_hidden_or_raw(
         self, layout: EvidenceLayout, tmp_path: Path
     ) -> None:
-        """Reconciled from ``== outside.as_posix()``: shown, but never the account name.
+        """Reconciled from ``== outside.as_posix()``: shown, but never raw.
 
         The previous pin recorded the raw absolute spelling, and that spelling
         flows into manifest artefact entries — a committed, published document
@@ -133,18 +133,21 @@ class TestLayout:
         an outside-tree path is still *visible* as one (it is not silently
         relativised into a fake in-tree path, and not an exception), and the
         basename still says which file it was. What changed is the spelling:
-        the floor redactor's placeholders replace the directories that name a
-        machine and a person, which is not a lie about where the file is —
-        "an absolute path elsewhere, ending in thing.log" is exactly what the
-        placeholder form states.
+        it is exactly the floor redactor's, so the manifest inherits whatever
+        the redactor promises. That promise is about profile *leads*, which is
+        why no account name is planted under ``tmp_path`` here: on Windows the
+        temp directory itself lives under the runner's profile, so a planted
+        mid-path segment sits past the stripped lead and survives — a shape
+        the floor documents as out of scope, not a leak. The account-name
+        promise is pinned on the profile-rooted shapes it is actually made
+        for, in ``test_no_manifest_entry_for_an_outside_tree_file_carries_the_account_name``.
         """
-        outside = tmp_path / "Users" / CYRILLIC_USER / "elsewhere" / "thing.log"
+        outside = tmp_path / "elsewhere" / "thing.log"
 
         shown = layout.relative(outside)
 
         assert shown == null_redactor().text(outside.as_posix())
         assert shown != outside.as_posix(), "the raw absolute spelling reached the manifest"
-        assert CYRILLIC_USER not in shown
         assert shown.endswith("thing.log"), "the basename is the diagnostic half; keep it"
         # Still visibly not an in-tree relative path: the placeholder marks it.
         assert "<" in shown and ">" in shown
@@ -257,17 +260,25 @@ class TestCollection:
         The realistic sources — the game console, the IPC journals — live
         under the user's profile, and this report is written verbatim into
         the evidence tree, so a ``source`` or skip line spelled absolutely
-        publishes the account name. Both shapes are exercised: a source that
-        copies (its spelling lands in ``copied``) and one that is absent (its
-        spelling lands in ``skipped``), and the sweep runs over the whole
-        serialised report. The skip line must still name the file — the
-        basename is the diagnostic part and the redactor keeps it.
+        publishes the account name. The claim is pinned in two executable
+        halves, because the whole-document sweep this test used to run rested
+        on a planted ``Users/<name>`` segment under ``tmp_path`` — and on
+        Windows the temp directory itself lives under the runner's profile,
+        so the planted segment sat mid-path past the stripped lead, a shape
+        the floor redactor documents as out of scope. Half one: every path
+        the report records — a source that copies and a skip line for one
+        that is absent — is spelled exactly as the floor redactor spells it,
+        never raw, so the report inherits the redactor's promise verbatim.
+        Half two: on the profile-rooted shapes the real sources actually
+        have, that promise strips the account name. The skip line must still
+        name the file — the basename is the diagnostic part the redactor
+        keeps.
         """
-        profile = tmp_path / "Users" / CYRILLIC_USER / "Zomboid"
-        profile.mkdir(parents=True)
-        console = profile / "console.txt"
+        zomboid = tmp_path / "Zomboid"
+        zomboid.mkdir(parents=True)
+        console = zomboid / "console.txt"
         console.write_text("a lua error", encoding="utf-8")
-        absent = profile / "queue.jsonl"
+        absent = zomboid / "queue.jsonl"
 
         report = collect_files(
             [
@@ -278,10 +289,24 @@ class TestCollection:
         )
 
         assert len(report.copied) == 1, report.skipped
+        floor = null_redactor()
+        assert report.copied[0].source == floor.text(console.as_posix()), (
+            "the copied source is not the floor redactor's spelling"
+        )
         assert report.copied[0].source.endswith("console.txt")
-        assert any("queue.jsonl" in line and "not found" in line for line in report.skipped)
+        missing = floor.text(absent.as_posix())
+        assert any(missing in line and "not found" in line for line in report.skipped), (
+            report.skipped
+        )
         document = json.dumps(report.to_dict(), ensure_ascii=False)
-        assert CYRILLIC_USER not in document, document
+        assert console.as_posix() not in document, "a raw absolute source reached the report"
+        # The real consoles and journals are profile-rooted, and there the
+        # floor's promise does hold the account name back — both spellings.
+        for rooted in (
+            f"C:/Users/{CYRILLIC_USER}/Zomboid/console.txt",
+            f"/home/{CYRILLIC_USER}/Zomboid/console.txt",
+        ):
+            assert CYRILLIC_USER not in floor.text(rooted), rooted
 
 
 class TestManifestEntries:

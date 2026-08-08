@@ -33,6 +33,20 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **The Windows drop guard learned the platform's spelling of a hang-up.**
+  Run 31247921064 showed the server-survival fix below was half right: a
+  short idle budget does end the wait on an abandoned named pipe, but the
+  hang-up surfaces from `connection.poll` itself as `BrokenPipeError` — and
+  the poll sat outside `_exchange`'s recv-drop guard, so one vanished client
+  unwound `serve_forever` and took the sidecar with it. On Unix the same
+  fact arrives as `EOFError` from the recv, inside the guard. The poll now
+  sits inside the guard, with a seam-pinning test driving the Windows
+  spelling directly. The two remaining account-name tests that planted a
+  `Users/<name>` segment under pytest's temp directory (mid-path past the
+  stripped profile lead on Windows — out of the floor redactor's documented
+  scope) now pin the collection report's spelling to the floor redactor's
+  exactly, plus direct profile-rooted probes.
+
 - **Three Windows-only regressions from the goal-channel/transport iteration,
   none reproducible on Linux, diagnosed from the CI log.** (1) The transport
   rework hand-dialled its socket and referenced `socket.AF_UNIX`
