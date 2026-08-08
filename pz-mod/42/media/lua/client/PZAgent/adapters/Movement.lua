@@ -305,7 +305,14 @@ local function pollWalk(ctx)
       reasons.PATH_NOT_FOUND,
       string.format("the walk ended %.2f squares short of the target", distance)
   end
-  return "running"
+  -- `true`, not "running". This poll is handed to PZAgent.ActionRuntime
+  -- directly -- these two adapters keep their own two-call shape instead of
+  -- going through Toolkit.declare, whose poll wrapper is what translates a
+  -- progress step's "running" for every declared adapter -- so it must speak
+  -- normaliseOutcome's vocabulary itself: a table, "done", true or nil.
+  -- Anything else, "running" included, is normalised to INTERNAL_ERROR, which
+  -- terminated every walk that actually had ground to cover on its first poll.
+  return true
 end
 
 --- Record where the character got to when the runtime calls the command off.

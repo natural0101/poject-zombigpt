@@ -152,7 +152,11 @@ do
   equal(evidence.distance_before, 5, "and the gap it has to close")
   isNil(evidence.position_after, "nothing is claimed about the arrival yet")
 
-  equal(MoveTo.poll(ctx), "running", "while the walk is queued the command is running")
+  -- `true` is the runtime's word for "still working": ActionRuntime's
+  -- normaliseOutcome accepts a table, "done", true or nil, and this suite once
+  -- pinned "running" here -- a value normaliseOutcome maps to INTERNAL_ERROR,
+  -- so every real walk died on its first poll while this file stayed green.
+  equal(MoveTo.poll(ctx), true, "while the walk is queued the command is still working")
 
   finishQueue(walk, queue)
   equal(MoveTo.poll(ctx), "done", "once the character is standing there the command is done")
@@ -196,10 +200,10 @@ do
   local _, ctx, _, queue = scene()
   local args = accept(MoveTo, { x = 105, y = 200, z = 0 })
   MoveTo.start(ctx, args)
-  equal(MoveTo.poll(ctx), "running", "the first poll only marks where the gap stood")
+  equal(MoveTo.poll(ctx), true, "the first poll only marks where the gap stood")
 
   ctx.now_ms = Support.NOW + (Toolkit.DEFAULT_STALL_MS / 2)
-  equal(MoveTo.poll(ctx), "running", "a character that has not moved for half the window is not yet stuck")
+  equal(MoveTo.poll(ctx), true, "a character that has not moved for half the window is not yet stuck")
   equal(#queue.queue.queue, 1, "the walk action is still queued the whole time, which proves nothing")
 
   ctx.now_ms = Support.NOW + Toolkit.DEFAULT_STALL_MS
