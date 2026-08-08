@@ -835,6 +835,36 @@ class ShutdownOutcome:
     lost: tuple[ActionResult, ...] = ()
 
 
+@dataclass(frozen=True, slots=True)
+class ControlDecision:
+    """What the loop did with one control request, published for another thread.
+
+    The control channel is one-way: a second terminal (or the Core RPC server's
+    thread) writes a request file and the loop consumes it on its next tick,
+    which leaves the writer with no way to learn what the loop decided — an arm
+    can be refused for a stale request, a silent game, a panic sentinel or a
+    multiplayer session, and until this record existed every one of those read
+    back as nothing at all. The loop publishes its judgement here, keyed by the
+    request's nonce, so the writer can wait a bounded time and then report the
+    loop's *own* words rather than re-deriving a second opinion that races the
+    first.
+
+    One slot, not a log, mirroring the channel itself: the channel holds at
+    most one pending request, so at most one decision is in flight, and a
+    request that was replaced before the loop saw it never gets a decision —
+    its writer times out and says so. The instance is immutable and the field
+    holding it is replaced whole, which is what makes the cross-thread read
+    safe: a reader sees the previous decision or this one, never half of each.
+    """
+
+    nonce: str
+    kind: ControlKind
+    armed: bool
+    mode: SessionMode
+    detail: str
+    applied: bool
+
+
 # ---------------------------------------------------------------------------
 # the loop
 # ---------------------------------------------------------------------------
@@ -878,6 +908,7 @@ class SidecarLoop:
     _attached: _Attached | None = field(default=None, init=False)
     _mode: SessionMode = field(default=SessionMode.OBSERVE, init=False)
     _armed: bool = field(default=False, init=False)
+    _control_decision: ControlDecision | None = field(default=None, init=False)
     _tick: int = field(default=0, init=False)
     _budget: ActionBudget = field(init=False)
     _store: ObservationStore = field(init=False)
@@ -933,6 +964,16 @@ class SidecarLoop:
     @property
     def session(self) -> SessionDescriptor | None:
         return None if self._attached is None else self._attached.session
+
+    @property
+    def control_decision(self) -> ControlDecision | None:
+        """The loop's judgement of the last control request it consumed.
+
+        Written on the tick thread, read from the Core RPC server's thread. The
+        read is one reference to an immutable record, so it is safe without a
+        lock; see :class:`ControlDecision`.
+        """
+        return self._control_decision
 
     @property
     def queue(self) -> CommandQueue | None:
@@ -1342,8 +1383,24 @@ class SidecarLoop:
         if request.kind is not ControlKind.ARM:
             return request
         if request.issued_at_ms < attached_at_ms:
+            self._decide(
+                request,
+                applied=False,
+                detail=(
+                    "the arm request was issued before this sidecar attached, so it is "
+                    "refused; a request left behind by a previous run proves nothing — ask again"
+                ),
+            )
             return None
         if now_ms - request.issued_at_ms > CONTROL_MAX_AGE_MS:
+            self._decide(
+                request,
+                applied=False,
+                detail=(
+                    f"the arm request is older than {CONTROL_MAX_AGE_MS} ms and no longer "
+                    "proves what the user wants now; ask again"
+                ),
+            )
             return None
         return request
 
@@ -1360,14 +1417,36 @@ class SidecarLoop:
         if request is None:
             return None
         if request.kind is ControlKind.STOP:
+            self._decide(request, applied=True, detail="stop requested; the loop is shutting down")
             return StopCause.STOP_REQUESTED
         if request.kind is ControlKind.DISARM:
-            self.disarm(reason="requested")
+            outcome = self.disarm(reason="requested")
+            self._decide(request, applied=True, detail=outcome.detail)
             return None
         if any(event.forces_disarm for event in events):
+            self._decide(
+                request,
+                applied=False,
+                detail=(
+                    "the guard demanded a disarm on the same tick, so the arm request is "
+                    "refused; see what it saw with 'pz-agent status', then ask again"
+                ),
+            )
             return None
-        self.arm(request.mode or SessionMode.ASSISTED)
+        outcome = self.arm(request.mode or SessionMode.ASSISTED)
+        self._decide(request, applied=outcome.armed, detail=outcome.detail)
         return None
+
+    def _decide(self, request: ControlRequest, *, applied: bool, detail: str) -> None:
+        """Publish what this tick did with *request*; see :class:`ControlDecision`."""
+        self._control_decision = ControlDecision(
+            nonce=request.nonce,
+            kind=request.kind,
+            armed=self._armed,
+            mode=self._mode,
+            detail=detail,
+            applied=applied,
+        )
 
     def _act(
         self,

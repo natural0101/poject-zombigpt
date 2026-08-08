@@ -272,9 +272,9 @@ _E06_WIRING = [
         "Serve the router from the sidecar over the RPC server",
         8,
         "a second process reaches the real core through the link",
-        f".venv/bin/pytest {C}/test_remote_core_round_trip.py -q",
-        f"{C}/test_remote_core_round_trip.py",
-        "packages/pz_agent_cli/src/pz_agent_cli/supervisor.py",
+        f".venv/bin/pytest {C}/test_sidecar_serves_the_core.py -q",
+        f"{C}/test_sidecar_serves_the_core.py",
+        "packages/pz_agent_cli/src/pz_agent_cli/core_services.py",
     ),
     (
         "Build RemoteCoreServices from a state directory alone",

@@ -189,7 +189,28 @@ richer in `intents.py`; the wiring is `intent.py`'s), and the tests have to
 name the survivor.
 *Blocks:* closing E09-M02 honestly. Found at `743115c`; not yet resolved.
 
-### R-008 — the shipped sidecar never serves the Core RPC router
+### R-008 — the shipped sidecar never serves the Core RPC router — **CLOSED**
+
+Closed: `pz_agent_cli/core_services.py` implements the port bundle over the
+loop's real subsystems — session state, the observation store, the capability
+ledger, the save memory, the diagnostic log — and `serve_core_rpc` puts
+`CoreRouter` behind `SidecarSupervisor.serve_rpc`. `_start_foreground` (the one
+loop-running path; the detached start spawns a child that runs it) serves after
+a successful attach and before `loop.run()`, and takes it down in the same
+`finally` that shuts the loop down. Arm and disarm travel the shipped
+`ControlChannel` and wait, bounded, for the loop's own published
+`ControlDecision`; the panic stop is the same sentinel the mod reads. Actions,
+plans and goals are *not* faked: each answers `CORE_REFUSED` with a named
+reason (`REMOTE_ACTIONS_UNSERVED`, `REMOTE_PLANS_UNSERVED`, the router's own
+`NO_GOAL_CHANNEL_REASON`), because the engine runs on the tick thread and a
+queue nothing drains would be the fabricated acceptance this file exists to
+refuse. The closing criterion is met by
+`tests/contract/test_sidecar_serves_the_core.py`: a real loop over a real
+exchange directory, the mod faked at the files and nothing else, served by the
+same `serve_core_rpc` the CLI calls, reached through
+`RemoteCoreServices.from_state_dir` — the second process's exact client path —
+which reads the real loop's mode, the observation the fake mod wrote, and the
+named refusals. The original record follows.
 
 **Severity: critical — the recurring defect, live.** `CoreRouter` (the server
 half of the Core RPC link) exists only in `pz_agent_mcp/remote/server.py` and

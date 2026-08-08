@@ -10,6 +10,27 @@ drift out of sync with `pz_agent_core.version`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **R-008 closed: the shipped sidecar now serves the Core RPC router over its
+  real subsystems.** `pz_agent_cli/core_services.py` adapts the running
+  `SidecarLoop` onto the CoreServices ports — session status, observations,
+  capabilities, memory and diagnostics served from the loop's own immutable
+  state (each read a single reference to whole-replaced frozen objects); arm,
+  disarm and stop travelling the shipped one-slot control channel and panic
+  sentinel with doubly bounded waits on the loop's own published decision.
+  `pz-agent start` now serves the link between attach and the tick loop and
+  withdraws the descriptor in the same finally as shutdown. Ports that cannot
+  be served honestly yet refuse by name — `REMOTE_ACTIONS_UNSERVED`,
+  `REMOTE_PLANS_UNSERVED`, the router's own no-goal-channel refusal — because
+  a queue nothing drains would fabricate acceptance. Proven by
+  `test_sidecar_serves_the_core.py`: the MCP client's exact
+  `from_state_dir` path reaches the real loop over a real socket and reads
+  the observation the fake mod wrote (fixture-chosen seq 47, no default
+  produces it), and — after an adversarial verifier's mutation check found
+  the shipped call site unpinned — by a test driving the real
+  `start --foreground` and asserting the `rpc.serving` record.
+
 ### Changed
 
 - **A criterion-coverage audit of the 75 heaviest claims moved the honest

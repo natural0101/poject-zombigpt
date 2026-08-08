@@ -61,6 +61,7 @@ from .context import (
     Workspace,
     resolve_workspace,
 )
+from .core_services import serve_core_rpc
 from .doctor import check_capabilities, run_checks
 from .livetest import add_live_test_parser, run_live_test
 from .memory import SidecarMemory, add_remember_parser, build_sidecar_memory, run_remember
@@ -85,7 +86,7 @@ from .saves import run_backup_save, run_restore_save
 from .smoke import default_scenario_dir, run_smoke
 from .status import game_liveness, run_status
 from .supervisor import GameRunningProbe, SidecarSupervisor, SupervisorState, probe_game_running
-from .support import DEFAULT_LOG_LINES, DEFAULT_REPLAY_LIMIT, run_logs, run_replay
+from .support import _LOG_STEM, DEFAULT_LOG_LINES, DEFAULT_REPLAY_LIMIT, run_logs, run_replay
 from .voice import add_voice_parser, run_voice
 
 PROGRAM: Final = "pz-agent"
@@ -752,10 +753,48 @@ def _start_foreground(
     )
     supervisor = build_supervisor(ctx, workspace)
     supervisor.pid_file.claim(os.getpid())
+    # The Core RPC link, served after a successful attach and before the loop
+    # runs: this process owns the session, so this process is the server half.
+    # A sidecar that cannot publish the link still observes and guards — the
+    # failure is stated rather than fatal, because trading the reflex guard for
+    # a diagnostic endpoint would protect the wrong thing.
+    try:
+        endpoint = serve_core_rpc(
+            supervisor,
+            loop,
+            doctor=lambda: run_checks(ctx, workspace),
+            log_file=workspace.logs_dir / f"{_LOG_STEM}.jsonl",
+        )
+    except Exception as exc:
+        # Any failure to bind, publish or key the endpoint lands here, and all
+        # of them trade the same way: the link is lost, the session is not.
+        _log_safely(
+            log,
+            LogLevel.ERROR,
+            "rpc.refused",
+            detail=f"{type(exc).__name__}: {exc}",
+        )
+        printer.error(
+            "the Core RPC link could not be served "
+            f"({workspace.redactor.text(str(exc))}); the sidecar runs on, but "
+            "pz-agent-mcp and voice will find nothing to connect to"
+        )
+    else:
+        _log_safely(
+            log,
+            LogLevel.INFO,
+            "rpc.serving",
+            descriptor=str(endpoint.descriptor_file.name),
+            family=endpoint.descriptor.family,
+        )
     try:
         summary = loop.run()
     finally:
         shutdown = loop.shutdown(reason="the foreground loop ended")
+        # After the loop, before anything else: the descriptor must go before
+        # a client can dial a core that no longer ticks. `stop_rpc` is safe
+        # whether or not `serve_core_rpc` succeeded.
+        supervisor.stop_rpc()
         _log_run(log, loop, summary=locals().get("summary"), shutdown=shutdown)
     # Named only when it exists: the writer creates the directory at startup and
     # the file on the first observation, so a run with no game behind it leaves

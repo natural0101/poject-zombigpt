@@ -3977,19 +3977,17 @@ epics:
       owner: remote
       depends_on: []
       pass_criterion: a second process reaches the real core through the link
-      verify_command: .venv/bin/pytest tests/contract/test_remote_core_round_trip.py -q
-      regression_test: tests/contract/test_remote_core_round_trip.py
-      evidence: packages/pz_agent_cli/src/pz_agent_cli/supervisor.py
+      verify_command: .venv/bin/pytest tests/contract/test_sidecar_serves_the_core.py -q
+      regression_test: tests/contract/test_sidecar_serves_the_core.py
+      evidence: packages/pz_agent_cli/src/pz_agent_cli/core_services.py
       status: IN_PROGRESS
       implementation_commit: 136f16ecde4c2df2c62fd33316b53f449f0dde68
       verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
       commit: 136f16ecde4c2df2c62fd33316b53f449f0dde68
       ci_url: null
-      reason: 'criterion-coverage audit at 094cb8a: Nothing observes ''a second process reaches the real
-        core'': (1) the named test is single-process (threads) against a Doubles fake; (2) the recorded
-        evidence, packages/pz_agent_cli/src/pz_agent_cli/supervisor.py, is exercised by no test with the
-        router — grep shows serve_rpc/SidecarRpc is never called with CoreRouter anywhere in packages/
-        or tests/ (tests/unit/test_rpc_sidecar_lifecycle.py drives Si'
+      reason: 'R-008 closed: serve_core_rpc wires CoreRouter over the real loop in pz-agent start, proven
+        by test_sidecar_serves_the_core.py through the client''s exact from_state_dir path over a real
+        socket; stays IN_PROGRESS until the proof runs the client in a genuine second OS process'
     - id: E06-M04-T002
       subsystem: rpc-server
       action: Build RemoteCoreServices from a state directory alone

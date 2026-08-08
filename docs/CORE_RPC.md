@@ -120,6 +120,26 @@ constrained by what Kahlua can encode and this one is not, so they move at
 different speeds. `scripts/check_versions.py` fails if the schemas drift from
 either.
 
+## Where the server half lives
+
+The router (`pz_agent_mcp.remote.server.CoreRouter`) is constructed and served
+by the sidecar itself. `pz-agent start --foreground` — which is also what a
+detached `pz-agent start` runs in its child — builds a `CoreServices` adapter
+over the running loop's real subsystems in
+`packages/pz_agent_cli/src/pz_agent_cli/core_services.py` and calls
+`serve_core_rpc(...)` after a successful attach and before the loop's first
+tick. Serving goes through `SidecarSupervisor.serve_rpc`, which owns the
+descriptor and token lifecycle below, and comes down in the same `finally` that
+shuts the loop down, so the descriptor is gone before the process is.
+
+Session, observations, capabilities, memory and diagnostics are answered from
+the live loop. Actions, plans and the goal channel are not served by this build:
+those methods answer `CORE_REFUSED` with a named reason (see the module
+docstring of `core_services.py`), which a client can read verbatim — a refusal,
+not a stub. `tests/contract/test_sidecar_serves_the_core.py` proves the whole
+path from a second process's client (`RemoteCoreServices.from_state_dir`) to
+the real core and back.
+
 ## Finding a running server
 
 `<state-dir>/runtime/core-rpc.json`:
