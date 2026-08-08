@@ -13,9 +13,9 @@
     "NOT_STARTED": 80,
     "PASS": 400
   },
-  "head_commit": "12b958278f4a2f133fea838a55799f22e585489d",
+  "head_commit": "a76e6bb7d19f6562007b21224f2c9402e23d0a15",
   "linux_ci": {
-    "commit": "3d8078dacd2b2861926b83abf5c93b3b0fdba0be",
+    "commit": "4428c8109cf608d76c4077d68af5d9b76ec3b70b",
     "describes_current_head": false,
     "status": "STALE:GREEN"
   },
@@ -75,7 +75,7 @@
   "total_weight": 3104,
   "weighted_progress_percent": 74.26,
   "windows_ci": {
-    "commit": "3d8078dacd2b2861926b83abf5c93b3b0fdba0be",
+    "commit": "4428c8109cf608d76c4077d68af5d9b76ec3b70b",
     "describes_current_head": false,
     "status": "STALE:GREEN"
   }
