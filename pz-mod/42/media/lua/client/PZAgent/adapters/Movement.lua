@@ -186,10 +186,10 @@ end
 --- Everything both commands do between "the arguments are valid" and "a walk is
 --- under way", in the order the checks have to happen.
 ---
---- Returns "done" when the character was already there -- queueing a walk to
---- where somebody is standing puts a mod-owned entry in the queue that a panic
---- stop would then have to cancel for no reason -- true when a walk was queued,
---- or nil plus a reason code.
+--- Returns a done outcome table when the character was already there --
+--- queueing a walk to where somebody is standing puts a mod-owned entry in the
+--- queue that a panic stop would then have to cancel for no reason -- true when
+--- a walk was queued, or nil plus a reason code.
 local function beginWalk(ctx, goal, radius, options)
   options = options or {}
   local Toolkit = PZAgent.Adapters.Toolkit
@@ -217,8 +217,35 @@ local function beginWalk(ctx, goal, radius, options)
   end
   noteDeparture(ctx, goal, radius, position, options.evidence)
   if arrived(position, goal, radius) then
-    noteArrival(ctx, position)
-    return "done"
+    local evidence = noteArrival(ctx, position)
+    -- An outcome table rather than the bare "done": on this path the three
+    -- before/after pairs (position, distance, floor) are necessarily identical
+    -- -- both halves were read at the same spot moments apart -- and
+    -- ActionRuntime.verify refuses an all-unchanged bag unless the outcome
+    -- says unchanged_is_success, which the "done" string has no way to carry.
+    -- Pre-fix, a move_to to the square the character already stood on (and a
+    -- move_near to something carried on their person) therefore ended
+    -- FAILED/POSTCONDITION_FAILED: "observed no change: all 3 before/after
+    -- readings match".
+    --
+    -- The flag is honest here, and does not blunt the refusal it steps past.
+    -- That refusal exists to catch an adapter that went through the motions
+    -- and observed nothing; this adapter went through no motions and observed
+    -- everything. A move's postcondition is a relation to the target -- within
+    -- `radius` of it, on its floor -- not a delta, and every reading in the
+    -- bag is a genuine read of the world made just now: position from
+    -- Toolkit.snapshot, distance measured against the target, and `arrived`
+    -- stating plainly that the relation holds. The world already being in the
+    -- asked-for state is the same situation the runtime's own control
+    -- adapters mark this way (re-arming into the mode already held, stopping
+    -- an agent already disarmed), and verify's general gate stays exactly as
+    -- strict for every adapter that does not say so about a specific outcome.
+    return {
+      done = true,
+      unchanged_is_success = true,
+      evidence = evidence,
+      detail = string.format("already within %.2f of the target on its floor", radius),
+    }
   end
   local square, missing = Toolkit.gridSquare(goal.x, goal.y, goal.z)
   if square == nil then

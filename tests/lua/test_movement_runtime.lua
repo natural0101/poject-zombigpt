@@ -29,6 +29,7 @@ local same = Harness.same
 local MoveTo = PZ.Adapters.Movement.MoveTo
 local MoveNear = PZ.Adapters.Movement.MoveNear
 local STATUS = PZ.Protocol.STATUS
+local REASON = PZ.Protocol.REASON
 local NOW = Command.NOW
 
 --- A character, a loaded world, a walk class and an empty queue -- the same
@@ -130,6 +131,58 @@ do
   equal(#terminal, 1, "exactly one terminal ack ends the command")
   equal(terminal[1].status, STATUS.SUCCEEDED, "and it is a success, proven by the closed distance")
   equal(terminal[1].evidence.arrived, true, "with the arrival observed, not assumed")
+end
+
+-- The two groups below pin the other half of the same seam: a move whose
+-- postcondition already holds when the command arrives. Pre-fix these were
+-- red the same way the audit's live probe showed: beginWalk answered "done"
+-- without queueing, its three before/after pairs (position, distance, floor)
+-- were necessarily identical, and ActionRuntime.verify -- unable to see an
+-- unchanged_is_success the "done" string cannot carry -- ended the command
+-- FAILED/POSTCONDITION_FAILED, "observed no change: all 3 before/after
+-- readings match". A character told to stand where they already stand was
+-- reported as having failed to stand there.
+
+Harness.group("a move_to whose target the character already stands on succeeds at once")
+do
+  local player, _, queue = scene({ { 100, 200, 0 } })
+  local agent, fs, runtime = Command.runtime(Mock, { MoveTo })
+  agent.player = player
+  Command.publish(fs, { Command.command({ action = "movement.move_to", args = { x = 100, y = 200, z = 0 } }) })
+
+  runtime:tick(agent, NOW)
+  isNil(runtime:inFlight(), "there is nothing left to drive: the postcondition held before the command")
+  equal(#queue.added, 0, "and no walk was queued for a panic stop to have to undo")
+  local terminal = Command.terminalAcks(fs)
+  equal(#terminal, 1, "one terminal ack ends the command")
+  equal(terminal[1].status, STATUS.SUCCEEDED, "and it is a success, not POSTCONDITION_FAILED")
+  equal(terminal[1].reason_code, REASON.POSTCONDITION_MET, "for the postcondition that was observed")
+  equal(terminal[1].evidence.arrived, true, "the truthful reading: within radius, on the target's floor")
+  equal(terminal[1].evidence.distance_before, 0, "the gap was zero before the command did anything")
+  equal(terminal[1].evidence.distance_after, 0, "and still is, which here is the postcondition, not a defect")
+  same(terminal[1].evidence.position_after, { x = 100, y = 200, z = 0 }, "where the character was observed standing")
+  equal(player.state.x, 100, "the character was never moved, least of all by a coordinate write")
+end
+
+Harness.group("a move_near to something the character carries succeeds at once")
+do
+  local player, _, queue = scene({})
+  local agent, fs, runtime = Command.runtime(Mock, { MoveNear })
+  agent.player = player
+  Command.publish(fs, {
+    Command.command({ action = "movement.move_near", args = { ref = Adapter.mainRef() } }),
+  })
+
+  runtime:tick(agent, NOW)
+  isNil(runtime:inFlight(), "a bag on the character's back needs no walking")
+  equal(#queue.added, 0, "so nothing reached the character's queue")
+  local terminal = Command.terminalAcks(fs)
+  equal(#terminal, 1, "one terminal ack ends the command")
+  equal(terminal[1].status, STATUS.SUCCEEDED, "and it is a success")
+  equal(terminal[1].reason_code, REASON.POSTCONDITION_MET, "for a postcondition that was already true")
+  equal(terminal[1].evidence.on_person, true, "the evidence says why the distance was already zero")
+  equal(terminal[1].evidence.distance_after, 0, "and reports it")
+  equal(terminal[1].evidence.arrived, true, "as an arrival read from the world, not assumed")
 end
 
 Harness.finish("movement_runtime")

@@ -170,9 +170,19 @@ Harness.group("move_to that is already there queues nothing")
 do
   local _, ctx, _, queue = scene({ x = 105, y = 200, z = 0 })
   local args = accept(MoveTo, { x = 105, y = 200, z = 0 })
-  equal(MoveTo.start(ctx, args), "done", "standing on the target finishes synchronously")
+  -- An outcome table, not the bare "done" this group once pinned: on this path
+  -- every before/after pair is identical by construction, and the runtime's
+  -- verify refuses an all-unchanged bag unless the outcome itself says
+  -- unchanged_is_success -- which the string cannot. The old pin held the
+  -- adapter to a shape that made this very command FAILED/POSTCONDITION_FAILED
+  -- at the runtime level while this file stayed green.
+  local outcome = MoveTo.start(ctx, args)
+  equal(type(outcome), "table", "standing on the target finishes synchronously, as an outcome table")
+  equal(outcome.done, true, "which is done")
+  equal(outcome.unchanged_is_success, true, "and says the unchanged readings are the postcondition holding")
   equal(#queue.added, 0, "a walk to where the character stands would be work a panic stop has to undo")
   local evidence = Toolkit.state(ctx).evidence
+  equal(outcome.evidence, evidence, "the outcome carries the same evidence the runtime collects")
   equal(evidence.distance_before, 0, "the before measure is still recorded")
   equal(evidence.arrived, true, "and the after measure agrees")
 end
@@ -331,7 +341,15 @@ Harness.group("move_near to something already carried queues nothing")
 do
   local _, ctx, _, queue = scene()
   local args = accept(MoveNear, { ref = Support.mainRef() })
-  equal(MoveNear.start(ctx, args), "done", "a bag on the character's back needs no walking")
+  -- The same outcome-table shape the already-arrived move_to answers, for the
+  -- same reason: an on-person target reads identical on both sides of every
+  -- pair, and only the outcome itself can tell the runtime's verify that the
+  -- unchanged readings are the postcondition holding rather than nothing
+  -- having been observed.
+  local outcome = MoveNear.start(ctx, args)
+  equal(type(outcome), "table", "a bag on the character's back needs no walking")
+  equal(outcome.done, true, "so the approach is done at once")
+  equal(outcome.unchanged_is_success, true, "and the outcome says why unchanged readings are a success")
   equal(#queue.added, 0, "so nothing is queued")
   local evidence = Toolkit.state(ctx).evidence
   equal(evidence.on_person, true, "the evidence says why the distance was already zero")
@@ -340,7 +358,9 @@ do
   local itemRef = Support.itemRef("player-main", 7)
   local carried = accept(MoveNear, { ref = itemRef })
   local second = select(2, scene())
-  equal(MoveNear.start(second, carried), "done", "an item reference resolves through its container tail")
+  local carriedOutcome = MoveNear.start(second, carried)
+  equal(type(carriedOutcome) == "table" and carriedOutcome.done, true,
+    "an item reference resolves through its container tail")
 end
 
 Harness.group("move_near refuses a reference that names no reachable square")
