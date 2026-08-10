@@ -12,6 +12,25 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Added
 
+- **The mandatory survival chain runs without an LLM** (`epic/p2-goal-controller`,
+  wave 2). `satisfy_hunger` and `satisfy_thirst` — speakable since the voice
+  epic, LLM-served until now — are deterministic missions: read the stat
+  (absent is a typed refusal, never zero), eat carried safe food first (the
+  safety gates stay where they live, in the food/drink policies — the mission
+  restates nothing), fetch from reachable containers when nothing is carried
+  (memory-known category shelves first, nearest first, locked doors recorded
+  as skips), transfer to main, consume, and claim success only when the stat
+  is observed at the target. The user's reserves outrank hunger at any level:
+  the agent fails typed before eating the strategic stock. Only the goal
+  channel reroutes — the autonomy initiative path still asks its provider,
+  and the asymmetry is documented in the contract test.
+- **Three more care kinds** (12 total, nine deterministic): `treat_wounds`
+  (speakable — «перевяжись»; bandages every observed bleeding wound
+  worst-first, verifies each stopped from observation, honest partial failure
+  when dressings run out), `rest_until` (target endurance, the rest adapter's
+  own bounds), `sleep_until_rested` (the sleep adapter's danger>NONE refusal
+  surfaces unchanged and is never retried into danger). Care missions carry
+  phase tokens and sealed reports like the rest.
 - **Goals survive a sidecar restart, honestly** (`epic/p2-goal-controller`,
   wave 1). One versioned `goals.json` beside the memory dir, written
   atomically at most once per tick and only when a goal actually changed

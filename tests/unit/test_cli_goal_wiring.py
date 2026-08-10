@@ -46,14 +46,25 @@ from pz_agent_core.planner import GoalKind as PlannerGoalKind
 from pz_agent_core.protocol import (
     ActionName,
     ActionStatus,
+    ContainerKind,
+    InventoryView,
     NearbyObject,
     NearbyView,
     Observation,
     Position,
     ReasonCode,
     SessionMode,
+    Wound,
 )
-from tests.fixtures import make_game, make_player
+from tests.fixtures import (
+    DEFAULT_SESSION,
+    main_container_ref,
+    make_container,
+    make_game,
+    make_item,
+    make_player,
+)
+from tests.fixtures.policy_items import food_item
 from tests.fixtures.sidecar_worlds import SidecarWorld, arm_for_real, attached_world
 
 
@@ -759,6 +770,279 @@ class TestExploreGoalsAreServedByTheMission:
             assert wrapper.tracked_explores == 0, "the mission must die with its goal"
             report = wrapper.explore_report(record.goal_id)
             assert report is not None, "the report survives the goal it describes"
+
+
+# --------------------------------------------------------------------------
+# the founding kinds rerouted: satisfy_hunger and satisfy_thirst in the loop
+# --------------------------------------------------------------------------
+
+
+def satisfy_request(key: str = "hunger-key") -> GoalRequest:
+    """The bare goal, exactly as «я голоден» submits it: no params at all."""
+    return GoalRequest(kind=GoalKind.SATISFY_HUNGER, idempotency_key=key)
+
+
+def hungry_inventory() -> InventoryView:
+    """One safe tin in the main inventory, main container described."""
+    main = make_container(
+        main_container_ref(), ContainerKind.PLAYER_MAIN, capacity=20.0, used_capacity=3.0
+    )
+    return InventoryView(containers=[main], items=[food_item("beans")])
+
+
+class TestSatisfyGoalsAreServedByTheConsumeMission:
+    """``satisfy_hunger`` end to end through the loop, planner-less and typed.
+
+    The idiom of :class:`TestLootGoalsAreServedByTheMission`: a real loop over
+    a real exchange directory, the wrapper standing where the shipped assembly
+    puts it, the mod faked at the files. The registry carries no consume
+    adapter, so an engine refusal is still the proof that the mission's
+    request reached the engine with no planner involved.
+    """
+
+    def test_an_unreported_stat_ends_the_goal_typed_with_no_planner_at_all(
+        self, tmp_path: Path
+    ) -> None:
+        """planner=None end to end: the wrapper alone activates and refuses it."""
+        world, wrapper = navigating_world(tmp_path)
+        with world:
+            armed_autonomous(world)
+            record = submit(world, satisfy_request())
+            # A null hunger reading is "this build does not report it", which
+            # must never be read as "the character is not hungry".
+            world.observe(player=make_player(stats={"hunger": None}))
+
+            world.loop.tick()
+
+            ended = record_of(world, record.goal_id)
+            assert ended.state is GoalState.FAILED
+            assert ended.reason_code is ReasonCode.PRECONDITION_FAILED
+            assert "does not report hunger" in ended.detail
+            report = wrapper.consume_report(record.goal_id)
+            assert report is not None and report["ended"] == "unreported"
+
+    def test_a_consume_step_reaches_the_engine_without_asking_the_planner(
+        self, tmp_path: Path
+    ) -> None:
+        spy = RecordingGoalPlanner()
+        world, wrapper = navigating_world(tmp_path, spy)
+        with world:
+            armed_autonomous(world)
+            record = submit(world, satisfy_request())
+
+            def hungry_world() -> None:
+                world.observe(
+                    player=make_player(stats={"hunger": 0.6}),
+                    inventory=hungry_inventory(),
+                )
+
+            hungry_world()
+            world.loop.tick()
+
+            # Tick one: the mission's step — the ``consume.eat`` the food
+            # policy chose — was submitted into the loop's own action channel.
+            channel = world.loop.actions
+            assert channel is not None and channel.pending_count == 1
+            assert wrapper.tracked_consumes == 1
+            assert spy.goal_calls == [], "satisfy_hunger must never reach the wrapped planner"
+            assert spy.propose_calls == 0, "the goal outranks the planner's own initiative"
+
+            world.beat_game()
+            hungry_world()
+            world.loop.tick()
+
+            # Tick two: the loop drained that submission through the same
+            # engine every action takes; this registry carries no consume
+            # adapter, so the dispatch came back the engine's own refusal —
+            # still proof of the join. The wrapper folded that refusal into
+            # the mission in the same tick's _act, the tin became a recorded
+            # skip, no other candidate is reachable, and the mission ended
+            # the goal through the queue with its typed reason.
+            assert spy.goal_calls == []
+            ended = record_of(world, record.goal_id)
+            assert ended.state is GoalState.FAILED
+            assert ended.reason_code is ReasonCode.NO_SAFE_FOOD
+            assert "reachable containers" in ended.detail
+            report = wrapper.consume_report(record.goal_id)
+            assert report is not None
+            assert len(report["skipped"]) == 1
+
+
+# --------------------------------------------------------------------------
+# the care kinds: treat_wounds, rest_until and sleep_until_rested in the loop
+# --------------------------------------------------------------------------
+
+
+def bandaged_inventory() -> InventoryView:
+    """One sterile dressing in the described main inventory."""
+    main = make_container(
+        main_container_ref(), ContainerKind.PLAYER_MAIN, capacity=20.0, used_capacity=3.0
+    )
+    wrap = make_item(
+        f"item:{DEFAULT_SESSION}:player-main:wrap:0",
+        main_container_ref(),
+        full_type="Base.Bandage",
+        display_name="Bandage",
+        category="FirstAid",
+        weight=0.1,
+    )
+    return InventoryView(containers=[main], items=[wrap])
+
+
+def a_bleeding_head() -> list[Wound]:
+    return [
+        Wound(
+            ref=f"wound:{DEFAULT_SESSION}:Head",
+            kind="scratch",
+            severity=0.5,
+            bleeding=True,
+        )
+    ]
+
+
+class TestCareGoalsAreServedByTheMissions:
+    """The three care kinds end to end through the loop, spy planner never asked.
+
+    The idiom of :class:`TestSatisfyGoalsAreServedByTheConsumeMission`: a real
+    loop over a real exchange directory, the wrapper standing where the
+    shipped assembly puts it, the mod faked at the files. The registry
+    carries no medical or survival adapter, so the engine's own
+    ``CAPABILITY_UNAVAILABLE`` refusal is still the proof that the mission's
+    request reached the engine with no planner involved.
+    """
+
+    def test_a_bandage_step_reaches_the_engine_without_asking_the_planner(
+        self, tmp_path: Path
+    ) -> None:
+        spy = RecordingGoalPlanner()
+        world, wrapper = navigating_world(tmp_path, spy)
+        with world:
+            armed_autonomous(world)
+            record = submit(
+                world, GoalRequest(kind=GoalKind.TREAT_WOUNDS, idempotency_key="treat-key")
+            )
+
+            def hurt_world() -> None:
+                world.observe(
+                    player=make_player(wounds=a_bleeding_head()),
+                    inventory=bandaged_inventory(),
+                )
+
+            hurt_world()
+            world.loop.tick()
+
+            # Tick one: the mission's step — the ``medical.bandage`` the
+            # triage chose — was submitted into the loop's action channel.
+            channel = world.loop.actions
+            assert channel is not None and channel.pending_count == 1
+            assert wrapper.tracked_cares == 1
+            assert spy.goal_calls == [], "treat_wounds must never reach the wrapped planner"
+            assert spy.propose_calls == 0, "the goal outranks the planner's own initiative"
+
+            world.beat_game()
+            hurt_world()
+            outcome = world.loop.tick()
+
+            # Tick two: the loop drained that submission through the same
+            # engine every action takes; this registry carries no medical
+            # adapter, so the dispatch came back the engine's refusal — still
+            # proof of the join. The wound still bleeds, so the mission asked
+            # again inside its bounded failure streak; the goal stays active.
+            assert "medical.bandage" in [result.action for result in outcome.results]
+            assert spy.goal_calls == []
+            assert channel.pending_count == 1
+            assert record_of(world, record.goal_id).state is GoalState.ACTIVE
+
+    def test_a_rest_step_reaches_the_engine_and_a_refusal_rides_through_typed(
+        self, tmp_path: Path
+    ) -> None:
+        spy = RecordingGoalPlanner()
+        world, wrapper = navigating_world(tmp_path, spy)
+        with world:
+            armed_autonomous(world)
+            record = submit(
+                world,
+                GoalRequest(
+                    kind=GoalKind.REST_UNTIL,
+                    idempotency_key="rest-key",
+                    params=GoalParams(target_endurance=0.8),
+                ),
+            )
+            world.observe(player=make_player(stats={"endurance": 0.3}))
+
+            world.loop.tick()
+
+            channel = world.loop.actions
+            assert channel is not None and channel.pending_count == 1
+            assert wrapper.tracked_cares == 1
+            assert spy.goal_calls == [], "rest_until must never reach the wrapped planner"
+            assert spy.propose_calls == 0
+
+            world.beat_game()
+            world.observe(player=make_player(stats={"endurance": 0.3}))
+            outcome = world.loop.tick()
+
+            # Tick two: the engine's refusal for the adapter this registry
+            # does not carry rode to the goal typed and unchanged — the care
+            # missions never retry a refused survival action.
+            assert "survival.rest" in [result.action for result in outcome.results]
+            assert spy.goal_calls == []
+            ended = record_of(world, record.goal_id)
+            assert ended.state is GoalState.FAILED
+            assert ended.reason_code is ReasonCode.CAPABILITY_UNAVAILABLE
+            assert "survival.rest refused" in ended.detail
+            report = wrapper.care_report(record.goal_id)
+            assert report is not None and report["ended"] == "refused"
+
+    def test_a_sleep_step_reaches_the_engine_without_asking_the_planner(
+        self, tmp_path: Path
+    ) -> None:
+        spy = RecordingGoalPlanner()
+        world, wrapper = navigating_world(tmp_path, spy)
+        with world:
+            armed_autonomous(world)
+            record = submit(
+                world,
+                GoalRequest(
+                    kind=GoalKind.SLEEP_UNTIL_RESTED,
+                    idempotency_key="sleep-key",
+                    params=GoalParams(hours=6),
+                ),
+            )
+            bed = NearbyObject(
+                ref=f"object:{DEFAULT_SESSION}:7001:0",
+                kind="bed",
+                distance=1.0,
+                position=Position(x=1201.0, y=3400.0, z=0),
+                semantics=["bed"],
+            )
+
+            world.observe(nearby=NearbyView(objects=[bed]))
+            world.loop.tick()
+
+            channel = world.loop.actions
+            assert channel is not None and channel.pending_count == 1
+            assert wrapper.tracked_cares == 1
+            assert spy.goal_calls == [], "sleep_until_rested must never reach the wrapped planner"
+            assert spy.propose_calls == 0
+
+            world.beat_game()
+            world.observe(nearby=NearbyView(objects=[bed]))
+            outcome = world.loop.tick()
+
+            # Tick two: the one sleep this goal will ever send was dispatched
+            # and refused by the adapterless engine; the refusal rode through
+            # typed, never retried — the same structure that keeps a real
+            # danger refusal from being slept into twice.
+            assert "survival.sleep" in [result.action for result in outcome.results]
+            assert spy.goal_calls == []
+            ended = record_of(world, record.goal_id)
+            assert ended.state is GoalState.FAILED
+            assert ended.reason_code is ReasonCode.CAPABILITY_UNAVAILABLE
+            assert "survival.sleep refused" in ended.detail
+            report = wrapper.care_report(record.goal_id)
+            assert report is not None and report["ended"] == "refused"
+            assert wrapper.tracked_cares == 0, "the mission dies with its goal"
 
 
 # --------------------------------------------------------------------------

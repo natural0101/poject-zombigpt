@@ -166,6 +166,8 @@ def params_for(kind: GoalKind) -> GoalParams:
         return GoalParams(skill=TrainableSkill.COOKING)
     if kind is GoalKind.NAVIGATE_TO:
         return GoalParams(target_x=1200, target_y=3400, target_z=0)
+    if kind is GoalKind.REST_UNTIL:
+        return GoalParams(target_endurance=0.9)
     return GoalParams()
 
 
@@ -248,7 +250,7 @@ def outside_values(name: str) -> tuple[object, object]:
 
 
 class TestClosedVocabulary:
-    def test_goal_kinds_are_exactly_these_nine(self) -> None:
+    def test_goal_kinds_are_exactly_these_twelve(self) -> None:
         # Hand-written. Adding a kind is a reviewed change to three tables, and
         # this literal is the thing that makes the review happen.
         assert {k.value for k in GoalKind} == {
@@ -261,6 +263,9 @@ class TestClosedVocabulary:
             "loot_area",
             "return_home",
             "explore_area",
+            "treat_wounds",
+            "rest_until",
+            "sleep_until_rested",
         }
 
     def test_trainable_skills_are_exactly_these_eleven(self) -> None:
@@ -315,7 +320,7 @@ class TestClosedVocabulary:
         # strips deliberately; the constructor does neither.
         with pytest.raises(ValueError, match="is not a valid"):
             GoalKind(unknown)
-        assert len(GoalKind) == 9
+        assert len(GoalKind) == 12
 
     def test_no_lookup_hook_invents_a_member(self) -> None:
         # ``_missing_`` is the one hook that can turn an unrecognised value into
@@ -359,6 +364,15 @@ class TestClosedVocabulary:
             # loot's ROOM — because exploring the room already observed is a
             # no-op. The mission reads the absence.
             "explore_area": (set(), {"scope", "radius"}),
+            # Parameterless: which wound and which dressing are the medical
+            # policy's decisions, remade per observation.
+            "treat_wounds": (set(), set()),
+            # The target is the goal; "rest" without one has no postcondition
+            # to verify, and a default here would be the channel choosing.
+            "rest_until": ({"target_endurance"}, set()),
+            # Absent hours mean the sleep adapter's own default night, which
+            # the mission expresses by omitting the argument.
+            "sleep_until_rested": (set(), {"hours"}),
         }
         actual = {
             kind.value: (set(spec.required), set(spec.optional))
@@ -391,6 +405,8 @@ class TestNoFreeText:
             # behaviour the loot-parameter tests below pin. A widening of the
             # validation would not fail this line — it fails those.
             "categories": "str | None",
+            "target_endurance": "float | None",
+            "hours": "int | None",
         }
         assert tuple(annotations) == PARAM_NAMES
 
@@ -558,6 +574,8 @@ class TestTypedParameterSurface:
             "radius": 5,
             "take_all": True,
             "categories": "food,medical",
+            "target_endurance": 0.8,
+            "hours": 8,
         }
         assert set(samples) == set(PARAM_NAMES)
         for kind, spec in GOAL_SPECS.items():
@@ -602,6 +620,8 @@ class TestTypedParameterSurface:
             "radius": 5,
             "take_all": True,
             "categories": "food,medical",
+            "target_endurance": 0.8,
+            "hours": 8,
         }
         for kind, spec in GOAL_SPECS.items():
             declared = spec.required | spec.optional
@@ -741,6 +761,14 @@ class TestNumericRanges:
             # The loot sweep. The ceiling deliberately equals the mod's own
             # single-move distance (MAX_MOVE_DISTANCE_SQUARES), pinned below.
             "radius": (1, 30),
+            # The rest adapter's own bounds, imported by the model rather than
+            # restated there; the literal here is the reconciliation point if
+            # the adapter's bounds ever move.
+            "target_endurance": (0.05, 1.0),
+            # The floor is the sleep adapter's own; the ceiling is the
+            # channel's narrower MAX_SLEEP_GOAL_HOURS — "until rested" is not
+            # a request for the adapter's sixteen-hour maximum.
+            "hours": (1, 12),
         }
 
     def test_the_loot_radius_ceiling_is_the_single_move_distance(self) -> None:

@@ -37,8 +37,9 @@ EAT_CAP = "eat_percentage"
 DRINK_CAP = "drink_carried"
 READ_CAP = "read_literature"
 MOVE_CAP = "move_to_square"
+BANDAGE_CAP = "medical_bandage"
 
-EVERYTHING = frozenset({EAT_CAP, DRINK_CAP, READ_CAP, MOVE_CAP})
+EVERYTHING = frozenset({EAT_CAP, DRINK_CAP, READ_CAP, MOVE_CAP, BANDAGE_CAP})
 
 #: The speakable kinds the channel carries, as an independent literal.
 #: ``return_home`` joined with the goal-controller epic: the first
@@ -52,6 +53,10 @@ KIND_VALUES = frozenset(
         "train_skill",
         "learn_recipe",
         "return_home",
+        # The care wave's parameterless kind: speakable on return_home's own
+        # argument — the bare word carries the whole goal, and the triage
+        # stays the medical policy's.
+        "treat_wounds",
     }
 )
 
@@ -70,7 +75,16 @@ KIND_VALUES = frozenset(
 #: its optional parameters (a scope token, a radius) are unspeakable in this
 #: grammar, and a spoken explore that silently swept the default radius would
 #: be the invention the partition check exists to prevent.
-UNSPEAKABLE_KIND_VALUES = frozenset({"navigate_to", "loot_area", "explore_area"})
+#: ``rest_until`` and ``sleep_until_rested`` join with the care wave, each
+#: with its own dedicated pin below: rest_until's *required* fraction has no
+#: unit word of its own (the percent vocabulary is satisfy_to's, and one
+#: namespace is the rule), and sleep_until_rested's optional ``hours`` is
+#: unit-word-shaped but the spoken-quantity path does not carry an hour scale
+#: end to end yet — a spoken sleep that silently slept the default night
+#: would be the invention the partition check exists to prevent.
+UNSPEAKABLE_KIND_VALUES = frozenset(
+    {"navigate_to", "loot_area", "explore_area", "rest_until", "sleep_until_rested"}
+)
 
 #: The loot goal's parameters, restated as an independent literal for the
 #: partition assertions below.
@@ -121,6 +135,13 @@ ATTESTED: dict[str, tuple[str, ...]] = {
         "агент, домой",
         "возвращайся домой",
         "вернись домой",
+    ),
+    "treat_wounds": (
+        "перевяжись",
+        "обработай раны",
+        "агент, перевяжи рану",
+        "забинтуйся",
+        "перевяжи меня",
     ),
 }
 
@@ -182,7 +203,8 @@ def test_navigation_is_deliberately_unspeakable() -> None:
     """
     assert {kind.value for kind in intent.UNSPEAKABLE_KINDS} == UNSPEAKABLE_KIND_VALUES
     assert (
-        frozenset({"target_x", "target_y", "target_z"}) | LOOT_PARAM_VALUES
+        frozenset({"target_x", "target_y", "target_z", "target_endurance", "hours"})
+        | LOOT_PARAM_VALUES
         == intent.UNSPEAKABLE_PARAMS
     )
     for transcript in ("агент, иди туда", "навигация 1200 3400", "иди на точку"):
@@ -245,6 +267,76 @@ def test_explore_area_is_unspeakable_by_loots_own_argument() -> None:
     for transcript in ("агент, исследуй окрестности", "разведай территорию"):
         resolution = resolve(transcript)
         assert resolution.kind is None
+
+
+def test_rest_until_is_unspeakable_by_the_required_parameter_argument() -> None:
+    """The rest decision, pinned so it is revisited rather than inherited.
+
+    ``target_endurance`` is *required* — the channel's own spec says so, the
+    first assertion proves it — and it is unspeakable in this grammar: a
+    fraction whose natural unit word is already ``satisfy_to``'s, under the
+    one-namespace rule. A kind whose required parameter speech cannot supply
+    is exactly what the pinned argument keeps out, so the kind travels
+    through ``pz_goal_submit``.
+    """
+    rest = parse_kind("rest_until")
+    assert rest is not None
+    spec = core_goals.GOAL_SPECS[rest]
+    assert spec.required == frozenset({"target_endurance"})
+    assert spec.required <= intent.UNSPEAKABLE_PARAMS
+    assert rest in intent.UNSPEAKABLE_KINDS
+    # And a restful transcript resolves to no goal at all, never to a guess.
+    for transcript in ("агент, отдохни", "передохни немного"):
+        assert resolve(transcript).kind is None
+
+
+def test_sleep_until_rested_is_unspeakable_until_hours_can_be_spoken() -> None:
+    """The sleep decision, pinned the way loot's is above.
+
+    Half one: the bare goal is admissible — no required parameters — so the
+    kind is a real speakable candidate, like loot's founding sentence. Half
+    two: its one optional parameter is declared unspeakable here, because
+    the spoken-quantity path (this grammar's unit table *and* the session's
+    spoken-scale conversion) does not carry an hour scale end to end, and
+    the partition check refuses a speakable kind that takes an unspeakable
+    parameter even optionally — «поспи два часа» that silently slept the
+    adapter's default night would be the invention that check prevents.
+    When the whole path grows the hour quantity, this test is the one to
+    delete alongside the exclusion.
+    """
+    sleep = parse_kind("sleep_until_rested")
+    assert sleep is not None
+    assert GoalRequest(kind=sleep, idempotency_key="k").params.present() == frozenset()
+    spec = core_goals.GOAL_SPECS[sleep]
+    assert spec.required == frozenset()
+    assert spec.optional == frozenset({"hours"})
+    assert spec.optional <= intent.UNSPEAKABLE_PARAMS
+    assert sleep in intent.UNSPEAKABLE_KINDS
+    # And a sleepy transcript resolves to no goal at all, never to a guess.
+    for transcript in ("агент, поспи", "ложись спать", "выспись"):
+        assert resolve(transcript).kind is None
+
+
+def test_the_bandage_word_resolves_to_treat_wounds() -> None:
+    """«перевяжись» is the whole goal, pinned end to end like «домой».
+
+    Parameterless by the kind's own spec — which wound and which dressing
+    stay the medical policy's decisions — so the bare word, the two-word
+    sentence and the wake-word sentence all reach the same member with no
+    parameters at all. «перевязку» stays first aid's *skill* word: asking to
+    train first aid and asking to be bandaged resolve to different kinds.
+    """
+    treat = parse_kind("treat_wounds")
+    assert treat is not None
+    assert core_goals.GOAL_SPECS[treat].required == frozenset()
+    assert core_goals.GOAL_SPECS[treat].optional == frozenset()
+    for transcript in ("перевяжись", "обработай раны", "агент, забинтуйся"):
+        resolution = resolve(transcript)
+        assert resolution.intent is VoiceIntent.GOAL, transcript
+        assert resolution.kind is treat
+        assert resolution.params.present() == frozenset()
+    trained = resolve("изучай медицину")
+    assert trained.kind is not None and trained.kind.value == "train_skill"
 
 
 def test_the_homeward_word_resolves_to_return_home() -> None:
@@ -751,6 +843,7 @@ def test_nothing_is_carried_between_two_transcripts() -> None:
         ("прокачай плотницкое", READ_CAP, "чтение"),
         ("выучи рецепт", READ_CAP, "чтение"),
         ("иди домой", MOVE_CAP, "передвижение"),
+        ("перевяжись", BANDAGE_CAP, "перевязка"),
     ],
 )
 def test_a_kind_the_build_cannot_serve_names_the_missing_capability(
@@ -791,6 +884,7 @@ GOOD_GRAMMAR: dict[str, frozenset[str]] = {
     "train_skill": frozenset({"прокачай"}),
     "learn_recipe": frozenset({"рецепт"}),
     "return_home": frozenset({"домой"}),
+    "treat_wounds": frozenset({"перевяжись"}),
 }
 
 
@@ -966,6 +1060,9 @@ GOAL_UTTERANCES: tuple[tuple[str, str, dict[str, object]], ...] = (
     ("идём домой", "return_home", {}),
     ("возвращайся домой", "return_home", {}),
     ("вернись домой", "return_home", {}),
+    ("перевяжись", "treat_wounds", {}),
+    ("обработай раны", "treat_wounds", {}),
+    ("забинтуй рану", "treat_wounds", {}),
 )
 
 

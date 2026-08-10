@@ -1619,7 +1619,23 @@ TOOLS: Final[tuple[ToolSpec, ...]] = (
             "'return_home' goal takes no parameters at all: the target is "
             "the save's remembered home point ('pz-agent remember home'), "
             "no home set is a typed PRECONDITION_FAILED whose detail is the "
-            "remedy, and the goal succeeds only on the observed arrival."
+            "remedy, and the goal succeeds only on the observed arrival. "
+            "The care kinds are deterministic missions over the medical and "
+            "survival adapters: 'treat_wounds' (no parameters — triage and "
+            "dressing choice are policy, remade per observation) dresses "
+            "every observed bleeding wound and finishes only when none "
+            "bleeds, with dressings running out a typed partial failure "
+            "naming the honest count; 'rest_until' sends one survival.rest "
+            "to its required target_endurance, verified by the adapter from "
+            "the observation; 'sleep_until_rested' sleeps on an observed bed "
+            "for its optional hours (absent means the adapter's own night), "
+            "and the sleep adapter's danger refusal reaches the goal typed "
+            "and unchanged, never retried. 'satisfy_hunger' and "
+            "'satisfy_thirst' are served the same deterministic way now — "
+            "food and water found in known containers, moved to the main "
+            "inventory, unsafe candidates (rotten, burnt, poisonous, "
+            "reserved) skipped with recorded reasons, and success only by "
+            "the observed stat moving."
         ),
         input_schema=_goal_channel(
             {
@@ -1729,6 +1745,32 @@ TOOLS: Final[tuple[ToolSpec, ...]] = (
                     "pattern": _LOOT_CATEGORIES_PATTERN,
                     "maxLength": MAX_LOOT_CATEGORIES_CHARS,
                 },
+                # The two below belong to the care kinds and to nothing else.
+                # Their bounds are the survival adapters' own, imported via
+                # the goals model's NUMERIC_RANGES so this schema cannot
+                # advertise a target the adapter refuses.
+                "target_endurance": {
+                    "type": "number",
+                    "description": (
+                        "Endurance fraction a 'rest_until' goal rests to; the "
+                        "stat runs 0..1 and the adapter verifies the target "
+                        "from the observation. Required for that kind — a "
+                        "rest with no stated target has no postcondition."
+                    ),
+                    "minimum": NUMERIC_RANGES["target_endurance"].minimum,
+                    "maximum": NUMERIC_RANGES["target_endurance"].maximum,
+                },
+                "hours": {
+                    "type": "integer",
+                    "description": (
+                        "How long a 'sleep_until_rested' goal asks to sleep. "
+                        "Absent means the sleep adapter's own default night; "
+                        "the ceiling is the channel's — 'until rested' is not "
+                        "a request for the adapter's sixteen-hour maximum."
+                    ),
+                    "minimum": NUMERIC_RANGES["hours"].minimum,
+                    "maximum": NUMERIC_RANGES["hours"].maximum,
+                },
             },
             required=("kind",),
         ),
@@ -1747,7 +1789,9 @@ TOOLS: Final[tuple[ToolSpec, ...]] = (
             "nothing to say: 'progress' is the deterministic drive's phase (a "
             "journey's planning/moving/arrived/refused; a loot sweep's "
             "start/approach/open/inspect/transfer; an explore sweep's "
-            "start/approach) plus detail-free counters, for the named goal or, "
+            "start/approach; a consume drive's check/fetch/consume/verify; a "
+            "care drive's start/transfer/treat, start/rest or start/sleep) "
+            "plus detail-free counters, for the named goal or, "
             "with no id, the active one — a goal a plan provider serves has no "
             "deterministic phase and honestly answers null; 'paused' is the goal "
             "a manual takeover parked, visible until a fresh activation replaces "

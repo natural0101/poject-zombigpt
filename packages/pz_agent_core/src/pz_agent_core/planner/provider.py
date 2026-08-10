@@ -104,6 +104,12 @@ class GoalKind(StrEnum):
     asked for any of them answers with a typed refusal naming the
     deterministic server — never with a plan that approximates the work with
     something else.
+
+    ``TREAT_WOUNDS``, ``REST_UNTIL`` and ``SLEEP_UNTIL_RESTED`` sit in the
+    same column, served by the CLI's deterministic care missions over the
+    medical and survival adapters — bandaging wound by observed wound,
+    resting and sleeping under the adapters' own verification. A provider
+    asked for any of the three answers with the same typed refusal shape.
     """
 
     SATISFY_HUNGER = "satisfy_hunger"
@@ -115,6 +121,9 @@ class GoalKind(StrEnum):
     LOOT_AREA = "loot_area"
     RETURN_HOME = "return_home"
     EXPLORE_AREA = "explore_area"
+    TREAT_WOUNDS = "treat_wounds"
+    REST_UNTIL = "rest_until"
+    SLEEP_UNTIL_RESTED = "sleep_until_rested"
 
 
 @dataclass(frozen=True, slots=True)
@@ -288,6 +297,34 @@ class NullProvider:
                 "explore_area is driven by the deterministic explore mission, not "
                 "planned by a provider; a sidecar without the navigating planner "
                 "wired cannot serve it.",
+            )
+        if request.goal.kind is GoalKind.TREAT_WOUNDS:
+            # Triage is policy.medical's decision made per observation; a plan
+            # would freeze one wound and one dressing into a guess about a
+            # body that is re-observed between every bandage.
+            return PlanProposal.refusal(
+                ReasonCode.CAPABILITY_UNAVAILABLE,
+                "treat_wounds is driven by the deterministic care mission, not "
+                "planned by a provider; a sidecar without the navigating planner "
+                "wired cannot serve it.",
+            )
+        if request.goal.kind is GoalKind.REST_UNTIL:
+            # One survival.rest whose adapter does the waiting and the
+            # verifying; a provider holds neither the wait nor the proof.
+            return PlanProposal.refusal(
+                ReasonCode.CAPABILITY_UNAVAILABLE,
+                "rest_until is driven by the deterministic care mission, not "
+                "planned by a provider; a sidecar without the navigating planner "
+                "wired cannot serve it.",
+            )
+        if request.goal.kind is GoalKind.SLEEP_UNTIL_RESTED:
+            # Sleep is the one P4 action; the reflex-guard refusal must reach
+            # the goal unchanged, which only the deterministic server does.
+            return PlanProposal.refusal(
+                ReasonCode.CAPABILITY_UNAVAILABLE,
+                "sleep_until_rested is driven by the deterministic care mission, "
+                "not planned by a provider; a sidecar without the navigating "
+                "planner wired cannot serve it.",
             )
         if request.observation.inventory is None:
             return PlanProposal.refusal(

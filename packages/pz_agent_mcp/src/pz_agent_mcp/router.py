@@ -1146,6 +1146,8 @@ class ToolRouter:
                     radius=args.get("radius"),
                     take_all=args.get("take_all"),
                     categories=args.get("categories"),
+                    target_endurance=args.get("target_endurance"),
+                    hours=args.get("hours"),
                 ),
             )
         except ValueError as rejected:
@@ -1246,6 +1248,10 @@ class ToolRouter:
             param_payload["take_all"] = params.take_all
         if params.categories is not None:
             param_payload["categories"] = params.categories
+        if params.target_endurance is not None:
+            param_payload["target_endurance"] = params.target_endurance
+        if params.hours is not None:
+            param_payload["hours"] = params.hours
         data: JsonDict = {
             "goal_id": as_token(record.goal_id),
             "kind": record.kind.value,

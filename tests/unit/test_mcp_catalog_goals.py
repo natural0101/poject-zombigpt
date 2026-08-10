@@ -40,12 +40,18 @@ from typing import Any, Final
 import pytest
 
 from pz_agent_core.actions.adapters.literature import MAX_READ_PAGES
+from pz_agent_core.actions.adapters.survival import (
+    MAX_REST_TARGET,
+    MIN_REST_TARGET,
+    MIN_SLEEP_HOURS,
+)
 from pz_agent_core.goals import (
     GOAL_SPECS,
     MAX_IDEMPOTENCY_KEY_LEN,
     MAX_LOOT_CATEGORIES_CHARS,
     MAX_LOOT_RADIUS,
     MAX_SKILL_LEVEL,
+    MAX_SLEEP_GOAL_HOURS,
     MIN_LOOT_RADIUS,
     GoalAdmission,
     GoalKind,
@@ -87,6 +93,9 @@ DOCUMENTED_KINDS: Final[frozenset[str]] = frozenset(
         "loot_area",
         "return_home",
         "explore_area",
+        "treat_wounds",
+        "rest_until",
+        "sleep_until_rested",
     }
 )
 
@@ -444,6 +453,14 @@ def test_the_numeric_bounds_are_the_channels_own() -> None:
     # whole vocabulary joined.
     assert (properties["radius"]["minimum"], properties["radius"]["maximum"]) == (1, 30)
     assert properties["categories"]["maxLength"] == 128
+    # The care pair: 0.05..1.0 is the rest adapter's own endurance range, and
+    # 1..12 the sleep floor beside the channel's narrower "until rested"
+    # ceiling — deliberately below the adapter's sixteen-hour maximum.
+    assert (
+        properties["target_endurance"]["minimum"],
+        properties["target_endurance"]["maximum"],
+    ) == (0.05, 1.0)
+    assert (properties["hours"]["minimum"], properties["hours"]["maximum"]) == (1, 12)
     # …and those literals are what the channel itself will check against.
     assert properties["target_level"]["maximum"] == MAX_SKILL_LEVEL
     assert properties["pages"]["maximum"] == MAX_READ_PAGES
@@ -452,6 +469,14 @@ def test_the_numeric_bounds_are_the_channels_own() -> None:
         MAX_LOOT_RADIUS,
     )
     assert properties["categories"]["maxLength"] == MAX_LOOT_CATEGORIES_CHARS
+    assert (
+        properties["target_endurance"]["minimum"],
+        properties["target_endurance"]["maximum"],
+    ) == (MIN_REST_TARGET, MAX_REST_TARGET)
+    assert (properties["hours"]["minimum"], properties["hours"]["maximum"]) == (
+        MIN_SLEEP_HOURS,
+        MAX_SLEEP_GOAL_HOURS,
+    )
 
 
 @pytest.mark.parametrize(
@@ -472,6 +497,13 @@ def test_the_numeric_bounds_are_the_channels_own() -> None:
         # published pattern refuses it before the call is made — the safe
         # direction for a schema and its receiver to disagree in.
         {"kind": "loot_area", "categories": "food"},
+        # The care pair, both sides of both ranges: below the rest adapter's
+        # floor, above the endurance ceiling, below the sleep floor, above
+        # the channel's narrower "until rested" ceiling.
+        {"kind": "rest_until", "target_endurance": 0.0},
+        {"kind": "rest_until", "target_endurance": 1.5},
+        {"kind": "sleep_until_rested", "hours": 0},
+        {"kind": "sleep_until_rested", "hours": 13},
     ],
 )
 def test_a_parameter_outside_the_channels_range_never_reaches_it(arguments: JsonDict) -> None:
@@ -585,6 +617,59 @@ def test_submit_hands_the_channel_a_typed_loot_request() -> None:
         "take_all": False,
         "categories": "FOOD,MEDICAL",
     }
+
+
+def test_submit_hands_the_channel_typed_care_requests() -> None:
+    """The three care kinds cross the boundary typed, no parameter dropped.
+
+    ``rest_until``'s required target and ``sleep_until_rested``'s optional
+    hours are numbers on the far side and in the echo; ``treat_wounds`` is
+    the bare goal — no parameter exists for it, and none is filled in.
+    """
+    router, goals, _ = wired()
+
+    rest = router.call(
+        "pz_goal_submit",
+        {"kind": "rest_until", "target_endurance": 0.8, "idempotency_key": "goal-1:rest"},
+    )
+    sleep = router.call(
+        "pz_goal_submit",
+        {"kind": "sleep_until_rested", "hours": 8, "idempotency_key": "goal-1:sleep"},
+    )
+    treat = router.call(
+        "pz_goal_submit", {"kind": "treat_wounds", "idempotency_key": "goal-1:treat"}
+    )
+
+    assert len(goals.submitted) == 3
+    rested, slept, treated = goals.submitted
+    assert rested.kind is GoalKind.REST_UNTIL
+    assert rested.params.target_endurance == 0.8
+    assert rest["data"]["params"] == {"target_endurance": 0.8}
+    assert slept.kind is GoalKind.SLEEP_UNTIL_RESTED
+    assert slept.params.hours == 8
+    assert sleep["data"]["params"] == {"hours": 8}
+    assert treated.kind is GoalKind.TREAT_WOUNDS
+    assert treated.params.present() == frozenset()
+    assert treat["data"]["params"] == {}
+
+
+def test_a_care_rule_the_schema_cannot_state_is_still_the_callers_mistake() -> None:
+    """The per-kind requirement table, at the care kinds' edges.
+
+    ``rest_until`` without its target, and a care parameter on a kind that
+    forbids it, are both the channel's ``ValueError`` — translated to
+    ``INVALID_ARGUMENT`` rather than left to become ``INTERNAL_ERROR``.
+    """
+    router, goals, _ = wired()
+
+    missing = submit(router, kind="rest_until")
+    forbidden = submit(router, kind="treat_wounds", target_endurance=0.8)
+    crossed = submit(router, kind="rest_until", hours=8, target_endurance=0.8)
+
+    assert missing["reason_code"] == "INVALID_ARGUMENT"
+    assert forbidden["reason_code"] == "INVALID_ARGUMENT"
+    assert crossed["reason_code"] == "INVALID_ARGUMENT"
+    assert goals.submitted == []
 
 
 def test_a_bare_loot_goal_is_admitted_with_nothing_filled_in() -> None:

@@ -477,10 +477,12 @@ class TestGoalStatusTails:
             assert status.report["ended"] == "unpinned"
 
     def test_an_llm_served_goal_crosses_with_no_deterministic_phase(self, tmp_path: Path) -> None:
+        # read_for_boredom: still a provider-served kind. The consume kinds
+        # left this category when the wrapper's own mission took them over.
         with attached_world(tmp_path) as world:
             self._wrapped(world)
             record = self._activated(
-                world, GoalRequest(kind=GoalKind.SATISFY_HUNGER, idempotency_key="tail-llm")
+                world, GoalRequest(kind=GoalKind.READ_FOR_BOREDOM, idempotency_key="tail-llm")
             )
 
             status = self._goal_port(world).status(record.goal_id)
@@ -491,7 +493,13 @@ class TestGoalStatusTails:
             assert status.paused is None
 
     def test_a_takeover_is_visible_as_paused_until_a_fresh_activation(self, tmp_path: Path) -> None:
-        """The scripted takeover from ``test_two_phase_arm``, read at the port."""
+        """The scripted takeover from ``test_two_phase_arm``, read at the port.
+
+        A read_for_boredom goal, because the pause semantics need a goal that
+        idles ACTIVE under a planner-less wrapper: the consume kinds are
+        served by the wrapper's own mission now, and over this world's empty
+        inventory a satisfy goal would end typed before the takeover arrived.
+        """
         with attached_world(tmp_path) as world:
             queue = GoalQueue(clock=world.clock, armed=False)
             world.loop.goals = queue
@@ -502,7 +510,7 @@ class TestGoalStatusTails:
             arm_for_real(world, mod, SessionMode.AUTONOMOUS)
             with world.loop.goal_lock:
                 admission = queue.submit(
-                    GoalRequest(kind=GoalKind.SATISFY_HUNGER, idempotency_key="tail-pause")
+                    GoalRequest(kind=GoalKind.READ_FOR_BOREDOM, idempotency_key="tail-pause")
                 )
             assert admission.goal is not None
             goal_id = admission.goal.goal_id
@@ -520,7 +528,7 @@ class TestGoalStatusTails:
             paused = port.status().paused
             assert isinstance(paused, PausedGoalRecord)
             assert paused.goal_id == goal_id
-            assert paused.kind == GoalKind.SATISFY_HUNGER.value
+            assert paused.kind == GoalKind.READ_FOR_BOREDOM.value
             assert paused.reason == "manual takeover"
             assert paused.paused_at_ms >= BASE_TIME_MS
 
@@ -537,7 +545,7 @@ class TestGoalStatusTails:
             # marker has served its purpose.
             with world.loop.goal_lock:
                 fresh = queue.submit(
-                    GoalRequest(kind=GoalKind.SATISFY_HUNGER, idempotency_key="tail-resume")
+                    GoalRequest(kind=GoalKind.READ_FOR_BOREDOM, idempotency_key="tail-resume")
                 )
             assert fresh.goal is not None
             world.observe(safety=make_safety(armed=True, mode=SessionMode.AUTONOMOUS))

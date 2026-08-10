@@ -36,6 +36,14 @@ from typing import Any
 
 import pytest
 
+from pz_agent_cli.care_mission import (
+    PHASE_REST,
+    PHASE_SLEEP,
+    PHASE_TREAT,
+    REST_PHASES,
+    SLEEP_PHASES,
+    TREAT_PHASES,
+)
 from pz_agent_cli.explore_mission import EXPLORE_PHASES
 from pz_agent_cli.loot_mission import (
     LOOT_PHASES,
@@ -68,6 +76,7 @@ from pz_agent_core.protocol import (
     NearbyView,
     Observation,
     Position,
+    Wound,
 )
 from pz_agent_mcp.ports import MAX_PROGRESS_COUNTERS, GoalProgress, PausedGoalRecord
 from tests.fixtures import (
@@ -199,6 +208,13 @@ def test_the_phase_vocabularies_are_the_stated_closed_sets() -> None:
     # the wrapper must never come to read the two missions' phases differently.
     assert EXPLORE_PHASES[0] is PHASE_START
     assert EXPLORE_PHASES[1] is PHASE_APPROACH
+    # The care vocabularies, on the same terms: the shared tokens are the
+    # loot mission's own objects, the three new ones are stated here.
+    assert TREAT_PHASES == ("start", "transfer", "treat")
+    assert REST_PHASES == ("start", "rest")
+    assert SLEEP_PHASES == ("start", "sleep")
+    assert TREAT_PHASES[0] is PHASE_START
+    assert TREAT_PHASES[1] is PHASE_TRANSFER
 
 
 # --------------------------------------------------------------------------
@@ -383,12 +399,155 @@ class TestExplorePhases:
         assert progress.counters["waypoints_visited"] == 8
 
 
+def care_observed(
+    seq: int,
+    *,
+    wounds: tuple[Wound, ...] = (),
+    items: tuple[ItemView, ...] = (),
+    stats: dict[str, float] | None = None,
+    objects: tuple[NearbyObject, ...] = (),
+) -> Observation:
+    """A care-shaped world: wounds and stats on the player, dressings in main."""
+    main = make_container(
+        main_container_ref(), ContainerKind.PLAYER_MAIN, capacity=20.0, used_capacity=3.0
+    )
+    return make_observation(
+        seq=seq,
+        player=make_player(wounds=list(wounds), stats=stats or {}),
+        nearby=NearbyView(objects=list(objects)),
+        inventory=InventoryView(containers=[main], items=list(items)),
+    )
+
+
+def a_dressing() -> ItemView:
+    return make_item(
+        f"item:{DEFAULT_SESSION}:player-main:wrap:0",
+        main_container_ref(),
+        full_type="Base.Bandage",
+        display_name="Bandage",
+        category="FirstAid",
+        weight=0.1,
+    )
+
+
+def a_head_wound() -> Wound:
+    return Wound(ref=f"wound:{DEFAULT_SESSION}:Head", kind="scratch", severity=0.5, bleeding=True)
+
+
+class TestCarePhases:
+    def test_a_treat_mission_reports_treat_while_a_bandage_is_out(self) -> None:
+        """The phase moves with the dressing pipeline and dies with the goal."""
+        wrapper, queue, channel = bound_wrapper()
+        record = submitted_and_active(
+            queue, GoalRequest(kind=GoalKind.TREAT_WOUNDS, idempotency_key="treat-key")
+        )
+        goal = to_planner_goal(record)
+
+        assert wrapper.goal_progress(record.goal_id) is None, (
+            "no drive exists before the wrapper is asked"
+        )
+
+        # Tick 1: the bandage is submitted; the mission is treating.
+        hurt = care_observed(1, wounds=(a_head_wound(),), items=(a_dressing(),))
+        assert wrapper.propose_for_goal(goal, hurt) is None
+        assert channel.pending_count == 1
+        progress = wrapper.goal_progress(record.goal_id)
+        assert progress is not None
+        assert progress.phase == PHASE_TREAT
+        assert progress.counters == {"wounds_bandaged": 0, "bleeding_remaining": 1}
+        settle_success(channel, seq=1, evidence={"bleeding_before": True, "bleeding_after": False})
+
+        # Tick 2: no observed wound bleeds — the criterion holds, the goal
+        # succeeds on the engine's evidence, and the pruned drive honestly
+        # answers nothing while the sealed report survives it.
+        assert wrapper.propose_for_goal(goal, care_observed(2)) is None
+        finished = queue.record(record.goal_id)
+        assert finished is not None and finished.state is GoalState.SUCCEEDED
+        assert wrapper.goal_progress(record.goal_id) is None
+        report = wrapper.care_report(record.goal_id)
+        assert report is not None
+        assert report["wounds_bandaged"] == ["Head"]
+        assert report["ended"] == "complete"
+
+    def test_a_rest_mission_reports_rest_and_the_one_request_as_a_counter(self) -> None:
+        wrapper, queue, channel = bound_wrapper()
+        record = submitted_and_active(
+            queue,
+            GoalRequest(
+                kind=GoalKind.REST_UNTIL,
+                idempotency_key="rest-key",
+                params=GoalParams(target_endurance=0.8),
+            ),
+        )
+        goal = to_planner_goal(record)
+
+        assert wrapper.propose_for_goal(goal, care_observed(1, stats={"endurance": 0.3})) is None
+        assert channel.pending_count == 1
+        progress = wrapper.goal_progress(record.goal_id)
+        assert progress is not None
+        assert progress.phase == PHASE_REST
+        assert progress.counters == {"requested": 1}
+
+    def test_a_rest_already_at_target_reports_start_over_the_probe(self) -> None:
+        """The no-work completion travels the goal seam; the drive stays live."""
+        wrapper, queue, channel = bound_wrapper()
+        record = submitted_and_active(
+            queue,
+            GoalRequest(
+                kind=GoalKind.REST_UNTIL,
+                idempotency_key="rested-key",
+                params=GoalParams(target_endurance=0.5),
+            ),
+        )
+
+        probe = wrapper.propose_for_goal(
+            to_planner_goal(record), care_observed(1, stats={"endurance": 0.9})
+        )
+
+        assert probe is not None and probe.action is ActionName.MOVEMENT_MOVE_TO
+        assert channel.pending_count == 0
+        progress = wrapper.goal_progress(record.goal_id)
+        assert progress is not None
+        assert progress.phase == PHASE_START
+        assert progress.counters == {"requested": 0}
+
+    def test_a_sleep_mission_reports_sleep_while_the_night_is_out(self) -> None:
+        wrapper, queue, channel = bound_wrapper()
+        record = submitted_and_active(
+            queue,
+            GoalRequest(
+                kind=GoalKind.SLEEP_UNTIL_RESTED,
+                idempotency_key="sleep-key",
+                params=GoalParams(hours=6),
+            ),
+        )
+        bed = NearbyObject(
+            ref=f"object:{DEFAULT_SESSION}:7001:0",
+            kind="bed",
+            distance=1.0,
+            position=Position(x=1201.0, y=3400.0, z=0),
+            semantics=["bed"],
+        )
+
+        assert (
+            wrapper.propose_for_goal(to_planner_goal(record), care_observed(1, objects=(bed,)))
+            is None
+        )
+        assert channel.pending_count == 1
+        progress = wrapper.goal_progress(record.goal_id)
+        assert progress is not None
+        assert progress.phase == PHASE_SLEEP
+        assert progress.counters == {"requested": 1}
+
+
 class TestDelegatedKindsAnswerNothing:
     def test_an_llm_served_goal_has_no_deterministic_phase(self) -> None:
+        # read_for_boredom: still a provider-served kind. The consume kinds
+        # left this category when the wrapper's own mission took them over.
         wrapper, queue, _ = bound_wrapper()
         record = submitted_and_active(
             queue,
-            GoalRequest(kind=GoalKind.SATISFY_HUNGER, idempotency_key="eat-key"),
+            GoalRequest(kind=GoalKind.READ_FOR_BOREDOM, idempotency_key="read-key"),
         )
 
         assert wrapper.goal_progress(record.goal_id) is None

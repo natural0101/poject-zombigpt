@@ -49,6 +49,7 @@ from types import MappingProxyType
 from typing import Final
 
 from ..actions.adapters.literature import MAX_READ_PAGES
+from ..actions.adapters.survival import MAX_REST_TARGET, MIN_REST_TARGET, MIN_SLEEP_HOURS
 from ..loot import LootCategory
 from ..planner.provider import Goal as PlannerGoal
 from ..planner.provider import GoalKind as PlannerGoalKind
@@ -68,6 +69,7 @@ __all__ = [
     "MAX_PENDING_TTL_MS",
     "MAX_RENDERED_VALUE_CHARS",
     "MAX_SKILL_LEVEL",
+    "MAX_SLEEP_GOAL_HOURS",
     "MAX_TARGET_FLOOR",
     "MAX_TARGET_SQUARE",
     "MIN_GOAL_WALL_MS",
@@ -180,6 +182,15 @@ MAX_LOOT_RADIUS: Final = 30
 #: loot under.
 MAX_LOOT_CATEGORIES_CHARS: Final = 128
 
+#: The longest night a ``sleep_until_rested`` goal may ask for. Deliberately
+#: narrower than the sleep adapter's own ``MAX_SLEEP_HOURS`` (16): the kind's
+#: whole meaning is "until rested", and a request for more than half a day of
+#: sleep is a typo to refuse at the door rather than a night to attempt. The
+#: adapter keeps its wider bound for callers that drive the action directly;
+#: the floor and the rest target's bounds are the adapters' own, imported
+#: rather than restated so the two layers cannot drift apart.
+MAX_SLEEP_GOAL_HOURS: Final = 12
+
 #: Postcondition field *names* kept on a finished goal. Values are deliberately
 #: not kept: evidence values are forwarded from the mod, which forwards them
 #: from the game, and game-authored text is untrusted data (AGENTS.md).
@@ -266,6 +277,15 @@ class GoalKind(StrEnum):
     four by name rather than approximating them with a plan. The mapping to
     the planner vocabulary stays total all the same, because these goals
     still cross the planner seam on their way to the deterministic server.
+
+    ``TREAT_WOUNDS``, ``REST_UNTIL`` and ``SLEEP_UNTIL_RESTED`` join that
+    arrangement one wave later, served by the CLI's deterministic care
+    missions (``pz_agent_cli.care_mission``) over the existing medical and
+    survival adapters: bandage every observed bleeding wound, one
+    ``survival.rest`` to a target the adapter itself verifies, one
+    ``survival.sleep`` whose danger refusal surfaces unchanged.
+    :class:`~pz_agent_core.planner.provider.NullProvider` refuses all three
+    by name, exactly as it refuses the four above.
     """
 
     SATISFY_HUNGER = "satisfy_hunger"
@@ -277,6 +297,9 @@ class GoalKind(StrEnum):
     LOOT_AREA = "loot_area"
     RETURN_HOME = "return_home"
     EXPLORE_AREA = "explore_area"
+    TREAT_WOUNDS = "treat_wounds"
+    REST_UNTIL = "rest_until"
+    SLEEP_UNTIL_RESTED = "sleep_until_rested"
 
 
 class LootScope(StrEnum):
@@ -477,6 +500,13 @@ NUMERIC_RANGES: Final[Mapping[str, NumericRange]] = MappingProxyType(
         "target_y": NumericRange(0, MAX_TARGET_SQUARE),
         "target_z": NumericRange(MIN_TARGET_FLOOR, MAX_TARGET_FLOOR),
         "radius": NumericRange(MIN_LOOT_RADIUS, MAX_LOOT_RADIUS),
+        # The rest adapter's own bounds, imported rather than restated: a
+        # target the channel admitted and the adapter refused would be a goal
+        # that can only ever end in a downstream refusal.
+        "target_endurance": NumericRange(MIN_REST_TARGET, MAX_REST_TARGET),
+        # The floor is the sleep adapter's own; the ceiling is the channel's
+        # narrower MAX_SLEEP_GOAL_HOURS, documented on that constant.
+        "hours": NumericRange(MIN_SLEEP_HOURS, MAX_SLEEP_GOAL_HOURS),
     }
 )
 
@@ -571,6 +601,13 @@ class GoalParams:
     #: a mission is a set of reviewed tokens joined by commas and nothing
     #: else. A string field only because :class:`GoalParams` carries scalars.
     categories: str | None = None
+    #: Where a ``rest_until`` goal stops resting: the endurance fraction the
+    #: survival adapter is asked to reach and verifies from the observation.
+    target_endurance: float | None = None
+    #: How long a ``sleep_until_rested`` goal asks to sleep. Absent means the
+    #: sleep adapter's own default — the mission omits the argument rather
+    #: than restating the number here.
+    hours: int | None = None
 
     def __post_init__(self) -> None:
         if self.skill is not None and not isinstance(self.skill, TrainableSkill):
@@ -583,10 +620,13 @@ class GoalParams:
         if self.satisfy_to is not None:
             fraction = _require_number(self.satisfy_to, name="satisfy_to")
             NUMERIC_RANGES["satisfy_to"].check(fraction, name="satisfy_to")
+        if self.target_endurance is not None:
+            target = _require_number(self.target_endurance, name="target_endurance")
+            NUMERIC_RANGES["target_endurance"].check(target, name="target_endurance")
         if self.pages is not None:
             pages = _require_whole(self.pages, name="pages")
             NUMERIC_RANGES["pages"].check(pages, name="pages")
-        for name in ("target_x", "target_y", "target_z", "radius"):
+        for name in ("target_x", "target_y", "target_z", "radius", "hours"):
             value = getattr(self, name)
             if value is not None:
                 coordinate = _require_whole(value, name=name)
@@ -630,6 +670,8 @@ PARAM_NAMES: Final[tuple[str, ...]] = (
     "radius",
     "take_all",
     "categories",
+    "target_endurance",
+    "hours",
 )
 
 
@@ -728,6 +770,25 @@ _EXPLORE_BUDGET: Final = GoalBudget(
     max_wall_ms=MAX_GOAL_WALL_MS, max_steps=MAX_GOAL_STEPS, pending_ttl_ms=120_000
 )
 
+#: The treat budget. ``max_steps`` is sized to the care mission's own wound
+#: ceiling (``MAX_WOUNDS_PER_MISSION`` = 8, pinned by a test rather than
+#: imported — the channel keeps zero dependencies on the CLI): every bandage
+#: and every transfer in front of one travels the loop's action channel, so
+#: the goal seam only ever carries the no-work completion probe, and eight is
+#: room for it several times over. Five minutes of wall clock covers eight
+#: dressings at the bandage adapter's own thirty-second budget each.
+_TREAT_BUDGET: Final = GoalBudget(max_wall_ms=300_000, max_steps=8, pending_ttl_ms=120_000)
+
+#: The rest and sleep budgets, one constant because the two goals are the
+#: same shape of work: one survival action whose adapter does the waiting
+#: under its own wall-clock bounds, plus at most a completion probe on the
+#: goal seam. The wall clock sits at the channel ceiling — endurance and
+#: fatigue move at the game's pace, not this channel's — and the ceiling rule
+#: from the loot wave applies: the wire schema pins fifteen minutes, so
+#: "longer" is a protocol change, not a bigger constant here.
+_REST_BUDGET: Final = GoalBudget(max_wall_ms=MAX_GOAL_WALL_MS, max_steps=4, pending_ttl_ms=120_000)
+_SLEEP_BUDGET: Final = _REST_BUDGET
+
 #: The whole channel in one table. Adding a kind without adding a row here
 #: fails :func:`_check_tables` at import time, not at the first submission.
 GOAL_SPECS: Final[Mapping[GoalKind, GoalSpec]] = MappingProxyType(
@@ -789,6 +850,31 @@ GOAL_SPECS: Final[Mapping[GoalKind, GoalSpec]] = MappingProxyType(
             required=frozenset(),
             optional=frozenset({"scope", "radius"}),
             budget=_EXPLORE_BUDGET,
+        ),
+        # Parameterless on purpose: «перевяжись» carries the whole goal. Which
+        # wound and which dressing are policy.medical.select_treatment's
+        # decisions, made deterministically per observation — a parameter here
+        # would be a spoken second opinion on the triage order.
+        GoalKind.TREAT_WOUNDS: GoalSpec(
+            required=frozenset(),
+            optional=frozenset(),
+            budget=_TREAT_BUDGET,
+        ),
+        # The target is required because it is the goal: "rest" without a
+        # stated endurance to reach has no postcondition to verify, and the
+        # adapter's own default would be this channel choosing one silently.
+        GoalKind.REST_UNTIL: GoalSpec(
+            required=frozenset({"target_endurance"}),
+            optional=frozenset(),
+            budget=_REST_BUDGET,
+        ),
+        # ``hours`` optional: the absent value means the sleep adapter's own
+        # default night, which the mission expresses by omitting the argument
+        # rather than by restating the adapter's number.
+        GoalKind.SLEEP_UNTIL_RESTED: GoalSpec(
+            required=frozenset(),
+            optional=frozenset({"hours"}),
+            budget=_SLEEP_BUDGET,
         ),
     }
 )
@@ -1118,6 +1204,13 @@ _PLANNER_KIND: Final[Mapping[GoalKind, PlannerGoalKind]] = MappingProxyType(
         # behind the same wrapper, both refused by name by NullProvider.
         GoalKind.RETURN_HOME: PlannerGoalKind.RETURN_HOME,
         GoalKind.EXPLORE_AREA: PlannerGoalKind.EXPLORE_AREA,
+        # The care wave, three at once: bandaging, resting and sleeping are
+        # driven by the CLI's deterministic care missions over the medical and
+        # survival adapters, and NullProvider refuses each by name for a loop
+        # assembled without that wrapper.
+        GoalKind.TREAT_WOUNDS: PlannerGoalKind.TREAT_WOUNDS,
+        GoalKind.REST_UNTIL: PlannerGoalKind.REST_UNTIL,
+        GoalKind.SLEEP_UNTIL_RESTED: PlannerGoalKind.SLEEP_UNTIL_RESTED,
     }
 )
 

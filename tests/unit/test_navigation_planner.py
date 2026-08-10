@@ -135,6 +135,9 @@ class TestTheWrapperServesNavigationItself:
         assert spy.goal_calls == [] and spy.propose_calls == 0
 
     def test_other_kinds_delegate_untouched(self) -> None:
+        # read_for_boredom, because the consume kinds no longer delegate: the
+        # satisfy goals are served by the wrapper's own consume mission now,
+        # and tests/unit/test_consume_mission.py owns that half of the seam.
         sentinel = ActionRequest(
             action=ActionName.ACTION_WAIT,
             session_id=DEFAULT_SESSION,
@@ -143,7 +146,9 @@ class TestTheWrapperServesNavigationItself:
         )
         spy = SpyPlanner(sentinel)
         wrapper, queue, _ = bound_wrapper(spy)
-        admission = queue.submit(GoalRequest(kind=GoalKind.SATISFY_HUNGER, idempotency_key="eat"))
+        admission = queue.submit(
+            GoalRequest(kind=GoalKind.READ_FOR_BOREDOM, idempotency_key="read")
+        )
         assert admission.goal is not None
         goal = to_planner_goal(admission.goal)
 

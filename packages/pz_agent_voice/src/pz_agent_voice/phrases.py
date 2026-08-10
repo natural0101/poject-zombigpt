@@ -25,6 +25,7 @@ from pz_agent_core.capabilities import (
     MOVE_TO_SQUARE,
     READ_LITERATURE,
 )
+from pz_agent_core.capabilities.probes import MEDICAL_BANDAGE
 from pz_agent_core.goals import NUMERIC_RANGES, PARAM_NAMES, GoalKind
 from pz_agent_core.protocol import DangerLevel, ReasonCode
 
@@ -150,6 +151,7 @@ KIND_ACCEPTED: Final[dict[GoalKind, str]] = {
     GoalKind.TRAIN_SKILL: "Ищу книгу по навыку.",
     GoalKind.LEARN_RECIPE: "Ищу книгу с рецептами.",
     GoalKind.RETURN_HOME: "Иду домой.",
+    GoalKind.TREAT_WOUNDS: "Перевязываю раны.",
 }
 
 #: How to say each goal parameter, in the nominative singular so one sentence
@@ -180,6 +182,7 @@ CAPABILITY_NOUNS: Final[dict[str, str]] = {
     DRINK_CARRIED: "питьё",
     READ_LITERATURE: "чтение",
     MOVE_TO_SQUARE: "передвижение",
+    MEDICAL_BANDAGE: "перевязка",
 }
 
 #: The refusals whose whole sentence is a constant. The other three name

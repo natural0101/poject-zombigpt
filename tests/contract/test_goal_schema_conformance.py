@@ -66,16 +66,29 @@ SCHEMA_PATH: Final = Path(__file__).resolve().parents[2] / "schemas" / "goal.sch
 #: remote submission is a loud refusal rather than a silently dropped goal.
 #: ``return_home`` and ``explore_area`` join the carve-out on the same terms:
 #: both are served locally by the sidecar's deterministic servers, and putting
-#: either on the remote link is the same protocol change.
+#: either on the remote link is the same protocol change. The care wave's
+#: three kinds — ``treat_wounds``, ``rest_until``, ``sleep_until_rested`` —
+#: join on those terms again: each is served locally by the deterministic
+#: care missions, and each rides the same loud-refusal rule below.
 NOT_YET_ON_THE_WIRE: Final[frozenset[str]] = frozenset(
-    {"navigate_to", "loot_area", "return_home", "explore_area"}
+    {
+        "navigate_to",
+        "loot_area",
+        "return_home",
+        "explore_area",
+        "treat_wounds",
+        "rest_until",
+        "sleep_until_rested",
+    }
 )
 
 #: The *numeric* parameters only those kinds carry, absent from the wire
 #: schema for the same reason and pinned the same way. (Every name here must
 #: have a row in NUMERIC_RANGES; the loot goal's non-numeric parameters are
 #: pinned separately below.)
-LOCAL_ONLY_PARAMS: Final[frozenset[str]] = frozenset({"target_x", "target_y", "target_z", "radius"})
+LOCAL_ONLY_PARAMS: Final[frozenset[str]] = frozenset(
+    {"target_x", "target_y", "target_z", "radius", "target_endurance", "hours"}
+)
 
 #: The loot goal's closed-token parameters: local to the sidecar, not on the
 #: wire, and with no numeric range to appear in the loop above — so their
@@ -203,6 +216,9 @@ class TestTheClosedSetsAgree:
             "loot_area": {"scope": "room"},
             "return_home": {},
             "explore_area": {"scope": "radius", "radius": 8},
+            "treat_wounds": {},
+            "rest_until": {"target_endurance": 0.8},
+            "sleep_until_rested": {"hours": 8},
         }
         assert set(local_params) == set(NOT_YET_ON_THE_WIRE)
         for kind, params in sorted(local_params.items()):
