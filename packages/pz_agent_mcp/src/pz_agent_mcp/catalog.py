@@ -128,11 +128,13 @@ from pz_agent_core.protocol.messages import MAX_LEASE_MS, MIN_LEASE_MS
 from .validation import validate_arguments
 
 __all__ = [
+    "DEFAULT_ACTION_WAIT_MS",
     "DEFAULT_MEMORY_RESULTS",
     "DEFAULT_OBSERVE_RADIUS",
     "DEFAULT_PLAN_REAL_SECONDS",
     "DEFAULT_TAIL_RECORDS",
     "EXAMPLE_SESSION_ID",
+    "MAX_ACTION_WAIT_MS",
     "MAX_GOAL_CHARS",
     "MAX_IDEMPOTENCY_KEY_CHARS",
     "MAX_MEMORY_RESULTS",
@@ -140,6 +142,7 @@ __all__ = [
     "MAX_PLAN_REAL_SECONDS",
     "MAX_PLAN_STEPS",
     "MAX_TAIL_RECORDS",
+    "MIN_ACTION_WAIT_MS",
     "MIN_APPROACH_RADIUS",
     "RESOURCES",
     "RESOURCES_BY_URI",
@@ -167,6 +170,16 @@ MAX_PLAN_STEPS: Final = 8
 MAX_PLAN_REAL_SECONDS: Final = 600
 DEFAULT_PLAN_REAL_SECONDS: Final = 120
 
+#: The wait budget ``pz_action_await`` accepts. Not the command lease: a lease
+#: bounds how long the *loop* may hold a command, this bounds how long one
+#: status call may keep re-reading before it answers with the record as it
+#: stands. The floor stops a budget shorter than a single poll interval from
+#: advertising a wait that cannot happen; the ceiling keeps a stuck action from
+#: parking a client for longer than a minute per call.
+MIN_ACTION_WAIT_MS: Final = 100
+MAX_ACTION_WAIT_MS: Final = 60_000
+DEFAULT_ACTION_WAIT_MS: Final = 5_000
+
 #: The floor ``movement.move_near`` applies to an approach radius. Restated
 #: rather than imported because the adapter inlines it in its own reader instead
 #: of naming it; a radius this schema waved through would be one the adapter
@@ -189,6 +202,12 @@ _EXAMPLE_SQUARE: Final = f"square:{EXAMPLE_SESSION_ID}:1200:3400:0"
 #: and is not session-scoped, and an example that reused the session's id would
 #: teach a client the two are interchangeable.
 _EXAMPLE_GOAL_ID: Final = "00000000-0000-4000-8000-0000000000a1"
+
+#: An action id the way the sidecar's own ``mint_action_id`` spells one — a
+#: UUID the process minted and handed back on submission. Distinct from the
+#: goal id above for the same reason that one is distinct from the session id:
+#: three different minters, three values a client must not conflate.
+_EXAMPLE_ACTION_ID: Final = "00000000-0000-4000-8000-0000000000c1"
 
 #: Filter tokens (categories, components, memory kinds) are identifiers, not
 #: prose. A sentence in one of those positions is a red flag, so the pattern is
@@ -321,6 +340,13 @@ _GOAL_KEY: Final[JsonDict] = {
 _GOAL_ID: Final[JsonDict] = {
     "type": "string",
     "description": "A goal id the channel minted and handed back on submission.",
+    "pattern": _UUID_PATTERN,
+    "maxLength": _UUID_CHARS,
+}
+
+_ACTION_ID: Final[JsonDict] = {
+    "type": "string",
+    "description": "An action id this sidecar minted and handed back on submission.",
     "pattern": _UUID_PATTERN,
     "maxLength": _UUID_CHARS,
 }
@@ -1220,6 +1246,82 @@ TOOLS: Final[tuple[ToolSpec, ...]] = (
             required=(),
         ),
         example={"idempotency_key": "goal-1:cancel:attempt-1"},
+    ),
+    ToolSpec(
+        name="pz_action_cancel_all",
+        kind=ToolKind.CONTROL,
+        risk=RiskClass.P1,
+        summary=(
+            "Clear every mod-owned entry in one call: the mass form of "
+            "pz_action_cancel, with nothing narrower to mis-aim. Ownership is "
+            "the mod's own tag, so an action the player queued is never "
+            "touched, and the postcondition is negative — no entry this "
+            "session owns still in flight — so a second call finds it already "
+            "true and succeeds clearing nothing. Returns the cancel's action "
+            "id; pz_action_await turns it into the engine's verdict."
+        ),
+        input_schema=_mutating({}, required=()),
+        example={"idempotency_key": "goal-1:cancel-all:attempt-1"},
+    ),
+    # --- asking after submitted work ---------------------------------------
+    # Read tools, not queries: they answer from the record store the sidecar
+    # already holds and submit nothing, so they run in OBSERVE, on a disarmed
+    # session, and against a game that is gone. Until they existed the only
+    # public read of an action's fate was replaying its idempotency key, and an
+    # agent that had lost the key — or the sidecar that minted it — could ask
+    # nobody; a live session sat watching an 'accepted' nothing could explain.
+    ToolSpec(
+        name="pz_action_status",
+        kind=ToolKind.READ,
+        risk=RiskClass.P0,
+        summary=(
+            "The current record of one submitted action: its status, its "
+            "terminal result, and — for an observed success — its evidence. An "
+            "id this sidecar does not hold is answered as known: false with "
+            "the likely causes, not as an error: the record store is a bounded "
+            "ring that evicts finished work, and a restarted sidecar holds "
+            "nothing the previous process minted, so unknown here is a routine "
+            "fact and never means the action did not run."
+        ),
+        input_schema={
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {"action_id": _ACTION_ID},
+            "required": ["action_id"],
+        },
+        example={"action_id": _EXAMPLE_ACTION_ID},
+    ),
+    ToolSpec(
+        name="pz_action_await",
+        kind=ToolKind.READ,
+        risk=RiskClass.P0,
+        summary=(
+            "Wait, bounded, for a submitted action to reach a terminal state, "
+            "re-reading its record on a small interval with no lock held "
+            "across the wait — the stop tools stay reachable while it runs. "
+            "Answers the pz_action_status shape plus waited_ms and timed_out; "
+            "a budget that ends first reports the record as it stands with "
+            "timed_out: true, and an unknown id answers immediately."
+        ),
+        input_schema={
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "action_id": {**_ACTION_ID, "description": "The action to wait on."},
+                "timeout_ms": {
+                    "type": "integer",
+                    "description": (
+                        "The wait budget for this one call, in milliseconds — "
+                        "how long to keep re-reading, not the action's lease."
+                    ),
+                    "minimum": MIN_ACTION_WAIT_MS,
+                    "maximum": MAX_ACTION_WAIT_MS,
+                    "default": DEFAULT_ACTION_WAIT_MS,
+                },
+            },
+            "required": ["action_id"],
+        },
+        example={"action_id": _EXAMPLE_ACTION_ID, "timeout_ms": 2000},
     ),
     # --- plans ------------------------------------------------------------
     ToolSpec(

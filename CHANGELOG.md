@@ -12,6 +12,58 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **The arm a client is told about is now the arm the game confirmed**
+  (`epic/p0-windows-ipc-arm-recovery`). Live, `pz_session_arm` answered
+  `armed=true` having armed only the sidecar; the game kept publishing
+  `armed=false, mode=OFF` because no `session.arm` command was ever enqueued.
+  Arming is now two-phase: the sidecar submits a real `session.arm` command
+  through the queue and reports success only after observing *both* the mod's
+  terminal `succeeded` ack *and* a fresh game heartbeat of the same session
+  reporting `armed=true` in the requested mode — within a bounded window
+  (default 5 s), after which the refusal names which half never arrived and a
+  countermanding `session.disarm` closes the late-ack hole. Disarm stays
+  locally ungated (user input wins) and notifies the game, surfacing an
+  unconfirmed notification honestly.
+- **A restarted sidecar is no longer a second producer.** The command queue
+  seeded its outbound sequence at 0 on every start while the mod's journal
+  still held records 0..N. The queue now recovers `highest+1` from the durable
+  journal tail (bounded read, newest rotated generation when the live file is
+  fresh, session-scoped), refuses with a typed error when bytes exist but
+  nothing parses, and logs — rather than crashes on — a terminal ack for the
+  previous process's in-flight command. In-process, a second `attach()` on an
+  attached loop is now a typed refusal instead of a silent second
+  `JournalWriter` over the same file.
+- **The mod stopped colliding with everyone — including itself — on the
+  snapshot pointer.** Live, the game repeatedly failed to open
+  `observation.snapshot.pointer` for writing. The Lua IPC layer now retries a
+  refused open boundedly (3 attempts, in-call), remembers the slot it last
+  committed instead of re-reading the pointer from disk before every publish,
+  carries a refused pointer commit over to the next publish (committed first,
+  bounded at 10 publishes, and the pointer can never name a slot whose write
+  failed), and reports a reader close that failed instead of discarding it.
+  On the Python side, `read_json_document` gained a small read-side patience
+  (4 × 10 ms — sized for a 125 ms tick, documented against the 0.5 s write
+  budget) raising `SharingViolationError` so a locked file is distinguishable
+  from a corrupt one, and `SnapshotReader` treats a locked pointer or slot as
+  an honest per-poll miss that never regresses `_last_seq`. A two-process
+  contention soak — a child process writing truncate-in-place exactly like the
+  mod, torn slots included, against the real reader at 20 Hz — pins the whole
+  protocol.
+- **An action can no longer sit in `accepted` forever, invisibly.** New public
+  tools: `pz_action_status` (a typed answer even for an id this sidecar no
+  longer knows, naming the likely causes), `pz_action_await` (bounded wait for
+  a terminal result; the name `pz_action_wait` was already taken by the
+  in-game clock wait), and `pz_action_cancel_all` (mass cancel of mod-owned
+  work only, idempotent, honest `null` for counts it cannot yet observe).
+  `pz_session_status` now reports the game's own word beside the sidecar's —
+  `desired_mode`, `effective_mode`, `game_armed`, and a tri-state
+  `armed_mismatch` where "the game has said nothing" is not agreement. Every
+  submission now carries a wall deadline (lease + grace) swept into a terminal
+  `ACTION_TIMEOUT`, re-attach turns the previous attachment's records terminal
+  instead of leaving clients polling `accepted`, and a manual takeover parks
+  the active goal as paused-by-user rather than losing it (a new arm does not
+  silently resume it).
+
 - **The thirteen defects the first live session proved, fixed at their roots**
   (`epic/p0-build42-live-compat`; live run 2026-08-08, Project Zomboid Build
   42.20.2, Windows — the findings themselves are recorded in

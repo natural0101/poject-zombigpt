@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final
 
-from .atomic import DocumentError, read_json_document, write_json_atomic
+from .atomic import DocumentError, SharingViolationError, read_json_document, write_json_atomic
 from .clocks import Clock, system_clock_ms
 from .layout import IpcLayout, SnapshotSlot
 
@@ -105,6 +105,12 @@ class SnapshotReader:
     ``last_seq`` is remembered so a fallback cannot rewind the world model: a
     document older than one already accepted is reported and refused, because
     acting on stale inventory is worse than having no snapshot this tick.
+
+    A file locked by another process (the Windows read-side contention
+    :mod:`.atomic` reports as :class:`SharingViolationError`) is a third
+    outcome, distinct from both a tear and a rewind: the document behind the
+    lock is presumed good, so the poll reports a miss naming the lock and
+    leaves ``last_seq`` untouched for the next poll to build on.
     """
 
     layout: IpcLayout
@@ -116,7 +122,18 @@ class SnapshotReader:
 
     def read(self) -> SnapshotRead | SnapshotMiss:
         diagnostics: list[str] = []
-        pointer = _read_pointer(self.layout.snapshot_pointer)
+        try:
+            pointer = _read_pointer(self.layout.snapshot_pointer)
+        except SharingViolationError:
+            # The pointer is held open by another process — on Windows that is
+            # the game mid-commit, live-confirmed on Build 42.20.2. The
+            # document behind the lock is fine, it just cannot be seen right
+            # now, so this is a miss for this poll and nothing more: not
+            # corruption, not a crash, and ``_last_seq`` stays where it is so
+            # the next poll picks up exactly where this one could not.
+            return SnapshotMiss(
+                diagnostics=(*diagnostics, "pointer locked by another process this poll")
+            )
         order: list[tuple[SnapshotSlot, bool]]
         if pointer is None:
             diagnostics.append("snapshot pointer is missing or unreadable; probing both slots")
@@ -128,6 +145,12 @@ class SnapshotReader:
         for slot, from_pointer in order:
             try:
                 document = read_json_document(self.layout.snapshot_slot(slot))
+            except SharingViolationError:
+                # Same contention as the pointer, on a slot: the other slot may
+                # still serve, so this is a per-slot miss, kept apart from the
+                # corruption diagnostics because the document is not suspect.
+                diagnostics.append(f"slot {slot.value} locked by another process this poll")
+                continue
             except DocumentError as exc:
                 diagnostics.append(f"slot {slot.value}: {exc}")
                 continue
@@ -169,7 +192,15 @@ class SnapshotReader:
 
 
 def _read_pointer(path: Path) -> tuple[SnapshotSlot, int] | None:
-    """Parse the pointer file, or None when it cannot be trusted."""
+    """Parse the pointer file, or None when it cannot be trusted.
+
+    Only :class:`DocumentError` becomes ``None`` — a missing or torn pointer
+    genuinely cannot be trusted. :class:`SharingViolationError` propagates: a
+    locked pointer is a perfectly good document behind a brief hold, and the
+    two callers want different things from it — the reader turns it into a
+    miss for this poll, while the writer lets it surface as the same typed
+    contention refusal its own publish path already raises.
+    """
     try:
         payload = read_json_document(path)
     except DocumentError:

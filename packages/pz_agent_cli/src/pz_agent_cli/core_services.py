@@ -173,11 +173,15 @@ __all__ = [
     "serve_core_rpc",
 ]
 
-#: How long a control write waits for the loop to judge it. Two seconds is a
-#: dozen ticks at the default interval and stays inside the transport client's
-#: ten-second deadline, so a slow tick reads as a slow answer rather than a
-#: dead link.
-DEFAULT_CONTROL_WAIT_S: Final = 2.0
+#: How long a control write waits for the loop to judge it. The budget has to
+#: cover the two-phase arm from the far side: the loop publishes an arm's
+#: :class:`~pz_agent_cli.runtime.ControlDecision` only once the game's own
+#: confirmation — or its refusal, or the
+#: :data:`~pz_agent_cli.runtime.DEFAULT_ARM_CONFIRM_TIMEOUT_MS` deadline (5 s)
+#: — has been observed, so eight seconds is that whole window plus ticks of
+#: slack while staying inside the transport client's ten-second deadline. A
+#: slow confirmation reads as a slow answer rather than a dead link.
+DEFAULT_CONTROL_WAIT_S: Final = 8.0
 
 #: How often the waiter looks for the loop's decision. The poll count derived
 #: from it is the second bound: a monotonic clock that stopped moving must not
@@ -344,6 +348,14 @@ class LoopSessionPort:
     def arm(self, mode: SessionMode, *, confirm_backup: bool) -> SessionSnapshot:
         """Ask the loop to arm, through the shipped control channel, and wait.
 
+        The wait spans the whole two-phase arm: the loop submits ``session.arm``
+        to the mod and publishes this request's decision only once the game's
+        terminal ack *and* a heartbeat reporting the armed mode were observed —
+        or once the refusal was (:meth:`~pz_agent_cli.runtime.SidecarLoop.arm`).
+        A decision that says armed is therefore the game's own word, never the
+        sidecar's opinion of itself; that distinction is the 2026-08-08 live
+        finding this port exists downstream of.
+
         Raises:
             LoopError: no backup was confirmed (:data:`ARM_NEEDS_BACKUP`), the
                 loop refused — its own detail is relayed verbatim — or the loop
@@ -463,9 +475,14 @@ class LoopActionPort:
     contract requires so a long action can never hold the transport the stop
     tool needs. :meth:`status` answers the channel's real record — the queued
     claim, the started claim, or the terminal record carrying the engine's own
-    result — and ``None`` only for an id the channel never minted or has
-    evicted after it ended. Every answer is the channel's; nothing is decided
-    on this side of its lock.
+    result — and ``None`` only for an id this process cannot answer for: never
+    minted here, evicted after its record turned terminal, or minted by a
+    previous run of the sidecar (the restart case; the channel's store dies
+    with its process). A live record always answers, so the boundary above can
+    honestly tell "unknown id" apart from every lifecycle state — it must
+    relay ``None`` as "unknown to this sidecar", never guess a status for it.
+    Every answer is the channel's; nothing is decided on this side of its
+    lock.
     """
 
     loop: SidecarLoop

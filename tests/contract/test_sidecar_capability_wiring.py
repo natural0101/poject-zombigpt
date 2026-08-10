@@ -122,6 +122,12 @@ class FakeMod:
     seq: int = 0
     served: list[str] = field(default_factory=list)
     nonce: str = field(default_factory=lambda: uuid.uuid4().hex)
+    #: The mod's own Safety state, mirrored into the heartbeat. Load-bearing
+    #: since the two-phase arm: the loop grants authority only on this mod's
+    #: session.arm ack plus a heartbeat reporting the armed mode.
+    armed: bool = False
+    mode: SessionMode = SessionMode.OFF
+    _ack_seq: int = 0
     _commands: JournalReader = field(init=False)
 
     def __post_init__(self) -> None:
@@ -135,6 +141,8 @@ class FakeMod:
             version=PRODUCT_VERSION,
             build=BUILD,
             player_present=True,
+            armed=self.armed,
+            mode=self.mode,
         )
 
     def observe(self) -> Observation:
@@ -152,19 +160,46 @@ class FakeMod:
         """Run whatever the sidecar queued, then ack it."""
         for record in self._commands.read().records:
             command = Command.from_dict(record.payload)
+            if command.action is ActionName.SESSION_ARM:
+                self.armed = True
+                self.mode = SessionMode(str(command.args.get("mode")))
+                self._ack_session_control(command)
+                continue
+            if command.action is ActionName.SESSION_DISARM:
+                self.armed = False
+                self.mode = SessionMode.OFF
+                self._ack_session_control(command)
+                continue
             if command.action is not ActionName.SURVIVAL_REST:
                 continue
             self.served.append(command.command_id)
             self.endurance = RESTED
             ack = ActionResult.succeeded(
                 session_id=command.session_id,
-                seq=len(self.served),
+                seq=self._next_ack_seq(),
                 command_id=command.command_id,
                 action=command.action.value,
                 timestamp_ms=self.world.clock.now_ms,
                 evidence={"endurance_before": TIRED, "endurance_after": RESTED},
             )
             self._append(self.layout.command_ack, ack.to_dict())
+
+    def _next_ack_seq(self) -> int:
+        seq = self._ack_seq
+        self._ack_seq += 1
+        return seq
+
+    def _ack_session_control(self, command: Command) -> None:
+        """The Arm/DisarmAdapters' own succeeded shape: observed before/after."""
+        ack = ActionResult.succeeded(
+            session_id=command.session_id,
+            seq=self._next_ack_seq(),
+            command_id=command.command_id,
+            action=command.action.value,
+            timestamp_ms=self.world.clock.now_ms,
+            evidence={"armed_after": self.armed, "mode_after": self.mode.value},
+        )
+        self._append(self.layout.command_ack, ack.to_dict())
 
     def pump(self, milliseconds: int) -> None:
         self.world.clock.advance(max(0, milliseconds))
@@ -253,10 +288,20 @@ def assemble(world: CliWorld) -> Assembled:
     assert session is not None
     mod.session_id = session.session_id
     mod.beat()
+    armed = loop.arm(SessionMode.ASSISTED)
+    assert armed.pending, armed.detail
+    # Two-phase: the mod executes session.arm, acks it, and its next heartbeat
+    # reports the armed mode; the following tick observes both and grants. The
+    # planner is attached only after that, so the confirmation tick cannot
+    # spend its one proposal.
+    mod.pump(0)
+    mod.beat()
+    granted = loop.tick()
+    assert granted.armed, (
+        armed.detail if loop.arm_resolution is None else loop.arm_resolution.detail
+    )
     planner = OneAction(session_id=session.session_id)
     loop.planner = planner
-    armed = loop.arm(SessionMode.ASSISTED)
-    assert armed.armed, armed.detail
     mod.observe()
     return Assembled(world=world, workspace=workspace, loop=loop, mod=mod, planner=planner)
 

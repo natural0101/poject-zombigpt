@@ -40,7 +40,9 @@ to fall out of date.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import replace
 from itertools import islice
 from typing import Any, Final
 
@@ -67,10 +69,12 @@ from pz_agent_core.observation.compact import (
 )
 from pz_agent_core.protocol import (
     ON_PERSON_CONTAINERS,
+    ActionName,
     ActionResult,
     ActionStatus,
     ContainerKind,
     JsonDict,
+    Observation,
     ReasonCode,
     SessionMode,
 )
@@ -109,11 +113,13 @@ from .scrub import as_token, is_reference, scrub_payload, scrub_text
 from .validation import validate_arguments
 
 __all__ = [
+    "ACTION_WAIT_POLL_MS",
     "MAX_DOCTOR_CHECKS",
     "MAX_EVIDENCE_ENTRIES",
     "MAX_PENDING_GOALS_REPORTED",
     "MAX_PLAN_STEPS_REPORTED",
     "MAX_REFS_PER_RECORD",
+    "UNKNOWN_ACTION_CAUSES",
     "ToolRouter",
 ]
 
@@ -169,6 +175,19 @@ MAX_DOCTOR_CHECKS: Final = 64
 
 _ZOMBIE_TYPE: Final = "zombie"
 
+#: How often ``pz_action_await`` re-reads the action port, in milliseconds.
+#: Fifty is well under the loop's tick — a settlement is seen within one poll of
+#: happening — and well over a busy spin; each read is one bounded port call
+#: with nothing held between reads.
+ACTION_WAIT_POLL_MS: Final = 50
+
+#: Why an action id can be unknown here while the work it named was real. A
+#: closed vocabulary rather than prose, so an agent loop can branch on the
+#: answer instead of parsing a sentence: the record store is a bounded ring
+#: that evicts terminal records, and a restarted sidecar holds nothing the
+#: previous process minted.
+UNKNOWN_ACTION_CAUSES: Final[tuple[str, ...]] = ("evicted", "sidecar_restarted")
+
 Handler = Callable[[ToolSpec, JsonDict], ToolOutcome]
 
 
@@ -211,10 +230,18 @@ class ToolRouter:
         *,
         cache: IdempotencyCache | None = None,
         request_ids: IdFactory = new_request_id,
+        sleep: Callable[[float], None] = time.sleep,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self._services = services
         self._cache = cache if cache is not None else IdempotencyCache()
         self._request_ids = request_ids
+        #: Injected for the same reason the CLI's control waiter injects them: a
+        #: test drives the bounded wait to its deadline instead of sleeping
+        #: through it, and a frozen clock proves the poll count is the second
+        #: bound rather than hoping it is.
+        self._sleep = sleep
+        self._monotonic = monotonic
         #: The session the cached calls belong to; see :meth:`_scope_cache_to_session`.
         self._session_id: str | None = None
         self._handlers: dict[str, Handler] = {
@@ -248,6 +275,9 @@ class ToolRouter:
             "pz_action_sleep": self._submit,
             "pz_action_wait": self._submit,
             "pz_action_cancel": self._submit,
+            "pz_action_cancel_all": self._cancel_all,
+            "pz_action_status": self._action_status,
+            "pz_action_await": self._action_await,
             "pz_plan_execute": self._plan_execute,
             "pz_plan_status": self._plan_status,
             "pz_goal_submit": self._goal_submit,
@@ -442,6 +472,11 @@ class ToolRouter:
             "session_id": session.session_id,
             "mode": session.mode.value,
             "armed": session.armed,
+            # ``mode`` and ``armed`` restated under the name that says whose
+            # word they are. The pair above is kept unrenamed for existing
+            # clients; the pair of vocabularies below is what makes the
+            # disagreement readable.
+            "desired_mode": session.mode.value,
             "protocol_version": session.protocol_version,
             "capability_revision": session.capability_revision,
             "observation_seq": session.observation_seq,
@@ -456,6 +491,29 @@ class ToolRouter:
             # name, so what crosses the boundary is its digest (§3.13).
             "save_scope": None if session.save_id is None else save_scope(session.save_id),
         }
+        # The game's own word beside the sidecar's, because the two disagreed
+        # in the wild: a session armed on this side while the mod ran OFF
+        # answered every status call as if the agent were driving. What the
+        # game last said is read from the newest observation — the mod authored
+        # it, so it is the game's claim and not this process's — and
+        # ``heartbeat.game_ok`` above is how fresh that word is.
+        data.update(self._game_arming_view(self._services.observations.latest(), session.armed))
+        message = "session status"
+        warnings: tuple[str, ...] = ()
+        if data["armed_mismatch"]:
+            message = (
+                f"session status: the sidecar says armed={session.armed} and the "
+                f"game's last word says armed={data['game_armed']}"
+            )
+            staleness = (
+                ""
+                if session.game_heartbeat_ok
+                else " — and the game heartbeat is stale, so even that word is old"
+            )
+            warnings = (
+                "arming disagreement: trust the game's word (observation seq "
+                f"{data['game_view_seq']}) over the sidecar's flag{staleness}",
+            )
         try:
             view = self._compact_view()
         except ToolFailure:
@@ -467,7 +525,33 @@ class ToolRouter:
                 "safety": view["safety"],
                 "action": view["action"],
             }
-        return ToolOutcome(data=data, message="session status")
+        return ToolOutcome(data=data, message=message, warnings=warnings)
+
+    @staticmethod
+    def _game_arming_view(observation: Observation | None, sidecar_armed: bool) -> JsonDict:
+        """The game's last word on arming, with nothing invented to fill gaps.
+
+        ``None`` throughout means the game has said nothing yet, and
+        ``armed_mismatch`` stays ``None`` with it rather than collapsing to
+        ``False``: absent-as-agreement is exactly the reading the live defect
+        hid behind. ``effective_mode`` is the mode the game is actually
+        running, against the sidecar's ``desired_mode``.
+        """
+        if observation is None:
+            return {
+                "effective_mode": None,
+                "game_armed": None,
+                "game_session_id": None,
+                "game_view_seq": None,
+                "armed_mismatch": None,
+            }
+        return {
+            "effective_mode": observation.safety.mode.value,
+            "game_armed": observation.safety.armed,
+            "game_session_id": as_token(observation.session_id),
+            "game_view_seq": observation.seq,
+            "armed_mismatch": sidecar_armed != observation.safety.armed,
+        }
 
     def _session_arm(self, spec: ToolSpec, args: JsonDict) -> ToolOutcome:
         mode = SessionMode(args["mode"])
@@ -681,6 +765,149 @@ class ToolRouter:
         if isinstance(seq, int) and not isinstance(seq, bool):
             payload["observation_seq"] = seq
         return payload
+
+    # -- asking after submitted work ----------------------------------------
+
+    def _action_status(self, spec: ToolSpec, args: JsonDict) -> ToolOutcome:
+        """One action's current record, or the honest 'unknown here'."""
+        action_id = str(args["action_id"])
+        record = self._services.actions.status(action_id)
+        if record is None:
+            return self._unknown_action(action_id)
+        outcome = self._action_outcome(record)
+        return replace(outcome, data={"known": True, **outcome.data})
+
+    def _action_await(self, spec: ToolSpec, args: JsonDict) -> ToolOutcome:
+        """Poll one action, bounded, until terminal; report the record either way.
+
+        A budget that runs out is the *call's* end, not the action's, and the
+        answer keeps the two apart: ``timed_out: true`` beside the record as it
+        stands, so a caller never mistakes a slow action for a lost one. An id
+        nobody here knows answers immediately — waiting for a record that
+        cannot appear would be a timeout dressed as patience.
+        """
+        action_id = str(args["action_id"])
+        record, waited_ms, timed_out = self._poll_until_terminal(action_id, int(args["timeout_ms"]))
+        if record is None:
+            unknown = self._unknown_action(action_id)
+            return replace(
+                unknown, data={**unknown.data, "waited_ms": waited_ms, "timed_out": False}
+            )
+        outcome = self._action_outcome(record)
+        data = {"known": True, **outcome.data, "waited_ms": waited_ms, "timed_out": timed_out}
+        message = (
+            f"{record.action.value} is still {record.status.value} after {waited_ms} ms; "
+            "the wait budget ended, not the action"
+            if timed_out
+            else outcome.message
+        )
+        return replace(outcome, data=data, message=message)
+
+    def _poll_until_terminal(
+        self, action_id: str, budget_ms: int
+    ) -> tuple[ActionRecord | None, int, bool]:
+        """Re-read *action_id* until its record is terminal or the budget ends.
+
+        Doubly bounded — a deadline on the injected clock and a poll count —
+        for the same reason the CLI's control waiter is: a monotonic clock that
+        stopped moving must not turn the deadline into a spin. Nothing is held
+        between reads; each ``status`` call is one bounded port read, so a stop
+        tool on another connection is never waiting on this wait.
+        """
+        started = self._monotonic()
+        deadline = started + budget_ms / 1000.0
+        polls = max(1, budget_ms // ACTION_WAIT_POLL_MS + 1)
+        record = self._services.actions.status(action_id)
+        for _ in range(polls):
+            if record is None or record.terminal:
+                break
+            if self._monotonic() >= deadline:
+                break
+            self._sleep(ACTION_WAIT_POLL_MS / 1000.0)
+            record = self._services.actions.status(action_id)
+        waited_ms = int((self._monotonic() - started) * 1000)
+        return record, waited_ms, record is not None and not record.terminal
+
+    @staticmethod
+    def _unknown_action(action_id: str) -> ToolOutcome:
+        """A typed 'unknown here', which is not 'it never ran'.
+
+        The record store is a bounded ring that evicts terminal records, and a
+        restarted sidecar holds nothing the previous process minted, so an
+        unknown id is a routine fact of this surface rather than a fault. It is
+        answered as data an agent loop can branch on; refusing instead would
+        turn every poll of an old id into an error path, which is how the live
+        session ended up with in-flight work nobody could ask about.
+        """
+        return ToolOutcome(
+            data={
+                "known": False,
+                "action_id": action_id,
+                "status": None,
+                "terminal": None,
+                "likely_causes": list(UNKNOWN_ACTION_CAUSES),
+            },
+            message=(
+                "no record of that action survives here: either its terminal record "
+                "was evicted from the bounded store, or the sidecar restarted since "
+                "the id was minted. Unknown is not 'it did not run'."
+            ),
+        )
+
+    def _cancel_all(self, spec: ToolSpec, args: JsonDict) -> ToolOutcome:
+        """Submit the mass cancel and report exactly what this side can see.
+
+        The command is the same capability-free ``plan.cancel`` the reflex
+        guard and the panic path use, submitted with no ``command_id`` — the
+        spelling every cancel adapter reads as "clear everything of ours".
+        Ownership is decided by the mod's own tag against this session's
+        observation, so the player's queued actions are out of reach by
+        construction, and the negative postcondition makes a repeat call
+        succeed against work that is already gone — idempotent by the action's
+        own shape, not by caching.
+
+        What is *not* reported is a number nobody on this side measured. The
+        loop records ``CANCELLED_BY_REQUEST`` against each waiting submission
+        and in-flight command its levers end, and no port on this surface
+        carries those counts back, so ``cancelled_counts`` answers null — the
+        same rule that keeps the panic stop's ``cleared`` at what was observed
+        rather than what was hoped.
+        """
+        session = self._services.session.status()
+        record = self._services.actions.submit(
+            ActionRequest(
+                action=ActionName.PLAN_CANCEL,
+                session_id=session.session_id,
+                idempotency_key=str(args["idempotency_key"]),
+                args={},
+                lease_ms=int(args["timeout_ms"]),
+            )
+        )
+        if record.action is not ActionName.PLAN_CANCEL:
+            raise ToolFailure(
+                ReasonCode.INTERNAL_ERROR,
+                f"{spec.name} submitted {ActionName.PLAN_CANCEL.value} but the core "
+                f"reported {record.action.value}",
+            )
+        outcome = self._action_outcome(record)
+        return replace(
+            outcome,
+            data={
+                **outcome.data,
+                "scope": "mod_owned",
+                "requested_reason": ReasonCode.CANCELLED_BY_REQUEST.value,
+                "cancelled_counts": {"channel_pending": None, "in_flight": None},
+            },
+            message=(
+                f"mass cancel of mod-owned work is {record.status.value}; "
+                "pz_action_await the action id for the engine's verdict"
+            ),
+            warnings=(
+                "per-layer cancellation counts live with the loop that applies the "
+                "levers and are not readable through this surface; null means "
+                "uncounted, never zero",
+            ),
+        )
 
     # -- plans -------------------------------------------------------------
 

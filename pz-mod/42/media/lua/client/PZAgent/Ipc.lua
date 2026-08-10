@@ -16,6 +16,15 @@ currently published is rewritten, and only then is the pointer rewritten. The
 pointer is the commit point, so a reader either follows the old slot or the new
 one and never parses a file that is being written.
 
+On Windows an open can be refused by a sharing lock the other side of the
+exchange -- the sidecar's poll, an antivirus scan, even this module's own
+pointer read an instant earlier -- holds for microseconds. A refused open is
+therefore retried a small bounded number of times inside the same call: the
+game thread cannot sleep, but the lock holder is usually already closing, so
+consecutive immediate reopens win the common race. A snapshot whose slot was
+written but whose pointer commit was refused is carried over so the next
+publish commits exactly that pointer first, boundedly.
+
 The game's file API is reached through an injected table so this module can be
 exercised outside the game. The default resolves the engine globals lazily --
 loading this file on a machine with no game must not fail.
@@ -72,6 +81,20 @@ local DEFAULT_MAX_JOURNAL_BYTES = 1024 * 1024
 --- cannot stall a game tick.
 local DEFAULT_MAX_LINES = 256
 
+--- How many times one call may try the open before reporting the refusal. On
+--- Windows getFileWriter/getFileReader answer nil (or raise) while someone
+--- else holds a sharing lock on the file; the holder is usually a reader
+--- already closing, so an immediate reopen -- sleeping inside a game tick is
+--- not an option -- wins the common race within a try or two.
+Ipc.WRITE_OPEN_ATTEMPTS = 3
+Ipc.READ_OPEN_ATTEMPTS = 3
+
+--- How many consecutive publishSnapshot calls may carry an uncommitted
+--- pointer before the pending commit is dropped and the failure reported as
+--- persistent. The carry-over is one pending pointer for a bounded number of
+--- ticks, never an accumulating queue.
+Ipc.POINTER_COMMIT_TICK_BUDGET = 10
+
 local Handle = {}
 Handle.__index = Handle
 
@@ -125,7 +148,11 @@ function Ipc.new(options)
     maxLines = options.maxLines or DEFAULT_MAX_LINES,
     clock = options.clock,
     journals = {},
+    -- The slot this handle last *committed* -- pointer write succeeded -- and
+    -- a commit that wrote its slot but not yet its pointer. Both start empty:
+    -- the first publish consults the pointer on disk instead.
     lastSlot = nil,
+    pendingPointer = nil,
   }, Handle)
   return self
 end
@@ -159,6 +186,12 @@ local function encodeLine(record)
 end
 
 --- Write `text` to the file `role` names. `append` selects append mode.
+---
+--- A refused open -- getFileWriter raising or answering nil, which is what a
+--- Windows sharing lock looks like from here -- is retried up to
+--- WRITE_OPEN_ATTEMPTS times before the failure is reported, with the attempt
+--- count in the report so a persistent lock reads differently from a single
+--- lost race.
 function Handle:writeRaw(role, text, append)
   if not self:isAvailable() then
     return nil, self.fileApiError
@@ -167,12 +200,25 @@ function Handle:writeRaw(role, text, append)
   if path == nil then
     return nil, pathError
   end
-  local opened, writer = pcall(self.fileApi.openWriter, path, append and true or false)
-  if not opened then
-    return nil, string.format("opening %s failed: %s", path, tostring(writer))
+  local writer = nil
+  local raised = nil
+  for _ = 1, Ipc.WRITE_OPEN_ATTEMPTS do
+    local opened, result = pcall(self.fileApi.openWriter, path, append and true or false)
+    if opened and result ~= nil then
+      writer = result
+      break
+    end
+    -- Remember how the *latest* attempt failed: the report below describes
+    -- the state the budget ended in, not the first stumble.
+    raised = (not opened) and result or nil
   end
   if writer == nil then
-    return nil, string.format("the game refused to open %s for writing", path)
+    if raised ~= nil then
+      return nil,
+        string.format("opening %s failed after %d attempts: %s", path, Ipc.WRITE_OPEN_ATTEMPTS, tostring(raised))
+    end
+    return nil,
+      string.format("the game refused to open %s for writing (%d attempts)", path, Ipc.WRITE_OPEN_ATTEMPTS)
   end
   local written, writeError = pcall(function()
     writer:write(text)
@@ -192,6 +238,16 @@ end
 --- Read up to `maxLines` lines from the file `role` names.
 --- Returns a table of lines (possibly empty) or nil plus a reason. A missing
 --- file is not an error: it is an empty stream that may appear later.
+---
+--- An open that raises or answers nil is retried up to READ_OPEN_ATTEMPTS
+--- times -- a Windows sharing lock and an absent file are indistinguishable
+--- from here, and the reopen costs less than losing the poll. Only after the
+--- whole budget is a nil open treated as absence.
+---
+--- When the read succeeded but the reader's close raised, the lines are
+--- returned together with a second value naming the leaked handle, so a
+--- caller that records errors can report the leak instead of a discarded
+--- pcall result hiding it.
 function Handle:readLines(role, maxLines, startLine)
   if not self:isAvailable() then
     return nil, self.fileApiError
@@ -200,11 +256,24 @@ function Handle:readLines(role, maxLines, startLine)
   if path == nil then
     return nil, pathError
   end
-  local opened, reader = pcall(self.fileApi.openReader, path)
-  if not opened then
-    return nil, string.format("opening %s failed: %s", path, tostring(reader))
+  local reader = nil
+  local raised = nil
+  for _ = 1, Ipc.READ_OPEN_ATTEMPTS do
+    local opened, result = pcall(self.fileApi.openReader, path)
+    if opened and result ~= nil then
+      reader = result
+      break
+    end
+    -- As in writeRaw: the report describes the state the budget ended in.
+    raised = (not opened) and result or nil
   end
   if reader == nil then
+    if raised ~= nil then
+      return nil,
+        string.format("opening %s failed after %d attempts: %s", path, Ipc.READ_OPEN_ATTEMPTS, tostring(raised))
+    end
+    -- Still nil after the whole budget: the file is absent (or held longer
+    -- than any closing reader would hold it), and absent is not an error.
     return {}
   end
   local limit = maxLines or self.maxLines
@@ -236,11 +305,20 @@ function Handle:readLines(role, maxLines, startLine)
       lines[count] = line
     end
   end
-  pcall(function()
+  -- The close stays inside pcall -- a raise here must not unwind the game
+  -- tick -- but its failure is no longer discarded: a handle the engine could
+  -- not release is exactly the sharing lock that refuses the next open.
+  local closed, closeError = pcall(function()
     reader:close()
   end)
   if failure then
     return nil, failure
+  end
+  if not closed then
+    -- The data was read in full, so the lines are returned; the leak rides
+    -- along as a second value for the caller's last_error instead of
+    -- replacing a successful poll with a failure.
+    return lines, string.format("closing %s failed: %s", path, tostring(closeError))
   end
   return lines
 end
@@ -407,9 +485,22 @@ end
 
 --- Publish a full snapshot. Returns the slot it landed in.
 ---
---- The slot is chosen from the pointer on disk rather than from memory, so a
---- mod that reloaded mid-session never overwrites the slot a reader is about to
---- follow.
+--- The slot alternates from the slot this handle last *committed* -- pointer
+--- write succeeded -- held in memory. Reading the pointer back from disk on
+--- every publish, microseconds before truncate-writing it, is how the mod
+--- collided with its own sharing lock on Windows (and with the sidecar's
+--- poll). Only the first publish after a load reads the pointer from disk: a
+--- mod that reloaded mid-session must not overwrite the slot a reader of the
+--- previous incarnation is about to follow.
+---
+--- When the slot write succeeds but the pointer write is refused, the disk
+--- pointer still names the old slot, so the commit is carried over: the next
+--- publish retries exactly that pointer first, then writes its own snapshot
+--- to the other slot as usual. The carry-over exists only for a slot whose
+--- content is complete, so the pointer can never name a slot whose write
+--- failed. After POINTER_COMMIT_TICK_BUDGET consecutive publishes without a
+--- committed pointer the pending state is dropped and the failure reported as
+--- persistent.
 function Handle:publishSnapshot(document)
   if type(document) ~= "table" then
     return nil, "a snapshot must be a table"
@@ -418,19 +509,58 @@ function Handle:publishSnapshot(document)
   if type(seq) ~= "number" or seq ~= math.floor(seq) or seq < 0 then
     return nil, "a snapshot requires a non-negative integer 'seq'"
   end
-  local current = self:currentSlot()
+  local pending = self.pendingPointer
+  if pending ~= nil then
+    local pointed, pointerError = self:writeDocument("snapshot_pointer", {
+      slot = pending.slot,
+      seq = pending.seq,
+      written_at_ms = pending.written_at_ms,
+    })
+    if pointed == nil then
+      pending.attempts = pending.attempts + 1
+      if pending.attempts >= Ipc.POINTER_COMMIT_TICK_BUDGET then
+        self.pendingPointer = nil
+        return nil,
+          string.format(
+            "the snapshot pointer could not be committed for %d consecutive publishes"
+              .. " (last failure: %s); the pending commit for slot %q is dropped",
+            Ipc.POINTER_COMMIT_TICK_BUDGET,
+            tostring(pointerError),
+            pending.slot
+          )
+      end
+      return nil, pointerError
+    end
+    -- The carried-over commit landed: the pointer now names the pending slot
+    -- and the alternation continues from it, sending this call's document to
+    -- the other slot.
+    self.pendingPointer = nil
+    self.lastSlot = pending.slot
+  end
+  local current = self.lastSlot
+  if current == nil then
+    -- First publish since this handle was created: only the pointer on disk
+    -- knows which slot a reader may be following.
+    current = self:currentSlot()
+  end
   local slot = (current == "a") and "b" or "a"
   local written, writeError = self:writeDocument(SLOT_ROLE[slot], document)
   if written == nil then
     return nil, writeError
   end
   -- The pointer is written last and is the commit point.
+  local writtenAt = self:nowMs()
   local pointed, pointerError = self:writeDocument("snapshot_pointer", {
     slot = slot,
     seq = seq,
-    written_at_ms = self:nowMs(),
+    written_at_ms = writtenAt,
   })
   if pointed == nil then
+    -- The slot holds a complete document but the disk pointer still names the
+    -- old one. lastSlot is deliberately not advanced: a reader may be
+    -- following the old slot as current, and the next publish must not treat
+    -- the uncommitted slot as published. The commit is carried over instead.
+    self.pendingPointer = { slot = slot, seq = seq, written_at_ms = writtenAt, attempts = 1 }
     return nil, pointerError
   end
   self.lastSlot = slot

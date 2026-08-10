@@ -195,6 +195,155 @@ class TestABlockedRemovalNamesTheLeakedPath:
         ), f"the original replace refusal fell off the chain: {chain!r}"
 
 
+class TestAWriterMidPublishIsWaitedOutByTheReader:
+    """The read side of the same contention, with its own smaller budget.
+
+    On Windows the game holds ``observation.snapshot.pointer`` (and the
+    heartbeat files) open across its own truncate-in-place writes, and a poll
+    landing inside that hold draws ``PermissionError`` from the open — which
+    used to be folded into :class:`DocumentError`, turning a locked file into
+    apparent corruption. The read now retries the refusal within a budget kept
+    deliberately far under the write side's: the caller is a ~125ms tick loop,
+    and 40ms worst case stays inside the tick where half a second would eat
+    four of them.
+    """
+
+    def test_two_refusals_then_success_returns_the_document(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        layout = make_layout(tmp_path)
+        write_json_atomic(layout, layout.session, DOCUMENT)
+        real_read_text = Path.read_text
+        refusals = {"left": 2}
+
+        def held_then_released(self: Path, *args: object, **kwargs: object) -> str:
+            if self == layout.session and refusals["left"] > 0:
+                refusals["left"] -= 1
+                raise _windows_refusal()
+            return real_read_text(self, *args, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(Path, "read_text", held_then_released)
+        monkeypatch.setattr(atomic, "_READ_PAUSE_SECONDS", 0.001)
+
+        assert read_json_document(layout.session) == DOCUMENT
+        assert refusals["left"] == 0, "the Windows refusals were never consumed"
+
+    def test_a_refused_stat_is_retried_the_same_way(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The hold can land on the stat before the open; same patience."""
+        layout = make_layout(tmp_path)
+        write_json_atomic(layout, layout.session, DOCUMENT)
+        real_stat = Path.stat
+        refusals = {"left": 2}
+
+        def held_then_released(self: Path, **kwargs: object) -> os.stat_result:
+            if self == layout.session and refusals["left"] > 0:
+                refusals["left"] -= 1
+                raise _windows_refusal()
+            return real_stat(self, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(Path, "stat", held_then_released)
+        monkeypatch.setattr(atomic, "_READ_PAUSE_SECONDS", 0.001)
+
+        assert read_json_document(layout.session) == DOCUMENT
+        assert refusals["left"] == 0
+
+
+class TestAWriterThatNeverLetsGoIsTheTypedContentionError:
+    def test_persistent_refusal_is_a_sharing_violation_not_a_document_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Contention must stay distinguishable from corruption.
+
+        A caller shown :class:`DocumentError` treats the file as corrupt and
+        degrades to a miss silently; :class:`SharingViolationError` says the
+        document is merely locked, so the caller can say so and poll again.
+        """
+        layout = make_layout(tmp_path)
+        write_json_atomic(layout, layout.session, DOCUMENT)
+        attempts = {"n": 0}
+
+        def always_held(self: Path, *args: object, **kwargs: object) -> str:
+            attempts["n"] += 1
+            raise _windows_refusal()
+
+        monkeypatch.setattr(Path, "read_text", always_held)
+        monkeypatch.setattr(atomic, "_READ_PAUSE_SECONDS", 0.001)
+
+        with pytest.raises(SharingViolationError, match="held it open past the") as caught:
+            read_json_document(layout.session)
+
+        assert "session.json" in str(caught.value), "the refusal must name the file"
+        assert attempts["n"] == atomic._READ_ATTEMPTS, "the read budget was not honoured"
+        assert not isinstance(caught.value, DocumentError)
+
+    def test_the_read_budget_is_smaller_than_the_write_budget(self) -> None:
+        """The reader lives in a ~125ms tick loop; the writer does not.
+
+        Pinned as an inequality so neither budget can silently grow past the
+        other: the worst-case read wait must stay under one tick, while the
+        write side may spend half a second because a publish happens off the
+        poll path.
+        """
+        read_budget = atomic._READ_ATTEMPTS * atomic._READ_PAUSE_SECONDS
+        write_budget = atomic._REPLACE_ATTEMPTS * atomic._REPLACE_PAUSE_SECONDS
+        assert read_budget < write_budget
+        assert read_budget <= 0.125, "the read budget must fit inside one tick"
+
+    def test_the_refusal_is_still_an_oserror_for_existing_callers(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        layout = make_layout(tmp_path)
+        write_json_atomic(layout, layout.session, DOCUMENT)
+
+        def always_held(self: Path, *args: object, **kwargs: object) -> str:
+            raise _windows_refusal()
+
+        monkeypatch.setattr(Path, "read_text", always_held)
+        monkeypatch.setattr(atomic, "_READ_PAUSE_SECONDS", 0.001)
+
+        with pytest.raises(OSError):
+            read_json_document(layout.session)
+
+
+class TestGenuineDocumentFailuresAreUntouchedByThePatience:
+    def test_a_missing_file_is_still_a_document_error_with_no_retry_wait(
+        self, tmp_path: Path
+    ) -> None:
+        """Absence is not contention: it must fail fast, first attempt."""
+        layout = make_layout(tmp_path)
+
+        with pytest.raises(DocumentError):
+            read_json_document(layout.session)
+
+    def test_a_torn_file_is_still_a_document_error(self, tmp_path: Path) -> None:
+        layout = make_layout(tmp_path)
+        layout.session.write_text('{"seq": 1, "trunc', encoding="utf-8")
+
+        with pytest.raises(DocumentError, match="malformed JSON"):
+            read_json_document(layout.session)
+
+    def test_a_non_permission_oserror_is_a_document_error_on_the_first_attempt(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Disk trouble is not a hold that resolves itself; no retries."""
+        layout = make_layout(tmp_path)
+        write_json_atomic(layout, layout.session, DOCUMENT)
+        attempts = {"n": 0}
+
+        def broken_disk(self: Path, *args: object, **kwargs: object) -> str:
+            attempts["n"] += 1
+            raise OSError(5, "Input/output error")
+
+        monkeypatch.setattr(Path, "read_text", broken_disk)
+
+        with pytest.raises(DocumentError, match="Input/output error"):
+            read_json_document(layout.session)
+
+        assert attempts["n"] == 1, "a non-contention failure must not be retried"
+
+
 class TestTheHappyPathIsByteIdentical:
     def test_bytes_on_disk_match_the_canonical_encoding(self, tmp_path: Path) -> None:
         """The patience must change failure behaviour only, never the bytes.

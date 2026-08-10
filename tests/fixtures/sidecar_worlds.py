@@ -20,9 +20,17 @@ from pz_agent_cli.runtime import LoopLimits, SidecarLoop
 from pz_agent_cli.supervisor import ControlChannel, PidFile, SidecarSupervisor
 from pz_agent_core.actions.adapter import AdapterRegistry
 from pz_agent_core.actions.builtin import register_builtins
-from pz_agent_core.ipc.journal import JournalWriter
+from pz_agent_core.ipc.journal import JournalReader, JournalWriter
 from pz_agent_core.ipc.layout import IpcLayout
-from pz_agent_core.protocol import Observation
+from pz_agent_core.protocol import (
+    ActionName,
+    ActionResult,
+    ActionStatus,
+    Command,
+    Observation,
+    ReasonCode,
+    SessionMode,
+)
 from pz_agent_core.session.heartbeat import Heartbeat, HeartbeatMonitor, Peer
 from pz_agent_core.version import PRODUCT_VERSION
 
@@ -243,6 +251,117 @@ def make_sidecar_world(
         loop=loop,
         monitor=monitor,
         limits=limits,
+    )
+
+
+class ScriptedMod:
+    """The mod at the files, scripted a step at a time.
+
+    The two-phase arm (the 2026-08-08 live finding) made this half of the fake
+    mod load-bearing: :meth:`SidecarLoop.arm` grants nothing until the mod's
+    terminal ``succeeded`` ack for ``session.arm`` *and* a game heartbeat
+    reporting the armed mode are both observed, so a test that arms needs a mod
+    that answers. This one reads the command journal the way the Lua side does
+    and answers on the ack journal and the heartbeat file — nothing reaches
+    into the loop. The ack sequence is allocated here because the ack stream is
+    gap-checked: two acks with the same seq would read as a redelivery.
+    """
+
+    def __init__(self, world: SidecarWorld) -> None:
+        self.world = world
+        self._ack_seq = 0
+
+    def commands(self, action: ActionName | None = None) -> list[Command]:
+        """Every command on the journal, oldest first, optionally one action's."""
+        reader = JournalReader(self.world.layout, self.world.layout.command_queue)
+        commands = [Command.from_dict(record.payload) for record in reader.read().records]
+        if action is None:
+            return commands
+        return [command for command in commands if command.action is action]
+
+    def only_arm_command(self) -> Command:
+        arms = self.commands(ActionName.SESSION_ARM)
+        assert len(arms) == 1, f"expected exactly one session.arm on disk, found {len(arms)}"
+        return arms[0]
+
+    def _next_seq(self) -> int:
+        seq = self._ack_seq
+        self._ack_seq += 1
+        return seq
+
+    def _publish(self, ack: ActionResult) -> ActionResult:
+        writer = JournalWriter(self.world.layout, self.world.layout.command_ack)
+        try:
+            writer.append(ack.to_dict())
+        finally:
+            writer.close()
+        return ack
+
+    def ack_success(self, command: Command, *, mode: SessionMode) -> ActionResult:
+        """The ArmAdapter's own succeeded shape: observed before/after evidence."""
+        return self._publish(
+            ActionResult.succeeded(
+                session_id=command.session_id,
+                seq=self._next_seq(),
+                command_id=command.command_id,
+                action=command.action.value,
+                timestamp_ms=self.world.clock.now,
+                evidence={
+                    "armed_before": False,
+                    "armed_after": True,
+                    "mode_before": SessionMode.OBSERVE.value,
+                    "mode_after": mode.value,
+                },
+            )
+        )
+
+    def ack_failure(
+        self, command: Command, *, reason_code: ReasonCode, message: str
+    ) -> ActionResult:
+        return self._publish(
+            ActionResult.failure(
+                session_id=command.session_id,
+                seq=self._next_seq(),
+                command_id=command.command_id,
+                action=command.action.value,
+                timestamp_ms=self.world.clock.now,
+                reason_code=reason_code,
+                status=ActionStatus.FAILED,
+                message=message,
+            )
+        )
+
+    def beat(self, *, armed: bool | None = None, mode: SessionMode | None = None) -> None:
+        self.world.beat_game(armed=armed, mode=mode)
+
+    def confirm_arm(self, mode: SessionMode) -> Command:
+        """Both halves of the confirmation: the terminal ack and the heartbeat."""
+        arms = self.commands(ActionName.SESSION_ARM)
+        assert arms, "no session.arm command reached the journal"
+        command = arms[-1]
+        self.ack_success(command, mode=mode)
+        self.beat(armed=True, mode=mode)
+        return command
+
+
+def arm_for_real(
+    world: SidecarWorld,
+    mod: ScriptedMod | None = None,
+    mode: SessionMode = SessionMode.ASSISTED,
+) -> None:
+    """The whole two-phase arm, scripted end to end, for tests about later things.
+
+    Submits through :meth:`SidecarLoop.arm`, answers as the mod would, and
+    drives the one tick that observes both halves of the confirmation. Fails
+    loudly with the loop's own resolution detail when the arm does not land.
+    """
+    outcome = world.loop.arm(mode)
+    assert outcome.pending and not outcome.armed, outcome.detail
+    (mod or ScriptedMod(world)).confirm_arm(mode)
+    world.loop.tick()
+    resolution = world.loop.arm_resolution
+    assert world.loop.armed is True and world.loop.mode is mode, (
+        None if resolution is None else resolution.detail
     )
 
 

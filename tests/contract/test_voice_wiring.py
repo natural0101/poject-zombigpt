@@ -84,9 +84,17 @@ from pz_agent_cli.voice import (
     select_adapter,
     voice_services,
 )
+from pz_agent_core.ipc.journal import JournalReader, JournalWriter
 from pz_agent_core.ipc.layout import IpcLayout
 from pz_agent_core.planner.providers import DEFAULT_TEAMON_KEY_ENV
-from pz_agent_core.protocol import DangerLevel, JsonDict, SessionMode
+from pz_agent_core.protocol import (
+    ActionName,
+    ActionResult,
+    Command,
+    DangerLevel,
+    JsonDict,
+    SessionMode,
+)
 from pz_agent_core.rpc.descriptor import runtime_dir, write_descriptor
 from pz_agent_core.rpc.token import issue_token
 from pz_agent_core.rpc.transport import RpcServer, new_address
@@ -184,6 +192,42 @@ class FakeMod:
     queued: list[str] = field(default_factory=lambda: ["consume.eat"])
     stops: int = 0
     nonce: str = field(default_factory=lambda: uuid.uuid4().hex)
+    _ack_seq: int = 0
+    _commands: JournalReader = field(init=False)
+
+    def __post_init__(self) -> None:
+        self._commands = JournalReader(self.layout, self.layout.command_queue)
+
+    def serve_session_control(self) -> None:
+        """Execute queued session.arm/session.disarm and ack, as the mod does.
+
+        Load-bearing since the two-phase arm: the loop grants authority only on
+        this ack plus a heartbeat reporting the armed mode.
+        """
+        for record in self._commands.read().records:
+            command = Command.from_dict(record.payload)
+            if command.action is ActionName.SESSION_ARM:
+                self.armed = True
+                self.mode = SessionMode(str(command.args.get("mode")))
+            elif command.action is ActionName.SESSION_DISARM:
+                self.armed = False
+                self.mode = SessionMode.OBSERVE
+            else:
+                continue
+            ack = ActionResult.succeeded(
+                session_id=command.session_id,
+                seq=self._ack_seq,
+                command_id=command.command_id,
+                action=command.action.value,
+                timestamp_ms=self.clock.now_ms,
+                evidence={"armed_after": self.armed, "mode_after": self.mode.value},
+            )
+            self._ack_seq += 1
+            writer = JournalWriter(self.layout, self.layout.command_ack)
+            try:
+                writer.append(ack.to_dict())
+            finally:
+                writer.close()
 
     def beat(self) -> None:
         self.monitor.publish(
@@ -322,10 +366,15 @@ class Listening:
     def arm(self, mode: SessionMode = SessionMode.ASSISTED) -> None:
         self.mod.beat()
         outcome = self.loop.arm(mode)
-        assert outcome.armed, outcome.detail
-        self.mod.armed = True
-        self.mod.mode = mode
+        assert outcome.pending, outcome.detail
+        # Two-phase: the mod executes session.arm, acks it, and beats the armed
+        # mode; the tick observes both halves and grants.
+        self.mod.serve_session_control()
         self.mod.beat()
+        granted = self.loop.tick()
+        assert granted.armed, (
+            outcome.detail if self.loop.arm_resolution is None else self.loop.arm_resolution.detail
+        )
 
     def session_state(self) -> tuple[bool, SessionMode]:
         """What a user would call "is it stopped": armed, and in which mode."""

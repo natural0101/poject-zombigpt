@@ -99,7 +99,7 @@ one.
 
 ## What the server publishes
 
-Thirty-one tools, in seven groups. The names are stable and the schemas are served
+Thirty-seven tools, in seven groups. The names are stable and the schemas are served
 with them:
 
 - **session** — `pz_session_status`, `pz_session_arm`, `pz_session_disarm`
@@ -116,7 +116,11 @@ with them:
   `pz_action_eat`, `pz_action_drink`, `pz_action_drink_source`,
   `pz_action_read`, `pz_action_equip`,
   `pz_action_unequip`, `pz_action_bandage`, `pz_action_rest`,
-  `pz_action_sleep`, `pz_action_wait`, `pz_action_cancel`
+  `pz_action_sleep`, `pz_action_wait`, `pz_action_cancel`,
+  `pz_action_cancel_all` — the mass form of the cancel, mod-owned work only —
+  and the two reads over submitted work: `pz_action_status`, which answers a
+  known record or an honest `known: false` for an id this sidecar no longer
+  holds, and `pz_action_await`, a bounded wait for a terminal record
 - **plan** — `pz_plan_execute`, `pz_plan_status`
 - **goal** — `pz_goal_submit`, `pz_goal_status`, `pz_goal_cancel`. The typed
   goal channel: a closed set of kinds with per-kind typed, range-checked

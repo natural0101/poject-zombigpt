@@ -172,6 +172,7 @@ class FakeMod:
     seq: int = 0
     served: list[str] = field(default_factory=list)
     nonce: str = field(default_factory=lambda: uuid.uuid4().hex)
+    _ack_seq: int = 0
     _commands: JournalReader = field(init=False)
     _snapshots: SnapshotWriter = field(init=False)
 
@@ -187,6 +188,11 @@ class FakeMod:
             version=PRODUCT_VERSION,
             build=BUILD,
             player_present=True,
+            # Load-bearing since the two-phase arm: the loop grants authority
+            # only on this mod's session.arm ack plus a heartbeat reporting
+            # the armed mode.
+            armed=self.armed,
+            mode=self.mode,
         )
 
     def inventory(self) -> InventoryView:
@@ -219,6 +225,16 @@ class FakeMod:
         """Run whatever the sidecar queued, then ack it."""
         for record in self._commands.read().records:
             command = Command.from_dict(record.payload)
+            if command.action is ActionName.SESSION_ARM:
+                self.armed = True
+                self.mode = SessionMode(str(command.args.get("mode")))
+                self._ack_session_control(command)
+                continue
+            if command.action is ActionName.SESSION_DISARM:
+                self.armed = False
+                self.mode = SessionMode.OFF
+                self._ack_session_control(command)
+                continue
             if command.action is not ActionName.CONSUME_EAT:
                 continue
             self.hunger = FED
@@ -227,13 +243,32 @@ class FakeMod:
                 self.layout.command_ack,
                 ActionResult.succeeded(
                     session_id=command.session_id,
-                    seq=len(self.served),
+                    seq=self._next_ack_seq(),
                     command_id=command.command_id,
                     action=command.action.value,
                     timestamp_ms=self.world.clock.now_ms,
                     evidence={"queued": True},
                 ).to_dict(),
             )
+
+    def _next_ack_seq(self) -> int:
+        seq = self._ack_seq
+        self._ack_seq += 1
+        return seq
+
+    def _ack_session_control(self, command: Command) -> None:
+        """The Arm/DisarmAdapters' own succeeded shape: observed before/after."""
+        self._append(
+            self.layout.command_ack,
+            ActionResult.succeeded(
+                session_id=command.session_id,
+                seq=self._next_ack_seq(),
+                command_id=command.command_id,
+                action=command.action.value,
+                timestamp_ms=self.world.clock.now_ms,
+                evidence={"armed_after": self.armed, "mode_after": self.mode.value},
+            ).to_dict(),
+        )
 
     def pump(self, milliseconds: int) -> None:
         self.world.clock.advance(max(0, milliseconds))
@@ -377,8 +412,20 @@ def assemble(world: CliWorld, **mod_state: object) -> Assembled:
     planner = loop.planner
     assert isinstance(planner, AutonomyPlanner)
     planner.backup = witness_for_the_observed_save
+    # Two-phase arm: the mod executes session.arm, acks it, and its next
+    # heartbeat reports the armed mode; the following tick observes both. The
+    # planner is parked for that tick so confirmation cannot dispatch anything
+    # before the test has said what the world should hold.
     armed = loop.arm(SessionMode.AUTONOMOUS)
-    assert armed.armed, armed.detail
+    assert armed.pending, armed.detail
+    loop.planner = None
+    mod.pump(0)
+    mod.beat()
+    granted = loop.tick()
+    assert granted.armed, (
+        armed.detail if loop.arm_resolution is None else loop.arm_resolution.detail
+    )
+    loop.planner = planner
     mod.observe()
     return Assembled(world=world, workspace=workspace, loop=loop, mod=mod)
 
@@ -584,8 +631,16 @@ def test_a_different_save_does_not_inherit_the_previous_saves_reservations(
         assembled.mod.observe()
         disarming = assembled.loop.tick()
         assert [event.reason_code for event in disarming.events] == [ReasonCode.SAVE_CHANGED]
-        rearmed = assembled.loop.arm(SessionMode.AUTONOMOUS)
-        assert rearmed.armed, rearmed.detail
+        rearming = assembled.loop.arm(SessionMode.AUTONOMOUS)
+        assert rearming.pending, rearming.detail
+        assembled.mod.pump(0)
+        assembled.mod.beat()
+        rearmed = assembled.loop.tick()
+        assert rearmed.armed, (
+            rearming.detail
+            if assembled.loop.arm_resolution is None
+            else assembled.loop.arm_resolution.detail
+        )
         assembled.mod.observe()
         assembled.loop.tick()
 

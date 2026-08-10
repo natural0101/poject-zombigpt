@@ -23,7 +23,7 @@ Transport: stdio. The server registers itself as `pz-agent`.
 | `product_version` | `0.1.0` |
 | `protocol_version` | `1.1` |
 | `capability_gated` | `true` |
-| tools | 34 |
+| tools | 37 |
 | resources | 7 |
 
 `--describe` reports the **whole** catalogue. A running server publishes a
@@ -35,7 +35,7 @@ See *Capability gating* below.
 ## Semantics that apply to every tool
 
 **Every input schema is closed.** `additionalProperties` is `false` on all
-34 tools, so an argument this document does not list is rejected rather
+37 tools, so an argument this document does not list is rejected rather
 than ignored.
 
 **The advertised bound is the enforced bound.** `catalog.py` imports its numbers
@@ -52,10 +52,10 @@ the `write` tools and for nothing else:
 
 | Kind | Count | Arming | What it is |
 | --- | --- | --- | --- |
-| `read` | 9 | not required | Answered from state the sidecar already holds |
+| `read` | 11 | not required | Answered from state the sidecar already holds |
 | `query` | 3 | not required | Submits one of the protocol's `READ_ONLY_ACTIONS`; comes back with an action id, but the character neither moves nor touches anything |
 | `write` | 17 | **required** | Changes the world; refused with `NOT_ARMED` on a disarmed session |
-| `control` | 5 | not required | Arm, disarm, cancel, stop and the goal verbs — how a disarmed or panicking session is driven |
+| `control` | 6 | not required | Arm, disarm, cancel, stop and the goal verbs — how a disarmed or panicking session is driven |
 
 `pz_action_open_container` is a `write` tool, whatever its name suggests: it
 walks the character across a room. `ToolSpec.__post_init__` refuses to construct
@@ -74,24 +74,28 @@ declares. Several adapters assess higher per call — `movement.move_to` becomes
 neither is visible from the tool name, so neither is published.
 
 **Long-running tools return an action id.** `long_running` is `true` for
-19 tools. The call returns immediately with an `action_id`; you poll it by
-calling again with the same `idempotency_key`, which replays the call and
-refreshes it to the action's current state. It does not block the transport and
-it does not report success early.
+19 tools. The call returns immediately with an `action_id`; you poll it with
+`pz_action_status`, wait on it with `pz_action_await`, or call again with the
+same `idempotency_key`, which replays the call and refreshes it to the action's
+current state. It does not block the transport and it does not report success
+early.
 
 **Idempotency.** Every tool that submits a command takes a required
-`idempotency_key`; 22 tools do. Twenty of them accept 1–120 characters with no
-further shape; the two goal verbs, `pz_goal_submit` and `pz_goal_cancel`, take
-1–64 matching `^[A-Za-z0-9][A-Za-z0-9_.:\-]{0,63}$`, because the goal channel
-carries the key into its own record and a key is not a place to smuggle text.
-Calling twice with the same key does not perform the action twice — the
+`idempotency_key`; 23 tools do. Twenty-one of them accept 1–120 characters with
+no further shape; the two goal verbs, `pz_goal_submit` and `pz_goal_cancel`,
+take 1–64 matching `^[A-Za-z0-9][A-Za-z0-9_.:\-]{0,63}$`, because the goal
+channel carries the key into its own record and a key is not a place to smuggle
+text. Calling twice with the same key does not perform the action twice — the
 original result is replayed with `replayed: true`.
 
 **`timeout_ms`** is that one command's lease: integer, 100–300000 ms, default
-15000. Nineteen tools take it — every one that submits a single command.
+15000. Twenty tools take it — every one that submits a single command.
 `pz_plan_execute` does not, because a plan is bounded by
 `limits.max_real_seconds` instead, and publishing an argument no handler reads
-would be a lie shaped like an option.
+would be a lie shaped like an option. One tool reuses the name for a different
+budget: on `pz_action_await`, `timeout_ms` is that call's own wait budget
+(100–60000 ms, default 5000), not a lease — its section says so beside the
+number.
 
 **No free text.** `pz_plan_execute`'s `goal` (1–200 characters) is the only
 field in the whole surface a caller may write in their own words, and it comes
@@ -130,6 +134,9 @@ an enum member, or a lower-case token matching
 | `pz_action_sleep` | write | P4 | yes | yes | `survival_sleep` |
 | `pz_action_wait` | write | P0 | yes | yes | — |
 | `pz_action_cancel` | control | P1 | no | yes | — |
+| `pz_action_cancel_all` | control | P1 | no | no | — |
+| `pz_action_status` | read | P0 | no | no | — |
+| `pz_action_await` | read | P0 | no | no | — |
 | `pz_plan_execute` | write | P2 | yes | no | — |
 | `pz_plan_status` | read | P0 | no | no | — |
 | `pz_goal_submit` | write | P2 | yes | no | — |
@@ -149,6 +156,16 @@ an enum member, or a lower-case token matching
 Mode, armed state, session id, heartbeat health, game build and capability revision. Answers even when the game is not connected.
 
 No arguments.
+
+The answer carries **both sides of the arming question**, because the two can
+disagree and did in a live session: `mode` and `armed` (with `desired_mode` as
+the explicit spelling of whose word `mode` is) are the sidecar's flags, while
+`effective_mode`, `game_armed`, `game_session_id` and `game_view_seq` are read
+from the newest observation — the game's own last word, with
+`heartbeat.game_ok` as its freshness. `armed_mismatch` is `true` when the two
+disagree and `null` when the game has said nothing yet, which is not agreement.
+A sidecar that says armed while the game says OFF is readable from this one
+call, and the answer says which word to trust in a warning.
 
 ### `pz_session_arm`
 
@@ -414,6 +431,52 @@ Cancel a mod-owned action. Verified by no mod-owned entry remaining in the queue
 | `idempotency_key` | yes | `string`; minLength 1; maxLength 120 |
 | `timeout_ms` | no | `integer`; minimum 100; maximum 300000; default `15000` |
 
+### `pz_action_cancel_all`
+
+Clear every mod-owned entry in one call: the mass form of `pz_action_cancel`, with nothing narrower to mis-aim. Ownership is the mod's own tag, so an action the player queued is never touched, and the postcondition is negative — no entry this session owns still in flight — so a second call finds it already true and succeeds clearing nothing. Returns the cancel's action id; `pz_action_await` turns it into the engine's verdict.
+
+| Argument | Required | Schema |
+| --- | --- | --- |
+| `idempotency_key` | yes | `string`; minLength 1; maxLength 120 |
+| `timeout_ms` | no | `integer`; minimum 100; maximum 300000; default `15000` |
+
+The answer reports `scope: "mod_owned"` and `requested_reason:
+"CANCELLED_BY_REQUEST"` — the reason the loop's levers record against each
+submission and in-flight command they end. `cancelled_counts` answers
+`{"channel_pending": null, "in_flight": null}`: the per-layer counts are
+recorded by the loop against the records it terminalises and no port carries
+them back, and `null` means uncounted, never zero — the same rule that keeps
+the panic stop's `cleared` at what was observed. It differs from
+`pz_safety_stop` on exactly one axis: nothing here disarms.
+
+### `pz_action_status`
+
+The current record of one submitted action: its status, its terminal result, and — for an observed success — its evidence. An id this sidecar does not hold is answered as `known: false` with the likely causes, not as an error: the record store is a bounded ring that evicts finished work, and a restarted sidecar holds nothing the previous process minted, so unknown here is a routine fact and never means the action did not run.
+
+| Argument | Required | Schema |
+| --- | --- | --- |
+| `action_id` | yes | `string`; maxLength 36; pattern `^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$` |
+
+A known id answers the same shape a submit does — `data.status`,
+`data.terminal`, `reason_code`, the quarantined `detail` and, on an observed
+success, `data.evidence` — plus `known: true`, with the record's status in the
+envelope `status`. An unknown id answers `known: false`, `status: null`,
+`terminal: null` and `likely_causes: ["evicted", "sidecar_restarted"]` — a
+typed answer an agent loop can branch on, deliberately not a refusal.
+
+### `pz_action_await`
+
+Wait, bounded, for a submitted action to reach a terminal state, re-reading its record on a small interval (50 ms; no busy spin, no lock held across the wait — the stop tools stay reachable while it runs). Answers the `pz_action_status` shape plus `waited_ms` and `timed_out`; a budget that ends first reports the record as it stands with `timed_out: true`, and an unknown id answers immediately.
+
+| Argument | Required | Schema |
+| --- | --- | --- |
+| `action_id` | yes | `string`; maxLength 36; pattern `^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$` |
+| `timeout_ms` | no | `integer`; minimum 100; maximum 60000; default `5000` — **this call's wait budget, not the action's lease** |
+
+`timed_out: true` is the *call's* end, not the action's: the record is still
+reported as it stands, and calling again keeps waiting. `timed_out: false` with
+`known: false` means the id is unknown here and waiting longer cannot help.
+
 ### `pz_plan_execute`
 
 Submit a goal for the typed planner. The plan is validated before anything runs. There is no field for raw steps, code or file paths.
@@ -497,7 +560,7 @@ Recent structured log records, redacted and bounded.
 
 ## Capability gating
 
-Fourteen of the 34 tools name a capability. `published_tools()` offers a
+Fourteen of the 37 tools name a capability. `published_tools()` offers a
 tool only when `CapabilityReport.usable()` is true for its capability, which
 means `verified` or `available_unverified`; `experimental`, `unsupported` and
 `disabled_by_policy` are all unusable. `withheld_tools()` returns the withheld
@@ -518,7 +581,7 @@ tool is an answer rather than an error.
 | `survival_rest` | `pz_action_rest` |
 | `survival_sleep` | `pz_action_sleep` |
 
-The other twenty tools name no capability at all. For the three query
+The other twenty-three tools name no capability at all. For the three query
 tools that is deliberate and documented in `capabilities/probes.py`: everything
 `world.inspect`, `container.inspect` and `inventory.search` read is reached
 through Java accessors that never appear in the game's Lua, so a probe over
@@ -615,7 +678,7 @@ have to maintain its own table of which failures are worth another attempt.
 
 - Execute code. There is no field for it anywhere in the surface.
 - Name a file. Every IPC filename is a hardcoded constant on both sides.
-- Act while disarmed, except through the five `control` tools and the read and
+- Act while disarmed, except through the six `control` tools and the read and
   query ones.
 - Choose *what* to eat, drink or read. No tool takes a "pick something" form;
   selection is deterministic policy in `pz_agent_core.policy`. `pz_goal_submit`

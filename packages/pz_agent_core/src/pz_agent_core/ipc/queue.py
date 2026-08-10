@@ -27,6 +27,7 @@ from collections import OrderedDict, deque
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
+from pathlib import Path
 from typing import Final
 
 from ..protocol import (
@@ -46,9 +47,13 @@ from .clocks import Clock, system_clock_ms
 from .journal import (
     DEFAULT_KEEP,
     DEFAULT_MAX_BYTES,
+    MAX_READ_BYTES,
     JournalDiagnostic,
+    JournalError,
     JournalReader,
     JournalWriter,
+    probe_header,
+    rotated_path,
 )
 from .layout import IpcLayout
 
@@ -71,6 +76,14 @@ DEFAULT_GAP_HISTORY: Final = 32
 #: probes, so a small bound is enough and keeps the map from growing if the mod
 #: stops acking altogether.
 DEFAULT_PENDING_LIMIT: Final = 64
+
+#: How far back into the command journal a restarting queue looks for the last
+#: sequence number the previous process committed. Allocation is monotonic and
+#: only records that reach the journal consume a number, so the highest
+#: committed seq is always in the file's final record; a window of a few
+#: maximum-length lines is guaranteed to contain that record whole, and reading
+#: further back buys nothing but memory.
+RECOVERY_TAIL_BYTES: Final = MAX_READ_BYTES
 
 
 class Stream(StrEnum):
@@ -135,6 +148,20 @@ class SequenceTracker:
         seq = self._next[stream]
         self._next[stream] = seq + 1
         return seq
+
+    def seed(self, stream: Stream, next_seq: int) -> None:
+        """Start outbound allocation for *stream* no lower than *next_seq*.
+
+        Used at construction, when durable state — the tail of the command
+        journal — shows the stream is already further along than a fresh
+        tracker assumes. Seeding never moves the counter backwards: a number
+        that may already be on disk stays burned, because handing it out a
+        second time creates exactly the duplicate producer this method exists
+        to prevent.
+        """
+        if next_seq < 0:
+            raise ValueError(f"next_seq must be non-negative, got {next_seq}")
+        self._next[stream] = max(self._next[stream], next_seq)
 
     def peek(self, stream: Stream) -> int:
         return self._next[stream]
@@ -301,6 +328,11 @@ class CommandQueue:
         if self.pending_limit < 1:
             raise ValueError(f"pending_limit must be positive, got {self.pending_limit}")
         self.layout.ensure()
+        # Recover the outbound sequence before the writer opens the journal:
+        # the writer's resume logic rotates a file it cannot read aside and
+        # starts fresh, so the evidence of where the previous process stopped
+        # has to be read while it is still where that process left it.
+        self.sequences.seed(Stream.COMMAND, self._recover_next_command_seq())
         self._writer = JournalWriter(
             self.layout,
             self.layout.command_queue,
@@ -311,6 +343,96 @@ class CommandQueue:
         self._acks = JournalReader(self.layout, self.layout.command_ack, keep=self.keep)
         self._cache = IdempotencyCache(self.idempotency_capacity)
         self._pending = OrderedDict()
+
+    # -- restart recovery --------------------------------------------------
+
+    def _recover_next_command_seq(self) -> int:
+        """The first sequence number this process may write, read from disk.
+
+        Live finding (Build 42.20.2): a restarted sidecar whose tracker
+        defaulted to zero became a second producer of the same stream — the
+        journal still held records 0..N from the previous process, and the mod
+        dedups by ``command_id`` rather than ``seq``, so the replayed numbers
+        were accepted silently while gap detection on both sides quietly lost
+        its meaning. The journal is the durable record of how far the stream
+        got, so its tail decides where allocation resumes: the live file, or —
+        when rotation left the live file freshly headed — the newest rotated
+        generation.
+        """
+        live = self.layout.command_queue
+        highest = self._highest_committed_seq(live)
+        if highest is None and self.keep > 0:
+            highest = self._highest_committed_seq(rotated_path(live, 1))
+        return 0 if highest is None else highest + 1
+
+    def _highest_committed_seq(self, path: Path) -> int | None:
+        """The highest ``seq`` this session committed near the end of *path*.
+
+        None means the file offers this session nothing to resume from —
+        absent, empty, holding only the journal's own markers, or holding
+        only other sessions' records, each a state where starting from zero
+        is the truth. Only the final :data:`RECOVERY_TAIL_BYTES` are read:
+        allocation is monotonic and only written records consume a number, so
+        the highest committed seq lives in the last records, and the window is
+        several maximum-length lines wide.
+
+        Raises :class:`JournalError` when the file has bytes beyond its header
+        but not one record could be parsed for a seq. Seeding zero over an
+        unreadable command journal would restart a stream whose real position
+        is unknown — the exact lie this recovery exists to remove.
+        """
+        try:
+            size = path.stat().st_size
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            raise JournalError(
+                f"cannot recover the command sequence from {path.name}: {exc}"
+            ) from exc
+        if size == 0:
+            return None
+        header, problem = probe_header(path)
+        if header is None:
+            # ``problem`` is None only when the first line has no newline yet.
+            # For a live producer that means "poll again shortly"; here the
+            # producer is this process's predecessor and it is gone, so the
+            # header was simply never committed — and without one, not a
+            # single record behind it can be attributed to a generation.
+            detail = problem if problem is not None else "its header line was never committed"
+            raise JournalError(f"cannot recover the command sequence from {path.name}: {detail}")
+        reader = JournalReader(self.layout, path, keep=self.keep)
+        reader.resume(
+            offset=max(header.end_offset, size - RECOVERY_TAIL_BYTES), serial=header.serial
+        )
+        highest: int | None = None
+        parsed_any = False
+        damaged = False
+        position = reader.offset
+        while True:
+            read = reader.read()
+            damaged = damaged or bool(read.diagnostics) or read.pending_bytes > 0
+            for record in read.records:
+                seq = record.payload.get("seq")
+                if not isinstance(seq, int) or isinstance(seq, bool) or seq < 0:
+                    damaged = True
+                    continue
+                parsed_any = True
+                if record.payload.get("session_id") != self.session_id:
+                    # Another session's records seed nothing: its stream ended
+                    # with it, and this session's numbering starts at zero.
+                    continue
+                highest = seq if highest is None else max(highest, seq)
+            if reader.offset == position:
+                # Nothing moved, so nothing is left. The loop is bounded by
+                # the tail window because every earlier pass consumed bytes.
+                break
+            position = reader.offset
+        if highest is None and damaged and not parsed_any:
+            raise JournalError(
+                f"cannot recover the command sequence from {path.name}: bytes are "
+                "present after the header but no record could be parsed for a seq"
+            )
+        return highest
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -535,6 +657,22 @@ class CommandQueue:
                 # returned so the caller can log it.
                 continue
             results.append(result)
+            if result.is_terminal and result.command_id not in self._pending:
+                # §3.12: after a restart the mod may still be answering a
+                # command the *previous* process shipped — or one the pending
+                # bound already shed. That is honest work finishing, not an
+                # error, so it is surfaced as a diagnostic and otherwise left
+                # alone; there is no idempotency key to file it under and
+                # inventing one would poison the cache.
+                diagnostics.append(
+                    JournalDiagnostic(
+                        offset=record.offset,
+                        detail=(
+                            f"terminal ack for command {result.command_id} that this "
+                            "process is not tracking; nothing to apply it to"
+                        ),
+                    )
+                )
             self.record_ack(result)
         return AckPoll(
             results=tuple(results),
@@ -552,6 +690,13 @@ class CommandQueue:
         ack changes nothing: the command is still running, and caching a
         ``started`` would answer a duplicate with a status that promises an ack
         which will never arrive for it.
+
+        An ack for a command this process is not tracking — the previous
+        process's in-flight work answered after a restart, or a read-only
+        command the pending bound already shed — also changes nothing, on
+        purpose: its idempotency key is not known here, so there is nowhere
+        honest to file the result, and the quiet no-op is what keeps a mod
+        that finished real work from crashing its new peer.
         """
         if not result.is_terminal:
             return

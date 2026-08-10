@@ -12,6 +12,7 @@ lives in ``tests/contract/test_sidecar_serves_the_core.py``.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -39,7 +40,13 @@ from pz_agent_core.protocol import ActionName, Observation, SessionMode
 from pz_agent_mcp.ports import CoreServices, PlanRequest
 from tests.fixtures.ipc_builders import BASE_TIME_MS
 from tests.fixtures.mcp_doubles import make_report
-from tests.fixtures.sidecar_worlds import SidecarWorld, attached_world, make_sidecar_world
+from tests.fixtures.sidecar_worlds import (
+    ScriptedMod,
+    SidecarWorld,
+    arm_for_real,
+    attached_world,
+    make_sidecar_world,
+)
 
 
 class Monotonic:
@@ -54,10 +61,22 @@ class Monotonic:
         return self.now
 
 
-def _services(world: SidecarWorld, *, ticking: bool = True, step: float = 0.0001) -> CoreServices:
-    """The adapter over *world*'s loop, its waits driving the loop's own ticks."""
+def _services(
+    world: SidecarWorld,
+    *,
+    ticking: bool = True,
+    step: float = 0.0001,
+    while_waiting: Callable[[], None] | None = None,
+) -> CoreServices:
+    """The adapter over *world*'s loop, its waits driving the loop's own ticks.
+
+    ``while_waiting`` is the fake mod acting between polls — the seam the
+    two-phase arm needs, since the loop now waits for the mod's own answer.
+    """
 
     def tick_once(_seconds: float) -> None:
+        if while_waiting is not None:
+            while_waiting()
         world.loop.tick()
 
     def never(_seconds: float) -> None:
@@ -136,7 +155,17 @@ class TestArmingTravelsTheControlChannel:
         self, tmp_path: Path
     ) -> None:
         with attached_world(tmp_path) as world:
-            services = _services(world)
+            mod = ScriptedMod(world)
+            answered: set[str] = set()
+
+            def mod_confirms_the_arm() -> None:
+                for command in mod.commands(ActionName.SESSION_ARM):
+                    if command.command_id not in answered:
+                        answered.add(command.command_id)
+                        mod.ack_success(command, mode=SessionMode.ASSISTED)
+                        mod.beat(armed=True, mode=SessionMode.ASSISTED)
+
+            services = _services(world, while_waiting=mod_confirms_the_arm)
 
             snapshot = services.session.arm(SessionMode.ASSISTED, confirm_backup=True)
 
@@ -185,7 +214,7 @@ class TestArmingTravelsTheControlChannel:
     def test_disarm_returns_the_loop_to_observe(self, tmp_path: Path) -> None:
         with attached_world(tmp_path) as world:
             world.beat_game()
-            assert world.loop.arm(SessionMode.ASSISTED).armed is True
+            arm_for_real(world, mode=SessionMode.ASSISTED)
             services = _services(world)
 
             snapshot = services.session.disarm()
@@ -201,7 +230,7 @@ class TestArmingTravelsTheControlChannel:
             world.observe()
             world.loop.tick()
             world.beat_game()
-            assert world.loop.arm(SessionMode.ASSISTED).armed is True
+            arm_for_real(world, mode=SessionMode.ASSISTED)
             services = _services(world)
 
             report = services.session.stop()
