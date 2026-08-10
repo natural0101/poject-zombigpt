@@ -101,8 +101,10 @@ number.
 **No free text.** `pz_plan_execute`'s `goal` (1–200 characters) is the only
 field in the whole surface a caller may write in their own words, and it comes
 back quarantined. Every other string argument is a ref matching a fixed pattern,
-an enum member, or a lower-case token matching
-`^[a-z][a-z0-9_.\-]{0,63}$`.
+an enum member, a lower-case token matching
+`^[a-z][a-z0-9_.\-]{0,63}$`, or — in exactly one place, `pz_goal_submit`'s
+`categories` — a comma-joined list of closed upper-case tokens whose pattern
+names every admissible spelling.
 
 ---
 
@@ -195,6 +197,17 @@ Current world state, compacted for a model. 'compact' is the player and safety h
 | --- | --- | --- |
 | `detail` | no | one of `compact`, `standard`, `full`; default `"compact"` |
 
+The observation behind every level carries `player.room` and
+`player.building` when the build reports them: bounded tokens naming the room
+the character stands in and the building it belongs to. An absent value is
+deliberately one answer for two facts — standing outdoors and running a build
+with no room reader produce the same absence, because a scope decision ("loot
+this room") must never read a missing reader as "outside". The compacted
+`player` this tool returns does not yet forward the two fields; the loot
+mission reads them from the observation itself, which is why a `loot_area`
+goal with `scope: "room"` or `"building"` needs a build that reports rooms —
+and only a live session proves that this one does.
+
 ### `pz_observe_inventory`
 
 Container tree with stable refs, recursing into nested carried containers. Item display names are untrusted data and are marked as such.
@@ -213,6 +226,18 @@ World objects and zombies within a bounded radius, with their semantics.
 | --- | --- | --- |
 | `radius` | no | `number`; maximum 30.0; exclusive minimum 0; default `10.0` |
 | `types` | no | array, maxItems 8; items `string`; maxLength 64; pattern `^[a-z][a-z0-9_.\-]{0,63}$` |
+
+Dead bodies with loot aboard are reported as objects of kind `corpse` with
+the `container` semantic; a body holding nothing is not listed at all. A
+corpse is observation-only for now — it lives in the engine's dead-body list,
+which the world-container reference scheme cannot address, so no reference it
+could mint would resolve to its loot; the gap is recorded in
+`docs/GAME_API_VERIFICATION.md`. The observation additionally stamps each
+object with the `room` and `building` of the square it stands on, with the
+same tri-state as the player's — a missing field covers both "outdoors" and
+"this build cannot read rooms", never to be narrowed to either; the compacted
+objects this tool returns do not yet forward the two fields, and the loot
+mission reads them from the observation itself.
 
 ### `pz_action_inspect_world`
 
@@ -581,11 +606,11 @@ No arguments.
 
 ### `pz_goal_submit`
 
-Ask the typed goal channel for one of the things it carries. The kind set is closed and there is no free-text field at all: an invented kind is refused, never approximated. The channel admits the goal to a bounded backlog and answers with its id and state — 'pending' is the honest word for a goal nothing has started yet, and every goal carries a wall-clock, step and time-to-live budget so that it reaches a terminal state whether or not it is served. Which sandwich satisfies a hunger goal is never decided here.
+Ask the typed goal channel for one of the things it carries. The kind set is closed and there is no free-text field at all: an invented kind is refused, never approximated. The channel admits the goal to a bounded backlog and answers with its id and state — 'pending' is the honest word for a goal nothing has started yet, and every goal carries a wall-clock, step and time-to-live budget so that it reaches a terminal state whether or not it is served. Which sandwich satisfies a hunger goal is never decided here. A 'loot_area' goal finishes on one provable criterion — every reachable container in scope was inspected or has a recorded skip reason — and its terminal answer reports the looted scope (the pinned room, building or sweep), the containers inspected, the containers skipped each with its reason, and the items taken per category and left per reason.
 
 | Argument | Required | Schema |
 | --- | --- | --- |
-| `kind` | yes | one of `learn_recipe`, `navigate_to`, `read_for_boredom`, `satisfy_hunger`, `satisfy_thirst`, `train_skill` |
+| `kind` | yes | one of `learn_recipe`, `loot_area`, `navigate_to`, `read_for_boredom`, `satisfy_hunger`, `satisfy_thirst`, `train_skill` |
 | `skill` | no | one of `carpentry`, `cooking`, `electrical`, `farming`, `first_aid`, `fishing`, `foraging`, `mechanics`, `metalworking`, `tailoring`, `trapping` |
 | `target_level` | no | `integer`; minimum 1; maximum 10 |
 | `satisfy_to` | no | `number`; minimum 0.0; maximum 1.0 |
@@ -593,6 +618,11 @@ Ask the typed goal channel for one of the things it carries. The kind set is clo
 | `target_x` | no | `integer`; minimum 0; maximum 32000 |
 | `target_y` | no | `integer`; minimum 0; maximum 32000 |
 | `target_z` | no | `integer`; minimum -32; maximum 31 |
+| `scope` | no | one of `building`, `radius`, `room` |
+| `radius` | no | `integer`; minimum 1; maximum 30 |
+| `take_all` | no | `boolean` |
+| `categories` | no | `string`; maxLength 128; comma-joined closed tokens, each of `CLOTHING`, `FOOD`, `LITERATURE`, `MATERIALS`, `MEDICAL`, `OTHER`, `TOOLS`, `WATER`, `WEAPONS` at most once |
+| `idempotency_key` | yes | `string`; minLength 1; maxLength 64; pattern `^[A-Za-z0-9][A-Za-z0-9_.:\-]{0,63}$` |
 
 `navigate_to` requires all three `target_*` coordinates and takes nothing
 else: the sidecar's deterministic route executor walks the character to that
@@ -600,7 +630,25 @@ world square — doors, stairs, blocked passages and stuck detection handled
 locally, with no model call per square — and the goal ends on the *observed*
 arrival or with the executor's typed refusal (`DOOR_LOCKED`,
 `DOOR_BARRICADED`, `PATH_NOT_FOUND`, `PATH_STUCK`, `NO_PROGRESS`).
-| `idempotency_key` | yes | `string`; minLength 1; maxLength 64; pattern `^[A-Za-z0-9][A-Za-z0-9_.:\-]{0,63}$` |
+
+`loot_area` takes only the four loot parameters, all optional: the bare goal
+means scope `room`, the useful-only category selection and no `take_all`, and
+those defaults are read by the mission, never filled in by this surface. The
+sidecar's deterministic loot mission serves it with no model call per
+container: it builds the reachable candidate map, opens allowed doors, moves
+via the local pathfinder, inspects each container, selects deterministically,
+moves items with batch transfers and replans on blockage. Scope semantics:
+`room` and `building` are pinned from the observation at activation and need
+a build that reports rooms — where the reader is unavailable they are refused
+with a typed failure naming `radius` as the alternative, because outdoors and
+"no room reader" are deliberately indistinguishable and a guess would loot
+the wrong scope; `radius` (a Chebyshev sweep of `radius` squares around the
+activation square, requiring `scope: "radius"` beside it) always works. Only
+a live session proves a given build reports rooms. The report is honest both
+ways: a container skipped for a locked door, a failed path or a budget that
+ran out appears in the terminal answer with that reason, never silently
+dropped; `take_all` widens the selection to every category but never
+overrides the user's reserved items.
 
 ### `pz_goal_status`
 

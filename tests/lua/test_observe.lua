@@ -524,6 +524,144 @@ do
   removeCell()
 end
 
+Harness.group("a room is read once per square, and outdoors reports nothing")
+do
+  local position = { x = 100, y = 200, z = 0 }
+  local spy = { count = 0 }
+  local kitchen = Support.room({ name = "kitchen", building = Support.building({ id = 42 }) })
+  local removeCell = Support.installCell({
+    ["100,200,0"] = Support.square({
+      Support.worldObject({ name = "Fridge", container_type = "fridge" }),
+      Support.worldObject({ name = "Counter", container_type = "counter" }),
+      Support.worldObject({ name = "Stove" }),
+    }, { room = kitchen, room_spy = spy }),
+    ["101,200,0"] = Support.square({ Support.worldObject({ name = "Chair" }) }),
+  }, {})
+
+  local scanned = Observe.nearbyObjects(position).objects
+  equal(spy.count, 1, "three objects on the square cost one room read, not three")
+  local byKind = {}
+  for index = 1, #scanned do
+    byKind[scanned[index].kind] = scanned[index]
+  end
+  equal(byKind.fridge.room, "kitchen", "an object in a room carries the room's name")
+  equal(byKind.fridge.building, "42", "and the building's numeric id, as a digit string")
+  equal(byKind.stove.room, "kitchen", "every object on the square shares the one reading")
+  isNil(byKind.chair.room, "a square whose build has no room reader claims none")
+  isNil(byKind.chair.building, "and no building")
+  removeCell()
+
+  local housed = Observe.playerFields(Support.player({ square = Support.square({}, { room = kitchen }) }))
+  equal(housed.room, "kitchen", "the player's own room hangs on getCurrentSquare")
+  equal(housed.building, "42", "with the building")
+
+  local outdoors = Observe.playerFields(Support.player({
+    -- getRoom exists and answers nil: the character is standing outside.
+    square = Support.square({}, { room_spy = { count = 0 } }),
+  }))
+  isNil(outdoors.room, "outdoors -- a nil room -- reports no room")
+  isNil(outdoors.building, "and no building")
+
+  local blind = Observe.playerFields(Support.player({}))
+  isNil(blind.room, "a build with no getCurrentSquare reports the identical absence")
+  isNil(blind.building, "for both fields, so 'no reader' can never read as 'outside'")
+
+  local defNamed = Observe.playerFields(Support.player({
+    square = Support.square({}, {
+      room = Support.room({ def_name = "bedroom", building = Support.building({ def_name = "farmhouse" }) }),
+    }),
+  }))
+  equal(defNamed.room, "bedroom", "a room named only on its definition still names itself")
+  equal(defNamed.building, "farmhouse", "and a building with no id falls back to its definition's name")
+
+  local nameless = Observe.playerFields(Support.player({
+    square = Support.square({}, { room = Support.room({ building = Support.building({ id = 7 }) }) }),
+  }))
+  isNil(nameless.room, "a room that answers no name under either spelling stays absent")
+  equal(nameless.building, "7", "while the building it did answer is still carried")
+end
+
+Harness.group("a corpse with loot is a container to look at, not one to reference")
+do
+  local position = { x = 100, y = 200, z = 0 }
+  local removeCell = Support.installCell({
+    ["100,200,0"] = Support.square({
+      Support.worldObject({ name = "Crate", container_type = "crate" }),
+    }, {
+      room = Support.room({ name = "kitchen" }),
+      bodies = {
+        Support.deadBody({ loot = { Support.item({ id = 9, name = "Wallet" }) } }),
+        Support.deadBody({}),
+      },
+    }),
+  }, {})
+
+  local scanned = Observe.nearbyObjects(position).objects
+  local corpses = {}
+  for index = 1, #scanned do
+    if scanned[index].kind == "corpse" then
+      corpses[#corpses + 1] = scanned[index]
+    end
+  end
+  equal(#corpses, 1, "a body that answers no container is not emitted as one")
+  same(corpses[1].semantics, { "container" }, "a looted body carries the container semantic the loot goal filters on")
+  isNil(corpses[1].object_index, "and no object index -- a dead body is not in getObjects()")
+  isNil(corpses[1].container_index, "so no world-container reference can honestly be minted for its loot")
+  equal(corpses[1].room, "kitchen", "the corpse shares the square's one room reading")
+
+  local document = Model.build({
+    session_id = SESSION,
+    seq = 3,
+    timestamp_ms = NOW,
+    game = { build = "42.20" },
+    player = Observe.playerFields(furnishedPlayer()),
+    nearby = Observe.nearbyFields(furnishedPlayer(), position),
+  })
+  local emitted = nil
+  for index = 1, #document.nearby.objects do
+    if document.nearby.objects[index].kind == "corpse" then
+      emitted = document.nearby.objects[index]
+    end
+  end
+  equal(
+    emitted.ref,
+    "square:" .. SESSION .. ":100:200:0",
+    "observation-only: the corpse is named by its square, the coarsest honest reference"
+  )
+  removeCell()
+
+  Support.installCell({
+    ["100,200,0"] = Support.square({}, { body = Support.deadBody({ loot = {} }) }),
+  }, {})
+  local single = Observe.nearbyObjects(position).objects
+  equal(#single, 1, "a build spelling only the singular accessor still reports the body")
+  equal(single[1].kind, "corpse", "as a corpse")
+
+  local pile = {}
+  for index = 1, Observe.MAX_BODIES_PER_SQUARE + 2 do
+    pile[index] = Support.deadBody({ loot = {} })
+  end
+  Support.installCell({ ["100,200,0"] = Support.square({}, { bodies = pile }) }, {})
+  local heaped = Observe.nearbyObjects(position)
+  equal(#heaped.objects, Observe.MAX_BODIES_PER_SQUARE, "a pile of corpses is read to its cap")
+  equal(heaped.truncated, true, "and the scan says it stopped")
+  ok(heaped.dropped >= 2, "counting the bodies it never looked at")
+
+  local sharedBudget = Observe.MAX_OBJECTS_SCANNED
+  Observe.MAX_OBJECTS_SCANNED = 1
+  local removeStarved = Support.installCell({
+    ["100,200,0"] = Support.square({
+      Support.worldObject({ name = "Crate", container_type = "crate" }),
+    }, { bodies = { Support.deadBody({ loot = {} }) } }),
+  }, {})
+  local starved = Observe.nearbyObjects(position)
+  equal(#starved.objects, 1, "corpses spend the same shared object budget as everything else")
+  equal(starved.truncated, true, "which therefore reports the body it had no budget left for")
+  ok(starved.dropped >= 1, "in the dropped count")
+  Observe.MAX_OBJECTS_SCANNED = sharedBudget
+  removeStarved()
+end
+
 Harness.group("the nearby scan spends one object budget, nearest squares first")
 do
   -- A cluttered warehouse: every square inside the radius holding as many

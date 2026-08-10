@@ -105,6 +105,9 @@ ObserveModel.BASE_SEMANTICS = {
   stairs = { "stairs", "traversal" },
   container = { "container" },
   water = { "water_source" },
+  -- A corpse with loot is a container to inspect, even when the reader that
+  -- emitted it could not say so itself.
+  corpse = { "container" },
 }
 
 local floor = math.floor
@@ -203,6 +206,29 @@ function ObserveModel.token(value)
     return nil
   end
   return value
+end
+
+--- A room or building identifier as a token, or nil.
+---
+--- One normalisation and only one: every space becomes an underscore, applied
+--- identically to the player's reading and to each object's, so the equality a
+--- scope decision runs on survives the rename -- "main hall" compares equal on
+--- both sides of "is this container in my room", as "main_hall". The
+--- substitution can in principle collide a literal "main_hall" with
+--- "main hall"; that is accepted and stated here rather than hidden behind a
+--- cleverer encoding.
+---
+--- Any other byte outside the reference alphabet drops the field entirely,
+--- which is the same absence outdoors produces -- on purpose. Mapping unsafe
+--- bytes to a filler instead would collapse distinct rooms into one token
+--- (every non-ASCII name would become a run of underscores), and two rooms
+--- behind one name is a lie a criterion like "every reachable container in
+--- this room was inspected" cannot survive.
+function ObserveModel.place(value)
+  if type(value) ~= "string" or #value == 0 then
+    return nil
+  end
+  return ObserveModel.token((value:gsub(" ", "_")))
 end
 
 --- A runtime id normalised to a reference segment, or nil.
@@ -631,6 +657,17 @@ function ObserveModel.player(sessionId, fields, limits)
     stats = ObserveModel.stats(fields.stats, limits),
     moodles = ObserveModel.moodles(fields.moodles, limits),
   }
+  -- Room and building are optional in the schema precisely so an unread value
+  -- can stay unread: outdoors and "no room reader on this build" are the same
+  -- absence, and a name the token rules cannot carry joins them -- see place.
+  local room = ObserveModel.place(fields.room)
+  if room ~= nil then
+    player.room = room
+  end
+  local building = ObserveModel.place(fields.building)
+  if building ~= nil then
+    player.building = building
+  end
   local wounds = ObserveModel.wounds(sessionId, fields.wounds, limits)
   if #wounds > 0 then
     player.wounds = wounds
@@ -974,6 +1011,16 @@ local function buildObject(sessionId, descriptor)
     if orientation ~= nil then
       object.orientation = orientation
     end
+  end
+  -- The square's room and building, validated like every other token; an
+  -- unread or unnameable one is absent, exactly as outdoors is.
+  local room = ObserveModel.place(descriptor.room)
+  if room ~= nil then
+    object.room = room
+  end
+  local building = ObserveModel.place(descriptor.building)
+  if building ~= nil then
+    object.building = building
   end
   local position = nearbyPosition(descriptor)
   if position ~= nil then

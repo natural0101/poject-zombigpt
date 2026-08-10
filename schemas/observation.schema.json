@@ -86,6 +86,16 @@
         "alive": {
           "type": "boolean"
         },
+        "room": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "building": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
         "position": {
           "type": "object",
           "required": [

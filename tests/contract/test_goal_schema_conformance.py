@@ -64,11 +64,18 @@ SCHEMA_PATH: Final = Path(__file__).resolve().parents[2] / "schemas" / "goal.sch
 #: epic does not make. The gap is pinned both ways below: the schema must not
 #: quietly grow the kind, and a payload naming it must *fail* validation, so a
 #: remote submission is a loud refusal rather than a silently dropped goal.
-NOT_YET_ON_THE_WIRE: Final[frozenset[str]] = frozenset({"navigate_to"})
+NOT_YET_ON_THE_WIRE: Final[frozenset[str]] = frozenset({"navigate_to", "loot_area"})
 
-#: The parameters only those kinds carry, absent from the wire schema for the
-#: same reason and pinned the same way.
-LOCAL_ONLY_PARAMS: Final[frozenset[str]] = frozenset({"target_x", "target_y", "target_z"})
+#: The *numeric* parameters only those kinds carry, absent from the wire
+#: schema for the same reason and pinned the same way. (Every name here must
+#: have a row in NUMERIC_RANGES; the loot goal's non-numeric parameters are
+#: pinned separately below.)
+LOCAL_ONLY_PARAMS: Final[frozenset[str]] = frozenset({"target_x", "target_y", "target_z", "radius"})
+
+#: The loot goal's closed-token parameters: local to the sidecar, not on the
+#: wire, and with no numeric range to appear in the loop above — so their
+#: absence from the schema is pinned by its own assertion.
+LOCAL_ONLY_TOKEN_PARAMS: Final[frozenset[str]] = frozenset({"scope", "take_all", "categories"})
 
 
 def _document() -> dict[str, Any]:
@@ -186,13 +193,23 @@ class TestTheClosedSetsAgree:
         self, schema: Draft202012Validator
     ) -> None:
         """The gap is a refusal at the wire, never a silently dropped goal."""
-        for kind in sorted(NOT_YET_ON_THE_WIRE):
+        local_params: dict[str, dict[str, Any]] = {
+            "navigate_to": {"target_x": 1200, "target_y": 3400, "target_z": 0},
+            "loot_area": {"scope": "room"},
+        }
+        assert set(local_params) == set(NOT_YET_ON_THE_WIRE)
+        for kind, params in sorted(local_params.items()):
             payload = {
                 "kind": kind,
                 "idempotency_key": "client:goal.8",
-                "params": {"target_x": 1200, "target_y": 3400, "target_z": 0},
+                "params": params,
             }
             assert not schema.is_valid(payload), kind
+            # Even a bare submission of the kind is refused: the enum is the
+            # gate, not the parameters that happened to ride along.
+            assert not schema.is_valid(
+                {"kind": kind, "idempotency_key": "client:goal.9", "params": {}}
+            ), kind
 
     def test_the_skills_are_the_trainable_skill_enum(self) -> None:
         skills = _document()["$defs"]["params"]["properties"]["skill"]["enum"]
@@ -214,6 +231,21 @@ class TestTheClosedSetsAgree:
             assert params[name]["minimum"] == bound.minimum, name
             assert params[name]["maximum"] == bound.maximum, name
         assert set(NUMERIC_RANGES) >= LOCAL_ONLY_PARAMS
+
+    def test_the_local_only_token_parameters_are_not_on_the_wire(self) -> None:
+        """The other half of the loot carve-out: scope/take_all/categories.
+
+        Not numeric, so the range loop above never visits them; their absence
+        is pinned here so a schema that grew one without the protocol change
+        would put half of loot_area on the link.
+        """
+        params = _document()["$defs"]["params"]["properties"]
+        for name in sorted(LOCAL_ONLY_TOKEN_PARAMS):
+            assert name not in params, name
+        # And the census stays honest against the model's own declaration.
+        loot_spec = GOAL_SPECS[GoalKind("loot_area")]
+        assert loot_spec.required == frozenset()
+        assert loot_spec.optional == LOCAL_ONLY_TOKEN_PARAMS | {"radius"}
 
     def test_the_budget_bounds_are_the_models_bounds(self) -> None:
         budget = _document()["$defs"]["budget"]["properties"]

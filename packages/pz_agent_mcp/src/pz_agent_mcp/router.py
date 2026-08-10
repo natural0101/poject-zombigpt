@@ -58,6 +58,7 @@ from pz_agent_core.goals import (
     GoalParams,
     GoalRecord,
     GoalRequest,
+    LootScope,
     TrainableSkill,
 )
 from pz_agent_core.observation.compact import (
@@ -1114,6 +1115,7 @@ class ToolRouter:
         :mod:`pz_agent_core.goals.model` never quotes a byte the caller sent.
         """
         skill = args.get("skill")
+        scope = args.get("scope")
         try:
             return GoalRequest(
                 kind=GoalKind(str(args["kind"])),
@@ -1126,6 +1128,10 @@ class ToolRouter:
                     target_x=args.get("target_x"),
                     target_y=args.get("target_y"),
                     target_z=args.get("target_z"),
+                    scope=None if scope is None else LootScope(str(scope)),
+                    radius=args.get("radius"),
+                    take_all=args.get("take_all"),
+                    categories=args.get("categories"),
                 ),
             )
         except ValueError as rejected:
@@ -1164,6 +1170,18 @@ class ToolRouter:
             param_payload["target_y"] = params.target_y
         if params.target_z is not None:
             param_payload["target_z"] = params.target_z
+        if params.scope is not None:
+            param_payload["scope"] = params.scope.value
+        if params.radius is not None:
+            param_payload["radius"] = params.radius
+        # `is not None`, not truthiness: take_all=False is a choice the caller
+        # made, and `categories` is a checked closed-token string — the
+        # channel's constructor refused anything that is not a comma-joined
+        # list of category tokens, which is what makes echoing it safe.
+        if params.take_all is not None:
+            param_payload["take_all"] = params.take_all
+        if params.categories is not None:
+            param_payload["categories"] = params.categories
         data: JsonDict = {
             "goal_id": as_token(record.goal_id),
             "kind": record.kind.value,

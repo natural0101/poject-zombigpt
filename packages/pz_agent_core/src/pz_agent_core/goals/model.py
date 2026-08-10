@@ -49,6 +49,7 @@ from types import MappingProxyType
 from typing import Final
 
 from ..actions.adapters.literature import MAX_READ_PAGES
+from ..loot import LootCategory
 from ..planner.provider import Goal as PlannerGoal
 from ..planner.provider import GoalKind as PlannerGoalKind
 from ..protocol import ReasonCode
@@ -61,6 +62,8 @@ __all__ = [
     "MAX_GOAL_STEPS",
     "MAX_GOAL_WALL_MS",
     "MAX_IDEMPOTENCY_KEY_LEN",
+    "MAX_LOOT_CATEGORIES_CHARS",
+    "MAX_LOOT_RADIUS",
     "MAX_PARSED_TOKEN_CHARS",
     "MAX_PENDING_TTL_MS",
     "MAX_RENDERED_VALUE_CHARS",
@@ -68,6 +71,7 @@ __all__ = [
     "MAX_TARGET_FLOOR",
     "MAX_TARGET_SQUARE",
     "MIN_GOAL_WALL_MS",
+    "MIN_LOOT_RADIUS",
     "MIN_TARGET_FLOOR",
     "NUMERIC_RANGES",
     "PARAM_NAMES",
@@ -82,12 +86,15 @@ __all__ = [
     "GoalSpec",
     "GoalState",
     "GoalTransition",
+    "LootScope",
     "NumericRange",
     "TrainableSkill",
     "key_digest",
     "mint_goal_id",
     "normalise_evidence_keys",
     "parse_kind",
+    "parse_loot_categories",
+    "parse_scope",
     "parse_skill",
     "to_planner_goal",
 ]
@@ -154,6 +161,23 @@ MAX_TARGET_SQUARE: Final = 32_000
 #: outside them is a typo to refuse rather than a journey to attempt.
 MIN_TARGET_FLOOR: Final = -32
 MAX_TARGET_FLOOR: Final = 31
+
+#: The Chebyshev radius a ``loot_area`` goal with ``scope=radius`` may sweep,
+#: in squares around the position the goal was activated at. The ceiling is
+#: the single-move distance the mod accepts (``MAX_MOVE_DISTANCE_SQUARES``,
+#: value pinned by a test rather than imported — the goal channel does not
+#: depend on the action layer's modules): a wider sweep than the character can
+#: cross in one bounded move is a patrol, not "loot this area", and the
+#: autonomous-radius rule in AGENTS.md is exactly about not admitting one.
+MIN_LOOT_RADIUS: Final = 1
+MAX_LOOT_RADIUS: Final = 30
+
+#: Longest ``categories`` string a ``loot_area`` goal may carry. The string is
+#: a comma-joined list of closed tokens — every :class:`LootCategory` value
+#: fits several times over — so the bound is about the parsing work, not about
+#: expressiveness; anything longer holds no set of categories this build files
+#: loot under.
+MAX_LOOT_CATEGORIES_CHARS: Final = 128
 
 #: Postcondition field *names* kept on a finished goal. Values are deliberately
 #: not kept: evidence values are forwarded from the mod, which forwards them
@@ -229,12 +253,15 @@ class GoalKind(StrEnum):
     :data:`DEFAULT_BUDGETS` and to :data:`_PLANNER_KIND` together, and the tests
     fail until all three know about it.
 
-    ``NAVIGATE_TO`` is the one kind not served by a plan provider: the sidecar's
-    deterministic route executor (``pz_agent_core.navigation``) walks it square
-    by square, and :class:`~pz_agent_core.planner.provider.NullProvider` refuses
-    it by name rather than approximating it with a plan. The mapping to the
-    planner vocabulary stays total all the same, because the goal still crosses
-    the planner seam on its way to the executor.
+    ``NAVIGATE_TO`` and ``LOOT_AREA`` are the two kinds not served by a plan
+    provider: the sidecar's deterministic route executor
+    (``pz_agent_core.navigation``) walks the first square by square, the CLI's
+    deterministic loot mission (``pz_agent_cli.loot_mission``) drives the
+    second container by container, and
+    :class:`~pz_agent_core.planner.provider.NullProvider` refuses both by name
+    rather than approximating them with a plan. The mapping to the planner
+    vocabulary stays total all the same, because both goals still cross the
+    planner seam on their way to the deterministic server.
     """
 
     SATISFY_HUNGER = "satisfy_hunger"
@@ -243,6 +270,26 @@ class GoalKind(StrEnum):
     TRAIN_SKILL = "train_skill"
     LEARN_RECIPE = "learn_recipe"
     NAVIGATE_TO = "navigate_to"
+    LOOT_AREA = "loot_area"
+
+
+class LootScope(StrEnum):
+    """What "the area" means to a ``loot_area`` goal.
+
+    Closed for the same reason every other vocabulary here is: the scope is
+    the widest thing about the goal — it decides how far the character may
+    wander unattended — so it is a reviewed token, never a string. ``ROOM``
+    and ``BUILDING`` are pinned from the *current* observation at activation
+    (the room or building the character stands in as the build reports it);
+    ``RADIUS`` pins the activation square and sweeps a Chebyshev radius of
+    :data:`NUMERIC_RANGES`'s ``radius`` squares around it. A build whose room
+    reader is unavailable refuses ``ROOM`` and ``BUILDING`` with a typed
+    failure naming ``RADIUS`` as the alternative — it never guesses.
+    """
+
+    ROOM = "room"
+    BUILDING = "building"
+    RADIUS = "radius"
 
 
 class TrainableSkill(StrEnum):
@@ -319,9 +366,60 @@ def parse_skill(raw: str) -> TrainableSkill | None:
     return _SKILL_BY_VALUE.get(token)
 
 
+def parse_scope(raw: str) -> LootScope | None:
+    """Resolve *raw* to a :class:`LootScope`, or to nothing.
+
+    The third door of the same shape as :func:`parse_kind`: bounded first,
+    folded once, resolved against the enum or answered with ``None`` — never
+    with the string. Callers report the ``None`` case without quoting *raw*.
+    """
+    return _SCOPE_BY_VALUE.get(raw[:MAX_PARSED_TOKEN_CHARS].strip().casefold())
+
+
+def parse_loot_categories(raw: str) -> frozenset[LootCategory]:
+    """The categories a ``loot_area`` goal's ``categories`` string selects.
+
+    The string is a comma-joined list of closed tokens because
+    :class:`GoalParams` carries scalars, not collections; this function is the
+    one place the join is undone, so the channel and the mission cannot come
+    to read it differently. Tokens resolve case-insensitively against the
+    :class:`~pz_agent_core.loot.LootCategory` values and against nothing else.
+
+    Raises:
+        ValueError: the string is longer than
+            :data:`MAX_LOOT_CATEGORIES_CHARS`, holds an empty or repeated
+            token, or names a token that is not a category this build files
+            loot under. No refusal quotes the offending token — the string
+            reaches this function from a caller the channel does not trust
+            with a traceback.
+    """
+    if len(raw) > MAX_LOOT_CATEGORIES_CHARS:
+        raise ValueError(f"categories must be at most {MAX_LOOT_CATEGORIES_CHARS} characters")
+    selected: set[LootCategory] = set()
+    for token in raw.split(","):
+        member = _CATEGORY_BY_VALUE.get(token.strip().casefold())
+        if member is None:
+            raise ValueError(
+                "categories must be a comma-joined list of loot category tokens "
+                f"({', '.join(sorted(_CATEGORY_BY_VALUE))}); one entry is not one of them"
+            )
+        if member in selected:
+            raise ValueError("categories must not repeat a category token")
+        selected.add(member)
+    return frozenset(selected)
+
+
 _KIND_BY_VALUE: Final[Mapping[str, GoalKind]] = MappingProxyType({k.value: k for k in GoalKind})
 _SKILL_BY_VALUE: Final[Mapping[str, TrainableSkill]] = MappingProxyType(
     {s.value: s for s in TrainableSkill}
+)
+_SCOPE_BY_VALUE: Final[Mapping[str, LootScope]] = MappingProxyType(
+    {scope.value: scope for scope in LootScope}
+)
+#: Keys are the case-folded wire values (the enum spells them upper-case), so
+#: the lookup in :func:`parse_loot_categories` is one fold and one get.
+_CATEGORY_BY_VALUE: Final[Mapping[str, LootCategory]] = MappingProxyType(
+    {category.value.casefold(): category for category in LootCategory}
 )
 
 
@@ -360,8 +458,16 @@ NUMERIC_RANGES: Final[Mapping[str, NumericRange]] = MappingProxyType(
         "target_x": NumericRange(0, MAX_TARGET_SQUARE),
         "target_y": NumericRange(0, MAX_TARGET_SQUARE),
         "target_z": NumericRange(MIN_TARGET_FLOOR, MAX_TARGET_FLOOR),
+        "radius": NumericRange(MIN_LOOT_RADIUS, MAX_LOOT_RADIUS),
     }
 )
+
+#: The parameters that are not numbers, restated so :func:`_check_tables` can
+#: insist that everything else a spec declares has a row in
+#: :data:`NUMERIC_RANGES`. Each entry here is validated by its own closed
+#: check in :class:`GoalParams` instead: an enum member, a boolean, or the
+#: closed-token string :func:`parse_loot_categories` owns.
+_NON_NUMERIC_PARAMS: Final[frozenset[str]] = frozenset({"skill", "scope", "take_all", "categories"})
 
 
 def _require_whole(value: object, *, name: str) -> int:
@@ -430,6 +536,23 @@ class GoalParams:
     target_x: int | None = None
     target_y: int | None = None
     target_z: int | None = None
+    #: What "the area" means to a ``loot_area`` goal; the mission reads an
+    #: absent scope as :attr:`LootScope.ROOM`, documented on the kind's spec.
+    scope: LootScope | None = None
+    #: The Chebyshev sweep of a ``scope=radius`` loot, in squares around the
+    #: activation position. Meaningful only with that scope, and the pairing
+    #: is enforced by :class:`GoalRequest`, which knows the kind.
+    radius: int | None = None
+    #: Widens a ``loot_area`` goal to every category, including the unknowns
+    #: the ``useful_only`` default leaves on the shelf. Never overrides the
+    #: user's reserves — that precedence belongs to the loot policy itself.
+    take_all: bool | None = None
+    #: A comma-joined list of :class:`~pz_agent_core.loot.LootCategory`
+    #: tokens. Not free text: :func:`parse_loot_categories` validates every
+    #: token against the closed enum at construction, so a value that reaches
+    #: a mission is a set of reviewed tokens joined by commas and nothing
+    #: else. A string field only because :class:`GoalParams` carries scalars.
+    categories: str | None = None
 
     def __post_init__(self) -> None:
         if self.skill is not None and not isinstance(self.skill, TrainableSkill):
@@ -445,15 +568,34 @@ class GoalParams:
         if self.pages is not None:
             pages = _require_whole(self.pages, name="pages")
             NUMERIC_RANGES["pages"].check(pages, name="pages")
-        for name in ("target_x", "target_y", "target_z"):
+        for name in ("target_x", "target_y", "target_z", "radius"):
             value = getattr(self, name)
             if value is not None:
                 coordinate = _require_whole(value, name=name)
                 NUMERIC_RANGES[name].check(coordinate, name=name)
+        if self.scope is not None and not isinstance(self.scope, LootScope):
+            # Same shape as the skill check, for the same reason: the value a
+            # caller routed around parse_scope with is not echoed.
+            raise ValueError("scope must be a LootScope member; use parse_scope first")
+        if self.take_all is not None and not isinstance(self.take_all, bool):
+            raise ValueError("take_all must be true or false")
+        if self.categories is not None:
+            if not isinstance(self.categories, str):
+                raise ValueError("categories must be a comma-joined string of category tokens")
+            # Validated for effect, not parsed for storage: the field keeps the
+            # caller's (checked) spelling and the mission re-parses it through
+            # the same single door.
+            parse_loot_categories(self.categories)
 
     def present(self) -> frozenset[str]:
         """Names of the parameters that were actually supplied."""
         return frozenset(f.name for f in fields(self) if getattr(self, f.name) is not None)
+
+    def loot_categories(self) -> frozenset[LootCategory] | None:
+        """The parsed ``categories`` selection, or None when none was supplied."""
+        if self.categories is None:
+            return None
+        return parse_loot_categories(self.categories)
 
 
 #: Declaration order of :class:`GoalParams`, restated so the spec table can be
@@ -466,6 +608,10 @@ PARAM_NAMES: Final[tuple[str, ...]] = (
     "target_x",
     "target_y",
     "target_z",
+    "scope",
+    "radius",
+    "take_all",
+    "categories",
 )
 
 
@@ -533,6 +679,20 @@ _NAVIGATE_BUDGET: Final = GoalBudget(
     max_wall_ms=600_000, max_steps=MAX_GOAL_STEPS, pending_ttl_ms=120_000
 )
 
+#: The loot budget. Sized like :data:`_NAVIGATE_BUDGET` and for the same
+#: reason: ``max_steps`` bounds only the requests dispatched *through the goal
+#: seam* — for a loot mission that is the occasional completion probe, because
+#: every approach leg, door, open, inspect and batch travels the loop's action
+#: channel — while the mission's own bounds (candidates per mission,
+#: consecutive failures, batches per container, each sub-action's adapter
+#: budgets) bound the real work. The wall clock is the umbrella over all of it
+#: and sits at the channel ceiling: a multi-container sweep is the longest
+#: mission this channel carries, and the wire schema pins the ceiling at
+#: fifteen minutes, so "longer" is a protocol change, not a bigger constant.
+_LOOT_BUDGET: Final = GoalBudget(
+    max_wall_ms=MAX_GOAL_WALL_MS, max_steps=MAX_GOAL_STEPS, pending_ttl_ms=120_000
+)
+
 #: The whole channel in one table. Adding a kind without adding a row here
 #: fails :func:`_check_tables` at import time, not at the first submission.
 GOAL_SPECS: Final[Mapping[GoalKind, GoalSpec]] = MappingProxyType(
@@ -567,6 +727,15 @@ GOAL_SPECS: Final[Mapping[GoalKind, GoalSpec]] = MappingProxyType(
             optional=frozenset(),
             budget=_NAVIGATE_BUDGET,
         ),
+        # Everything optional on purpose: the bare goal is the product's
+        # founding sentence («облутай квартиру»), and it means scope=room,
+        # useful_only selection, no take_all. The mission reads the absent
+        # values as exactly those defaults.
+        GoalKind.LOOT_AREA: GoalSpec(
+            required=frozenset(),
+            optional=frozenset({"scope", "radius", "take_all", "categories"}),
+            budget=_LOOT_BUDGET,
+        ),
     }
 )
 
@@ -588,12 +757,16 @@ def _check_tables() -> None:
         unknown = declared - set(PARAM_NAMES)
         if unknown:
             raise RuntimeError(f"{kind.value} declares unknown parameter(s) {sorted(unknown)}")
-        undeclared_numbers = declared - {"skill"} - set(NUMERIC_RANGES)
+        undeclared_numbers = declared - _NON_NUMERIC_PARAMS - set(NUMERIC_RANGES)
         if undeclared_numbers:
             raise RuntimeError(
                 f"{kind.value} declares {sorted(undeclared_numbers)} with no range in "
                 "NUMERIC_RANGES"
             )
+    if _NON_NUMERIC_PARAMS & set(NUMERIC_RANGES):
+        raise RuntimeError("a parameter is either numeric or closed-checked, never both")
+    if _NON_NUMERIC_PARAMS - set(PARAM_NAMES):
+        raise RuntimeError("_NON_NUMERIC_PARAMS names a parameter GoalParams does not carry")
 
 
 _check_tables()
@@ -654,6 +827,15 @@ class GoalRequest:
         extra = present - spec.required - spec.optional
         if extra:
             raise ValueError(f"{self.kind.value} takes no {sorted(extra)}")
+        if (
+            self.kind is GoalKind.LOOT_AREA
+            and self.params.radius is not None
+            and self.params.scope is not LootScope.RADIUS
+        ):
+            # A radius the mission would silently ignore is a caller believing
+            # they bounded a sweep that is actually scoped to a room; the
+            # mismatch is refused at the door, where it can still be fixed.
+            raise ValueError("radius is meaningful only with scope=radius; set that scope too")
 
     @property
     def effective_budget(self) -> GoalBudget:
@@ -861,6 +1043,10 @@ _PLANNER_KIND: Final[Mapping[GoalKind, PlannerGoalKind]] = MappingProxyType(
         # because the goal still crosses the planner seam (the loop widens the
         # record with to_planner_goal before the navigating planner sees it).
         GoalKind.NAVIGATE_TO: PlannerGoalKind.NAVIGATE_TO,
+        # Same arrangement one epic later: the CLI's deterministic loot
+        # mission serves it behind the same wrapper, and NullProvider refuses
+        # it by name for a loop assembled without that wrapper.
+        GoalKind.LOOT_AREA: PlannerGoalKind.LOOT_AREA,
     }
 )
 

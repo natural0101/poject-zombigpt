@@ -31,6 +31,7 @@ failure in this file is a failure of the boundary and not of the queue.
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field, replace
@@ -42,7 +43,10 @@ from pz_agent_core.actions.adapters.literature import MAX_READ_PAGES
 from pz_agent_core.goals import (
     GOAL_SPECS,
     MAX_IDEMPOTENCY_KEY_LEN,
+    MAX_LOOT_CATEGORIES_CHARS,
+    MAX_LOOT_RADIUS,
     MAX_SKILL_LEVEL,
+    MIN_LOOT_RADIUS,
     GoalAdmission,
     GoalKind,
     GoalParams,
@@ -50,9 +54,11 @@ from pz_agent_core.goals import (
     GoalRefusal,
     GoalRequest,
     GoalState,
+    LootScope,
     TrainableSkill,
     key_digest,
 )
+from pz_agent_core.loot import LootCategory
 from pz_agent_core.observation.compact import CONTENT_MARKER, UNTRUSTED_TEXT_KEY
 from pz_agent_core.protocol import JsonDict, ReasonCode
 from pz_agent_mcp.catalog import TOOLS_BY_NAME
@@ -78,6 +84,31 @@ DOCUMENTED_KINDS: Final[frozenset[str]] = frozenset(
         "train_skill",
         "learn_recipe",
         "navigate_to",
+        "loot_area",
+    }
+)
+
+#: The same statement for :class:`~pz_agent_core.goals.LootScope`. The scope is
+#: the widest thing about a loot goal — it decides how far the character may
+#: wander unattended — so a fourth member is a deliberate edit here, never
+#: something the schema inherits from the enum it is built from.
+DOCUMENTED_SCOPES: Final[frozenset[str]] = frozenset({"room", "building", "radius"})
+
+#: And for :class:`~pz_agent_core.loot.LootCategory`, as the `categories`
+#: argument's pattern publishes them: canonical upper-case tokens. A tenth
+#: category widens what one comma-joined string can send a character to
+#: collect, so it too is a deliberate edit in two places.
+DOCUMENTED_CATEGORIES: Final[frozenset[str]] = frozenset(
+    {
+        "FOOD",
+        "WATER",
+        "MEDICAL",
+        "WEAPONS",
+        "TOOLS",
+        "MATERIALS",
+        "LITERATURE",
+        "CLOTHING",
+        "OTHER",
     }
 )
 
@@ -284,6 +315,40 @@ def test_the_published_skills_are_the_channels_closed_set() -> None:
     assert set(skill["enum"]) == {member.value for member in TrainableSkill}
 
 
+def test_the_published_scopes_are_the_channels_closed_set() -> None:
+    scope = SUBMIT_SCHEMA["properties"]["scope"]
+
+    assert set(scope["enum"]) == DOCUMENTED_SCOPES
+    # Both directions, exactly as with the kinds: a fourth member added to the
+    # enum and forgotten above is caught by that line, and a schema that
+    # stopped publishing one is caught by this one.
+    assert set(scope["enum"]) == {member.value for member in LootScope}
+
+
+def test_the_categories_pattern_admits_the_closed_set_and_nothing_else() -> None:
+    """The one list-valued argument, held against the vocabulary it names.
+
+    The pattern publishes the canonical spelling only. The channel's own
+    reader also folds case and strips spaces — wider than the schema, which is
+    the safe direction of disagreement: a spelling the schema refuses is
+    refused before the call is made, never waved through to fail after it.
+    """
+    pattern = re.compile(SUBMIT_SCHEMA["properties"]["categories"]["pattern"])
+
+    for token in DOCUMENTED_CATEGORIES:
+        assert pattern.fullmatch(token), token
+    everything = ",".join(sorted(DOCUMENTED_CATEGORIES))
+    assert pattern.fullmatch(everything)
+    assert len(everything) <= SUBMIT_SCHEMA["properties"]["categories"]["maxLength"]
+    # Both directions against the enum the pattern is derived from.
+    assert {member.value for member in LootCategory} == DOCUMENTED_CATEGORIES
+    for rejected in ("food", "Food", "JUNK", "FOOD,", ",FOOD", "FOOD, MEDICAL", ""):
+        assert not pattern.fullmatch(rejected), rejected
+    # …and every canonical token the schema admits is one the channel takes.
+    for token in DOCUMENTED_CATEGORIES:
+        assert GoalParams(categories=token).loot_categories() == frozenset({LootCategory(token)})
+
+
 def test_an_invented_kind_is_refused_by_validation_and_never_defaulted() -> None:
     with pytest.raises(ToolFailure) as refused:
         validate_arguments(
@@ -371,9 +436,20 @@ def test_the_numeric_bounds_are_the_channels_own() -> None:
     assert (properties["target_x"]["minimum"], properties["target_x"]["maximum"]) == (0, 32_000)
     assert (properties["target_y"]["minimum"], properties["target_y"]["maximum"]) == (0, 32_000)
     assert (properties["target_z"]["minimum"], properties["target_z"]["maximum"]) == (-32, 31)
+    # The loot sweep: 1..30 squares, the single-move distance the mod accepts,
+    # because a wider sweep is a patrol and the autonomous-radius rule refuses
+    # one. The categories string is capped at 128 characters, several times the
+    # whole vocabulary joined.
+    assert (properties["radius"]["minimum"], properties["radius"]["maximum"]) == (1, 30)
+    assert properties["categories"]["maxLength"] == 128
     # …and those literals are what the channel itself will check against.
     assert properties["target_level"]["maximum"] == MAX_SKILL_LEVEL
     assert properties["pages"]["maximum"] == MAX_READ_PAGES
+    assert (properties["radius"]["minimum"], properties["radius"]["maximum"]) == (
+        MIN_LOOT_RADIUS,
+        MAX_LOOT_RADIUS,
+    )
+    assert properties["categories"]["maxLength"] == MAX_LOOT_CATEGORIES_CHARS
 
 
 @pytest.mark.parametrize(
@@ -386,6 +462,14 @@ def test_the_numeric_bounds_are_the_channels_own() -> None:
         {"kind": "read_for_boredom", "pages": MAX_READ_PAGES + 1},
         {"kind": "navigate_to", "target_x": -1, "target_y": 3400, "target_z": 0},
         {"kind": "navigate_to", "target_x": 1200, "target_y": 3400, "target_z": 99},
+        {"kind": "loot_area", "scope": "radius", "radius": 0},
+        {"kind": "loot_area", "scope": "radius", "radius": 31},
+        {"kind": "loot_area", "scope": "city"},
+        {"kind": "loot_area", "categories": "JUNK"},
+        # Canonical spelling only: the channel would fold the case, but the
+        # published pattern refuses it before the call is made — the safe
+        # direction for a schema and its receiver to disagree in.
+        {"kind": "loot_area", "categories": "food"},
     ],
 )
 def test_a_parameter_outside_the_channels_range_never_reaches_it(arguments: JsonDict) -> None:
@@ -464,6 +548,90 @@ def test_submit_hands_the_channel_a_typed_navigation_request() -> None:
     assert request.params.target_z == 0
     assert payload["data"]["kind"] == "navigate_to"
     assert payload["data"]["params"] == {"target_x": 1200, "target_y": 3400, "target_z": 0}
+
+
+def test_submit_hands_the_channel_a_typed_loot_request() -> None:
+    """All four loot parameters cross the boundary typed, none dropped.
+
+    ``take_all=False`` crosses as the caller's own choice — the useful-only
+    default said in as many words — and comes back in the echo, because the
+    payload writes what is present, never what is truthy.
+    """
+    router, goals, _ = wired()
+
+    payload = submit(
+        router,
+        kind="loot_area",
+        scope="radius",
+        radius=8,
+        take_all=False,
+        categories="FOOD,MEDICAL",
+    )
+
+    request = goals.submitted[0]
+    assert len(goals.submitted) == 1
+    assert request.kind is GoalKind.LOOT_AREA
+    assert request.params.scope is LootScope.RADIUS
+    assert request.params.radius == 8
+    assert request.params.take_all is False
+    assert request.params.categories == "FOOD,MEDICAL"
+    assert request.params.loot_categories() == frozenset({LootCategory.FOOD, LootCategory.MEDICAL})
+    assert payload["data"]["kind"] == "loot_area"
+    assert payload["data"]["params"] == {
+        "scope": "radius",
+        "radius": 8,
+        "take_all": False,
+        "categories": "FOOD,MEDICAL",
+    }
+
+
+def test_a_bare_loot_goal_is_admitted_with_nothing_filled_in() -> None:
+    """The founding sentence: «облутай квартиру» is `loot_area` and no more.
+
+    Absent scope means room, absent categories means the useful-only set,
+    absent take_all means false — and every one of those defaults is read by
+    the *mission*, not written by this boundary. A parameter invented here
+    would reach the channel as a choice the caller never made.
+    """
+    router, goals, _ = wired()
+
+    payload = submit(router, kind="loot_area")
+
+    request = goals.submitted[0]
+    assert request.kind is GoalKind.LOOT_AREA
+    assert request.params.present() == frozenset()
+    assert payload["ok"] is True
+    assert payload["data"]["params"] == {}
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        # A radius beside a scope that ignores it: the caller believes they
+        # bounded a sweep that is actually scoped to a room.
+        {"kind": "loot_area", "radius": 5},
+        {"kind": "loot_area", "scope": "room", "radius": 5},
+        # A repeated token: the pattern cannot say "each at most once", so the
+        # channel refuses it — with the caller blamed, not this process.
+        {"kind": "loot_area", "categories": "FOOD,FOOD"},
+    ],
+)
+def test_a_loot_rule_the_schema_cannot_state_is_still_the_callers_mistake(
+    arguments: JsonDict,
+) -> None:
+    """The two loot rules outside the schema subset, refused as INVALID_ARGUMENT.
+
+    Same seam as ``test_a_parameter_the_kind_forbids_is_the_callers_mistake``:
+    the channel refuses with a ``ValueError``, and left to fall through that
+    becomes ``INTERNAL_ERROR`` — this process blamed for the caller's argument.
+    """
+    router, goals, _ = wired()
+
+    payload = submit(router, **arguments)
+
+    assert payload["ok"] is False
+    assert payload["reason_code"] == "INVALID_ARGUMENT"
+    assert goals.submitted == []
 
 
 def test_an_admitted_goal_is_pending_and_is_not_called_started() -> None:

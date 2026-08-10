@@ -18,7 +18,7 @@ grep -rn "Build 42:" pz-mod/
 ```
 
 `grep -rn "Build 42:" pz-mod/` returns six lines, in two files. It is a
-*shortcut*, not an inventory: the table below marks 129 symbol rows
+*shortcut*, not an inventory: the table below marks 136 symbol rows
 `requires_live` (several rows carry two or three slash-separated spellings,
 probed in the order written), so the grep covers roughly a twentieth of what is
 unconfirmed. **This document is the list.** Use the grep to jump to a comment;
@@ -299,6 +299,43 @@ so an adapter never indexes it directly. If the collection shape differs, fix it
 in those two functions and every adapter follows. The same shape assumption
 covers every other engine list in this file — worn items, body parts, traits,
 zombies, container items — and has its own row under containers.
+
+## Rooms, buildings and corpses
+
+All observation-only, added for the loot-area goal: the scope "current room /
+building" needs to know which room the player and each nearby container stand
+in, and a corpse is a container the goal must at least inspect. A missing
+accessor here costs a field, never a command — and one absence is deliberate
+policy rather than a fallback: **outdoors (a nil room) and "this build has no
+room reader" produce the same absent `room`/`building` fields**, because a
+scope decision must never read "could not be read" as "outside". Room and
+building names pass through `ObserveModel.place`, which turns spaces into
+underscores and drops any name the reference alphabet cannot carry — dropped
+whole, never mangled, so two distinct rooms can never collapse into one token.
+
+**The corpse has no reference, and that is recorded here as a decision.** A
+dead body lives in the square's dead-body list, not in
+`IsoGridSquare.getObjects()`, so the world-container reference
+(`x:y:z:object_index:container_index`, indices into `getObjects()`) cannot
+address its loot: an index minted for a corpse would resolve to whatever object
+happens to sit at that position in the *other* list. The mod therefore emits a
+corpse observation-only — square reference, kind `corpse`, semantics
+`container` — and **transfer-from-corpse is not possible until a reference
+surface for dead bodies exists on both sides of the wire** (a new container
+tail shape in `PZAgent.Refs` and `pz_agent_core.protocol.refs`, which is a
+protocol change a later task must make deliberately). Until then, a loot run
+over a corpse ends at "inspected: no — no addressable container", which is the
+honest skip reason, not a failure of this table.
+
+| Symbol | Assumed signature | Used by | Fallback | Test | Failure signature | Status | Actual |
+|---|---|---|---|---|---|---|---|
+| `IsoPlayer.getCurrentSquare` | `() -> IsoGridSquare or nil` | `Observe.lua` (`playerFields`) — the square the player's room reading hangs on | `player.room`/`player.building` absent | S02; `tests/lua/test_observe.lua` | none — fields absent | `requires_live` | |
+| `IsoGridSquare.getRoom` | `() -> IsoRoom or nil`; nil outdoors | `Observe.lua` (`placeOf`) — the player's room and, once per scanned square, every nearby object's | fields absent — the same absence as outdoors, by design (see above) | S02; `tests/lua/test_observe.lua` | none — fields absent | `requires_live` | |
+| `IsoRoom.getName` / `getRoomDef` + `RoomDef.getName` | `() -> string`; the definition spelling is probed when the room itself answers no name | `Observe.lua` (`placeOf`) | `room` absent while a readable `building` is still carried | S02; `tests/lua/test_observe.lua` | none — field absent | `requires_live` | |
+| `IsoRoom.getBuilding` | `() -> IsoBuilding or nil` | `Observe.lua` (`placeOf`) | `building` absent | S02; `tests/lua/test_observe.lua` | none — field absent | `requires_live` | |
+| `IsoBuilding.getID` / `getDef` + `BuildingDef.getName` | `getID() -> number >= 0`, probed first and formatted as a digit string; else the definition's name | `Observe.lua` (`placeOf`) — the stable identifier that groups "same building" | `building` absent | S02; `tests/lua/test_observe.lua` | none — field absent | `requires_live` | |
+| `IsoGridSquare.getDeadBodys` / `getDeadBody` | the engine's own plural first, `() -> a zero-based list of IsoDeadBody`; the singular second, `() -> IsoDeadBody or nil`, reading only the top of a pile | `Observe.lua` (`scanBodies`) — corpse containers in the nearby scan, capped at `MAX_BODIES_PER_SQUARE` per square | no corpses in the observation; a loot run cannot see bodies at all, and nothing names the gap | `tests/lua/test_observe.lua`; no playbook scenario stands the character over a corpse yet — a gap by the closing paragraph's rule | none — corpses simply absent | `requires_live` | |
+| `IsoDeadBody.getContainer` | `() -> ItemContainer or nil` | `Observe.lua` (`corpseFields`) — a body with no readable container is not emitted at all | the body is treated as scenery, never emitted as a container it could not prove it is | `tests/lua/test_observe.lua` | none — the corpse object is absent | `requires_live` | |
 
 ## Doors
 

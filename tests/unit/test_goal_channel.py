@@ -39,6 +39,7 @@ from typing import Any, get_args, get_type_hints
 
 import pytest
 
+from pz_agent_core.actions.adapters import movement
 from pz_agent_core.goals import (
     GOAL_SPECS,
     MAX_DETAIL_CHARS,
@@ -196,6 +197,13 @@ def a_record(**overrides: Any) -> GoalRecord:
 #: the question is "is every one of these safe to act on".
 MAX_CLOSED_VOCABULARY: int = 32
 
+#: The string parameters that are token *lists* rather than enum members —
+#: closed all the same, because the constructor resolves every comma-joined
+#: token against a closed enum and refuses the rest. Each entry here must have
+#: its closure proven behaviourally in :class:`TestLootParameters`; the
+#: structural walk exempts exactly these names and nothing else.
+CLOSED_TOKEN_LIST_PARAMS: frozenset[str] = frozenset({"categories"})
+
 
 def atoms(annotation: object) -> tuple[type, ...]:
     """The concrete types in a resolved annotation, with ``None`` dropped."""
@@ -240,7 +248,7 @@ def outside_values(name: str) -> tuple[object, object]:
 
 
 class TestClosedVocabulary:
-    def test_goal_kinds_are_exactly_these_six(self) -> None:
+    def test_goal_kinds_are_exactly_these_seven(self) -> None:
         # Hand-written. Adding a kind is a reviewed change to three tables, and
         # this literal is the thing that makes the review happen.
         assert {k.value for k in GoalKind} == {
@@ -250,6 +258,7 @@ class TestClosedVocabulary:
             "train_skill",
             "learn_recipe",
             "navigate_to",
+            "loot_area",
         }
 
     def test_trainable_skills_are_exactly_these_eleven(self) -> None:
@@ -304,7 +313,7 @@ class TestClosedVocabulary:
         # strips deliberately; the constructor does neither.
         with pytest.raises(ValueError, match="is not a valid"):
             GoalKind(unknown)
-        assert len(GoalKind) == 6
+        assert len(GoalKind) == 7
 
     def test_no_lookup_hook_invents_a_member(self) -> None:
         # ``_missing_`` is the one hook that can turn an unrecognised value into
@@ -338,6 +347,9 @@ class TestClosedVocabulary:
             "train_skill": ({"skill"}, {"target_level", "pages"}),
             "learn_recipe": (set(), {"pages"}),
             "navigate_to": ({"target_x", "target_y", "target_z"}, set()),
+            # Everything optional on purpose: the bare goal is «облутай
+            # квартиру», and it means scope=room with useful_only selection.
+            "loot_area": (set(), {"scope", "radius", "take_all", "categories"}),
         }
         actual = {
             kind.value: (set(spec.required), set(spec.optional))
@@ -362,6 +374,14 @@ class TestNoFreeText:
             "target_x": "int | None",
             "target_y": "int | None",
             "target_z": "int | None",
+            "scope": "LootScope | None",
+            "radius": "int | None",
+            "take_all": "bool | None",
+            # A string field, and deliberately not free text: the constructor
+            # runs it through parse_loot_categories, whose closed-token
+            # behaviour the loot-parameter tests below pin. A widening of the
+            # validation would not fail this line — it fails those.
+            "categories": "str | None",
         }
         assert tuple(annotations) == PARAM_NAMES
 
@@ -448,13 +468,19 @@ class TestTypedParameterSurface:
         # The structural form of the promise the package exists for. A ``str``
         # field would carry a transcript verbatim into the core; a ``StrEnum``
         # field is also a ``str`` subclass, and what makes it bounded is that
-        # its value set is finite, short and reviewed. Anything else has to be a
-        # number with a declared, finite range.
+        # its value set is finite, short and reviewed. Anything else has to be
+        # a boolean, a number with a declared finite range, or one of the
+        # named token-list exceptions whose closure is proven behaviourally in
+        # :class:`TestLootParameters` — an *exception list*, so a new ``str``
+        # field still fails here until it is reviewed onto it.
         typed = param_types()
         for kind, spec in GOAL_SPECS.items():
             for name in sorted(spec.required | spec.optional):
                 for atom in typed[name]:
                     where = f"{kind.value}.{name}"
+                    if name in CLOSED_TOKEN_LIST_PARAMS:
+                        assert atom in (str, NoneType), f"{where} widened past its tokens"
+                        continue
                     assert atom is not str, f"{where} is free-form text"
                     assert atom not in (bytes, object), f"{where} is unbounded"
                     if issubclass(atom, str):
@@ -463,6 +489,9 @@ class TestTypedParameterSurface:
                         assert 0 < len(members) <= MAX_CLOSED_VOCABULARY, where
                         for member in members:
                             assert len(str(member.value)) <= MAX_PARSED_TOKEN_CHARS, where
+                    elif atom is bool:
+                        # A boolean is the smallest closed vocabulary there is.
+                        continue
                     else:
                         assert atom in (int, float), f"{where} is neither a number nor an enum"
                         span = NUMERIC_RANGES[name]
@@ -514,6 +543,12 @@ class TestTypedParameterSurface:
             "target_x": 1200,
             "target_y": 3400,
             "target_z": 0,
+            # scope=radius so that the sample set stays jointly valid: radius
+            # is admissible only beside that scope, by loot_area's own rule.
+            "scope": goal_model.LootScope.RADIUS,
+            "radius": 5,
+            "take_all": True,
+            "categories": "food,medical",
         }
         assert set(samples) == set(PARAM_NAMES)
         for kind, spec in GOAL_SPECS.items():
@@ -552,6 +587,12 @@ class TestTypedParameterSurface:
             "target_x": 1200,
             "target_y": 3400,
             "target_z": 0,
+            # scope=radius so that the sample set stays jointly valid: radius
+            # is admissible only beside that scope, by loot_area's own rule.
+            "scope": goal_model.LootScope.RADIUS,
+            "radius": 5,
+            "take_all": True,
+            "categories": "food,medical",
         }
         for kind, spec in GOAL_SPECS.items():
             declared = spec.required | spec.optional
@@ -561,6 +602,84 @@ class TestTypedParameterSurface:
                 params=GoalParams(**{n: samples[n] for n in declared}),  # type: ignore[arg-type]
             )
             assert request.params.present() == frozenset(declared), kind
+
+
+class TestLootParameters:
+    """The seventh kind's parameter surface: closed tokens, honest pairings.
+
+    ``categories`` is the one ``str`` field the channel carries, exempted from
+    the structural string ban above on the strength of what this class proves:
+    every token resolves against :class:`~pz_agent_core.loot.LootCategory` or
+    the whole value is refused, bounded first, and never echoed back.
+    """
+
+    def test_scope_tokens_resolve_only_to_members(self) -> None:
+        assert goal_model.parse_scope("room") is goal_model.LootScope.ROOM
+        assert goal_model.parse_scope("  Building ") is goal_model.LootScope.BUILDING
+        assert goal_model.parse_scope("RADIUS") is goal_model.LootScope.RADIUS
+        assert goal_model.parse_scope("everywhere") is None
+        assert goal_model.parse_scope("room" + "x" * 100_000) is None
+
+    def test_a_raw_string_cannot_be_smuggled_in_as_a_scope(self) -> None:
+        with pytest.raises(ValueError, match="LootScope") as caught:
+            GoalParams(scope="room")  # type: ignore[arg-type]
+        assert "room" not in str(caught.value).replace("LootScope", "")
+
+    def test_categories_accepts_exactly_the_loot_category_tokens(self) -> None:
+        parsed = goal_model.parse_loot_categories("food, WATER,medical")
+        assert {member.value for member in parsed} == {"FOOD", "WATER", "MEDICAL"}
+        request = GoalRequest(
+            kind=GoalKind.LOOT_AREA,
+            idempotency_key="k",
+            params=GoalParams(categories="food,water"),
+        )
+        # Order-independent: the value is a set of reviewed tokens, not text.
+        assert request.params.loot_categories() == goal_model.parse_loot_categories("water,food")
+
+    @pytest.mark.parametrize(
+        "raw",
+        ["", "food,", "food,,water", "food,ammo", "еда", "food,food", "x" * 200],
+        ids=["empty", "trailing", "double-comma", "unknown", "cyrillic", "repeat", "over-long"],
+    )
+    def test_categories_refuses_anything_else_without_echoing(self, raw: str) -> None:
+        with pytest.raises(ValueError) as caught:
+            GoalParams(categories=raw)
+        if raw.strip():
+            assert "ammo" not in str(caught.value)
+            assert "еда" not in str(caught.value)
+
+    def test_take_all_is_a_boolean_and_nothing_else(self) -> None:
+        assert GoalParams(take_all=False).present() == {"take_all"}
+        with pytest.raises(ValueError, match="true or false"):
+            GoalParams(take_all=1)  # type: ignore[arg-type]
+
+    def test_radius_without_its_scope_is_refused_at_the_door(self) -> None:
+        # A radius the mission would silently ignore is a caller believing
+        # they bounded a sweep that is actually scoped to a room.
+        with pytest.raises(ValueError, match="scope=radius"):
+            GoalRequest(
+                kind=GoalKind.LOOT_AREA,
+                idempotency_key="k",
+                params=GoalParams(radius=5),
+            )
+        with pytest.raises(ValueError, match="scope=radius"):
+            GoalRequest(
+                kind=GoalKind.LOOT_AREA,
+                idempotency_key="k",
+                params=GoalParams(scope=goal_model.LootScope.ROOM, radius=5),
+            )
+        paired = GoalRequest(
+            kind=GoalKind.LOOT_AREA,
+            idempotency_key="k",
+            params=GoalParams(scope=goal_model.LootScope.RADIUS, radius=5),
+        )
+        assert paired.params.present() == {"scope", "radius"}
+
+    def test_the_bare_goal_is_admissible_with_no_parameters_at_all(self) -> None:
+        # «облутай квартиру», the founding sentence: kind and key, nothing else.
+        request = GoalRequest(kind=GoalKind.LOOT_AREA, idempotency_key="k")
+        assert request.params.present() == frozenset()
+        assert request.effective_budget == GOAL_SPECS[GoalKind.LOOT_AREA].budget
 
 
 # --------------------------------------------------------------------------
@@ -580,13 +699,26 @@ class TestNumericRanges:
             "target_x": (0, 32_000),
             "target_y": (0, 32_000),
             "target_z": (-32, 31),
+            # The loot sweep. The ceiling deliberately equals the mod's own
+            # single-move distance (MAX_MOVE_DISTANCE_SQUARES), pinned below.
+            "radius": (1, 30),
         }
+
+    def test_the_loot_radius_ceiling_is_the_single_move_distance(self) -> None:
+        # Pinned by value rather than imported in the model, so the goal
+        # channel keeps zero dependencies on the action layer's modules; this
+        # is the reconciliation point when either number moves.
+        assert goal_model.MAX_LOOT_RADIUS == movement.MAX_MOVE_DISTANCE_SQUARES
+        assert goal_model.MIN_LOOT_RADIUS == 1
 
     def test_every_declared_numeric_parameter_has_a_range(self) -> None:
         declared: set[str] = set()
         for spec in GOAL_SPECS.values():
             declared |= spec.required | spec.optional
-        assert declared - {"skill"} <= set(NUMERIC_RANGES)
+        # The non-numeric exemptions are each closed by their own check: the
+        # two enums, the boolean, and the token-list string proven above.
+        closed_otherwise = {"skill", "scope", "take_all"} | CLOSED_TOKEN_LIST_PARAMS
+        assert declared - closed_otherwise <= set(NUMERIC_RANGES)
 
     @pytest.mark.parametrize("pages", [1, 2, 199, 200])
     def test_pages_inside_the_range_is_accepted(self, pages: int) -> None:

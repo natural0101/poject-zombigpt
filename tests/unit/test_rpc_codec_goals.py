@@ -92,6 +92,12 @@ REQUIRED_PARAMS: dict[GoalKind, GoalParams] = {
     GoalKind.TRAIN_SKILL: GoalParams(skill=TrainableSkill.CARPENTRY),
     GoalKind.LEARN_RECIPE: GoalParams(),
     GoalKind.NAVIGATE_TO: GoalParams(target_x=1200, target_y=3400, target_z=0),
+    # No required parameters at all: the bare goal is the product's founding
+    # sentence, and the round trip below proves the kind token itself crosses.
+    # Its optional parameters (scope, radius, take_all, categories) are local
+    # to the sidecar and not on this wire — the schema-conformance contract
+    # test pins that carve-out, the same one navigate_to's coordinates carry.
+    GoalKind.LOOT_AREA: GoalParams(),
 }
 
 #: Tokens that are not goals. None of them resolves through ``parse_kind`` —

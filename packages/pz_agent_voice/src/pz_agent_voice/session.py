@@ -175,10 +175,14 @@ def _check_goal_tables() -> None:
             )
     if set(_SPOKEN_PER_CORE_UNIT) & UNSPEAKABLE_PARAMS:
         raise RuntimeError("a parameter declared unspeakable has a spoken unit scale anyway")
-    if set(_SPOKEN_PER_CORE_UNIT) | UNSPEAKABLE_PARAMS != set(NUMERIC_RANGES):
+    if set(_SPOKEN_PER_CORE_UNIT) - set(NUMERIC_RANGES):
+        raise RuntimeError("_SPOKEN_PER_CORE_UNIT names a parameter with no numeric range")
+    if set(NUMERIC_RANGES) - (set(_SPOKEN_PER_CORE_UNIT) | UNSPEAKABLE_PARAMS):
         # The unspeakable parameters (intent.UNSPEAKABLE_PARAMS) carry no spoken
         # scale on purpose: the matcher never binds a number to one, so there is
-        # no utterance whose units this table could convert.
+        # no utterance whose units this table could convert. Not an equality —
+        # the unspeakable list also carries the loot goal's closed-token
+        # parameters, which have no numeric range at all.
         raise RuntimeError("_SPOKEN_PER_CORE_UNIT has drifted from NUMERIC_RANGES")
     # The budget a spoken goal carries is built from VoiceConfig, so the config's
     # own ceilings have to fit inside the channel's. They do today; a config that

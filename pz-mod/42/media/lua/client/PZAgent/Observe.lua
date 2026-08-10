@@ -34,6 +34,11 @@ Observe.MAX_SQUARES = 256
 Observe.MAX_OBJECTS_PER_SQUARE = 16
 Observe.MAX_ZOMBIE_SCAN = 256
 
+--- Dead bodies inspected per square. A massacre site can stack dozens of
+--- corpses on one tile; past this many, the rest are counted as dropped
+--- rather than silently unread.
+Observe.MAX_BODIES_PER_SQUARE = 8
+
 --- Objects one nearby scan may read out of the engine, shared across every
 --- square it visits.
 ---
@@ -283,6 +288,46 @@ end
 
 Observe.positionOf = positionOf
 
+--- The room and building of a square, as raw strings, or nils.
+---
+--- The caller hands the square in and calls this ONCE per square: the nearby
+--- scan shares the answer across every object on the square, because asking
+--- the engine the same question MAX_OBJECTS_PER_SQUARE times over is pure
+--- game-thread work for one reading.
+---
+--- A nil room and an absent room reader produce the same pair of nils on
+--- purpose. Outdoors has no room; a build with no reader has no reading; and a
+--- scope decision downstream must not mistake the second for "outside", so
+--- neither is distinguishable here and both simply emit no field. The building
+--- identifier is the numeric id where the build exposes one -- formatted as a
+--- digit string -- else the name on the building's definition; the raw strings
+--- go to ObserveModel.place, which normalises or drops them under the token
+--- rules.
+function Observe.placeOf(square)
+  local room = invoke(square, "getRoom")
+  if room == nil then
+    return nil, nil
+  end
+  local name = readString(room, { "getName" })
+  if name == nil then
+    -- Build 42 also spells the room's name on its definition object.
+    local roomDef = invoke(room, "getRoomDef")
+    name = readString(roomDef, { "getName" })
+  end
+  local buildingId = nil
+  local building = invoke(room, "getBuilding")
+  if building ~= nil then
+    local id = readIdentity(building, { "getID" })
+    if id ~= nil then
+      buildingId = string.format("%.0f", id)
+    else
+      local buildingDef = invoke(building, "getDef")
+      buildingId = readString(buildingDef, { "getName" })
+    end
+  end
+  return name, buildingId
+end
+
 --- Character stats. A name whose accessor this build does not expose is left
 --- out of the table entirely, never set to a plausible number.
 function Observe.playerStats(player)
@@ -379,6 +424,10 @@ function Observe.playerFields(player)
   local angle = readNumber(player, { "getDirectionAngle", "getForwardDirection" })
   position.direction = model().direction(angle)
   local dead = readBoolean(player, { "isDead" })
+  local square = invoke(player, "getCurrentSquare")
+  -- Both nil outdoors, and both nil when the reader is missing: the fields
+  -- stay absent either way, never defaulted -- see Observe.placeOf.
+  local room, building = Observe.placeOf(square)
   return {
     present = true,
     -- Unknown liveness reads as dead, which suspends mutating work rather than
@@ -388,6 +437,8 @@ function Observe.playerFields(player)
     stats = Observe.playerStats(player),
     moodles = Observe.playerMoodles(player),
     wounds = Observe.playerWounds(player),
+    room = room,
+    building = building,
   }
 end
 
@@ -673,21 +724,60 @@ local function objectFields(object, objectIndex, position, distance)
   return fields
 end
 
---- Read one square into `result`, spending the walk's shared object budget.
+--- One dead body as a corpse descriptor, or nil when it holds no container.
 ---
---- `stopped` mirrors walkItemContainer: where the shared budget ran out, if it
---- did, so "the square holds four things" is never said of a square whose fifth
---- was not read.
-local function scanSquare(cell, playerPosition, x, y, result, budget)
-  local square = invoke(cell, "getGridSquare", x, y, playerPosition.z)
-  local objects = invoke(square, "getObjects")
-  local size = listSize(objects)
+--- A corpse is observed for its loot, so a body that answers no ItemContainer
+--- is scenery this scan has nothing to say about: it is not emitted at all,
+--- rather than emitted as a container it is not.
+---
+--- Deliberately no object_index and no container_index. A dead body lives in
+--- the square's dead-body list, not in getObjects(), so the world-container
+--- reference scheme -- x:y:z:object_index:container_index into getObjects() --
+--- cannot address its loot: an index minted here would resolve to whatever
+--- object happens to sit at that position in the *other* list, which is the
+--- exact failure the reference scheme exists to prevent. The corpse is
+--- therefore observation-only, named by its square, until a reference surface
+--- for dead bodies exists; docs/GAME_API_VERIFICATION.md records the gap.
+local function corpseFields(body, position, distance)
+  local container = invoke(body, "getContainer")
+  if container == nil then
+    return nil
+  end
+  return {
+    kind = "corpse",
+    distance = distance,
+    x = position.x,
+    y = position.y,
+    z = position.z,
+    semantics = { "container" },
+  }
+end
+
+--- The square's dead bodies, through whichever accessor this build spells.
+---
+--- `getDeadBodys` -- the engine's own plural -- is probed first because it is
+--- the complete answer; `getDeadBody` second, for a build that names only the
+--- top of the pile. Both spend the walk's shared object budget, and a body the
+--- budget or the per-square cap left unread is counted dropped like any other
+--- object.
+local function scanBodies(square, position, distance, keep, result, budget)
+  local bodies = invoke(square, "getDeadBodys")
+  local size = listSize(bodies)
   if size == nil then
+    local body = invoke(square, "getDeadBody")
+    if body == nil then
+      return
+    end
+    if budget.objects <= 0 then
+      result.truncated = true
+      result.dropped = result.dropped + 1
+      return
+    end
+    budget.objects = budget.objects - 1
+    keep(corpseFields(body, position, distance))
     return
   end
-  local scanned = math.min(size, Observe.MAX_OBJECTS_PER_SQUARE)
-  local position = { x = x, y = y, z = playerPosition.z }
-  local distance = PZAgent.Refs.chebyshevDistance(playerPosition, position)
+  local scanned = math.min(size, Observe.MAX_BODIES_PER_SQUARE)
   local stopped = nil
   for index = 0, scanned - 1 do
     if budget.objects <= 0 then
@@ -695,11 +785,7 @@ local function scanSquare(cell, playerPosition, x, y, result, budget)
       break
     end
     budget.objects = budget.objects - 1
-    local fields = objectFields(listGet(objects, index), index, position, distance)
-    if fields ~= nil then
-      budget.count = budget.count + 1
-      result.objects[budget.count] = fields
-    end
+    keep(corpseFields(listGet(bodies, index), position, distance))
   end
   local unread = size - scanned
   if stopped ~= nil then
@@ -709,6 +795,63 @@ local function scanSquare(cell, playerPosition, x, y, result, budget)
     result.truncated = true
     result.dropped = result.dropped + unread
   end
+end
+
+--- Read one square into `result`, spending the walk's shared object budget.
+---
+--- `stopped` mirrors walkItemContainer: where the shared budget ran out, if it
+--- did, so "the square holds four things" is never said of a square whose fifth
+--- was not read.
+---
+--- The room is read ONCE here and shared across everything on the square --
+--- objects and corpses alike -- rather than once per object: the same answer
+--- MAX_OBJECTS_PER_SQUARE times over would be pure engine work on the game
+--- thread.
+local function scanSquare(cell, playerPosition, x, y, result, budget)
+  local square = invoke(cell, "getGridSquare", x, y, playerPosition.z)
+  if square == nil then
+    return
+  end
+  local position = { x = x, y = y, z = playerPosition.z }
+  local distance = PZAgent.Refs.chebyshevDistance(playerPosition, position)
+  local room, building = Observe.placeOf(square)
+
+  --- Stamp the square's shared room reading onto a descriptor and keep it.
+  --- An absent reading stamps nothing: the fields stay out entirely.
+  local function keep(fields)
+    if fields == nil then
+      return
+    end
+    fields.room = room
+    fields.building = building
+    budget.count = budget.count + 1
+    result.objects[budget.count] = fields
+  end
+
+  local objects = invoke(square, "getObjects")
+  local size = listSize(objects)
+  if size ~= nil then
+    local scanned = math.min(size, Observe.MAX_OBJECTS_PER_SQUARE)
+    local stopped = nil
+    for index = 0, scanned - 1 do
+      if budget.objects <= 0 then
+        stopped = index
+        break
+      end
+      budget.objects = budget.objects - 1
+      keep(objectFields(listGet(objects, index), index, position, distance))
+    end
+    local unread = size - scanned
+    if stopped ~= nil then
+      unread = size - stopped
+    end
+    if unread > 0 then
+      result.truncated = true
+      result.dropped = result.dropped + unread
+    end
+  end
+
+  scanBodies(square, position, distance, keep, result, budget)
 end
 
 --- Objects on the squares around the player, nearest ring first.

@@ -73,8 +73,11 @@ from pz_agent_core.protocol import (
     ActionName,
     ActionStatus,
     InventoryView,
+    NearbyObject,
+    NearbyView,
     Observation,
     PlayerState,
+    Position,
     ReasonCode,
     RiskClass,
 )
@@ -108,13 +111,16 @@ CHANNEL_KINDS: Final[frozenset[str]] = frozenset(
         "train_skill",
         "learn_recipe",
         "navigate_to",
+        "loot_area",
     }
 )
 
-#: The one kind no plan provider serves: the deterministic route executor
-#: walks it (``pz_agent_core.navigation``, behind the CLI's NavigatingPlanner).
-#: Written out by hand for the same reason CHANNEL_KINDS is.
-EXECUTOR_KINDS: Final[frozenset[str]] = frozenset({"navigate_to"})
+#: The kinds no plan provider serves: the deterministic route executor walks
+#: ``navigate_to`` (``pz_agent_core.navigation``) and the deterministic loot
+#: mission drives ``loot_area`` (``pz_agent_cli.loot_mission``), both behind
+#: the CLI's NavigatingPlanner. Written out by hand for the same reason
+#: CHANNEL_KINDS is.
+EXECUTOR_KINDS: Final[frozenset[str]] = frozenset({"navigate_to", "loot_area"})
 
 #: The empty parameter set, as a singleton because :class:`GoalParams` is frozen
 #: and a default argument that constructs one is a call at import time.
@@ -558,6 +564,75 @@ class TestNavigateToIsServedByTheExecutor:
         """Provider-served and executor-served partition the vocabulary."""
         assert EXECUTOR_KINDS <= CHANNEL_KINDS
         assert {kind.value for kind in GoalKind} == CHANNEL_KINDS
+
+
+class TestLootAreaIsServedByTheMission:
+    """The seventh kind's half of the seam: the loot mission answers, no provider.
+
+    The same joins proven for ``navigate_to`` above: a real queue admits and
+    activates it, the real ``to_planner_goal`` widens it, and the real
+    :class:`NavigatingPlanner` drives the mission's first step — a
+    ``container.open_nearby`` — into the loop's action channel, while the
+    wrapped planner, a spy, is never asked anything at all.
+    """
+
+    def loot_world(self) -> Observation:
+        crate = f"container:{DEFAULT_SESSION}:world:1202:3400:0:1:0"
+        return planner_observation(
+            inventory=inventory(),
+            player=make_player(room="kitchen", building="apartments"),
+            nearby=NearbyView(
+                objects=[
+                    NearbyObject(
+                        ref=crate,
+                        kind="container",
+                        distance=2.0,
+                        position=Position(x=1202.0, y=3400.0, z=0),
+                        room="kitchen",
+                        building="apartments",
+                    )
+                ]
+            ),
+        )
+
+    def test_null_provider_refuses_loot_area_by_name(self) -> None:
+        """The deterministic provider's honest answer is a typed refusal.
+
+        The same property that keeps a mis-assembled loop safe for
+        navigation: the goal is refused and ends on its budgets, never
+        approximated with a plan to eat or read.
+        """
+        record = activated(channel(), GoalKind.LOOT_AREA)
+
+        proposal = proposed_for(record, world(pantry(), needy()))
+
+        assert proposal.refused
+        assert proposal.reason_code is ReasonCode.CAPABILITY_UNAVAILABLE
+        assert "loot mission" in proposal.detail
+
+    def test_the_wrapper_drives_the_mission_and_never_asks_the_planner(self) -> None:
+        queue = channel()
+        spy = SpyGoalPlanner()
+        wrapper = NavigatingPlanner(spy)
+        actions = ActionChannel(clock=FakeClock())
+        wrapper.bind(ExecutorHost(goals=queue, actions=actions))
+        record = activated(queue, GoalKind.LOOT_AREA)
+
+        value = wrapper.propose_for_goal(to_planner_goal(record), self.loot_world())
+
+        # Every ordinary mission step travels the action channel, never the
+        # goal seam — no step's success is the goal's postcondition.
+        assert value is None
+        assert actions.pending_count == 1
+        taken = actions.take_next()
+        assert taken is not None
+        _, request = taken
+        assert request.action is ActionName.CONTAINER_OPEN_NEARBY
+        # Attribution, as everywhere in this file: the request is the goal's.
+        assert request.idempotency_key.startswith(f"loot:{record.goal_id}")
+        assert spy.goal_calls == [] and spy.propose_calls == 0, (
+            "loot_area must never reach a plan provider"
+        )
 
 
 class TestAKindThePlannerCannotServeIsRefusedAtSubmission:

@@ -12,6 +12,34 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Added
 
+- **«Облутай квартиру» is now a typed goal** (`epic/p1-loot-area`, wave 2).
+  `loot_area` (7 goal kinds) takes a scope — `room` (default), `building`, or
+  `radius` 1..30 — plus `take_all` and an optional closed category list, and
+  runs as a deterministic mission with no LLM call anywhere: pin the scope
+  from the activation observation (a build that reports no rooms answers a
+  typed refusal naming `scope=radius`, never a guess), discover world
+  containers in scope, skip the ones the memory proves unchanged since their
+  last inspection — recorded as a skip, not silently —, approach each through
+  the navigation executor (a locked or barricaded door on the way becomes a
+  skip reason naming the door), open, inspect, select by the deterministic
+  loot policy (closed category vocabulary, user reserves outrank even
+  `take_all`, greedy capacity fitting where an exact fit is a fit), and move
+  items with `inventory.transfer_batch`. The mission ends `complete` only on
+  the provable criterion — every candidate inspected or carrying a recorded
+  skip reason — or `encumbered` the moment the main inventory provably cannot
+  take the smallest wanted item. The terminal report survives in a bounded
+  ledger: containers inspected, skipped with reasons, items taken per
+  category, left per reason.
+- **Observation grew rooms, buildings and corpses.** The player and every
+  nearby object now carry tri-state `room`/`building` tokens (outdoors and
+  "no reader on this build" are deliberately the same absence — a scope
+  decision must not read the second as the first; names are normalised once,
+  space to underscore, or dropped whole rather than mangled). Corpses with
+  loot appear as `kind=corpse` container objects — observation-only for now:
+  a dead body is not in the square's object list, so the world-container ref
+  scheme cannot honestly address its inventory; the gap is recorded in
+  `GAME_API_VERIFICATION.md` as a future protocol change, and the loot
+  mission records such containers as skipped rather than pretending.
 - **One command now moves a batch, and stopping honestly is part of the
   contract** (`epic/p1-loot-area`, wave 1). The dispatcher grew its first
   structured argument type: a declared, bounded LIST (dense array, 1..8

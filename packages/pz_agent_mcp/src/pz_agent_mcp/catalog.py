@@ -121,10 +121,13 @@ from pz_agent_core.capabilities.probes import (
 )
 from pz_agent_core.goals import (
     MAX_IDEMPOTENCY_KEY_LEN,
+    MAX_LOOT_CATEGORIES_CHARS,
     NUMERIC_RANGES,
     GoalKind,
+    LootScope,
     TrainableSkill,
 )
+from pz_agent_core.loot import LootCategory
 from pz_agent_core.protocol import READ_ONLY_ACTIONS, ActionName, JsonDict, RefKind, RiskClass
 from pz_agent_core.protocol.messages import MAX_LEASE_MS, MIN_LEASE_MS
 
@@ -349,6 +352,25 @@ def _mutating(
 #: pattern rather than as a constant; ``tests/unit/test_mcp_catalog_goals.py``
 #: holds the two together by feeding one's rejects to the other.
 _GOAL_KEY_PATTERN: Final = rf"^[A-Za-z0-9][A-Za-z0-9_.:\-]{{0,{MAX_IDEMPOTENCY_KEY_LEN - 1}}}$"
+
+#: One loot category token, spelled the one way the vocabulary publishes it.
+#: Derived from :class:`~pz_agent_core.loot.LootCategory` rather than typed
+#: out, so a tenth category appears here the moment the enum gains it.
+_LOOT_CATEGORY_TOKEN: Final = "|".join(sorted(category.value for category in LootCategory))
+
+#: The ``categories`` argument of a ``loot_area`` goal: a comma-joined list of
+#: closed tokens, at most one per category. The channel's own reader
+#: (:func:`~pz_agent_core.goals.parse_loot_categories`) additionally folds case,
+#: strips spaces and refuses a repeated token; the first two make the channel
+#: *wider* than this pattern, which is the safe direction of disagreement — a
+#: spelling the schema refuses is refused before the call is made, never waved
+#: through to fail after it. The repeat rule runs in the opposite direction and
+#: a pattern cannot state it, so a repeated token passes here and is refused by
+#: the channel with ``INVALID_ARGUMENT``, exactly as a parameter the kind
+#: forbids is.
+_LOOT_CATEGORIES_PATTERN: Final = (
+    rf"^(?:{_LOOT_CATEGORY_TOKEN})(?:,(?:{_LOOT_CATEGORY_TOKEN})){{0,{len(LootCategory) - 1}}}$"
+)
 
 _GOAL_KEY: Final[JsonDict] = {
     "type": "string",
@@ -1581,7 +1603,13 @@ TOOLS: Final[tuple[ToolSpec, ...]] = (
             "'pending' is the honest word for a goal nothing has started yet, "
             "and every goal carries a wall-clock, step and time-to-live budget "
             "so that it reaches a terminal state whether or not it is served. "
-            "Which sandwich satisfies a hunger goal is never decided here."
+            "Which sandwich satisfies a hunger goal is never decided here. A "
+            "'loot_area' goal finishes on one provable criterion — every "
+            "reachable container in scope was inspected or has a recorded "
+            "skip reason — and its terminal answer reports the looted scope "
+            "(the pinned room, building or sweep), the containers inspected, "
+            "the containers skipped each with its reason, and the items "
+            "taken per category and left per reason."
         ),
         input_schema=_goal_channel(
             {
@@ -1638,6 +1666,54 @@ TOOLS: Final[tuple[ToolSpec, ...]] = (
                     "description": "Floor of the target square; 0 is ground level.",
                     "minimum": NUMERIC_RANGES["target_z"].minimum,
                     "maximum": NUMERIC_RANGES["target_z"].maximum,
+                },
+                # The four below belong to 'loot_area' and to nothing else.
+                # All optional, and again with no defaults: the bare goal
+                # means scope room, the useful-only selection and no
+                # take_all, and it is the mission that reads the absence as
+                # those defaults — a default written here would attach a
+                # parameter to every kind that forbids it.
+                "scope": {
+                    "type": "string",
+                    "description": (
+                        "What 'the area' means to a 'loot_area' goal: the room "
+                        "or building the character stands in when the goal "
+                        "activates, or a bounded sweep around the activation "
+                        "square. Absent means room. 'room' and 'building' need "
+                        "a build that reports rooms and are refused with a "
+                        "typed failure naming 'radius' otherwise; 'radius' "
+                        "always works."
+                    ),
+                    "enum": sorted(scope.value for scope in LootScope),
+                },
+                "radius": {
+                    "type": "integer",
+                    "description": (
+                        "Chebyshev sweep of a 'loot_area' goal, in squares "
+                        "around the activation square. Meaningful only with "
+                        "scope 'radius' and refused beside any other scope."
+                    ),
+                    "minimum": NUMERIC_RANGES["radius"].minimum,
+                    "maximum": NUMERIC_RANGES["radius"].maximum,
+                },
+                "take_all": {
+                    "type": "boolean",
+                    "description": (
+                        "Widen a 'loot_area' goal to every category, including "
+                        "the unknowns the useful-only default leaves on the "
+                        "shelf. Never overrides the user's reserved items."
+                    ),
+                },
+                "categories": {
+                    "type": "string",
+                    "description": (
+                        "Restrict a 'loot_area' goal to these loot categories: "
+                        "a comma-joined list of closed tokens, each at most "
+                        "once. Not free text — every token is a member of the "
+                        "loot vocabulary or the goal is refused."
+                    ),
+                    "pattern": _LOOT_CATEGORIES_PATTERN,
+                    "maxLength": MAX_LOOT_CATEGORIES_CHARS,
                 },
             },
             required=("kind",),

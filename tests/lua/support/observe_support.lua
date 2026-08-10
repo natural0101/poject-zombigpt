@@ -210,6 +210,11 @@ function Support.player(fields)
       return fields.can_see
     end
   end
+  if fields.square ~= nil then
+    player.getCurrentSquare = function()
+      return fields.square
+    end
+  end
   return player
 end
 
@@ -388,14 +393,108 @@ function Support.installCell(squares, zombies)
   end
 end
 
---- A grid square holding `objects`.
-function Support.square(objects)
+--- A grid square holding `objects`. `extra` is optional and additive:
+---   room      an IsoRoom double `getRoom` answers (nil with room_spy set
+---             stands for "outdoors: the reader exists and answers nil")
+---   room_spy  a { count = n } table incremented on every getRoom call, so a
+---             test can prove the room is read once per square, not per object
+---   bodies    a list of dead-body doubles served through `getDeadBodys`
+---   body      a single dead-body double served through `getDeadBody`, for the
+---             build that spells only the singular accessor
+function Support.square(objects, extra)
+  extra = extra or {}
   local list = Support.list(objects)
-  return {
+  local square = {
     getObjects = function()
       return list
     end,
   }
+  if extra.room ~= nil or extra.room_spy ~= nil then
+    square.getRoom = function()
+      if extra.room_spy ~= nil then
+        extra.room_spy.count = extra.room_spy.count + 1
+      end
+      return extra.room
+    end
+  end
+  if extra.bodies ~= nil then
+    local bodyList = Support.list(extra.bodies)
+    square.getDeadBodys = function()
+      return bodyList
+    end
+  end
+  if extra.body ~= nil then
+    square.getDeadBody = function()
+      return extra.body
+    end
+  end
+  return square
+end
+
+--- An IsoRoom double. `name` answers getName; `def_name` answers only through
+--- the definition object, for the build that spells the name there; `building`
+--- is an IsoBuilding double getBuilding answers.
+function Support.room(fields)
+  fields = fields or {}
+  local room = {}
+  if fields.name ~= nil then
+    room.getName = function()
+      return fields.name
+    end
+  end
+  if fields.def_name ~= nil then
+    room.getRoomDef = function()
+      return {
+        getName = function()
+          return fields.def_name
+        end,
+      }
+    end
+  end
+  if fields.building ~= nil then
+    room.getBuilding = function()
+      return fields.building
+    end
+  end
+  return room
+end
+
+--- An IsoBuilding double, identified by a numeric `id` or by the name on its
+--- definition -- each installed only when the test names it, so removing one
+--- is how "this build does not spell that" is expressed.
+function Support.building(fields)
+  fields = fields or {}
+  local building = {}
+  if fields.id ~= nil then
+    building.getID = function()
+      return fields.id
+    end
+  end
+  if fields.def_name ~= nil then
+    building.getDef = function()
+      return {
+        getName = function()
+          return fields.def_name
+        end,
+      }
+    end
+  end
+  return building
+end
+
+--- An IsoDeadBody double. `loot` grants it an ItemContainer over those items;
+--- without it the body answers no container at all, which is how "a corpse
+--- that is only scenery" is expressed.
+function Support.deadBody(fields)
+  fields = fields or {}
+  local body = {}
+  if fields.loot ~= nil then
+    local container = Support.container(fields.loot)
+    body.getContainer = function()
+      return container
+    end
+  end
+  return body
 end
 
 --- Install a `getGameTime` global reporting `fields`.

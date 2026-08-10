@@ -36,7 +36,16 @@ from pz_agent_core.goals import (
 )
 from pz_agent_core.planner import Goal as PlannerGoal
 from pz_agent_core.planner import GoalKind as PlannerGoalKind
-from pz_agent_core.protocol import ActionName, ActionStatus, Observation, ReasonCode, SessionMode
+from pz_agent_core.protocol import (
+    ActionName,
+    ActionStatus,
+    NearbyObject,
+    NearbyView,
+    Observation,
+    Position,
+    ReasonCode,
+    SessionMode,
+)
 from tests.fixtures import make_game, make_player
 from tests.fixtures.sidecar_worlds import SidecarWorld, arm_for_real, attached_world
 
@@ -485,3 +494,131 @@ class TestThePortAnswersAreTheQueues:
 
             with pytest.raises(LoopError, match="without a goal queue"):
                 port.status()
+
+
+# --------------------------------------------------------------------------
+# the seventh kind: loot_area inside the running loop
+# --------------------------------------------------------------------------
+
+
+def loot_request(key: str = "loot-key") -> GoalRequest:
+    """The bare goal, exactly as «облутай квартиру» submits it: no params."""
+    return GoalRequest(kind=GoalKind.LOOT_AREA, idempotency_key=key)
+
+
+def loot_world_objects(world: SidecarWorld, room: str, building: str) -> list[NearbyObject]:
+    """One world container two squares from the player, inside *room*."""
+    return [
+        NearbyObject(
+            ref=f"container:{world.session_id}:world:1202:3400:0:1:0",
+            kind="container",
+            distance=2.0,
+            position=Position(x=1202.0, y=3400.0, z=0),
+            room=room,
+            building=building,
+        )
+    ]
+
+
+class TestLootGoalsAreServedByTheMission:
+    """``loot_area`` end to end through the loop, planner-less and deterministic.
+
+    The idiom of :class:`TestNavigateGoalsAreServedByTheExecutor`: a real
+    loop over a real exchange directory, the wrapper standing where the
+    shipped assembly puts it, the mod faked at the files. The registry
+    carries no container adapters, so an engine refusal is still the proof
+    that the mission's request reached the engine with no planner involved.
+    """
+
+    def test_an_unreadable_room_ends_the_goal_typed_with_no_planner_at_all(
+        self, tmp_path: Path
+    ) -> None:
+        """planner=None end to end: the wrapper alone activates and refuses it."""
+        world, wrapper = navigating_world(tmp_path)
+        with world:
+            armed_autonomous(world)
+            record = submit(world, loot_request())
+            # The default observation carries no room reading — exactly the
+            # build the scope refusal exists for.
+            world.observe()
+
+            world.loop.tick()
+
+            ended = record_of(world, record.goal_id)
+            assert ended.state is GoalState.FAILED
+            assert ended.reason_code is ReasonCode.PRECONDITION_FAILED
+            assert "scope=radius" in ended.detail
+            report = wrapper.loot_report(record.goal_id)
+            assert report is not None and report["ended"] == "unpinned"
+
+    def test_a_loot_mission_step_reaches_the_engine_without_asking_the_planner(
+        self, tmp_path: Path
+    ) -> None:
+        spy = RecordingGoalPlanner()
+        world, wrapper = navigating_world(tmp_path, spy)
+        with world:
+            armed_autonomous(world)
+            record = submit(world, loot_request())
+            world.observe(
+                player=make_player(room="kitchen", building="apartments"),
+                nearby=NearbyView(objects=loot_world_objects(world, "kitchen", "apartments")),
+            )
+
+            world.loop.tick()
+
+            # Tick one: the mission's first step — container.open_nearby —
+            # was submitted into the loop's own action channel.
+            channel = world.loop.actions
+            assert channel is not None and channel.pending_count == 1
+            assert wrapper.tracked_missions == 1
+            assert spy.goal_calls == [], "loot_area must never reach the wrapped planner"
+            assert spy.propose_calls == 0, "the goal outranks the planner's own initiative"
+
+            world.beat_game()
+            outcome = world.loop.tick()
+
+            # Tick two: the loop drained that submission through the same
+            # engine every action takes; this registry carries no container
+            # adapter, so the dispatch came back the engine's own refusal —
+            # still proof of the join. The wrapper folded that refusal into
+            # the mission in the same tick's _act, the candidate became a
+            # recorded skip, and the mission's completion probe went out the
+            # goal seam — the second engine dispatch below, whose refusal
+            # charges the goal one honest step.
+            assert [result.action for result in outcome.results] == [
+                "container.open_nearby",
+                "movement.move_to",
+            ]
+            assert spy.goal_calls == []
+            served = record_of(world, record.goal_id)
+            assert served.state is GoalState.ACTIVE
+            assert served.steps_used == 1
+            report = wrapper.loot_report(record.goal_id)
+            assert report is not None
+            assert len(report["containers_skipped"]) == 1
+
+    def test_the_mission_dies_with_its_cancelled_goal_and_keeps_the_report(
+        self, tmp_path: Path
+    ) -> None:
+        world, wrapper = navigating_world(tmp_path)
+        with world:
+            armed_autonomous(world)
+            record = submit(world, loot_request())
+            world.observe(
+                player=make_player(room="kitchen", building="apartments"),
+                nearby=NearbyView(objects=loot_world_objects(world, "kitchen", "apartments")),
+            )
+            world.loop.tick()
+            assert wrapper.tracked_missions == 1
+
+            cancellation = LoopGoalPort(loop=world.loop).cancel(record.goal_id)
+            assert cancellation.requested is True
+            world.beat_game()
+            world.loop.tick()
+
+            ended = record_of(world, record.goal_id)
+            assert ended.state is GoalState.CANCELLED
+            assert wrapper.tracked_missions == 0, "the mission must die with its goal"
+            report = wrapper.loot_report(record.goal_id)
+            assert report is not None, "the report survives the goal it describes"
+            assert report["ended"] == "cancelled"

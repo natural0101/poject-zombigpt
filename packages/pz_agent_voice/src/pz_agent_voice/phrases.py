@@ -259,7 +259,12 @@ def _check_speech_tables() -> None:
         raise RuntimeError("PARAM_NOUNS has drifted from the core's parameter names")
     if set(_RANGE_SPOKEN_AS) & UNSPEAKABLE_PARAMS:
         raise RuntimeError("a parameter declared unspeakable has a spoken range anyway")
-    if set(_RANGE_SPOKEN_AS) | UNSPEAKABLE_PARAMS != set(NUMERIC_RANGES):
+    if set(_RANGE_SPOKEN_AS) - set(NUMERIC_RANGES):
+        raise RuntimeError("_RANGE_SPOKEN_AS names a parameter with no numeric range")
+    # Not an equality: the unspeakable list also carries the loot goal's
+    # closed-token parameters, which have no numeric range. Every numeric
+    # parameter must still be pronounceable or declared unspeakable.
+    if set(NUMERIC_RANGES) - (set(_RANGE_SPOKEN_AS) | UNSPEAKABLE_PARAMS):
         raise RuntimeError("_RANGE_SPOKEN_AS has drifted from NUMERIC_RANGES")
     if set(CAPABILITY_NOUNS) != ALL_VOICE_CAPABILITIES:
         raise RuntimeError("a capability the matcher can refuse on has no spoken form")
