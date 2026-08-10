@@ -635,12 +635,40 @@ local function objectFields(object, objectIndex, position, distance)
     y = position.y,
     z = position.z,
     semantics = semantics,
+    -- Every scanned object carries its position in the square's object list, so
+    -- ObserveModel can mint a per-object reference for the kinds that need one.
+    object_index = objectIndex,
   }
   if container ~= nil then
     -- A container object is referenced as a container, because that is the
     -- reference an inventory transfer can actually name.
-    fields.object_index = objectIndex
     fields.container_index = 0
+  end
+  if fields.kind == "door" then
+    -- Each reading in its own guarded probe, and an absent reader leaves the
+    -- field out entirely: the sidecar treats a missing `locked` as "the lock
+    -- could not be read", and a defaulted false would read as "unlocked" --
+    -- which is a permission, not a gap. Build 42 capitalises some of these
+    -- differently across classes, so each is a short closed list of spellings.
+    local open = readBoolean(object, { "IsOpen", "isOpen" })
+    if open ~= nil then
+      fields.open = open
+    end
+    local locked = readBoolean(object, { "isLockedByKey", "isLocked" })
+    if locked ~= nil then
+      fields.locked = locked
+    end
+    local barricaded = readBoolean(object, { "isBarricaded" })
+    if barricaded ~= nil then
+      fields.barricaded = barricaded
+    end
+    -- The classic IsoDoor convention: getNorth() true is a door in the north
+    -- wall of its square, false one in the west wall. The token is emitted only
+    -- when the reader answered -- an unread orientation stays unread.
+    local north = readBoolean(object, { "getNorth" })
+    if north ~= nil then
+      fields.orientation = north and "north" or "west"
+    end
   end
   return fields
 end

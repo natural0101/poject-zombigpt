@@ -44,6 +44,7 @@ from pz_agent_cli.autonomy import (
     workspace_backups,
 )
 from pz_agent_cli.context import EXIT_OK, Workspace, resolve_workspace
+from pz_agent_cli.navigation_planner import unwrap_planner
 from pz_agent_cli.runtime import LoopLimits
 from pz_agent_core.ipc.layout import IpcLayout, SnapshotSlot
 from pz_agent_core.ipc.snapshot import SnapshotWriter
@@ -155,7 +156,9 @@ def hungry_in(save_id: str) -> Observation:
 def planner_of(world: CliWorld, workspace: Workspace) -> AutonomyPlanner:
     """The planner ``pz-agent start`` assembles, with its production witness."""
     loop = app.build_loop(world.ctx, workspace, limits=LIMITS)
-    planner = loop.planner
+    # The shipped assembly wraps the AutonomyPlanner in the navigating planner;
+    # the backup witness these tests describe lives on the wrapped one.
+    planner = unwrap_planner(loop.planner)
     assert isinstance(planner, AutonomyPlanner), planner
     return planner
 

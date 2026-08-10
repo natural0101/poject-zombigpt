@@ -34,6 +34,7 @@ Support.loadModules("", {
   "Movement",
   "World",
   "Containers",
+  "Doors",
   "Inventory",
   "Consumption",
   "Literature",

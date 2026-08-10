@@ -409,6 +409,75 @@ function Refs.parseZombie(raw)
 end
 
 -- ---------------------------------------------------------------------------
+-- object references
+-- ---------------------------------------------------------------------------
+
+--- object:<session>:<x>:<y>:<z>:<object-index>
+---
+--- Names one world object -- a door, in practice -- by the square it stands on
+--- and its position in that square's object list. The same stability caveat the
+--- world container tail carries applies here: the index is the engine's own
+--- ordering, which shifts when the square reloads or an object on it is
+--- destroyed, so a reference that stops resolving to the same kind of object is
+--- stale and must be refused, never "the nearest door instead".
+function Refs.buildObject(sessionId, x, y, z, objectIndex)
+  if not isSession(sessionId) then
+    return nil, "invalid session segment"
+  end
+  local parts = { Refs.KIND.OBJECT, sessionId }
+  local coordinates = { x, y, z }
+  for index = 1, 3 do
+    local value = coordinates[index]
+    if type(value) ~= "number" or value ~= math.floor(value) then
+      return nil, "object coordinates must be integers"
+    end
+    parts[index + 2] = string.format("%.0f", value)
+  end
+  if type(objectIndex) ~= "number" or objectIndex ~= math.floor(objectIndex) or objectIndex < 0 then
+    return nil, "object index must be a non-negative integer"
+  end
+  parts[6] = string.format("%.0f", objectIndex)
+  return table.concat(parts, Refs.SEPARATOR)
+end
+
+function Refs.parseObject(raw)
+  local rawError = checkRaw(raw)
+  if rawError then
+    return nil, rawError
+  end
+  local parts = {}
+  local count = 0
+  for part in (raw .. Refs.SEPARATOR):gmatch("([^:]*)" .. Refs.SEPARATOR) do
+    count = count + 1
+    if count > 6 then
+      return nil, "not an object ref"
+    end
+    parts[count] = part
+  end
+  if count ~= 6 or parts[1] ~= Refs.KIND.OBJECT then
+    return nil, "not an object ref"
+  end
+  if not isSession(parts[2]) then
+    return nil, "invalid session segment"
+  end
+  local x, y, z = toInteger(parts[3]), toInteger(parts[4]), toInteger(parts[5])
+  if x == nil or y == nil or z == nil then
+    return nil, "object ref has non-integer coordinate"
+  end
+  if not isCount(parts[6]) then
+    return nil, "object ref index must be a non-negative integer"
+  end
+  return {
+    kind = Refs.KIND.OBJECT,
+    session_id = parts[2],
+    x = x,
+    y = y,
+    z = z,
+    object_index = tonumber(parts[6]),
+  }
+end
+
+-- ---------------------------------------------------------------------------
 -- generic inspection
 -- ---------------------------------------------------------------------------
 
@@ -455,6 +524,8 @@ function Refs.parse(raw)
     return Refs.parseSquare(raw)
   elseif kind == Refs.KIND.ZOMBIE then
     return Refs.parseZombie(raw)
+  elseif kind == Refs.KIND.OBJECT then
+    return Refs.parseObject(raw)
   end
   return nil, string.format("no parser for ref kind %q", kind)
 end

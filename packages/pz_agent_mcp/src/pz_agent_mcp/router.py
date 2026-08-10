@@ -262,6 +262,9 @@ class ToolRouter:
             "pz_action_move_to": self._submit,
             "pz_action_move_near": self._submit,
             "pz_action_open_container": self._submit,
+            "pz_action_open_door": self._submit,
+            "pz_action_close_door": self._submit,
+            "pz_action_unlock_door": self._submit,
             "pz_action_transfer": self._submit,
             "pz_action_ensure_main": self._submit,
             "pz_action_eat": self._submit,
@@ -1119,6 +1122,9 @@ class ToolRouter:
                     target_level=args.get("target_level"),
                     satisfy_to=args.get("satisfy_to"),
                     pages=args.get("pages"),
+                    target_x=args.get("target_x"),
+                    target_y=args.get("target_y"),
+                    target_z=args.get("target_z"),
                 ),
             )
         except ValueError as rejected:
@@ -1151,6 +1157,12 @@ class ToolRouter:
             param_payload["satisfy_to"] = params.satisfy_to
         if params.pages is not None:
             param_payload["pages"] = params.pages
+        if params.target_x is not None:
+            param_payload["target_x"] = params.target_x
+        if params.target_y is not None:
+            param_payload["target_y"] = params.target_y
+        if params.target_z is not None:
+            param_payload["target_z"] = params.target_z
         data: JsonDict = {
             "goal_id": as_token(record.goal_id),
             "kind": record.kind.value,

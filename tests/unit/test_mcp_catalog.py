@@ -11,6 +11,7 @@ from pz_agent_core.actions import AdapterRegistry, PreconditionFailed, register_
 from pz_agent_core.actions.adapters import register_game_adapters
 from pz_agent_core.actions.adapters.movement import MAX_ARRIVAL_RADIUS, MAX_MOVE_DISTANCE_SQUARES
 from pz_agent_core.capabilities.probes import (
+    DOOR_TOGGLE,
     DRINK_CARRIED,
     DRINK_WORLD_SOURCE,
     EAT_PERCENTAGE,
@@ -55,6 +56,7 @@ MAIN = main_container_ref()
 BACKPACK = backpack_container_ref()
 SQUARE = f"square:{DEFAULT_SESSION}:1200:3400:0"
 CRATE = f"container:{DEFAULT_SESSION}:world:1200:3400:0:0:0"
+DOOR = f"object:{DEFAULT_SESSION}:1200:3401:0:2"
 
 #: The set named by docs/MCP_TOOLS.md, written out rather than derived, so a
 #: tool appearing or vanishing has to be a deliberate edit in two places.
@@ -74,6 +76,9 @@ DOCUMENTED_TOOLS = {
     "pz_action_move_to",
     "pz_action_move_near",
     "pz_action_open_container",
+    "pz_action_open_door",
+    "pz_action_close_door",
+    "pz_action_unlock_door",
     "pz_action_transfer",
     "pz_action_ensure_main",
     "pz_action_eat",
@@ -110,6 +115,7 @@ DOCUMENTED_RESOURCES = {
 
 ALL_CAPABILITIES = (
     MOVE_TO_SQUARE,
+    DOOR_TOGGLE,
     INVENTORY_TRANSFER,
     EAT_PERCENTAGE,
     DRINK_CARRIED,
@@ -284,8 +290,16 @@ FULL_ACTION_PAYLOADS: dict[str, dict[str, Any]] = {
         "allow_doors": True,
         "allow_stairs": False,
     },
-    "pz_action_move_near": {"object_ref": CRATE, "radius": 1.5, "max_distance": 10},
+    "pz_action_move_near": {
+        "object_ref": CRATE,
+        "radius": 1.5,
+        "max_distance": 10,
+        "allow_doors": False,
+    },
     "pz_action_open_container": {"container_ref": CRATE, "radius": 1.5},
+    "pz_action_open_door": {"door_ref": DOOR, "radius": 1.5},
+    "pz_action_close_door": {"door_ref": DOOR, "radius": 1.5},
+    "pz_action_unlock_door": {"door_ref": DOOR, "radius": 1.5},
     "pz_action_transfer": {
         "item_ref": ITEM,
         "destination_container_ref": BACKPACK,

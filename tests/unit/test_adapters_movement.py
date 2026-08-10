@@ -22,6 +22,7 @@ from pz_agent_core.actions import (
 from pz_agent_core.actions.adapters import MOVE_RETRY_POLICY, MoveNearAdapter, MoveToAdapter
 from pz_agent_core.actions.adapters.movement import (
     DEFAULT_ARRIVAL_RADIUS,
+    DEFAULT_NEAR_RADIUS,
     MAX_ARRIVAL_RADIUS,
     MAX_MOVE_DISTANCE_SQUARES,
     SEMANTIC_BLOCKED,
@@ -158,7 +159,7 @@ def test_the_right_square_on_the_wrong_floor_is_not_arrival() -> None:
     )
 
 
-def test_the_prepared_command_is_the_three_scalars_the_mod_declares() -> None:
+def test_the_prepared_command_is_the_scalars_the_mod_declares() -> None:
     """The payload is the destination, and nothing the mod would refuse.
 
     ``PZAgent.CommandDispatcher`` rebuilds the argument table from the adapter's
@@ -166,11 +167,13 @@ def test_the_prepared_command_is_the_three_scalars_the_mod_declares() -> None:
     object, the recomputed ``square_ref`` and the four policy flags this command
     used to carry were not ignored — they refused every move the agent made.
 
-    The flags are gone rather than renamed. ``max_distance``, ``allow_doors``,
-    ``allow_windows`` and ``allow_stairs`` are decisions, and ``parse`` and the
-    square check have already made them here, against an observation the mod is
-    not holding; sending them would ask the mod to re-derive a policy it has
-    nothing to re-derive it from.
+    Three of the flags stayed gone. ``max_distance``, ``allow_windows`` and
+    ``allow_stairs`` are decisions, and ``parse`` and the square check have
+    already made them here, against an observation the mod is not holding.
+    ``allow_doors`` came back with the doors epic, because its decision cannot
+    finish on this side: only the mod meets the closed door, mid-walk, and the
+    mod declares the flag now — so it ships, and the other three still must
+    not.
     """
     adapter = MoveToAdapter()
 
@@ -181,6 +184,7 @@ def test_the_prepared_command_is_the_three_scalars_the_mod_declares() -> None:
         "y": TARGET_Y,
         "z": 0,
         "radius": DEFAULT_ARRIVAL_RADIUS,
+        "allow_doors": True,
     }
 
 
@@ -651,6 +655,38 @@ def test_approaching_a_world_object_is_always_the_world_tier() -> None:
     adapter = MoveNearAdapter()
     assert adapter.risk is RiskClass.P3
     assert adapter.risk_for(near_command(), near_world()) is RiskClass.P3
+
+
+# --------------------------------------------------------------------------
+# the door switch, on both specs
+# --------------------------------------------------------------------------
+
+
+def test_both_move_payloads_carry_the_door_switch() -> None:
+    """``allow_doors`` must reach the mod, or "no doors" defaults to doors.
+
+    The mod's walk loop is where the closed door is met, and its declaration
+    defaults the flag to true — so a sidecar that kept the flag to itself
+    would have every forbidden door opened anyway. Both commands share that
+    loop, so both payloads carry the switch.
+    """
+    move_args = MoveToAdapter().build_args(move_command(allow_doors=False), world_with_target())
+    assert move_args["allow_doors"] is False
+
+    near_args = MoveNearAdapter().build_args(near_command(allow_doors=False), near_world())
+    assert near_args == {"ref": CRATE, "reach": DEFAULT_NEAR_RADIUS, "allow_doors": False}
+
+
+def test_the_door_switch_defaults_to_doors_allowed() -> None:
+    """The catalog's promise — "may open doors on the way" — is the default."""
+    assert MoveToAdapter().build_args(move_command(), world_with_target())["allow_doors"] is True
+    assert MoveNearAdapter().build_args(near_command(), near_world())["allow_doors"] is True
+
+
+def test_a_door_switch_that_is_not_a_boolean_is_refused() -> None:
+    with pytest.raises(PreconditionFailed) as caught:
+        MoveNearAdapter().validate(near_command(allow_doors="yes"), near_world())
+    assert caught.value.reason_code is ReasonCode.INVALID_ARGUMENT
 
 
 # --------------------------------------------------------------------------

@@ -327,6 +327,12 @@ def encode_goal_params(params: GoalParams) -> JsonDict:
         out["satisfy_to"] = params.satisfy_to
     if params.pages is not None:
         out["pages"] = params.pages
+    if params.target_x is not None:
+        out["target_x"] = params.target_x
+    if params.target_y is not None:
+        out["target_y"] = params.target_y
+    if params.target_z is not None:
+        out["target_z"] = params.target_z
     return out
 
 
@@ -346,19 +352,24 @@ def decode_goal_params(payload: Mapping[str, Any]) -> GoalParams:
     target_level = optional_int(payload, "target_level", where=_PARAMS)
     satisfy_to = _optional_float(payload, "satisfy_to", where=_PARAMS)
     pages = optional_int(payload, "pages", where=_PARAMS)
+    target_x = optional_int(payload, "target_x", where=_PARAMS)
+    target_y = optional_int(payload, "target_y", where=_PARAMS)
+    target_z = optional_int(payload, "target_z", where=_PARAMS)
     try:
         return GoalParams(
             skill=skill,
             target_level=target_level,
             satisfy_to=satisfy_to,
             pages=pages,
+            target_x=target_x,
+            target_y=target_y,
+            target_z=target_z,
         )
     except ValueError:
         # The constructor's message quotes the number it rejected. That number
         # came from the caller, so the chain is dropped rather than repeated.
         raise CodecError(
-            f"{_PARAMS}: target_level, satisfy_to or pages lies outside the range "
-            f"the channel declares for it"
+            f"{_PARAMS}: a numeric parameter lies outside the range the channel declares for it"
         ) from None
 
 

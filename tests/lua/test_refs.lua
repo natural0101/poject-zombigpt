@@ -23,6 +23,9 @@ local GOLDEN = {
   item_world = "item:3f2b9c1e-0a4d-4c7b-9e21-8b6d5f0a1c33:world:10726:9455:0:3:1:1a2b3c:7",
   square = "square:3f2b9c1e-0a4d-4c7b-9e21-8b6d5f0a1c33:-12:34:-1",
   zombie = "zombie:3f2b9c1e-0a4d-4c7b-9e21-8b6d5f0a1c33:z-99:2",
+  -- The object format is fixed by the protocol contract: the kind existed on
+  -- both sides with no builder, and door references are the first use of it.
+  object = "object:3f2b9c1e-0a4d-4c7b-9e21-8b6d5f0a1c33:-12:34:0:5",
 }
 
 Harness.group("container refs agree with the Python format")
@@ -86,7 +89,25 @@ do
   equal(zombie.generation, 2, "zombie generation")
 end
 
-Harness.group("kind and session checks")
+Harness.group("object refs name one world object by square and index")
+do
+  equal(Refs.buildObject(SESSION, -12, 34, 0, 5), GOLDEN.object, "object ref with a negative coordinate")
+  local parsed = Refs.parseObject(GOLDEN.object)
+  ok(parsed ~= nil, "the object ref parses")
+  equal(parsed.session_id, SESSION, "session id survives the parse")
+  equal(parsed.x, -12, "x may be negative")
+  equal(parsed.y, 34, "y")
+  equal(parsed.z, 0, "z is the floor")
+  equal(parsed.object_index, 5, "the object index is the last segment")
+
+  equal(Refs.kindOf(GOLDEN.object), "object", "object kind")
+  ok(Refs.belongsToSession(GOLDEN.object, SESSION), "an object ref from this session belongs to it")
+  ok(
+    not Refs.belongsToSession(GOLDEN.object, "00000000-0000-0000-0000-000000000000"),
+    "and one from another session does not"
+  )
+  equal(Refs.parse(GOLDEN.object).object_index, 5, "the generic parser dispatches object refs too")
+end
 do
   equal(Refs.kindOf(GOLDEN.item_world), "item", "item kind")
   equal(Refs.kindOf(GOLDEN.world), "container", "container kind")
@@ -132,6 +153,13 @@ do
 
   isNil(Refs.parseZombie("zombie:" .. SESSION .. ":z-99"), "a zombie ref with no generation")
   isNil(Refs.parseZombie("zombie:" .. SESSION .. ":z-99:x"), "a non-numeric zombie generation")
+
+  isNil(Refs.parseObject("object:" .. SESSION .. ":1:2:0"), "an object ref with no index")
+  isNil(Refs.parseObject("object:" .. SESSION .. ":1:2:0:5:9"), "an object ref with too many segments")
+  isNil(Refs.parseObject("object:" .. SESSION .. ":1:2:0:-1"), "a negative object index is not an index")
+  isNil(Refs.parseObject("object:" .. SESSION .. ":1:x:0:5"), "an object ref with a non-integer coordinate")
+  isNil(Refs.parseObject("object:bad session:1:2:0:5"), "an object ref with a malformed session")
+  isNil(Refs.parseObject("square:" .. SESSION .. ":1:2:0"), "a square ref is not an object ref")
 end
 
 Harness.group("builders refuse what they cannot represent")
@@ -146,6 +174,10 @@ do
   isNil(Refs.buildSquare(SESSION, "1", 2, 3), "a string coordinate is refused")
   isNil(Refs.buildZombie(SESSION, "z 99", 1), "a runtime id with a space is refused")
   isNil(Refs.buildContainer(string.rep("a", 65), "player-main"), "a session id past 64 bytes is refused")
+  isNil(Refs.buildObject("bad session", 1, 2, 0, 5), "an object ref with an invalid session is refused")
+  isNil(Refs.buildObject(SESSION, 1.5, 2, 0, 5), "a fractional object coordinate is refused")
+  isNil(Refs.buildObject(SESSION, 1, 2, 0, -1), "a negative object index is refused")
+  isNil(Refs.buildObject(SESSION, 1, 2, 0, 1.5), "and so is a fractional one")
 end
 
 Harness.finish("test_refs")

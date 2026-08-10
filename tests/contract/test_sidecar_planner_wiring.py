@@ -52,6 +52,7 @@ from pz_agent_cli.autonomy import (
     read_planner_record,
 )
 from pz_agent_cli.context import Workspace, resolve_workspace
+from pz_agent_cli.navigation_planner import NavigatingPlanner, unwrap_planner
 from pz_agent_cli.runtime import LoopLimits, SidecarLoop
 from pz_agent_core.actions.adapter import Evidence
 from pz_agent_core.capabilities.probes import (
@@ -362,7 +363,11 @@ class Assembled:
 
     @property
     def planner(self) -> AutonomyPlanner:
-        planner = self.loop.planner
+        # The shipped assembly wraps the AutonomyPlanner in the navigating
+        # planner (navigate_to is executor-served); what these tests describe
+        # is the wrapped planner's decisions, reached through the unwrap the
+        # serving code itself uses.
+        planner = unwrap_planner(self.loop.planner)
         assert isinstance(planner, AutonomyPlanner), planner
         return planner
 
@@ -404,8 +409,9 @@ def assemble(
     assert session is not None
     mod.session_id = session.session_id
     mod.beat()
-    if attributable_backup and isinstance(loop.planner, AutonomyPlanner):
-        loop.planner.backup = witness_for_the_observed_save
+    assembled = unwrap_planner(loop.planner)
+    if attributable_backup and isinstance(assembled, AutonomyPlanner):
+        assembled.backup = witness_for_the_observed_save
     if arm:
         # Two-phase arm: the mod executes session.arm, acks it, and its next
         # heartbeat reports the armed mode; the following tick observes both.
@@ -446,8 +452,12 @@ def test_build_loop_wires_a_planner_rather_than_leaving_the_loop_mute(tmp_path: 
         "build_loop returned a sidecar with no planner: it will observe, guard and "
         "propose nothing, in every mode, however it is armed"
     )
-    assert isinstance(loop.planner, AutonomyPlanner)
-    assert isinstance(loop.planner.provider, NullProvider)
+    # Always-on navigation: the loop's planner is the navigating wrapper, and
+    # the deterministic AutonomyPlanner is the planner it wraps.
+    assert isinstance(loop.planner, NavigatingPlanner)
+    wrapped = unwrap_planner(loop.planner)
+    assert isinstance(wrapped, AutonomyPlanner)
+    assert isinstance(wrapped.provider, NullProvider)
 
 
 def test_the_planner_record_says_what_the_assembled_loop_is_really_on(tmp_path: Path) -> None:
@@ -662,7 +672,7 @@ def test_a_configured_provider_with_no_key_falls_back_to_the_deterministic_path(
 
     loop = app.build_loop(world.ctx, workspace, limits=LIMITS)
 
-    planner = loop.planner
+    planner = unwrap_planner(loop.planner)
     assert isinstance(planner, AutonomyPlanner)
     assert isinstance(planner.provider, NullProvider)
     record = read_planner_record(workspace.state_dir / PLANNER_FILE_NAME)
@@ -699,7 +709,7 @@ def test_a_configured_provider_whose_key_is_set_is_the_one_that_answers(
 
     loop = app.build_loop(world.ctx, workspace, limits=LIMITS)
 
-    planner = loop.planner
+    planner = unwrap_planner(loop.planner)
     assert isinstance(planner, AutonomyPlanner)
     assert planner.provider.name == "openai_compatible"
     record = read_planner_record(workspace.state_dir / PLANNER_FILE_NAME)

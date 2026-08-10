@@ -64,6 +64,7 @@ from .context import (
 )
 from .core_services import serve_core_rpc
 from .doctor import check_capabilities, run_checks
+from .latency import run_latency
 from .livetest import add_live_test_parser, run_live_test
 from .memory import SidecarMemory, add_remember_parser, build_sidecar_memory, run_remember
 from .modinstall import (
@@ -73,6 +74,7 @@ from .modinstall import (
     install_mod,
     uninstall_mod,
 )
+from .navigation_planner import NavigatingPlanner, unwrap_planner
 from .output import Printer
 from .runtime import (
     CAPABILITY_FILE_NAME,
@@ -113,6 +115,7 @@ COMMANDS: Final[tuple[str, ...]] = (
     "voice",
     "logs",
     "replay",
+    "latency",
     "validate-config",
     "smoke",
     "live-test",
@@ -236,6 +239,16 @@ def build_parser() -> argparse.ArgumentParser:
     replay.add_argument("trace", type=Path)
     replay.add_argument("--limit", type=int, default=DEFAULT_REPLAY_LIMIT)
     replay.add_argument("--json", action="store_true")
+
+    latency = subparsers.add_parser(
+        "latency", help="measure the latency targets from the exchange directory's journals"
+    )
+    latency.add_argument("--json", action="store_true", help="the raw report document")
+    latency.add_argument(
+        "--targets",
+        action="store_true",
+        help="compare against the P0 targets; exits non-zero only on a measured miss",
+    )
 
     validate = subparsers.add_parser("validate-config", help="validate config.toml before start")
     validate.add_argument("--json", action="store_true")
@@ -546,6 +559,10 @@ def build_loop(
     planner, record = _build_planner(
         ctx, workspace, registry=registry, capabilities=capabilities, memory=memory
     )
+    # The navigating wrapper is always on: navigate_to goals are walked by the
+    # deterministic route executor whatever planner (or none) sits behind it,
+    # and every other kind passes through to the wrapped planner untouched.
+    navigating = NavigatingPlanner(planner)
     loop = SidecarLoop(
         layout=IpcLayout(ipc_root),
         state_dir=workspace.state_dir,
@@ -554,7 +571,7 @@ def build_loop(
         limits=limits,
         pid_file=build_supervisor(ctx, workspace).pid_file,
         capabilities=capabilities,
-        planner=planner,
+        planner=navigating,
         trace=trace,
         # The typed goal channel, on the loop's own clock and born disarmed —
         # SidecarLoop.arm is the only thing that arms it, the same rule the
@@ -563,6 +580,10 @@ def build_loop(
         # planner that could not would admit goals nothing ever activates.
         goals=GoalQueue(clock=ctx.clock_ms, armed=False),
     )
+    # Bound after construction because the loop takes its planner as a
+    # constructor argument: the wrapper needs the loop's queue, lock and
+    # action channel, and until this call it serves navigation to nobody.
+    navigating.bind(loop)
     publish_planner_record(
         workspace.state_dir / PLANNER_FILE_NAME,
         # Read off the loop, not off the intent above: this is the field that
@@ -600,7 +621,9 @@ def _planner_memory(loop: SidecarLoop) -> object | None:
     that stopped short of the planner is a fact ``status`` reports rather than
     an assembly that only looks right.
     """
-    planner = loop.planner
+    # The navigating wrapper serves navigate_to itself and delegates every
+    # other kind; the memory-holding planner is the one it wraps.
+    planner = unwrap_planner(loop.planner)
     return planner.memory if isinstance(planner, AutonomyPlanner) else None
 
 
@@ -1097,6 +1120,8 @@ def dispatch(ctx: CliContext, args: argparse.Namespace) -> int:
         )
     if command == "replay":
         return run_replay(ctx, trace=args.trace, as_json=args.json, limit=args.limit)
+    if command == "latency":
+        return run_latency(ctx, as_json=args.json, targets=args.targets)
     if command == "validate-config":
         return run_validate_config(ctx, as_json=args.json)
     if command == "smoke":

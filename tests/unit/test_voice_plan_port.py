@@ -874,7 +874,11 @@ def test_the_wait_is_bounded_by_the_deadline_the_wiring_chose(start: Start) -> N
         released.set()
 
     assert "no answer within" in str(raised.value)
-    assert IMPATIENT <= elapsed < IMPATIENT * 10
+    # The lower bound carries the same clock-granule allowance the arm-deadline
+    # test above earned: a Windows runner's timer measured a full 0.2 s wait as
+    # 0.187 s (run 31402335225), and punishing the port for the OS clock's
+    # coarseness proves nothing about the deadline.
+    assert IMPATIENT - _CLOCK_GRANULE <= elapsed < IMPATIENT * 10
 
 
 def test_the_default_deadline_is_short_and_never_longer_than_the_mcp_path() -> None:

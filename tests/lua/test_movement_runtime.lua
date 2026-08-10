@@ -61,6 +61,31 @@ local function finishWalk(walk, queue)
   Adapter.drainQueue(queue)
 end
 
+--- A door standing on a square: closed, unlocked, unbarricaded, and toggled
+--- open only by its own ToggleDoor. A local double rather than a shared one so
+--- this file owns what it pins.
+local function shutDoor()
+  local state = { open = false }
+  return {
+    state = state,
+    getObjectName = function()
+      return "Door"
+    end,
+    IsOpen = function()
+      return state.open
+    end,
+    isLocked = function()
+      return false
+    end,
+    isBarricaded = function()
+      return false
+    end,
+    ToggleDoor = function()
+      state.open = not state.open
+    end,
+  }
+end
+
 local function statuses(fs)
   local records = Command.acks(fs)
   local out = {}
@@ -131,6 +156,55 @@ do
   equal(#terminal, 1, "exactly one terminal ack ends the command")
   equal(terminal[1].status, STATUS.SUCCEEDED, "and it is a success, proven by the closed distance")
   equal(terminal[1].evidence.arrived, true, "with the arrival observed, not assumed")
+end
+
+Harness.group("a move_to blocked by a closed door opens it and still succeeds")
+do
+  -- The 2026-08-08 live run, end to end: the walk stalls against a closed
+  -- door, and pre-fix the command ended FAILED/PATH_STUCK until a human
+  -- pressed E. Driven through the real runtime so the door rescue's "return
+  -- true and keep polling" is proven to speak the runtime's vocabulary rather
+  -- than only this suite's.
+  local door = shutDoor()
+  local player, walk, queue = scene({ { 101, 200, 0, { door } }, { 105, 200, 0 } })
+  local agent, fs, runtime = Command.runtime(Mock, { MoveTo })
+  agent.player = player
+  Command.publish(fs, {
+    -- The support default lease (5000 ms) is shorter than the stall window the
+    -- rescue waits behind, so this command carries a lease that outlives it --
+    -- the field a real planner sizes to the walk it asked for.
+    Command.command({
+      action = "movement.move_to",
+      args = { x = 105, y = 200, z = 0 },
+      lease_ms = 20000,
+    }),
+  })
+
+  runtime:tick(agent, NOW)
+  ok(runtime:inFlight() ~= nil, "the admitted walk holds the in-flight slot")
+  runtime:tick(agent, NOW + 100)
+  ok(runtime:inFlight() ~= nil, "the first poll marks the gap and keeps working")
+
+  local Toolkit = PZ.Adapters.Toolkit
+  -- The stall window outlives the sidecar heartbeat's 5-second staleness bound,
+  -- so the heartbeat is refreshed the way a live sidecar refreshes it -- this
+  -- group is about the door, not about losing the sidecar.
+  PZAgent.Safety.noteSidecarHeartbeat(agent.safety, NOW + 100 + Toolkit.DEFAULT_STALL_MS)
+  runtime:tick(agent, NOW + 100 + Toolkit.DEFAULT_STALL_MS)
+  ok(runtime:inFlight() ~= nil, "the stall is spent opening the door: still in flight, not PATH_STUCK")
+  equal(door.state.open, true, "the door was toggled open by the game's own call")
+  equal(#queue.added, 2, "and a second tagged walk to the original target was queued")
+  equal(#Command.terminalAcks(fs), 0, "no terminal ack was written while the door was being handled")
+
+  finishWalk(walk, queue)
+  runtime:tick(agent, NOW + 200 + Toolkit.DEFAULT_STALL_MS)
+  isNil(runtime:inFlight(), "once the character is standing there the slot is free")
+  local terminal = Command.terminalAcks(fs)
+  equal(#terminal, 1, "exactly one terminal ack ends the command")
+  equal(terminal[1].status, STATUS.SUCCEEDED, "and it is a success, proven by arrival")
+  equal(terminal[1].evidence.arrived, true, "which the evidence states outright")
+  equal(terminal[1].evidence.doors_opened, 1, "along with the door it opened on the way")
+  same(terminal[1].evidence.doors[1], { x = 101, y = 200, z = 0, opened = true }, "square and all")
 end
 
 -- The two groups below pin the other half of the same seam: a move whose

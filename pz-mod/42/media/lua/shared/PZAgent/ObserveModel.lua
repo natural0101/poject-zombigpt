@@ -906,8 +906,9 @@ local function nearbyPosition(descriptor)
 end
 
 --- One world object. Containers are referenced as containers, because that
---- reference is the one an inventory transfer can actually name; everything
---- else is referenced by its square.
+--- reference is the one an inventory transfer can actually name; a door with a
+--- known object index is referenced as an object, because that is the reference
+--- door.open can actually resolve; everything else is referenced by its square.
 local function buildObject(sessionId, descriptor)
   if type(descriptor) ~= "table" then
     return nil
@@ -928,12 +929,25 @@ local function buildObject(sessionId, descriptor)
       container_index = descriptor.container_index,
     })
   else
-    ref = refs().buildSquare(
-      sessionId,
-      ObserveModel.integer(descriptor.x),
-      ObserveModel.integer(descriptor.y),
-      ObserveModel.integer(descriptor.z)
-    )
+    if kind == "door" and descriptor.object_index ~= nil then
+      ref = refs().buildObject(
+        sessionId,
+        ObserveModel.integer(descriptor.x),
+        ObserveModel.integer(descriptor.y),
+        ObserveModel.integer(descriptor.z),
+        ObserveModel.integer(descriptor.object_index)
+      )
+    end
+    if ref == nil then
+      -- A door whose index the reader could not carry still has a square: a
+      -- coarser reference is honest, a dropped door is a hole in the map.
+      ref = refs().buildSquare(
+        sessionId,
+        ObserveModel.integer(descriptor.x),
+        ObserveModel.integer(descriptor.y),
+        ObserveModel.integer(descriptor.z)
+      )
+    end
   end
   if ref == nil then
     return nil
@@ -943,6 +957,24 @@ local function buildObject(sessionId, descriptor)
     kind = kind,
     distance = distance,
   }
+  if kind == "door" then
+    -- Pass through only what was read: a boolean that is absent stays absent,
+    -- because the sidecar reads a missing `locked` as "could not be read" and a
+    -- fabricated false as "unlocked" -- opposite facts.
+    if type(descriptor.open) == "boolean" then
+      object.open = descriptor.open
+    end
+    if type(descriptor.locked) == "boolean" then
+      object.locked = descriptor.locked
+    end
+    if type(descriptor.barricaded) == "boolean" then
+      object.barricaded = descriptor.barricaded
+    end
+    local orientation = ObserveModel.token(descriptor.orientation)
+    if orientation ~= nil then
+      object.orientation = orientation
+    end
+  end
   local position = nearbyPosition(descriptor)
   if position ~= nil then
     object.position = position

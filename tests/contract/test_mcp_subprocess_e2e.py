@@ -454,6 +454,7 @@ _QUARANTINE: Final = "untrusted_text"
 #: Every capability any tool names. A report that marks all of them usable is
 #: what makes the running server publish the whole catalogue.
 _ALL_CAPABILITIES: Final[tuple[str, ...]] = (
+    "door_toggle",
     "drink_carried",
     "drink_world_source",
     "eat_percentage",

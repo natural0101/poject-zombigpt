@@ -120,6 +120,32 @@ guess. Fix the reader.
 | Planner proposed an impossible step | `planner/critic.py`, capability validation | `logs/`, `capabilities.json` | The critic should have refused it. A model proposing nonsense is expected; the critic letting it through is the defect. |
 | Provider returns a plan that will not parse | `planner/providers/*.py` | `logs/` | Correct behaviour is a typed rejection carrying the parse fault. If it raised instead, fix the provider, not the model. |
 
+## Measuring the latency targets
+
+`pz-agent latency` reads the command and ack journals (rotated generations
+included), the observation stream, the snapshot pointer and the heartbeat
+files, joins commands to their acks by `command_id`, and prints exact
+nearest-rank percentiles (count/min/p50/p95/max) for submit→accepted,
+accepted→started, started→terminal, submit→terminal, the safety-stop reaction
+and the observation interval. `pz-agent latency --json` emits the raw report,
+and `pz-agent latency --targets` compares it against the P0 targets
+(submit→accepted p95 ≤ 250 ms, terminal ack visibility ≤ 250 ms, observations
+≥ 4 Hz, safety reaction ≤ 200 ms), marking each MET, MISSED or UNMEASURED. It
+exits non-zero only on a *measured miss* under `--targets`: an UNMEASURED
+target exits 0, deliberately, so a CI machine with no game does not fail for
+lacking one. An interval nothing on disk records is reported as unmeasured,
+never estimated.
+
+One caveat to read the numbers with: `issued_at_ms` is stamped by the
+sidecar's wall clock and every ack stamp is the game process's, and nothing
+anywhere corrects the skew between the two — so the submit→accepted and
+submit→terminal rows are labelled cross-clock, include that skew, and can even
+be negative. The single-clock rows (accepted→started, started→terminal, the
+observation interval) are the trustworthy ones on a machine with drifting
+clocks. Live p95 numbers for the targets are therefore the game machine's to
+produce, from its own exchange directory during a real session; nothing in
+this repository can honestly invent them.
+
 ## What to send when you are stuck
 
 `pz-agent logs --bundle` builds a redacted archive. Send that, plus:

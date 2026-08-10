@@ -70,6 +70,7 @@ def test_every_capability_named_by_the_blueprint_has_a_probe() -> None:
         "survival_sleep",
         "drink_world_source",
         "autonomous_attack",
+        "door_toggle",
     }
 
 
@@ -398,6 +399,7 @@ def test_resolve_all_produces_one_entry_per_probe_and_a_revision(tmp_path: Path)
         "eat_percentage",
         "equipment_equip",
         "equipment_unequip",
+        "door_toggle",
         "inventory_transfer",
         "medical_bandage",
         "move_to_square",

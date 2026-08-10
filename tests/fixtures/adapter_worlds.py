@@ -155,6 +155,10 @@ def a_world_object(
     kind: str = "container",
     distance: float | None = None,
     semantics: list[str] | None = None,
+    open: bool | None = None,
+    locked: bool | None = None,
+    barricaded: bool | None = None,
+    orientation: str | None = None,
 ) -> NearbyObject:
     return NearbyObject(
         ref=ref,
@@ -162,6 +166,10 @@ def a_world_object(
         distance=float(max(abs(x - HOME_X), abs(y - HOME_Y))) if distance is None else distance,
         position=Position(x=float(x), y=float(y), z=z),
         semantics=list(semantics or ["container"]),
+        open=open,
+        locked=locked,
+        barricaded=barricaded,
+        orientation=orientation,
     )
 
 

@@ -445,6 +445,72 @@ function Support.worldObject(fields)
   return object
 end
 
+--- An IsoDoor double. State is mutable so the game's own toggle can move it,
+--- and each reader exists only when the case grants it, so withholding one is
+--- how "this build cannot read that" is expressed.
+---
+--- ToggleDoor is the vanilla behaviour in miniature: a barricade holds the
+--- door, a lock holds it only while it is closed (with the key carried the
+--- game unlocks it as part of the interaction, which `toggle_unlocks` stands
+--- in for), and an unlocked door swings. `toggle_noop` makes the call return
+--- while nothing moves -- the case every door verify exists to catch.
+function Support.door(fields)
+  fields = fields or {}
+  local state = {
+    open = fields.open == true,
+    locked = fields.locked == true,
+    barricaded = fields.barricaded == true,
+  }
+  local door = { state = state, fields = fields }
+  door.getObjectName = function()
+    return fields.name or "Door"
+  end
+  if fields.no_open_reader ~= true then
+    door.IsOpen = function()
+      return state.open
+    end
+  end
+  if fields.no_lock_reader ~= true then
+    door.isLockedByKey = function()
+      return state.locked
+    end
+  end
+  if fields.no_barricade_reader ~= true then
+    door.isBarricaded = function()
+      return state.barricaded
+    end
+  end
+  if fields.north ~= nil then
+    door.getNorth = function()
+      return fields.north
+    end
+  end
+  if fields.key_id ~= nil then
+    door.getKeyId = function()
+      return fields.key_id
+    end
+  end
+  if fields.no_toggle ~= true then
+    door.ToggleDoor = function()
+      if fields.toggle_noop == true then
+        return
+      end
+      if state.barricaded then
+        return
+      end
+      if not state.open and state.locked then
+        if fields.toggle_unlocks == true then
+          state.locked = false
+        else
+          return
+        end
+      end
+      state.open = not state.open
+    end
+  end
+  return door
+end
+
 local function squareKey(x, y, z)
   return string.format("%d:%d:%d", x, y, z)
 end
@@ -610,6 +676,10 @@ end
 
 function Support.worldContainerRef(x, y, z, objectIndex, session)
   return (PZAgent.Refs.worldContainer(session or Support.SESSION, x, y, z, objectIndex, 0))
+end
+
+function Support.objectRef(x, y, z, objectIndex, session)
+  return (PZAgent.Refs.buildObject(session or Support.SESSION, x, y, z, objectIndex))
 end
 
 return Support

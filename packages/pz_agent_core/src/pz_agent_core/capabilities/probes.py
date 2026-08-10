@@ -82,6 +82,12 @@ MEDICAL_BANDAGE: Final = "medical_bandage"
 SURVIVAL_REST: Final = "survival_rest"
 SURVIVAL_SLEEP: Final = "survival_sleep"
 
+# One capability for all three door actions. Opening, closing and unlocking
+# all ride the same interaction — a walk into reach, then the game's own door
+# toggle — so a build where one works is a build where all three do, and three
+# probes over one API would let them disagree about it.
+DOOR_TOGGLE: Final = "door_toggle"
+
 
 @dataclass(frozen=True, slots=True)
 class RuntimeConfirmation:
@@ -292,6 +298,26 @@ PROBES: Final[tuple[ProbeDefinition, ...]] = (
         static_state=CapabilityState.EXPERIMENTAL,
         static_reason=REASON_EXPERIMENTAL_API,
         description="drink from a sink, well or rain collector",
+    ),
+    ProbeDefinition(
+        capability=DOOR_TOGGLE,
+        # The walk into reach is the only half of the interaction the game's
+        # Lua ever names. The toggle itself is ``IsoDoor.ToggleDoor``, a Java
+        # method no Lua scan can see, so requiring it here would report
+        # ``unsupported`` on a perfectly healthy install; the mod probes the
+        # resolved door for the method per command and refuses naming the
+        # symbol when a build lacks it.
+        required_symbols=(
+            "ISWalkToTimedAction",
+            "ISWalkToTimedAction.new",
+            "ISTimedActionQueue.add",
+        ),
+        confirmation=RuntimeConfirmation(
+            action=ActionName.DOOR_OPEN,
+            evidence_keys=("door_ref", "open_before", "open_after"),
+            description="the door reads open when re-read after the toggle",
+        ),
+        description="open, close and unlock doors through the game's own door interaction",
     ),
     ProbeDefinition(
         capability=AUTONOMOUS_ATTACK,

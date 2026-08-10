@@ -49,6 +49,11 @@ class ReasonCode(StrEnum):
     PATH_STUCK = "PATH_STUCK"
     TARGET_OUT_OF_RANGE = "TARGET_OUT_OF_RANGE"
     TARGET_NOT_LOADED = "TARGET_NOT_LOADED"
+    # A locked and a barricaded door demand different replanning — a key hunt
+    # versus a detour — so they are distinct codes rather than one
+    # PRECONDITION_FAILED whose detail a planner would have to parse.
+    DOOR_LOCKED = "DOOR_LOCKED"
+    DOOR_BARRICADED = "DOOR_BARRICADED"
 
     # --- verification ------------------------------------------------------
     ACTION_TIMEOUT = "ACTION_TIMEOUT"

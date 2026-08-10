@@ -44,6 +44,10 @@ KIND_VALUES = frozenset(
     {"satisfy_hunger", "satisfy_thirst", "read_for_boredom", "train_skill", "learn_recipe"}
 )
 
+#: Kinds the grammar refuses on purpose: an exact world square cannot be
+#: dictated safely, so ``navigate_to`` travels only through ``pz_goal_submit``.
+UNSPEAKABLE_KIND_VALUES = frozenset({"navigate_to"})
+
 #: Several attested phrasings per intent (T005). Keyed by the kind's wire value
 #: so an entry naming a kind that no longer exists fails at :func:`parse_kind`
 #: rather than failing to import.
@@ -127,9 +131,25 @@ def test_every_kind_has_several_attested_phrasings() -> None:
 
 
 def test_the_kind_set_is_the_one_this_grammar_was_written_against() -> None:
-    # An independently written literal. A sixth kind arrives here as a failure
-    # rather than as a kind speech cannot reach.
-    assert {kind.value for kind in GoalKind} == KIND_VALUES
+    # An independently written literal. A new kind arrives here as a failure
+    # rather than as a kind speech silently cannot reach: it is either given a
+    # vocabulary (KIND_VALUES) or declared unspeakable, on purpose, below.
+    assert {kind.value for kind in GoalKind} == KIND_VALUES | UNSPEAKABLE_KIND_VALUES
+    assert frozenset() == KIND_VALUES & UNSPEAKABLE_KIND_VALUES
+
+
+def test_navigation_is_deliberately_unspeakable() -> None:
+    """Coordinates do not cross a microphone; the exclusion is a decision.
+
+    Both sides written as independent literals: the grammar's own declaration
+    (``intent.UNSPEAKABLE_KINDS``) must say exactly this, and a transcript full
+    of navigation words must resolve to no goal at all rather than to a guess.
+    """
+    assert {kind.value for kind in intent.UNSPEAKABLE_KINDS} == UNSPEAKABLE_KIND_VALUES
+    assert frozenset({"target_x", "target_y", "target_z"}) == intent.UNSPEAKABLE_PARAMS
+    for transcript in ("агент, иди туда", "навигация 1200 3400", "иди на точку"):
+        resolution = resolve(transcript)
+        assert resolution.kind is None
 
 
 @pytest.mark.parametrize(
@@ -855,9 +875,13 @@ def test_an_utterance_resolves_to_its_kind_and_nothing_else(
 
 
 def test_every_kind_is_reachable_by_some_hand_written_phrase() -> None:
-    """A kind nobody can say is a row in a table, not a feature."""
+    """A kind nobody can say is a row in a table, not a feature.
+
+    Except the ones declared unspeakable, whose unreachability is the feature —
+    pinned above in test_navigation_is_deliberately_unspeakable.
+    """
     reached = {kind_value for _, kind_value, _ in GOAL_UTTERANCES}
-    assert reached == {kind.value for kind in GoalKind}
+    assert reached == {kind.value for kind in GoalKind} - UNSPEAKABLE_KIND_VALUES
 
 
 #: One literal phrase per skill, so a skill whose vocabulary is wrong is named.
@@ -1111,9 +1135,9 @@ def test_resolve_goal_is_total_over_percent_shaped_noise() -> None:
 
 
 def test_the_tables_cover_the_core_enums() -> None:
-    assert set(intent.KIND_WORDS) == set(GoalKind)
+    assert set(intent.KIND_WORDS) == set(GoalKind) - intent.UNSPEAKABLE_KINDS
     assert set(intent.SKILL_WORDS) == set(TrainableSkill)
-    assert set(intent.UNIT_WORDS) == set(core_goals.NUMERIC_RANGES)
+    assert set(intent.UNIT_WORDS) == set(core_goals.NUMERIC_RANGES) - intent.UNSPEAKABLE_PARAMS
 
 
 def test_no_vocabulary_word_is_a_stop_word() -> None:

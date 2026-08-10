@@ -18,7 +18,7 @@ grep -rn "Build 42:" pz-mod/
 ```
 
 `grep -rn "Build 42:" pz-mod/` returns six lines, in two files. It is a
-*shortcut*, not an inventory: the table below marks 120 symbol rows
+*shortcut*, not an inventory: the table below marks 129 symbol rows
 `requires_live` (several rows carry two or three slash-separated spellings,
 probed in the order written), so the grep covers roughly a twentieth of what is
 unconfirmed. **This document is the list.** Use the grep to jump to a comment;
@@ -299,6 +299,41 @@ so an adapter never indexes it directly. If the collection shape differs, fix it
 in those two functions and every adapter follows. The same shape assumption
 covers every other engine list in this file — worn items, body parts, traits,
 zombies, container items — and has its own row under containers.
+
+## Doors
+
+The door actions have no constructible timed action to ride: ISOpenCloseDoor
+does not exist as a class in Build 42, so `door.open`, `door.close` and
+`door.unlock` all walk into reach with `ISWalkToTimedAction` (declared in their
+`requires`, rows above) and then drive the game's own interaction —
+`IsoDoor:ToggleDoor(character)`, the call the E key lands on. The toggle is a
+method on a Java object, not a global, so it cannot be probed by the capability
+runtime; it is checked at the resolved door by `Toolkit.method` and its absence
+is a `CAPABILITY_UNAVAILABLE` spelled `IsoDoor.ToggleDoor` whichever member
+spelling was looked for. Every state reader below is also read by `Observe.lua`
+for the nearby block's door fields, where an absent reader leaves the field
+*absent* — the sidecar reads a missing `locked` as "could not be read", and a
+defaulted `false` would read as permission.
+
+| Symbol | Assumed signature | Used by | Fallback | Test | Failure signature | Status | Actual |
+|---|---|---|---|---|---|---|---|
+| `IsoDoor.ToggleDoor` / `toggleDoor` | `(character)` — the E-key interaction; answers nothing useful, so the postcondition is always a re-read | `adapters/Doors.lua` (all three door actions, capability `door_toggle`) | command refused | no playbook scenario issues a door command yet — a gap by the closing paragraph's rule; `tests/lua/test_adapter_doors.lua` | `IsoDoor.ToggleDoor is not available in this build` | `requires_live` | The 2026-08-08 run opened a door, but via the system-input fallback, not this call |
+| `IsoDoor.IsOpen` / `isOpen` | `() -> boolean` | `Observe.lua` (the nearby door's `open` field), `adapters/Doors.lua` — the precondition and the *whole postcondition* of open and close | observation field absent; the door commands refuse up front rather than toggling blind | `tests/lua/test_observe.lua`, `tests/lua/test_adapter_doors.lua` | `IsoDoor.IsOpen is not available in this build` from the commands; none from observation — field absent | `requires_live` | |
+| `IsoDoor.isLockedByKey` / `isLocked` | `() -> boolean` | `Observe.lua` (`locked`), `adapters/Doors.lua` — the `DOOR_LOCKED` gate of open and the pre/postcondition of unlock | observation field absent; open proceeds (an unreadable lock surfaces as the toggle bouncing, then `POSTCONDITION_FAILED`); unlock refuses | `tests/lua/test_observe.lua`, `tests/lua/test_adapter_doors.lua` | unlock's refusal is `PRECONDITION_FAILED` "the lock state could not be read on this build" | `requires_live` | |
+| `IsoDoor.isBarricaded` | `() -> boolean` | `Observe.lua` (`barricaded`), `adapters/Doors.lua` — the `DOOR_BARRICADED` gate of all three commands | observation field absent; the gate fires only on a positive `true`, so an absent reader passes it and the barricade surfaces as a swallowed toggle | `tests/lua/test_observe.lua`, `tests/lua/test_adapter_doors.lua` | none — field absent | `requires_live` | |
+| `IsoDoor.getNorth` | `() -> boolean`; true is the north wall of the square, false the west — the classic IsoDoor convention | `Observe.lua` — the nearby door's `orientation` token | field absent | `tests/lua/test_observe.lua` | none — field absent | `requires_live` | |
+| `ItemContainer.haveThisKeyForDoor` | `(door) -> boolean` — the game's own key check, the one the vanilla context menu asks | `adapters/Doors.lua` (`Doors.haveKey`), probed first | falls through to the key-id scan below | `tests/lua/test_adapter_doors.lua` | with the whole chain gone: `ItemContainer.haveThisKeyForDoor / IsoDoor.getKeyId is not available in this build` | `requires_live` | |
+| `IsoDoor.getKeyId` | `() -> number` | `adapters/Doors.lua` (`Doors.haveKey`) — the fallback key check matches it against carried keys | with neither this nor `haveThisKeyForDoor`, unlock refuses naming both: "the key cannot be looked for" and "there is no key" are opposite facts | `tests/lua/test_adapter_doors.lua` | as the row above | `requires_live` | |
+| `InventoryItem.getKeyId` | `() -> number` on a key item | `adapters/Doors.lua` (`Doors.haveKey`) — the carried side of the key-id match, one nesting level deep because keys live on key rings | an item with no reading never matches, so a build hiding it reports `DOOR_LOCKED` with the key in the bag — conservative, and the row to check when that happens | `tests/lua/test_adapter_doors.lua` | none — the item simply never matches | `requires_live` | |
+
+**Unlock rides the toggle, and that is the least certain assumption here.** With
+the key carried, vanilla unlocks a locked door as part of the interaction —
+that is what `door.unlock` counts on when it calls `ToggleDoor` and then
+re-reads `isLockedByKey`. If Build 42 does not unlock on interaction, the
+command fails honestly on its postcondition ("the door still reads locked"),
+never by writing the lock: `setLockedByKey(false)` is state-writing and stays
+forbidden. If a live run shows the game exposes a proper unlock entry point
+callable from Lua, that entry point should replace the toggle here.
 
 ## The game clock and the save's identity
 
