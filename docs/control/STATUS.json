@@ -13,11 +13,11 @@
     "NOT_STARTED": 80,
     "PASS": 400
   },
-  "head_commit": "f4cc2e11b9c912b1471d841cc16dd49af9324dd6",
+  "head_commit": "d22f50a73895903936b3414bd7ad4fd517c85b5c",
   "linux_ci": {
-    "commit": "f4cc2e11b9c912b1471d841cc16dd49af9324dd6",
+    "commit": "d22f50a73895903936b3414bd7ad4fd517c85b5c",
     "describes_current_head": true,
-    "status": "RED"
+    "status": "PENDING"
   },
   "live_scenarios": {
     "failed": 0,
@@ -75,7 +75,7 @@
   "total_weight": 3104,
   "weighted_progress_percent": 74.26,
   "windows_ci": {
-    "commit": "f4cc2e11b9c912b1471d841cc16dd49af9324dd6",
+    "commit": "d22f50a73895903936b3414bd7ad4fd517c85b5c",
     "describes_current_head": true,
     "status": "PENDING"
   }
