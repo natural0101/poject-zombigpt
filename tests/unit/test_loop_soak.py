@@ -85,8 +85,13 @@ GRACE: Final = 8.0
 TICK_GOAL: Final = 2_500
 
 #: The one wait allowed to be longer than :data:`GRACE`: topping the tick
-#: count up to :data:`TICK_GOAL` on a slow runner.
-TICK_GOAL_DEADLINE_S: Final = 90.0
+#: count up to :data:`TICK_GOAL` on a slow runner. This is a ceiling, not a
+#: wait -- the poll returns the moment the count is reached -- so only a
+#: pathological runner ever spends it. 90 s was outrun on a loaded Windows CI
+#: runner (run 31387138670: the same tree passed on the sibling runner), which
+#: works out to ~36 ms per tick; 300 s tolerates a 120 ms/tick machine before
+#: calling the loop stuck.
+TICK_GOAL_DEADLINE_S: Final = 300.0
 
 #: Operations in the disarmed soak phase. Fixed, so the schedule is a fixed
 #: list once the seed is fixed.
