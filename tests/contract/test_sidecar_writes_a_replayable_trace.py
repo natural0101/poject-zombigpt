@@ -47,7 +47,7 @@ from pz_agent_core.diagnostics import (
 )
 from pz_agent_core.protocol import ActionName, Observation
 from tests.fixtures.cli_worlds import make_world
-from tests.fixtures.sidecar_worlds import SidecarWorld, attached_world
+from tests.fixtures.sidecar_worlds import SidecarWorld, arm_for_real, attached_world
 
 TRACE_NAME: Final = "session.jsonl"
 
@@ -153,7 +153,7 @@ def test_an_action_and_its_result_are_recorded_together(tmp_path: Path) -> None:
     trace = _writer(tmp_path)
     with attached_world(tmp_path, trace=trace) as world:
         world.loop.planner = Waiting(world.session_id)
-        assert world.loop.arm().armed is True
+        arm_for_real(world)
         # The world keeps moving while the engine waits inside the tick. Without
         # this the engine never gets a fresh observation, refuses before it
         # sends anything, and the entry under test is a different one.
@@ -185,7 +185,7 @@ def test_an_action_refused_before_it_was_sent_is_still_recorded(tmp_path: Path) 
     trace = _writer(tmp_path)
     with attached_world(tmp_path, trace=trace) as world:
         world.loop.planner = Waiting(world.session_id)
-        assert world.loop.arm().armed is True
+        arm_for_real(world)
         # No ``while_waiting``: the world stands still, so the engine never gets
         # the fresh observation it needs and refuses before sending anything.
         _observe_and_tick(world, 1)

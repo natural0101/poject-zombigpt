@@ -30,13 +30,19 @@ from pz_agent_cli.core_services import (
     core_services_over,
 )
 from pz_agent_cli.doctor import DoctorReport
-from pz_agent_cli.runtime import ActionChannel, LoopError
+from pz_agent_cli.runtime import ACTION_SWEEP_GRACE_MS, ActionChannel, LoopError
 from pz_agent_core.actions import ActionRequest
 from pz_agent_core.protocol import ActionName, ActionResult, ActionStatus, ReasonCode
 from pz_agent_mcp.ports import ActionRecord
 from tests.fixtures import make_game
-from tests.fixtures.ipc_builders import BASE_TIME_MS
-from tests.fixtures.sidecar_worlds import SidecarWorld, attached_world, make_sidecar_world
+from tests.fixtures.ipc_builders import BASE_TIME_MS, FakeClock
+from tests.fixtures.sidecar_worlds import (
+    ScriptedMod,
+    SidecarWorld,
+    arm_for_real,
+    attached_world,
+    make_sidecar_world,
+)
 
 #: A session id shaped like the ones the loop mints; the channel never checks
 #: it — the engine does — so any stable value serves the queue-level tests.
@@ -47,12 +53,20 @@ def _clock() -> int:
     return BASE_TIME_MS
 
 
-def _request(key: str, *, seconds: float = 1.0) -> ActionRequest:
+def _request(key: str, *, seconds: float = 1.0, lease_ms: int | None = None) -> ActionRequest:
+    if lease_ms is None:
+        return ActionRequest(
+            action=ActionName.ACTION_WAIT,
+            session_id=SESSION,
+            idempotency_key=key,
+            args={"game_seconds": seconds},
+        )
     return ActionRequest(
         action=ActionName.ACTION_WAIT,
         session_id=SESSION,
         idempotency_key=key,
         args={"game_seconds": seconds},
+        lease_ms=lease_ms,
     )
 
 
@@ -353,8 +367,7 @@ class TestTheLoopServesTheChannel:
         self, tmp_path: Path
     ) -> None:
         with attached_world(tmp_path) as world:
-            world.beat_game()
-            assert world.loop.arm().armed is True
+            arm_for_real(world, ScriptedMod(world))
             action_id = _submit(world, "armed-then-disarmed")
 
             world.loop.disarm(reason="user asked")
@@ -368,8 +381,7 @@ class TestTheLoopServesTheChannel:
         self, tmp_path: Path
     ) -> None:
         with attached_world(tmp_path) as world:
-            world.beat_game()
-            assert world.loop.arm().armed is True
+            arm_for_real(world, ScriptedMod(world))
             action_id = _submit(world, "panicked-1")
             world.panic()
 
@@ -408,8 +420,7 @@ class TestTheLoopServesTheChannel:
         Nothing acked anything; the world itself was the proof.
         """
         with attached_world(tmp_path) as world:
-            world.beat_game()
-            assert world.loop.arm().armed is True
+            arm_for_real(world, ScriptedMod(world))
 
             base = datetime(1993, 7, 9, 14, 20, 0)
             advanced = {"game_seconds": 0}
@@ -437,6 +448,127 @@ class TestTheLoopServesTheChannel:
             assert result in outcome.results
             channel = world.loop.actions
             assert channel is not None and channel.pending_count == 0
+
+
+class TestTheDeadlineSweep:
+    """No record lives forever: past its lease plus grace, the sweep ends it."""
+
+    def test_a_waiting_record_past_its_lease_plus_grace_times_out_by_name(self) -> None:
+        clock = FakeClock(BASE_TIME_MS)
+        channel = ActionChannel(clock=clock)
+        record = channel.submit(_request("sweep-1", lease_ms=200))
+
+        assert channel.sweep(clock.now) == (), "inside the lease, nothing is touched"
+        clock.advance(200 + ACTION_SWEEP_GRACE_MS - 1)
+        assert channel.sweep(clock.now) == (), "the grace is part of the bound"
+
+        clock.advance(1)
+        ended = channel.sweep(clock.now)
+
+        assert [r.action_id for r in ended] == [record.action_id]
+        swept = channel.status(record.action_id)
+        assert swept is not None and swept.status is ActionStatus.FAILED
+        result = swept.result
+        assert result is not None
+        assert result.reason_code is ReasonCode.ACTION_TIMEOUT
+        assert "200 ms lease" in result.message
+        assert "while waiting" in result.message
+        assert channel.pending_count == 0, "a timed-out submission must not be served later"
+
+    def test_a_started_record_never_settled_times_out_too(self) -> None:
+        # A shape the loop only produces across a crash (taken, never settled),
+        # constructed directly so the guard is provable.
+        clock = FakeClock(BASE_TIME_MS)
+        channel = ActionChannel(clock=clock)
+        record = channel.submit(_request("sweep-2", lease_ms=200))
+        assert channel.take_next() is not None
+
+        clock.advance(200 + ACTION_SWEEP_GRACE_MS + 1)
+        ended = channel.sweep(clock.now)
+
+        assert [r.action_id for r in ended] == [record.action_id]
+        swept = channel.status(record.action_id)
+        assert swept is not None and swept.status is ActionStatus.FAILED
+        result = swept.result
+        assert result is not None
+        assert result.reason_code is ReasonCode.ACTION_TIMEOUT
+        assert "after it was started" in result.message
+
+    def test_the_loop_s_own_tick_runs_the_sweep(self, tmp_path: Path) -> None:
+        with attached_world(tmp_path) as world:
+            channel = world.loop.actions
+            assert channel is not None
+            record = channel.submit(
+                ActionRequest(
+                    action=ActionName.ACTION_WAIT,
+                    session_id=world.session_id,
+                    idempotency_key="tick-sweep-1",
+                    args={"game_seconds": 1.0},
+                    lease_ms=200,
+                )
+            )
+            world.clock.advance(200 + ACTION_SWEEP_GRACE_MS + 1)
+
+            world.loop.tick()
+
+            swept = channel.status(record.action_id)
+            assert swept is not None and swept.status is ActionStatus.FAILED
+            result = swept.result
+            assert result is not None and result.reason_code is ReasonCode.ACTION_TIMEOUT
+
+
+class TestReattachEndsOrphans:
+    """A client polling an old id after a re-attach reads a terminal answer."""
+
+    def test_a_started_record_from_the_previous_attachment_ends_as_lost(
+        self, tmp_path: Path
+    ) -> None:
+        with attached_world(tmp_path) as world:
+            channel = world.loop.actions
+            assert channel is not None
+            waiting = channel.submit(
+                ActionRequest(
+                    action=ActionName.ACTION_WAIT,
+                    session_id=world.session_id,
+                    idempotency_key="orphan-waiting",
+                    args={"game_seconds": 1.0},
+                )
+            )
+            started = channel.submit(
+                ActionRequest(
+                    action=ActionName.ACTION_WAIT,
+                    session_id=world.session_id,
+                    idempotency_key="orphan-started",
+                    args={"game_seconds": 1.0},
+                )
+            )
+            taken = channel.take_next()  # the waiting one, oldest first
+            assert taken is not None and taken[0] == waiting.action_id
+
+            world.loop.shutdown(reason="restarting")
+            # Shutdown ends what waits; what was taken has no engine any more
+            # and is exactly the record the next attach must not leave open.
+            open_after_shutdown = channel.status(waiting.action_id)
+            assert open_after_shutdown is not None
+            assert open_after_shutdown.status is ActionStatus.STARTED
+
+            outcome = world.loop.attach()
+            assert outcome.attached, outcome.detail
+
+            orphan = channel.status(waiting.action_id)
+            assert orphan is not None and orphan.status is ActionStatus.LOST
+            result = orphan.result
+            assert result is not None
+            assert result.reason_code is ReasonCode.STALE_SESSION
+            assert "re-attached" in result.message
+            assert "never observed" in result.message
+            # The one that was still waiting was already ended by shutdown's
+            # own lever and keeps that record — the attach invents nothing.
+            cleared = channel.status(started.action_id)
+            assert cleared is not None and cleared.status is ActionStatus.CANCELLED
+            result = cleared.result
+            assert result is not None
+            assert result.reason_code is ReasonCode.CANCELLED_BY_REQUEST
 
 
 class TestTheServicesBundle:

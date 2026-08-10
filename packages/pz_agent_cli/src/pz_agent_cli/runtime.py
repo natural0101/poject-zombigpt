@@ -10,14 +10,19 @@ idempotency by :class:`~pz_agent_core.ipc.queue.CommandQueue`, the world model b
 :class:`~pz_agent_core.actions.engine.ActionEngine`. This module is wiring and
 lifecycle, and the five properties below are what it is responsible for:
 
-* **Attaching is not arming.** :meth:`SidecarLoop.attach` always comes up in
-  ``OBSERVE``, on a fresh session and on a resumed one alike, and there is no
-  parameter that changes that. ``session.default_mode`` in ``config.toml`` names
-  what :meth:`SidecarLoop.arm` would select; it is not consulted here. The only
-  code that sets ``armed`` is :meth:`SidecarLoop.arm`, and the only thing that
-  reaches it is an explicit user request — which is additionally refused when it
-  was issued before this process attached, so a request file left behind by a
-  crashed run cannot re-arm the run that replaces it.
+* **Attaching is not arming, and arming is the game's to confirm.**
+  :meth:`SidecarLoop.attach` always comes up in ``OBSERVE``, on a fresh session
+  and on a resumed one alike, and there is no parameter that changes that.
+  ``session.default_mode`` in ``config.toml`` names what :meth:`SidecarLoop.arm`
+  would select; it is not consulted here. The only code that sets ``armed`` is
+  the arm's confirmation (:meth:`SidecarLoop._grant_arm`), reached exclusively
+  through an explicit :meth:`SidecarLoop.arm` — which submits a ``session.arm``
+  command to the mod and grants nothing until the mod's terminal ack *and* a
+  game heartbeat reporting the armed mode are both observed, because the
+  2026-08-08 live run proved a sidecar that flips its own flag arms nobody.
+  An arm request issued before this process attached is additionally refused,
+  so a request file left behind by a crashed run cannot re-arm the run that
+  replaces it.
 
 * **The reflex guard runs first.** Every tick evaluates it before a single
   command is composed, whether or not a planner is attached and whether or not
@@ -211,6 +216,23 @@ ARMABLE_MODES: Final[frozenset[SessionMode]] = frozenset(
     {SessionMode.ASSISTED, SessionMode.AUTONOMOUS}
 )
 
+#: Wall time an arm may wait for the game's own confirmation before it is
+#: refused. Live finding (Build 42.20.2, 2026-08-08): ``pz_session_arm``
+#: answered ``armed=true`` having armed only the sidecar — no ``session.arm``
+#: command was ever enqueued, and the game kept publishing ``armed=false`` /
+#: ``mode=OFF``. Arming is therefore two-phase: the command travels the queue,
+#: and authority is granted only once the mod's terminal ack *and* a game
+#: heartbeat reporting the armed mode are both observed. Forty ticks at the
+#: default interval — several round trips for a mod that answers, short enough
+#: that a mod that does not answer is a refusal, not a hang.
+DEFAULT_ARM_CONFIRM_TIMEOUT_MS: Final = 5_000
+
+#: Hard ceiling on the configured confirmation window; it doubles as the lease
+#: on the ``session.arm`` command itself, so it must stay a lease the protocol
+#: accepts (``MAX_LEASE_MS``) and short enough that "the game never confirmed"
+#: arrives while the user is still watching.
+MAX_ARM_CONFIRM_TIMEOUT_MS: Final = 60_000
+
 #: Sleeps for the given number of milliseconds. Injected everywhere so a test
 #: drives thousands of ticks without a single real pause.
 Sleeper: TypeAlias = Callable[[int], None]
@@ -274,6 +296,7 @@ class LoopLimits:
     action_window_ms: int = DEFAULT_ACTION_WINDOW_MS
     observations_per_tick: int = DEFAULT_OBSERVATIONS_PER_TICK
     observation_window: int = DEFAULT_WINDOW
+    arm_confirm_timeout_ms: int = DEFAULT_ARM_CONFIRM_TIMEOUT_MS
 
     def __post_init__(self) -> None:
         if not 0 <= self.tick_interval_ms <= MAX_TICK_INTERVAL_MS:
@@ -296,6 +319,14 @@ class LoopLimits:
             raise LoopError(
                 f"observations_per_tick must be within 1..{MAX_OBSERVATIONS_PER_TICK}, "
                 f"got {self.observations_per_tick}"
+            )
+        # The floor is the protocol's own MIN_LEASE_MS (100): the window is also
+        # the lease on the session.arm command, and a lease the protocol refuses
+        # would turn every arm into an INVALID_ARGUMENT at build time.
+        if not 100 <= self.arm_confirm_timeout_ms <= MAX_ARM_CONFIRM_TIMEOUT_MS:
+            raise LoopError(
+                f"arm_confirm_timeout_ms must be within 100..{MAX_ARM_CONFIRM_TIMEOUT_MS}, "
+                f"got {self.arm_confirm_timeout_ms}"
             )
 
 
@@ -886,12 +917,82 @@ class RunSummary:
 
 @dataclass(frozen=True, slots=True)
 class ArmOutcome:
-    """Whether an arm or disarm request took effect, and why not if it did not."""
+    """Whether an arm or disarm request took effect, and why not if it did not.
+
+    ``pending`` marks the one answer that is neither: the arm passed every
+    local gate and a ``session.arm`` command is on its way to the mod, but no
+    authority has been granted — ``armed`` stays False until the game's own
+    terminal ack and a heartbeat reporting the armed mode are both observed
+    (see :meth:`SidecarLoop.arm`). A caller that reads ``armed`` alone still
+    reads the truth: nothing is armed yet.
+    """
 
     armed: bool
     mode: SessionMode
     detail: str
     changed: bool = False
+    pending: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class PendingArm:
+    """One arm awaiting the game's confirmation; see :meth:`SidecarLoop.arm`.
+
+    Immutable and replaced whole (the one transition, ``acked``, goes through
+    :func:`dataclasses.replace`), so the Core RPC serving thread may read
+    :attr:`SidecarLoop.pending_arm` without a lock. ``nonce`` ties the arm back
+    to the control request that asked for it, when one did — that is how the
+    resolution reaches :class:`ControlDecision` only once the outcome is known.
+    """
+
+    command_id: str
+    idempotency_key: str
+    mode: SessionMode
+    session_id: str
+    requested_at_ms: int
+    deadline_ms: int
+    nonce: str | None = None
+    #: The mod's terminal ``succeeded`` ack has been seen; the confirming
+    #: heartbeat has not. Kept so the deadline refusal can name which half of
+    #: the confirmation went missing.
+    acked: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class DisarmNotice:
+    """What became of one ``session.disarm`` sent to the game.
+
+    Disarming is never gated — the sidecar drops its own authority before this
+    command is even built — so this record carries no authority either way. It
+    exists because the opposite silence was the live finding's mirror image: a
+    sidecar that reports ``disarmed`` while the game still holds ``ASSISTED``
+    is lying by omission, and the only honest states are "the mod confirmed it
+    dropped to OFF", "the mod refused and said why", and "nothing confirmed
+    anything within the bound".
+    """
+
+    command_id: str
+    confirmed: bool
+    detail: str
+
+
+@dataclass(frozen=True, slots=True)
+class PausedGoal:
+    """The active goal as it stood when the user took over.
+
+    §8: user input always wins, and the goal channel's only lever for that
+    today is a cancel — the goals package has no ``PAUSED`` state. This marker
+    is the loop's honest bridge: the goal's record in the queue ends as
+    ``CANCELLED`` (through the queue's own vocabulary, nothing invented), and
+    the loop keeps *this* beside it so status can say "paused by your
+    takeover, not abandoned by the agent". Nothing resumes it implicitly — a
+    new arm does not, on purpose — resuming is an explicit fresh submission.
+    """
+
+    goal_id: str
+    kind: str
+    reason: str
+    paused_at_ms: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -947,6 +1048,20 @@ DEFAULT_MAX_PENDING_ACTIONS: Final = 4
 #: ended. Long enough that a client polling at a sane rate never loses the id
 #: it is waiting on; short enough to be a ring, not a log.
 DEFAULT_MAX_REMEMBERED_ACTIONS: Final = 32
+
+#: The lease a submission is held to when its request somehow carries none.
+#: :class:`~pz_agent_core.actions.engine.ActionRequest` bounds its own
+#: ``lease_ms`` at construction, so this default is a belt for the seam, not a
+#: path anything ordinary takes — but a record admitted without a bound would
+#: be the one thing in the channel allowed to live forever.
+DEFAULT_ACTION_LEASE_MS: Final = 30_000
+
+#: Grace past a submission's lease before the sweep ends it. The lease is the
+#: caller's own timeout (``router.py`` passes the tool's ``timeout_ms``), and
+#: a dispatch that started just inside it deserves the engine's answer rather
+#: than a racing sweep; one game-heartbeat timeout of slack is enough for
+#: that and never enough to matter to a caller that has already given up.
+ACTION_SWEEP_GRACE_MS: Final = 5_000
 
 
 def mint_action_id() -> str:
@@ -1006,6 +1121,8 @@ class ActionChannel:
         max_pending: int = DEFAULT_MAX_PENDING_ACTIONS,
         max_remembered: int = DEFAULT_MAX_REMEMBERED_ACTIONS,
         new_id: Callable[[], str] = mint_action_id,
+        default_lease_ms: int = DEFAULT_ACTION_LEASE_MS,
+        sweep_grace_ms: int = ACTION_SWEEP_GRACE_MS,
     ) -> None:
         if max_pending < 1:
             raise LoopError(f"max_pending must be positive, got {max_pending}")
@@ -1016,10 +1133,16 @@ class ActionChannel:
             raise LoopError(
                 f"max_remembered must exceed max_pending ({max_pending}), got {max_remembered}"
             )
+        if default_lease_ms < 1:
+            raise LoopError(f"default_lease_ms must be positive, got {default_lease_ms}")
+        if sweep_grace_ms < 0:
+            raise LoopError(f"sweep_grace_ms must be non-negative, got {sweep_grace_ms}")
         self._clock = clock
         self._new_id = new_id
         self._max_pending = max_pending
         self._max_remembered = max_remembered
+        self._default_lease_ms = default_lease_ms
+        self._sweep_grace_ms = sweep_grace_ms
         self._lock = threading.Lock()
         #: Every record this channel has minted and not yet evicted, oldest
         #: first. Values are frozen and replaced whole; see the class docstring.
@@ -1030,6 +1153,11 @@ class ActionChannel:
         self._requests: dict[str, ActionRequest] = {}
         #: Submissions the tick thread has not taken yet, oldest first.
         self._pending: OrderedDict[str, ActionRequest] = OrderedDict()
+        #: action id -> (lease applied, wall deadline). Held only while the
+        #: record is non-terminal: the deadline is what the sweep enforces, and
+        #: a record that already carries its terminal answer has nothing left
+        #: to bound. Trimmed with the record store.
+        self._deadlines: dict[str, tuple[int, int]] = {}
         #: idempotency key -> action id, trimmed with the record store.
         self._by_key: dict[str, str] = {}
         #: Sequence numbers for the refusal results this channel synthesises
@@ -1094,6 +1222,16 @@ class ActionChannel:
                 status=ActionStatus.ACCEPTED,
                 idempotency_key=request.idempotency_key,
             )
+            # Every record is admitted with a wall deadline: the request's own
+            # lease (the caller's tool timeout, via router.py) when it carries
+            # one, the channel's bounded default when it somehow does not. An
+            # ``accepted`` that nothing ever bounds is an id its submitter
+            # polls forever; see :meth:`sweep`.
+            lease = request.lease_ms if request.lease_ms > 0 else self._default_lease_ms
+            self._deadlines[record.action_id] = (
+                lease,
+                self._clock() + lease + self._sweep_grace_ms,
+            )
             self._records[record.action_id] = record
             self._requests[record.action_id] = request
             self._pending[record.action_id] = request
@@ -1102,7 +1240,15 @@ class ActionChannel:
             return record
 
     def status(self, action_id: str) -> ActionRecord | None:
-        """The record for *action_id*, or None for an id never minted or evicted."""
+        """The record for *action_id*, or None for an id unknown to this channel.
+
+        None covers exactly three truths, all of them "this process cannot
+        say more": the id was never minted here, it was evicted after its
+        record turned terminal, or it was minted by a previous process (a
+        restarted sidecar starts with an empty store). It never means "still
+        running" — a live record always answers — so a boundary serving this
+        port can honestly tell "unknown id" apart from any lifecycle state.
+        """
         with self._lock:
             return self._records.get(action_id)
 
@@ -1145,6 +1291,7 @@ class ActionChannel:
             settled = replace(record, status=result.status, result=result, progress=result.progress)
             self._records[action_id] = settled
             self._records.move_to_end(action_id)
+            self._deadlines.pop(action_id, None)
             self._evict()
             return settled
 
@@ -1180,8 +1327,103 @@ class ActionChannel:
                 settled = replace(self._records[action_id], status=status, result=refusal)
                 self._records[action_id] = settled
                 self._records.move_to_end(action_id)
+                self._deadlines.pop(action_id, None)
                 ended.append(settled)
             self._evict()
+            return tuple(ended)
+
+    def sweep(self, now_ms: int) -> tuple[ActionRecord, ...]:
+        """End every record that outlived its lease plus grace. Bounded, honest.
+
+        The tick thread calls this once per tick. An ``accepted`` record can
+        wait indefinitely on gates that never open — a silent game, a spent
+        budget, a world with no observation — and a ``started`` one can be
+        orphaned by a crash between :meth:`take_next` and :meth:`settle`. Both
+        end here as ``FAILED`` / ``ACTION_TIMEOUT`` with a message that says
+        which state they timed out in, because a submitter polling the id must
+        eventually read a terminal answer, not a promise that outlived its own
+        deadline. Nothing that is inside its lease is touched.
+        """
+        with self._lock:
+            ended: list[ActionRecord] = []
+            for action_id, record in list(self._records.items()):
+                if record.terminal:
+                    continue
+                bound = self._deadlines.get(action_id)
+                if bound is None:
+                    continue
+                lease, deadline = bound
+                if now_ms < deadline:
+                    continue
+                request = self._requests[action_id]
+                waiting = self._pending.pop(action_id, None) is not None
+                phase = (
+                    "while waiting for a tick to serve it"
+                    if waiting
+                    else "after it was started, without a terminal result"
+                )
+                self._seq += 1
+                timeout = ActionResult.failure(
+                    session_id=request.session_id,
+                    seq=self._seq,
+                    command_id=action_id,
+                    action=request.action.value,
+                    timestamp_ms=now_ms,
+                    reason_code=ReasonCode.ACTION_TIMEOUT,
+                    status=ActionStatus.FAILED,
+                    message=(
+                        f"no terminal outcome was observed within the {lease} ms lease "
+                        f"plus {self._sweep_grace_ms} ms grace; the submission timed "
+                        f"out {phase}"
+                    ),
+                )
+                settled = replace(record, status=ActionStatus.FAILED, result=timeout)
+                self._records[action_id] = settled
+                self._records.move_to_end(action_id)
+                self._deadlines.pop(action_id, None)
+                ended.append(settled)
+            if ended:
+                self._evict()
+            return tuple(ended)
+
+    def close_open(self, reason_code: ReasonCode, *, message: str) -> tuple[ActionRecord, ...]:
+        """End *every* non-terminal record, waiting or started, and say why.
+
+        The re-attach lever. :meth:`clear_pending` deliberately leaves a taken
+        submission to the engine that is driving it — but across an attach
+        there is no such engine any more: the records belong to a session that
+        ended, and a client polling one of their ids must read a terminal
+        answer rather than an ``accepted`` frozen forever. A waiting record
+        ends ``CANCELLED`` (nothing ever ran); a started one ends ``LOST``,
+        because whether the previous attachment's work finished is a fact
+        nobody observed.
+        """
+        with self._lock:
+            ended: list[ActionRecord] = []
+            for action_id, record in list(self._records.items()):
+                if record.terminal:
+                    continue
+                request = self._requests[action_id]
+                waiting = self._pending.pop(action_id, None) is not None
+                status = ActionStatus.CANCELLED if waiting else ActionStatus.LOST
+                self._seq += 1
+                refusal = ActionResult.failure(
+                    session_id=request.session_id,
+                    seq=self._seq,
+                    command_id=action_id,
+                    action=request.action.value,
+                    timestamp_ms=self._clock(),
+                    reason_code=reason_code,
+                    status=status,
+                    message=message,
+                )
+                settled = replace(record, status=status, result=refusal)
+                self._records[action_id] = settled
+                self._records.move_to_end(action_id)
+                self._deadlines.pop(action_id, None)
+                ended.append(settled)
+            if ended:
+                self._evict()
             return tuple(ended)
 
     def _evict(self) -> None:
@@ -1201,6 +1443,7 @@ class ActionChannel:
                 return
             record = self._records.pop(victim)
             self._requests.pop(victim, None)
+            self._deadlines.pop(victim, None)
             if self._by_key.get(record.idempotency_key) == victim:
                 self._by_key.pop(record.idempotency_key, None)
 
@@ -1269,6 +1512,11 @@ class SidecarLoop:
     _attached: _Attached | None = field(default=None, init=False)
     _mode: SessionMode = field(default=SessionMode.OBSERVE, init=False)
     _armed: bool = field(default=False, init=False)
+    _pending_arm: PendingArm | None = field(default=None, init=False)
+    _arm_resolution: ArmOutcome | None = field(default=None, init=False)
+    _pending_disarm: PendingArm | None = field(default=None, init=False)
+    _disarm_notice: DisarmNotice | None = field(default=None, init=False)
+    _paused_goal: PausedGoal | None = field(default=None, init=False)
     _control_decision: ControlDecision | None = field(default=None, init=False)
     _tick: int = field(default=0, init=False)
     _budget: ActionBudget = field(init=False)
@@ -1312,8 +1560,29 @@ class SidecarLoop:
 
     @property
     def armed(self) -> bool:
-        """Never True except after an explicit :meth:`arm`. Not configurable."""
+        """Never True except after a *confirmed* :meth:`arm`. Not configurable."""
         return self._armed
+
+    @property
+    def pending_arm(self) -> PendingArm | None:
+        """The arm awaiting the game's confirmation, if one is. Frozen, replaced whole."""
+        return self._pending_arm
+
+    @property
+    def arm_resolution(self) -> ArmOutcome | None:
+        """How the last two-phase arm resolved, for callers that did not travel
+        the control channel. Written on the tick thread, replaced whole."""
+        return self._arm_resolution
+
+    @property
+    def disarm_notice(self) -> DisarmNotice | None:
+        """What the game said to the last ``session.disarm``; see :class:`DisarmNotice`."""
+        return self._disarm_notice
+
+    @property
+    def paused_goal(self) -> PausedGoal | None:
+        """The goal parked by the user's takeover, until a new goal is activated."""
+        return self._paused_goal
 
     @property
     def store(self) -> ObservationStore:
@@ -1392,7 +1661,26 @@ class SidecarLoop:
         were minted under. What it does not keep is authority: ``resume`` mints a
         new sidecar nonce and this method sets the mode to ``OBSERVE``
         unconditionally, on both paths.
+
+        Attaching twice is refused, not layered. A second attach on a loop that
+        is already attached would build a second :class:`_Attached` — a second
+        ``JournalWriter`` over the same command journal, its sequences starting
+        at zero — without closing the first: the in-process twin of the
+        duplicate producer the cross-process :class:`SidecarLock` exists to
+        refuse, and the callers that legitimately re-attach (``restart`` in the
+        test worlds, a supervisor bringing a loop back) all shut down first.
+        The refusal names the session so the caller knows what to shut down.
         """
+        already = self._attached
+        if already is not None:
+            return AttachOutcome(
+                attached=False,
+                detail=(
+                    f"this loop is already attached to session "
+                    f"{already.session.session_id}; a second attach would open a second "
+                    "producer over the same journals — shut down first"
+                ),
+            )
         self.layout.ensure()
         self.state_dir.mkdir(parents=True, exist_ok=True)
         manager = self._session_manager()
@@ -1424,6 +1712,22 @@ class SidecarLoop:
             session = manager.create(mode=SessionMode.OBSERVE)
         self._mode = SessionMode.OBSERVE
         self._armed = False
+        self._pending_arm = None
+        self._pending_disarm = None
+        if self.actions is not None:
+            # Records left from before this attachment — a started submission a
+            # crashed drive never settled, anything shutdown's clear could not
+            # see — turn terminal now, so a client polling an old action id
+            # after a re-attach reads an answer rather than ``accepted``
+            # forever. The wording mirrors shutdown's clear_pending: what ended
+            # this work is named, nothing about its outcome is invented.
+            self.actions.close_open(
+                ReasonCode.STALE_SESSION,
+                message=(
+                    f"the sidecar re-attached (session {session.session_id}) while "
+                    "this action was open; its outcome was never observed"
+                ),
+            )
         self._attached = self._build(session)
         self._publish_heartbeat()
         detail = (
@@ -1475,8 +1779,30 @@ class SidecarLoop:
         """Disarm, close in-flight work honestly, and release the lock."""
         lost: tuple[ActionResult, ...] = ()
         attached = self._attached
+        was_armed = self._armed
         self._armed = False
         self._mode = SessionMode.OBSERVE
+        pending_arm = self._pending_arm
+        if pending_arm is not None:
+            self._resolve_arm(
+                pending_arm,
+                armed=False,
+                detail=f"the sidecar shut down before the game confirmed the arm: {reason}",
+            )
+        if was_armed and attached is not None:
+            # The game holds an armed mode this process granted; tell it to
+            # drop to OFF now rather than whenever the sidecar heartbeat goes
+            # stale. Nothing will tick to read the ack, and that is stated
+            # rather than papered over.
+            self._submit_session_disarm(
+                attached,
+                detail=(
+                    "session.disarm sent at shutdown; no tick remains to read the "
+                    "ack, so the mod's stale-sidecar disarm is the backstop"
+                ),
+                watch=False,
+            )
+        self._pending_disarm = None
         if self.goals is not None:
             # The queue dies with this process; ending the active goal through
             # its own disarm keeps the record honest for as long as it exists.
@@ -1516,20 +1842,53 @@ class SidecarLoop:
     # -- arming ------------------------------------------------------------
 
     def arm(self, mode: SessionMode = SessionMode.ASSISTED) -> ArmOutcome:
-        """Grant authority to act. The only thing in this module that sets ``armed``.
+        """Ask for authority to act. Two-phase: nothing here sets ``armed``.
 
         Refused while the panic sentinel is present and while the game is silent:
         arming against a world nothing is reporting on grants authority over
         nothing. The re-arm requirement §3.12 raises after a save change or a
-        game restart is cleared *here*, by this explicit call, and nowhere else —
-        which is the whole reason it exists as a flag rather than as a timeout.
+        game restart is cleared only by the *confirmation* of this explicit call,
+        and nowhere else — which is the whole reason it exists as a flag rather
+        than as a timeout.
+
+        Two-phase, because of the 2026-08-08 live run: the sidecar flipped its
+        own ``armed`` and answered ``armed=true`` while the game — which never
+        received a ``session.arm`` command — kept publishing ``mode=OFF``. The
+        local gates above are still only the sidecar's opinion; authority over
+        the character is the mod's to grant. So this method submits a
+        ``session.arm`` command through the ordinary queue (lease, sequencing
+        and ack tracking included) and returns ``pending``: across the next
+        ticks, :meth:`_watch_pending_arm` waits for the mod's terminal
+        ``succeeded`` ack *and* a fresh game heartbeat of this session
+        reporting ``armed=true`` in the requested mode, and only both observed
+        together set ``armed`` (:meth:`_grant_arm`). A failed ack, a missing
+        confirmation or the :attr:`LoopLimits.arm_confirm_timeout_ms` deadline
+        resolves ``armed=false`` with the honest reason, published as the
+        request's :class:`ControlDecision` and as :attr:`arm_resolution`.
         """
         attached = self._require_attached()
+        pending = self._pending_arm
+        if pending is not None:
+            return ArmOutcome(
+                armed=self._armed,
+                mode=self._mode,
+                detail=(
+                    f"an arm into {pending.mode.value} (command {pending.command_id}) "
+                    "is already awaiting the game's confirmation; wait for it to resolve"
+                ),
+                pending=True,
+            )
         if mode not in ARMABLE_MODES:
             return ArmOutcome(
                 armed=self._armed,
                 mode=self._mode,
                 detail=f"{mode.value} is not a mode this build arms into",
+            )
+        if self._armed and self._mode is mode:
+            return ArmOutcome(
+                armed=True,
+                mode=mode,
+                detail=f"already armed in {mode.value} on session {attached.session.session_id}",
             )
         if self.panic_engaged():
             return ArmOutcome(
@@ -1550,9 +1909,155 @@ class SidecarLoop:
         refusal = self._multiplayer_refusal()
         if refusal is not None:
             return ArmOutcome(armed=False, mode=self._mode, detail=refusal)
-        manager = self._session_manager()
-        manager.mark_rearmed()
-        self._mode = mode
+        now = self.clock()
+        timeout = self.limits.arm_confirm_timeout_ms
+        command = attached.queue.build(
+            ActionName.SESSION_ARM,
+            idempotency_key=f"session-arm-{uuid.uuid4().hex}",
+            # The command is only good for as long as this loop will wait for
+            # its confirmation; a session.arm the mod digs up later must not
+            # grant a mode nobody is asking for any more.
+            lease_ms=timeout,
+            args={"mode": mode.value},
+        )
+        outcome = attached.queue.submit(command)
+        if not outcome.accepted:
+            rejection = outcome.terminal_result
+            return ArmOutcome(
+                armed=False,
+                mode=self._mode,
+                detail=(
+                    "session.arm did not reach the command journal: "
+                    f"{'the queue refused it' if rejection is None else rejection.message}"
+                ),
+            )
+        self._pending_arm = PendingArm(
+            command_id=outcome.command.command_id,
+            idempotency_key=outcome.command.idempotency_key,
+            mode=mode,
+            session_id=attached.session.session_id,
+            requested_at_ms=now,
+            deadline_ms=now + timeout,
+        )
+        return ArmOutcome(
+            armed=False,
+            mode=self._mode,
+            detail=(
+                f"session.arm {outcome.command.command_id} submitted for {mode.value}; "
+                f"awaiting the game's terminal ack and a confirming heartbeat "
+                f"(within {timeout} ms)"
+            ),
+            pending=True,
+        )
+
+    # -- the confirmation the arm waits for --------------------------------
+
+    def _watch_pending_arm(
+        self, attached: _Attached, now_ms: int, *, panic: bool, game_alive: bool
+    ) -> None:
+        """Advance the two-phase arm by what this tick observed; see :meth:`arm`.
+
+        The terminal ack is read from the queue's idempotency cache rather
+        than from a private ack reader: whichever drain consumed it — this
+        tick's poll or the engine's, mid-command — the cache holds the first
+        terminal result filed under the command's key, and a second reader
+        over the ack journal is exactly what :class:`QueueCommandSink` forbids.
+        """
+        pending = self._pending_arm
+        if pending is None:
+            return
+        if panic:
+            self._resolve_arm(
+                pending,
+                armed=False,
+                detail=(
+                    "a panic-stop sentinel appeared while the arm awaited the game's "
+                    "confirmation; clear it in the game and ask again"
+                ),
+            )
+            return
+        if not game_alive:
+            self._resolve_arm(
+                pending,
+                armed=False,
+                detail=(
+                    "the game stopped writing a heartbeat while the arm awaited its "
+                    "confirmation; nothing to arm"
+                ),
+            )
+            return
+        if not pending.acked:
+            ack = attached.queue.cache.replay(pending.idempotency_key)
+            if ack is not None:
+                if ack.status is not ActionStatus.SUCCEEDED:
+                    self._resolve_arm(
+                        pending,
+                        armed=False,
+                        detail=(
+                            f"the game refused session.arm ({ack.reason_code.value}): "
+                            f"{ack.message or 'no detail was given'}"
+                        ),
+                    )
+                    return
+                pending = replace(pending, acked=True)
+                self._pending_arm = pending
+        if pending.acked and self._arm_confirmed_by_heartbeat(pending):
+            self._grant_arm(attached, pending)
+            return
+        if now_ms < pending.deadline_ms:
+            return
+        timeout = self.limits.arm_confirm_timeout_ms
+        if pending.acked:
+            detail = (
+                f"the game acked session.arm ({pending.command_id}) but no heartbeat "
+                f"confirming armed=true in {pending.mode.value} arrived within "
+                f"{timeout} ms; the sidecar stays disarmed"
+            )
+        else:
+            detail = (
+                f"the game never confirmed the arm within {timeout} ms: no terminal "
+                f"ack for session.arm ({pending.command_id}) arrived; the sidecar "
+                "stays disarmed"
+            )
+        self._resolve_arm(pending, armed=False, detail=detail)
+        # Countermand: an ack that lands *after* this deadline must not leave
+        # the game armed in a mode this loop never granted, so the abandoned
+        # arm is followed by a disarm the mod honours unconditionally
+        # (session.disarm bypasses its arming gate by design).
+        self._submit_session_disarm(
+            attached,
+            detail="session.disarm sent to countermand an arm the game never confirmed",
+            watch=True,
+        )
+
+    def _arm_confirmed_by_heartbeat(self, pending: PendingArm) -> bool:
+        """Whether the game's *own* heartbeat reports the requested authority.
+
+        Same session, written no earlier than the request, ``armed=true`` and
+        the exact requested mode. The freshness bound is what stops a stale
+        armed heartbeat — one left over from before a crash — from confirming
+        an arm the current game process never granted.
+        """
+        liveness = self._heartbeats().liveness(Peer.GAME)
+        beat = liveness.heartbeat
+        return (
+            liveness.alive
+            and beat is not None
+            and beat.session_id == pending.session_id
+            and beat.timestamp_ms >= pending.requested_at_ms
+            and beat.armed is True
+            and beat.mode is pending.mode
+        )
+
+    def _grant_arm(self, attached: _Attached, pending: PendingArm) -> None:
+        """Both halves of the confirmation were observed; authority is real now.
+
+        Everything the one-phase arm used to do lands here instead: the §3.12
+        re-arm flag clears, the goal channel arms, the sidecar heartbeat says
+        so — each of them only ever downstream of the game's own word.
+        """
+        self._session_manager().mark_rearmed()
+        self._mode = pending.mode
         self._armed = True
         if self.goals is not None:
             # The channel arms and disarms with the session: activation is an
@@ -1561,12 +2066,36 @@ class SidecarLoop:
             with self.goal_lock:
                 self.goals.arm()
         self._publish_heartbeat()
-        return ArmOutcome(
+        self._resolve_arm(
+            pending,
             armed=True,
-            mode=mode,
-            detail=f"armed in {mode.value} on session {attached.session.session_id}",
-            changed=True,
+            detail=(
+                f"armed in {pending.mode.value} on session {pending.session_id}: the "
+                f"game acked session.arm ({pending.command_id}) and its heartbeat "
+                f"reports armed=true in {pending.mode.value}"
+            ),
         )
+
+    def _resolve_arm(self, pending: PendingArm, *, armed: bool, detail: str) -> None:
+        """End the pending arm with its observed outcome, everywhere it is read.
+
+        The :class:`ControlDecision` for the request that asked (when one did)
+        is published here and only here — the control waiter must never see a
+        decision for an arm whose two-phase outcome is not known yet.
+        """
+        self._pending_arm = None
+        self._arm_resolution = ArmOutcome(
+            armed=armed, mode=self._mode, detail=detail, changed=armed
+        )
+        if pending.nonce is not None:
+            self._control_decision = ControlDecision(
+                nonce=pending.nonce,
+                kind=ControlKind.ARM,
+                armed=self._armed,
+                mode=self._mode,
+                detail=detail,
+                applied=armed,
+            )
 
     def _journal_refusal(self) -> str | None:
         """Why this session may not be armed, when a damaged journal is the reason.
@@ -1637,8 +2166,27 @@ class SidecarLoop:
         ends in the queue's own vocabulary (``CANCELLED`` / ``NOT_ARMED``,
         E08-M02-T007) and the backlog stays, exactly as
         :meth:`~pz_agent_core.goals.GoalQueue.disarm` documents.
+
+        The game is told, without being waited for. ``session.disarm`` exists
+        end-to-end (the mod's ``DisarmAdapter`` drops its Safety state to
+        ``OFF`` and acks with the observed before/after), so when this disarm
+        actually revoked authority a ``session.disarm`` command follows it —
+        the mirror of the two-phase arm, minus the gate: the local disarm
+        takes effect *first* and unconditionally, because refusing to drop
+        authority is never right, and the game's answer is then watched the
+        same bounded way and reported on :attr:`disarm_notice` rather than
+        allowed to un-disarm anything. A disarm that revoked nothing sends
+        nothing: the panic level calls this every tick it holds, and a
+        command per tick would be the unbounded stream this project forbids.
         """
         changed = self._armed or self._mode is not SessionMode.OBSERVE
+        pending_arm = self._pending_arm
+        if pending_arm is not None:
+            self._resolve_arm(
+                pending_arm,
+                armed=False,
+                detail=f"a disarm ({reason}) superseded the arm awaiting the game's confirmation",
+            )
         self._armed = False
         self._mode = SessionMode.OBSERVE
         if self.goals is not None:
@@ -1656,6 +2204,12 @@ class SidecarLoop:
                 message=f"the sidecar disarmed while this submission waited: {reason}",
             )
         if self._attached is not None:
+            if changed:
+                self._submit_session_disarm(
+                    self._attached,
+                    detail=f"session.disarm sent after disarming locally ({reason})",
+                    watch=True,
+                )
             self._publish_heartbeat()
         return ArmOutcome(
             armed=False,
@@ -1663,6 +2217,98 @@ class SidecarLoop:
             detail=f"disarmed: {reason}",
             changed=changed,
         )
+
+    def _submit_session_disarm(self, attached: _Attached, *, detail: str, watch: bool) -> None:
+        """Ship one ``session.disarm`` and, when a tick remains to read it, watch it.
+
+        Never raises and never gates anything: the local disarm this follows
+        has already happened, and a command journal that cannot take the
+        record is reported on :attr:`disarm_notice` as unconfirmed rather than
+        allowed to matter to the revocation.
+        """
+        timeout = self.limits.arm_confirm_timeout_ms
+        command = attached.queue.build(
+            ActionName.SESSION_DISARM,
+            idempotency_key=f"session-disarm-{uuid.uuid4().hex}",
+            lease_ms=timeout,
+        )
+        outcome = attached.queue.submit(command)
+        if not outcome.accepted:
+            rejection = outcome.terminal_result
+            self._pending_disarm = None
+            self._disarm_notice = DisarmNotice(
+                command_id=command.command_id,
+                confirmed=False,
+                detail=(
+                    "session.disarm did not reach the command journal: "
+                    f"{'the queue refused it' if rejection is None else rejection.message}"
+                ),
+            )
+            return
+        now = self.clock()
+        self._disarm_notice = DisarmNotice(
+            command_id=outcome.command.command_id,
+            confirmed=False,
+            detail=detail,
+        )
+        self._pending_disarm = (
+            PendingArm(
+                command_id=outcome.command.command_id,
+                idempotency_key=outcome.command.idempotency_key,
+                mode=SessionMode.OBSERVE,
+                session_id=attached.session.session_id,
+                requested_at_ms=now,
+                deadline_ms=now + timeout,
+            )
+            if watch
+            else None
+        )
+
+    def _watch_pending_disarm(self, attached: _Attached, now_ms: int) -> None:
+        """Fold the game's answer to ``session.disarm`` into :attr:`disarm_notice`.
+
+        The mod's ack is its own observed postcondition (the ``DisarmAdapter``
+        reports ``armed_after`` / ``mode_after``), so the ack alone settles
+        this — unlike the arm, no heartbeat is required, because nothing here
+        is waiting to *grant* anything on the strength of the answer.
+        """
+        pending = self._pending_disarm
+        if pending is None:
+            return
+        ack = attached.queue.cache.replay(pending.idempotency_key)
+        if ack is not None:
+            self._pending_disarm = None
+            if ack.status is ActionStatus.SUCCEEDED:
+                self._disarm_notice = DisarmNotice(
+                    command_id=pending.command_id,
+                    confirmed=True,
+                    detail=(
+                        "the game confirmed session.disarm "
+                        f"(armed_after={ack.evidence.get('armed_after')}, "
+                        f"mode_after={ack.evidence.get('mode_after')})"
+                    ),
+                )
+            else:
+                self._disarm_notice = DisarmNotice(
+                    command_id=pending.command_id,
+                    confirmed=False,
+                    detail=(
+                        f"the game answered session.disarm with {ack.status.value} "
+                        f"({ack.reason_code.value}): {ack.message or 'no detail was given'}"
+                    ),
+                )
+            return
+        if now_ms >= pending.deadline_ms:
+            self._pending_disarm = None
+            self._disarm_notice = DisarmNotice(
+                command_id=pending.command_id,
+                confirmed=False,
+                detail=(
+                    "the game never acked session.disarm within "
+                    f"{self.limits.arm_confirm_timeout_ms} ms; its own takeover and "
+                    "panic safety, and the stale-sidecar disarm, are the backstop"
+                ),
+            )
 
     def panic_engaged(self) -> bool:
         """True while the mod's panic sentinel is in the exchange directory."""
@@ -1682,6 +2328,10 @@ class SidecarLoop:
         # Drained here as well as inside the engine so that a terminal ack for a
         # command nobody is driving any more still frees the backpressure slot.
         attached.sink.poll_acks()
+        if self.actions is not None:
+            # Before anything is served: a submission past its lease must time
+            # out, not be dispatched against a world its caller gave up on.
+            self.actions.sweep(now)
 
         self._trace_observation()
 
@@ -1689,6 +2339,12 @@ class SidecarLoop:
         lost = self._apply_events(attached, events, now, panic=panic, game_alive=liveness.alive)
         self._trace_results(lost)
         disarmed_by_guard = any(event.forces_disarm for event in events) or panic
+
+        # The two-phase arm and the disarm notice advance on what this tick
+        # observed — after the stop levers above, so a panic or a silent game
+        # resolves a waiting arm before anything could grant it.
+        self._watch_pending_arm(attached, now, panic=panic, game_alive=liveness.alive)
+        self._watch_pending_disarm(attached, now)
 
         control = self._consume_control(now, attached.attached_at_ms)
         stop = self._apply_control(control, events)
@@ -1827,6 +2483,12 @@ class SidecarLoop:
                 closed = attached.queue.close_in_flight(event.reason_code, message=event.message)
                 if closed is not None:
                     lost.append(closed)
+        if any(e.reason_code is ReasonCode.USER_TAKEOVER for e in events):
+            # User input always wins, and a goal is the loop's largest unit of
+            # initiative — but "wins" must not mean "silently discards": the
+            # active goal is parked as paused-by-user *before* the cancel that
+            # ends it in the queue, so status keeps saying what happened to it.
+            self._pause_active_goal(now_ms, reason="manual takeover")
         forcing = sorted({e.reason_code.value for e in events if e.forces_disarm})
         if panic:
             # §8.1/§8.12 and E08-M02-T008: a panic stop leaves *nothing* in
@@ -1939,7 +2601,23 @@ class SidecarLoop:
                 ),
             )
             return None
-        outcome = self.arm(request.mode or SessionMode.ASSISTED)
+        wanted = request.mode or SessionMode.ASSISTED
+        outcome = self.arm(wanted)
+        pending = self._pending_arm
+        if outcome.pending and pending is not None:
+            if pending.nonce is None and pending.mode is wanted:
+                # No decision yet, on purpose: the waiter polling for this
+                # nonce must read the two-phase outcome, not the submission.
+                # The nonce rides on the pending arm and :meth:`_resolve_arm`
+                # publishes the decision once the confirmation — or its
+                # refusal — is observed.
+                self._pending_arm = replace(pending, nonce=request.nonce)
+                return None
+            # The pending arm answers to somebody else (an earlier request's
+            # nonce, or a different mode a direct caller asked for): this
+            # request is refused now, in the loop's own words.
+            self._decide(request, applied=False, detail=outcome.detail)
+            return None
         self._decide(request, applied=outcome.armed, detail=outcome.detail)
         return None
 
@@ -2093,7 +2771,38 @@ class SidecarLoop:
                 return active
             if not queue.pending:
                 return None
-            return queue.activate_next().goal
+            activated = queue.activate_next().goal
+        if activated is not None and self._paused_goal is not None:
+            # A fresh activation is the explicit resumption path: the user
+            # armed again and stated a goal, so the parked marker has served
+            # its purpose. Nothing before this point clears it — a bare re-arm
+            # keeps it visible on purpose.
+            self._paused_goal = None
+        return activated
+
+    def _pause_active_goal(self, now_ms: int, *, reason: str) -> None:
+        """Park the active goal as paused-by-user and ask the queue to end it.
+
+        The queue's own cancel is the only lever used — the goals package has
+        no ``PAUSED`` state, so the record honestly ends ``CANCELLED`` on a
+        following tick and the loop's :attr:`paused_goal` marker carries the
+        "paused, not abandoned" half until an explicit new activation replaces
+        it. Nothing implicit resumes it; see :class:`PausedGoal`.
+        """
+        queue = self.goals
+        if queue is None:
+            return
+        with self.goal_lock:
+            active = queue.active
+            if active is None:
+                return
+            self._paused_goal = PausedGoal(
+                goal_id=active.goal_id,
+                kind=active.kind.value,
+                reason=reason,
+                paused_at_ms=now_ms,
+            )
+            queue.request_cancel(active.goal_id)
 
     def _settle_goal_step(self, goal_id: str, result: ActionResult) -> None:
         """Fold one action's terminal result into the goal it served.

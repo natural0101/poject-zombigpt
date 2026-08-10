@@ -13,8 +13,8 @@ The handover point between work sessions: read it first, update it last.
 >
 > | Epic | Status |
 > | --- | --- |
-> | `P0-build42-live-compat` — the 13 live-confirmed fixes | **wip** — this branch |
-> | `P0-windows-ipc-arm-recovery` — single-producer queues, pointer contention, two-phase arm, action status/wait tools | todo |
+> | `P0-build42-live-compat` — the 13 live-confirmed fixes | **done here, awaits live** — PR #1 |
+> | `P0-windows-ipc-arm-recovery` — single-producer queues, pointer contention, two-phase arm, action status/await tools | **done here, awaits live** — stacked on PR #1; latency p95 instrumentation still open |
 > | `P1-doors-navigation` — door state/actions, local navigation executor | todo |
 > | `P1-loot-area` — container primitives + `loot_area` goal | todo |
 > | `P2-continuous-goal-controller` — long-lived goals, needs arbitration | todo |

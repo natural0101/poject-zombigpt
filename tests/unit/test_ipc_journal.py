@@ -25,7 +25,7 @@ from pz_agent_core.ipc.journal import (
 from pz_agent_core.ipc.layout import IpcLayout
 from pz_agent_core.protocol import SessionMode
 from tests.fixtures.ipc_builders import FakeClock, make_layout
-from tests.fixtures.sidecar_worlds import attached_world
+from tests.fixtures.sidecar_worlds import ScriptedMod, arm_for_real, attached_world
 
 
 def _writer(tmp_path: Path, **kwargs: object) -> tuple[JournalWriter, JournalReader]:
@@ -532,9 +532,9 @@ class TestATruncatedJournalRefusesToArm:
         being detected, not an arm gate that always refuses.
         """
         with attached_world(tmp_path) as world:
+            mod = ScriptedMod(world)
             world.beat_game()
-            granted = world.loop.arm(SessionMode.ASSISTED)
-            assert granted.armed, f"the healthy control did not arm: {granted.detail}"
+            arm_for_real(world, mod, mode=SessionMode.ASSISTED)
             world.loop.disarm()
 
             whole = _truncate_last_record(world.layout)
@@ -553,13 +553,13 @@ class TestATruncatedJournalRefusesToArm:
             # refusal lifts — it was about the tear, not about the file.
             world.layout.command_ack.write_bytes(whole)
             world.beat_game()
-            assert world.loop.arm(SessionMode.ASSISTED).armed is True
+            arm_for_real(world, mod, mode=SessionMode.ASSISTED)
 
     def test_disarming_is_never_gated_on_a_damaged_journal(self, tmp_path: Path) -> None:
         """Taking authority away must work exactly when things are broken."""
         with attached_world(tmp_path) as world:
             world.beat_game()
-            assert world.loop.arm(SessionMode.ASSISTED).armed
+            arm_for_real(world, mode=SessionMode.ASSISTED)
             _truncate_last_record(world.layout)
 
             outcome = world.loop.disarm()

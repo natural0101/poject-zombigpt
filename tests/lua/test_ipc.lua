@@ -123,8 +123,16 @@ do
   local restarted = Ipc.new({ fileApi = fs.api, clock = function() return NOW end })
   equal(restarted:publishSnapshot({ seq = 4 }), "b", "a fresh handle continues the alternation")
 
+  -- The warm handle last committed slot a (seq 3) and alternates from that
+  -- memory: it never re-opens the pointer it is about to truncate, so torn
+  -- bytes on disk cannot derail it -- and on Windows it no longer collides
+  -- with its own read's sharing lock.
   fs:put(path("snapshot_pointer"), "{tor")
-  equal(handle:publishSnapshot({ seq = 5 }), "a", "an unreadable pointer restarts at slot a")
+  equal(handle:publishSnapshot({ seq = 5 }), "b", "a warm handle alternates from its own last commit, not the disk")
+
+  fs:put(path("snapshot_pointer"), "{tor")
+  local blank = Ipc.new({ fileApi = fs.api, clock = function() return NOW end })
+  equal(blank:publishSnapshot({ seq = 6 }), "a", "an unreadable pointer restarts a fresh handle at slot a")
 
   isNil(handle:publishSnapshot({ full = true }), "a snapshot without a seq is refused")
   isNil(handle:publishSnapshot({ seq = -1 }), "a negative seq is refused")
@@ -266,6 +274,217 @@ do
   equal(#handle:readLines("command_queue", 10), 10, "the limit can be raised per call")
   equal(#handle:readLines("command_queue", 5, 45), 5, "and a poll can skip lines it already consumed")
   equal(Json.decode(handle:readLines("command_queue", 1, 9)[1]).seq, 10, "skipping lands on the right record")
+end
+
+-- ---------------------------------------------------------------------------
+-- Windows sharing locks: a refused open is a race lost, not a lost publish.
+-- The wrappers below stand in for getFileWriter/getFileReader answering nil
+-- while someone else briefly holds the file.
+-- ---------------------------------------------------------------------------
+
+Harness.group("a refused writer open is retried inside the call, boundedly")
+do
+  local fs = Mock.newFilesystem()
+  local writerOpens = 0
+  local writerRefusals = 2
+  local handle = Ipc.new({
+    clock = function() return NOW end,
+    fileApi = {
+      openReader = function(name) return fs.api.openReader(name) end,
+      openWriter = function(name, append)
+        writerOpens = writerOpens + 1
+        if writerRefusals > 0 then
+          writerRefusals = writerRefusals - 1
+          return nil -- a sharing lock: getFileWriter answers nil, no raise
+        end
+        return fs.api.openWriter(name, append)
+      end,
+    },
+  })
+  ok(handle:writeDocument("game_heartbeat", { seq = 1 }) ~= nil, "two refusals then success: the write goes through")
+  equal(writerOpens, 3, "without exceeding the three-attempt budget")
+  equal(fs:read(path("game_heartbeat")), '{"seq":1}', "and the bytes landed intact")
+
+  local stuckFs = Mock.newFilesystem()
+  local stuckOpens = 0
+  local stuck = Ipc.new({
+    clock = function() return NOW end,
+    fileApi = {
+      openReader = function(name) return stuckFs.api.openReader(name) end,
+      openWriter = function()
+        stuckOpens = stuckOpens + 1
+        return nil
+      end,
+    },
+  })
+  local written, reason = stuck:writeDocument("game_heartbeat", { seq = 1 })
+  isNil(written, "a permanently refused open fails the write honestly")
+  contains(reason, path("game_heartbeat"), "naming the path")
+  contains(reason, "3 attempts", "and how many attempts were spent")
+  equal(stuckOpens, 3, "with no attempts beyond the budget")
+end
+
+Harness.group("a refused reader open is retried inside the call, boundedly")
+do
+  local fs = Mock.newFilesystem()
+  local readerOpens = 0
+  local readerRefusals = 2
+  local handle = Ipc.new({
+    clock = function() return NOW end,
+    fileApi = {
+      openWriter = function(name, append) return fs.api.openWriter(name, append) end,
+      openReader = function(name)
+        readerOpens = readerOpens + 1
+        if readerRefusals > 0 then
+          readerRefusals = readerRefusals - 1
+          return nil
+        end
+        return fs.api.openReader(name)
+      end,
+    },
+  })
+  fs:put(path("session"), '{"nonce":"abc"}')
+  local document = handle:readDocument("session")
+  equal(document.nonce, "abc", "two refused opens then success: the document reads")
+  equal(readerOpens, 3, "without exceeding the three-attempt budget")
+
+  -- A file that stays nil for the whole budget is absent, and absent keeps
+  -- its meaning: the exact wording Runtime.readSession treats as silence.
+  local absent, absentReason = handle:readDocument("capabilities")
+  isNil(absent, "an absent file is still not a document after the retries")
+  equal(absentReason, "document is empty or absent", "with the wording the retry budget must not change")
+end
+
+Harness.group("a reader close that raises is reported, not swallowed")
+do
+  local fs = Mock.newFilesystem()
+  local handle = Ipc.new({
+    clock = function() return NOW end,
+    fileApi = {
+      openWriter = function(name, append) return fs.api.openWriter(name, append) end,
+      openReader = function(name)
+        local reader = fs.api.openReader(name)
+        if reader == nil then
+          return nil
+        end
+        return {
+          readLine = function() return reader:readLine() end,
+          close = function() error("mock close failure", 0) end,
+        }
+      end,
+    },
+  })
+  fs:put(path("command_queue"), '{"seq":1}\n{"seq":2}\n')
+  local lines, closeFailure = handle:readLines("command_queue")
+  equal(#lines, 2, "the read still returns its data")
+  contains(closeFailure, "closing", "but the failed close is reported alongside it")
+  contains(closeFailure, path("command_queue"), "naming the file whose handle leaked")
+  contains(closeFailure, "mock close failure", "and carrying the engine's reason")
+end
+
+Harness.group("the slot cache stops the mod colliding with its own pointer")
+do
+  local fs = Mock.newFilesystem()
+  local pointerReads = 0
+  local handle = Ipc.new({
+    clock = function() return NOW end,
+    fileApi = {
+      openWriter = function(name, append) return fs.api.openWriter(name, append) end,
+      openReader = function(name)
+        if name == path("snapshot_pointer") then
+          pointerReads = pointerReads + 1
+        end
+        return fs.api.openReader(name)
+      end,
+    },
+  })
+  -- A healthy disk left behind by an earlier run: the pointer names slot a.
+  fs:put(path("snapshot_a"), '{"seq":7}')
+  fs:put(path("snapshot_pointer"), '{"slot":"a","seq":7,"written_at_ms":0}')
+  equal(handle:publishSnapshot({ seq = 8 }), "b", "the first publish follows the pointer on disk")
+  equal(pointerReads, 1, "which is the one and only pointer read")
+  equal(handle:publishSnapshot({ seq = 9 }), "a", "the second publish alternates")
+  equal(pointerReads, 1, "from memory, without opening the pointer for reading again")
+  equal(handle:publishSnapshot({ seq = 10 }), "b", "and so does the third")
+  equal(pointerReads, 1, "the cache holds for the life of the handle")
+end
+
+Harness.group("a refused pointer commit is carried over and committed first")
+do
+  local fs = Mock.newFilesystem()
+  local refusePointerWrites = false
+  local handle = Ipc.new({
+    clock = function() return NOW end,
+    fileApi = {
+      openReader = function(name) return fs.api.openReader(name) end,
+      openWriter = function(name, append)
+        if refusePointerWrites and name == path("snapshot_pointer") then
+          return nil
+        end
+        return fs.api.openWriter(name, append)
+      end,
+    },
+  })
+  equal(handle:publishSnapshot({ seq = 1 }), "a", "a healthy first publish commits slot a")
+
+  refusePointerWrites = true
+  local slot, reason = handle:publishSnapshot({ seq = 2 })
+  isNil(slot, "with the pointer refused the publish does not claim success")
+  contains(reason, "refused", "and says the open was refused")
+  equal(Json.decode(fs:read(path("snapshot_pointer"))).slot, "a", "the disk pointer still names the committed slot")
+  equal(Json.decode(fs:read(path("snapshot_pointer"))).seq, 1, "at its committed sequence")
+  equal(Json.decode(fs:read(path("snapshot_b"))).seq, 2, "even though the slot write itself succeeded")
+
+  refusePointerWrites = false
+  equal(handle:publishSnapshot({ seq = 3 }), "a", "the next publish lands after the carried-over slot, not on it")
+  local pointer = Json.decode(fs:read(path("snapshot_pointer")))
+  equal(pointer.slot, "a", "the final pointer names the freshly published slot")
+  equal(pointer.seq, 3, "with its sequence number")
+  local named = Json.decode(fs:read(path(pointer.slot == "a" and "snapshot_a" or "snapshot_b")))
+  equal(named.seq, 3, "and that slot holds the complete document the pointer claims")
+  equal(Json.decode(fs:read(path("snapshot_b"))).seq, 2, "while the carried-over slot keeps its complete document")
+end
+
+Harness.group("a pointer refused for ten publishes is persistent, and the pending state is dropped")
+do
+  local fs = Mock.newFilesystem()
+  local refusePointerWrites = true
+  local pointerWriteOpens = 0
+  local handle = Ipc.new({
+    clock = function() return NOW end,
+    fileApi = {
+      openReader = function(name) return fs.api.openReader(name) end,
+      openWriter = function(name, append)
+        if name == path("snapshot_pointer") then
+          pointerWriteOpens = pointerWriteOpens + 1
+          if refusePointerWrites then
+            return nil
+          end
+        end
+        return fs.api.openWriter(name, append)
+      end,
+    },
+  })
+  local reasons = {}
+  for publish = 1, 10 do
+    local slot, reason = handle:publishSnapshot({ seq = publish })
+    isNil(slot, "publish " .. publish .. " honestly fails while the pointer is refused")
+    reasons[publish] = reason
+  end
+  contains(reasons[1], "refused", "the first failure names the refused open")
+  ok(not reasons[9]:find("consecutive", 1, true), "the ninth still reports an ordinary refusal")
+  contains(reasons[10], "10 consecutive publishes", "the tenth reports the persistent failure")
+
+  -- After the drop a healthy publish starts over with a single pointer
+  -- commit: no pending state survived, and the pointer names the new
+  -- snapshot, never the dropped one.
+  refusePointerWrites = false
+  pointerWriteOpens = 0
+  equal(handle:publishSnapshot({ seq = 11 }), "a", "a healthy publish after the drop succeeds")
+  equal(pointerWriteOpens, 1, "with exactly one pointer commit, so nothing pending was retried")
+  local pointer = Json.decode(fs:read(path("snapshot_pointer")))
+  equal(pointer.seq, 11, "the pointer names the new snapshot")
+  equal(Json.decode(fs:read(path("snapshot_" .. pointer.slot))).seq, 11, "whose slot holds the document it claims")
 end
 
 Harness.finish("test_ipc")

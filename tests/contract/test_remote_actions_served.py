@@ -45,11 +45,14 @@ from pz_agent_cli.doctor import run_checks
 from pz_agent_cli.runtime import LoopLimits
 from pz_agent_core.actions import ActionRequest
 from pz_agent_core.ipc.clocks import system_clock_ms
-from pz_agent_core.ipc.journal import JournalWriter
+from pz_agent_core.ipc.journal import JournalReader, JournalWriter
 from pz_agent_core.protocol import (
     ActionName,
+    ActionResult,
     ActionStatus,
+    Command,
     Observation,
+    ProtocolError,
     ReasonCode,
     SessionMode,
 )
@@ -151,10 +154,21 @@ def test_remote_actions_are_served_end_to_end(tmp_path: Path) -> None:
     # well as by their stop events.
     feeder_stop = threading.Event()
 
+    #: The fake mod's own Safety state, written by the answerer thread and read
+    #: by the heartbeat keeper. Load-bearing since the two-phase arm: the loop
+    #: grants authority only on the mod's session.arm ack plus a heartbeat
+    #: reporting the armed mode, so a fake mod that never answered would
+    #: (correctly) never let this test arm.
+    mod_safety_lock = threading.Lock()
+    mod_safety = {"armed": False, "mode": SessionMode.OFF}
+
     def keep_beating() -> None:
         for _ in range(int(GRACE * 4) + 1):
             if feeder_stop.is_set():
                 return
+            with mod_safety_lock:
+                armed = bool(mod_safety["armed"])
+                mode = mod_safety["mode"]
             monitor.publish(
                 Peer.GAME,
                 session_id=session.session_id,
@@ -162,8 +176,55 @@ def test_remote_actions_are_served_end_to_end(tmp_path: Path) -> None:
                 version=PRODUCT_VERSION,
                 build="42.20",
                 player_present=True,
+                armed=armed,
+                mode=mode if isinstance(mode, SessionMode) else None,
             )
             feeder_stop.wait(0.5)
+
+    def keep_answering_session_control() -> None:
+        """The mod's Arm/DisarmAdapters, at the files: execute, then ack."""
+        reader = JournalReader(loop.layout, loop.layout.command_queue)
+        writer = JournalWriter(loop.layout, loop.layout.command_ack)
+        ack_seq = 0
+        try:
+            for _ in range(int(GRACE * 40) + 1):
+                if feeder_stop.is_set():
+                    return
+                for record in reader.read().records:
+                    try:
+                        command = Command.from_dict(record.payload)
+                    except ProtocolError:
+                        continue  # not this fake mod's to judge
+                    if command.action not in (
+                        ActionName.SESSION_ARM,
+                        ActionName.SESSION_DISARM,
+                    ):
+                        continue
+                    with mod_safety_lock:
+                        if command.action is ActionName.SESSION_ARM:
+                            mod_safety["armed"] = True
+                            mod_safety["mode"] = SessionMode(str(command.args.get("mode")))
+                        else:
+                            mod_safety["armed"] = False
+                            mod_safety["mode"] = SessionMode.OFF
+                        after_armed = bool(mod_safety["armed"])
+                        after_mode = mod_safety["mode"]
+                    ack = ActionResult.succeeded(
+                        session_id=command.session_id,
+                        seq=ack_seq,
+                        command_id=command.command_id,
+                        action=command.action.value,
+                        timestamp_ms=system_clock_ms(),
+                        evidence={
+                            "armed_after": after_armed,
+                            "mode_after": getattr(after_mode, "value", str(after_mode)),
+                        },
+                    )
+                    ack_seq += 1
+                    writer.append(ack.to_dict())
+                feeder_stop.wait(0.05)
+        finally:
+            writer.close()
 
     def keep_observing() -> None:
         writer = JournalWriter(loop.layout, loop.layout.observation_events)
@@ -185,8 +246,12 @@ def test_remote_actions_are_served_end_to_end(tmp_path: Path) -> None:
 
     beating = threading.Thread(target=keep_beating, name="fake-mod-heartbeat", daemon=True)
     observing = threading.Thread(target=keep_observing, name="fake-mod-observations", daemon=True)
+    answering = threading.Thread(
+        target=keep_answering_session_control, name="fake-mod-session-control", daemon=True
+    )
     beating.start()
     observing.start()
+    answering.start()
     try:
         # -- the second process's exact client path --------------------------
         remote = RemoteCoreServices.from_state_dir(workspace.state_dir, deadline=GRACE)
@@ -248,6 +313,7 @@ def test_remote_actions_are_served_end_to_end(tmp_path: Path) -> None:
         stop.set()
         beating.join(timeout=GRACE)
         observing.join(timeout=GRACE)
+        answering.join(timeout=GRACE)
         ticking.join(timeout=GRACE)
         shutdown = loop.shutdown(reason="test finished")
         closed = supervisor.stop_rpc()

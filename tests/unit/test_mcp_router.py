@@ -993,6 +993,12 @@ def every_payload(router: ToolRouter) -> Iterator[tuple[str, Any]]:
         ("pz_action_sleep", {"bed_ref": SQUARE_REF, "idempotency_key": "sl1"}),
         ("pz_action_wait", {"game_seconds": 10, "idempotency_key": "w1"}),
         ("pz_action_cancel", {"idempotency_key": "c1"}),
+        ("pz_action_cancel_all", {"idempotency_key": "ca1"}),
+        # An id the fake port never minted, on purpose: the unknown-here answer
+        # is the leakiest-looking payload these two can produce (it echoes the
+        # caller's id and names causes), and it returns without waiting.
+        ("pz_action_status", {"action_id": str(uuid.UUID(int=0xDEAD))}),
+        ("pz_action_await", {"action_id": str(uuid.UUID(int=0xDEAD)), "timeout_ms": 100}),
         ("pz_plan_execute", {"goal": "eat then read", "idempotency_key": "p1"}),
         ("pz_plan_status", {}),
         ("pz_memory_query", {}),

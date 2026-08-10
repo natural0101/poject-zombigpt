@@ -11,9 +11,10 @@ from pathlib import Path
 
 import pytest
 
-from pz_agent_core.ipc.journal import JournalReader
+from pz_agent_core.ipc.journal import JournalError, JournalReader, JournalWriter, read_header
 from pz_agent_core.ipc.queue import (
     QUEUE_OCCUPYING_ACTIONS,
+    RECOVERY_TAIL_BYTES,
     CommandQueue,
     IdempotencyCache,
     LeaseCheckpoint,
@@ -545,3 +546,196 @@ def test_a_pending_limit_of_zero_is_refused(tmp_path: Path) -> None:
         CommandQueue(
             make_layout(tmp_path), session_id=IPC_SESSION_ID, clock=FakeClock(), pending_limit=0
         )
+
+
+# --------------------------------------------------------------------------
+# restart recovery of the outbound sequence
+# --------------------------------------------------------------------------
+
+
+def test_a_restarted_queue_continues_the_sequence_it_left_off(tmp_path: Path) -> None:
+    """Live finding (Build 42.20.2): a restarted sidecar started the COMMAND
+    stream at 0 while the journal still held records 0..N — a second producer
+    of the same stream, accepted silently because the mod dedups by command_id
+    rather than seq."""
+    clock = FakeClock()
+    layout = make_layout(tmp_path)
+    died = CommandQueue(layout, session_id=IPC_SESSION_ID, clock=clock)
+    for index in range(5):
+        outcome = died.submit(
+            died.build(ActionName.WORLD_INSPECT, idempotency_key=f"k{index}", lease_ms=10_000)
+        )
+        assert outcome.accepted
+    died.close()
+
+    restarted = CommandQueue(layout, session_id=IPC_SESSION_ID, clock=clock)
+    outcome = restarted.submit(
+        restarted.build(ActionName.WORLD_INSPECT, idempotency_key="k-new", lease_ms=10_000)
+    )
+    assert outcome.accepted
+    assert outcome.command.seq == 5
+    # The decisive assertion is the record on disk: one stream, one producer.
+    assert [c.seq for c in _written_commands(restarted)] == [0, 1, 2, 3, 4, 5]
+    restarted.close()
+
+
+def test_recovery_reads_the_newest_rotated_generation_when_the_live_file_is_fresh(
+    tmp_path: Path,
+) -> None:
+    """Rotation leaves the live file holding nothing but its header; the
+    previous process's last committed commands are then in generation ``.1``,
+    and that is where the sequence has to resume from."""
+    layout = make_layout(tmp_path)
+    writer = JournalWriter(layout, layout.command_queue)
+    for index in range(5):
+        writer.append(make_command(seq=index, idempotency_key=f"k{index}").to_dict())
+    writer.rotate()
+    writer.close()
+    # The rotation left a freshly headed live file behind.
+    header = read_header(layout.command_queue)
+    assert header is not None and header.end_offset == layout.command_queue.stat().st_size
+
+    queue = CommandQueue(layout, session_id=IPC_SESSION_ID, clock=FakeClock())
+    outcome = queue.submit(
+        queue.build(ActionName.WORLD_INSPECT, idempotency_key="k-new", lease_ms=10_000)
+    )
+    assert outcome.accepted
+    assert outcome.command.seq == 5
+    assert [c.seq for c in _written_commands(queue)] == [5]
+    queue.close()
+
+
+def test_an_absent_journal_still_starts_the_sequence_at_zero(tmp_path: Path) -> None:
+    """Today's behaviour, pinned: a stream that never existed starts at 0."""
+    queue = _queue(tmp_path, FakeClock())
+    outcome = queue.submit(
+        queue.build(ActionName.WORLD_INSPECT, idempotency_key="k", lease_ms=10_000)
+    )
+    assert outcome.accepted
+    assert outcome.command.seq == 0
+    assert [c.seq for c in _written_commands(queue)] == [0]
+    queue.close()
+
+
+def test_another_sessions_records_seed_nothing(tmp_path: Path) -> None:
+    """A journal full of a *different* session's commands is not this stream's
+    past: that stream ended with its session, and this one honestly begins at
+    zero rather than continuing someone else's numbering."""
+    layout = make_layout(tmp_path)
+    writer = JournalWriter(layout, layout.command_queue)
+    foreign = "00000000-0000-0000-0000-0000000000ff"
+    for index in range(3):
+        writer.append(
+            make_command(seq=index, session_id=foreign, idempotency_key=f"f{index}").to_dict()
+        )
+    writer.close()
+
+    queue = CommandQueue(layout, session_id=IPC_SESSION_ID, clock=FakeClock())
+    outcome = queue.submit(
+        queue.build(ActionName.WORLD_INSPECT, idempotency_key="k", lease_ms=10_000)
+    )
+    assert outcome.accepted
+    assert outcome.command.seq == 0
+    queue.close()
+
+
+def test_an_unreadable_tail_refuses_construction_instead_of_inventing_zero(
+    tmp_path: Path,
+) -> None:
+    """Bytes are on disk but not one record yields a seq. Seeding 0 over that
+    would be the restarted-second-producer lie again, wearing a diagnostic."""
+    layout = make_layout(tmp_path)
+    JournalWriter(layout, layout.command_queue).close()  # a valid header line
+    with layout.command_queue.open("a", encoding="utf-8", newline="\n") as handle:
+        handle.write("this is not a record\n")
+        handle.write('{"type": "command", "no_seq_here": true}\n')
+
+    with pytest.raises(JournalError, match=r"command\.queue\.0001\.jsonl"):
+        CommandQueue(layout, session_id=IPC_SESSION_ID, clock=FakeClock())
+
+
+def test_a_journal_without_a_readable_header_is_refused_not_restarted(tmp_path: Path) -> None:
+    """The writer's own resume logic would rotate such a file aside and begin a
+    fresh serial — with the sequence back at 0. Recovery runs first and refuses,
+    because a file whose header never committed hides how far the stream got."""
+    layout = make_layout(tmp_path)
+    layout.command_queue.write_text('{"seq": 3}\n', encoding="utf-8")
+
+    with pytest.raises(JournalError, match=r"command\.queue\.0001\.jsonl"):
+        CommandQueue(layout, session_id=IPC_SESSION_ID, clock=FakeClock())
+
+
+def test_recovery_reads_a_bounded_tail_not_the_whole_journal(tmp_path: Path) -> None:
+    """The proof is behavioural, not timed: a rogue high seq buried at the
+    *top* of an oversized journal is never seen, because only the tail — where
+    a monotonic producer's highest number genuinely lives — is read."""
+    layout = make_layout(tmp_path)
+    budget = 8 * RECOVERY_TAIL_BYTES
+    writer = JournalWriter(layout, layout.command_queue, max_bytes=budget)
+    writer.append(make_command(seq=10_000_000, idempotency_key="rogue").to_dict())
+    seq = 0
+    while writer.size <= RECOVERY_TAIL_BYTES + 4_096:
+        writer.append(make_command(seq=seq, idempotency_key=f"k{seq}").to_dict())
+        seq += 1
+    writer.close()
+    highest = seq - 1
+
+    queue = CommandQueue(layout, session_id=IPC_SESSION_ID, clock=FakeClock(), max_bytes=budget)
+    outcome = queue.submit(
+        queue.build(ActionName.WORLD_INSPECT, idempotency_key="k-new", lease_ms=10_000)
+    )
+    assert outcome.accepted
+    assert outcome.command.seq == highest + 1
+
+    # And the record on disk carries the same number: read the whole file the
+    # slow way, which a test may afford and the recovery may not.
+    reader = JournalReader(queue.layout, queue.layout.command_queue)
+    last_seq: int | None = None
+    while True:
+        read = reader.read()
+        if not read.records:
+            break
+        last_seq = read.records[-1].payload["seq"]
+    assert last_seq == highest + 1
+    queue.close()
+
+
+# --------------------------------------------------------------------------
+# acks for commands this process never shipped
+# --------------------------------------------------------------------------
+
+
+def test_an_ack_for_a_command_this_process_never_sent_is_noted_and_ignored(
+    tmp_path: Path,
+) -> None:
+    """§3.12: after a restart the mod may still be answering the *previous*
+    process's in-flight command. That is honest work finishing — it must land
+    as a diagnostic, not a crash, and must not be filed under anyone's key."""
+    clock = FakeClock()
+    layout = make_layout(tmp_path)
+    queue = CommandQueue(layout, session_id=IPC_SESSION_ID, clock=clock)
+    mine = queue.build(ActionName.CONSUME_EAT, idempotency_key="mine", lease_ms=10_000)
+    assert queue.submit(mine).accepted
+
+    ghost = make_command(idempotency_key="ghost")  # the dead process's command
+    publish_acks(layout, [make_success(ghost, seq=0)])
+    poll = queue.poll_acks()
+
+    assert [r.command_id for r in poll.results] == [ghost.command_id]
+    assert any("not tracking" in diagnostic.detail for diagnostic in poll.diagnostics)
+    # Nothing this process owns moved: the in-flight slot is still claimed by
+    # our command, and neither key was invented into the cache.
+    assert queue.in_flight is not None
+    assert queue.in_flight.command_id == mine.command_id
+    assert queue.cache.replay("ghost") is None
+    assert queue.cache.replay("mine") is None
+    queue.close()
+
+
+def test_record_ack_for_an_unknown_command_changes_nothing(tmp_path: Path) -> None:
+    queue = _queue(tmp_path, FakeClock())
+    queue.record_ack(make_success(make_command(idempotency_key="ghost")))
+    assert queue.in_flight is None
+    assert queue.pending == ()
+    assert len(queue.cache) == 0
+    queue.close()

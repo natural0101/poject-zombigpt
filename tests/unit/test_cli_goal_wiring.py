@@ -37,7 +37,7 @@ from pz_agent_core.planner import Goal as PlannerGoal
 from pz_agent_core.planner import GoalKind as PlannerGoalKind
 from pz_agent_core.protocol import ActionName, ActionStatus, Observation, ReasonCode, SessionMode
 from tests.fixtures import make_game, make_player
-from tests.fixtures.sidecar_worlds import SidecarWorld, attached_world
+from tests.fixtures.sidecar_worlds import SidecarWorld, arm_for_real, attached_world
 
 
 @dataclass
@@ -88,8 +88,7 @@ def record_of(world: SidecarWorld, goal_id: str) -> GoalRecord:
 
 def armed_autonomous(world: SidecarWorld) -> None:
     world.beat_game()
-    outcome = world.loop.arm(SessionMode.AUTONOMOUS)
-    assert outcome.armed, outcome.detail
+    arm_for_real(world, mode=SessionMode.AUTONOMOUS)
 
 
 def wait_request(world: SidecarWorld, key: str) -> ActionRequest:
@@ -176,7 +175,7 @@ class TestTheGoalReachesThePlanner:
         planner = RecordingGoalPlanner()
         with goal_world(tmp_path, planner) as world:
             world.beat_game()
-            assert world.loop.arm(SessionMode.ASSISTED).armed is True
+            arm_for_real(world, mode=SessionMode.ASSISTED)
             record = submit(world, a_goal())
             world.observe()
 

@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from pz_agent_core.ipc.atomic import DocumentError
+from pz_agent_core.ipc.atomic import DocumentError, SharingViolationError, read_json_document
 from pz_agent_core.ipc.layout import SnapshotSlot
 from pz_agent_core.ipc.snapshot import SnapshotMiss, SnapshotRead, SnapshotReader, SnapshotWriter
 from tests.fixtures.ipc_builders import FakeClock, make_layout
@@ -160,3 +161,140 @@ def test_a_restarted_writer_does_not_overwrite_the_live_slot(tmp_path: Path) -> 
     # A fresh writer object, as after a sidecar restart: it must read the
     # pointer rather than assume it starts at slot a again.
     assert SnapshotWriter(layout).next_slot() is SnapshotSlot.B
+
+
+def _lock_paths(monkeypatch: pytest.MonkeyPatch, *locked: Path) -> dict[Path, int]:
+    """Make :func:`read_json_document` speak the Windows hold for *locked*.
+
+    Patched at the snapshot module's seam rather than under ``Path``: the
+    retry mechanics that produce :class:`SharingViolationError` are pinned in
+    ``test_ipc_atomic_patience``; these tests pin what the reader *does* with
+    it, so the refusal is injected already-typed and counted per path.
+    """
+    holds: dict[Path, int] = dict.fromkeys(locked, 0)
+
+    def held(path: Path) -> dict[str, Any]:
+        if path in holds:
+            holds[path] += 1
+            raise SharingViolationError(f"{path.name}: could not be read; another process held it")
+        return read_json_document(path)
+
+    monkeypatch.setattr("pz_agent_core.ipc.snapshot.read_json_document", held)
+    return holds
+
+
+class TestALockedPointerIsAMissForThisPollOnly:
+    def test_the_miss_names_the_lock_and_is_not_corruption(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Live finding, Build 42.20.2: the game holds the pointer mid-commit.
+
+        Before the read side learnt patience this surfaced as a
+        :class:`DocumentError` and was logged as an unreadable pointer — a
+        corruption diagnostic for a healthy file. The lock must be named as a
+        lock, and nothing about the poll may crash.
+        """
+        layout = make_layout(tmp_path)
+        SnapshotWriter(layout).publish(_document(3))
+        holds = _lock_paths(monkeypatch, layout.snapshot_pointer)
+
+        read = SnapshotReader(layout).read()
+
+        assert isinstance(read, SnapshotMiss)
+        assert any(
+            "pointer locked by another process this poll" in diagnostic
+            for diagnostic in read.diagnostics
+        )
+        assert not any("unreadable" in diagnostic for diagnostic in read.diagnostics)
+        assert holds[layout.snapshot_pointer] == 1
+
+    def test_last_seq_survives_the_lock_and_the_next_poll_recovers(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        layout = make_layout(tmp_path)
+        writer = SnapshotWriter(layout)
+        writer.publish(_document(4))
+        reader = SnapshotReader(layout)
+        assert isinstance(reader.read(), SnapshotRead)
+        assert reader.last_seq == 4
+
+        with monkeypatch.context() as hold:
+            _lock_paths(hold, layout.snapshot_pointer)
+            missed = reader.read()
+
+        assert isinstance(missed, SnapshotMiss)
+        assert reader.last_seq == 4, "a locked poll must not regress the accepted sequence"
+
+        # The hold has been released; the very next poll serves the world
+        # published meanwhile, ordered against the surviving last_seq.
+        writer.publish(_document(5))
+        recovered = reader.read()
+        assert isinstance(recovered, SnapshotRead)
+        assert recovered.seq == 5
+        assert reader.last_seq == 5
+
+
+class TestALockedSlotIsAPerSlotMissNotCorruption:
+    def test_the_other_slot_still_serves_under_the_anti_rewind_rule(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A fresh reader falls back past the locked slot to the older one."""
+        layout = make_layout(tmp_path)
+        writer = SnapshotWriter(layout)
+        writer.publish(_document(1))
+        writer.publish(_document(2))
+        _lock_paths(monkeypatch, layout.snapshot_slot(SnapshotSlot.B))
+
+        read = SnapshotReader(layout).read()
+
+        assert isinstance(read, SnapshotRead)
+        assert read.slot is SnapshotSlot.A
+        assert read.seq == 1
+        assert read.recovered
+        assert any(
+            "slot b locked by another process this poll" in diagnostic
+            for diagnostic in read.diagnostics
+        )
+
+    def test_a_reader_that_has_seen_newer_refuses_the_stale_fallback(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The lock must not smuggle a rewind in through the fallback."""
+        layout = make_layout(tmp_path)
+        writer = SnapshotWriter(layout)
+        writer.publish(_document(1))
+        writer.publish(_document(2))
+        reader = SnapshotReader(layout)
+        assert isinstance(reader.read(), SnapshotRead)
+        assert reader.last_seq == 2
+
+        with monkeypatch.context() as hold:
+            _lock_paths(hold, layout.snapshot_slot(SnapshotSlot.B))
+            missed = reader.read()
+
+        assert isinstance(missed, SnapshotMiss)
+        assert reader.last_seq == 2
+        assert any("slot b locked" in diagnostic for diagnostic in missed.diagnostics)
+
+        recovered = reader.read()
+        assert isinstance(recovered, SnapshotRead)
+        assert recovered.seq == 2
+
+    def test_both_slots_locked_is_a_miss_naming_both(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        layout = make_layout(tmp_path)
+        writer = SnapshotWriter(layout)
+        writer.publish(_document(1))
+        writer.publish(_document(2))
+        _lock_paths(
+            monkeypatch,
+            layout.snapshot_slot(SnapshotSlot.A),
+            layout.snapshot_slot(SnapshotSlot.B),
+        )
+
+        read = SnapshotReader(layout).read()
+
+        assert isinstance(read, SnapshotMiss)
+        assert any("slot a locked" in diagnostic for diagnostic in read.diagnostics)
+        assert any("slot b locked" in diagnostic for diagnostic in read.diagnostics)

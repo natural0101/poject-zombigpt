@@ -15,6 +15,14 @@ translation is a bounded wait, not a crash: see :data:`_REPLACE_ATTEMPTS`
 below. Whatever happens, the scratch file never outlives the attempt silently —
 a failure removes it with the same patience, and when even that is refused the
 error names the leaked path instead of pretending it was cleaned up.
+
+The read side meets the same contention from the other chair: opening a file
+the game holds can be refused too, and folding that refusal into
+:class:`DocumentError` — as this module once did — makes a locked file look
+corrupt. :func:`read_json_document` therefore waits out ``PermissionError``
+with its own, much smaller budget (:data:`_READ_ATTEMPTS`) and then raises
+:class:`SharingViolationError`, so "locked this poll" and "corrupt" stay
+different answers.
 """
 
 from __future__ import annotations
@@ -87,6 +95,23 @@ _temp_serial = count()
 #: modules stay independent so neither can widen the other's wait by accident.
 _REPLACE_ATTEMPTS: Final = 10
 _REPLACE_PAUSE_SECONDS: Final = 0.05
+
+
+#: The same Windows contention, seen from the reading side. Opening a file the
+#: game (or an antivirus sweep) holds without read sharing raises the same
+#: ``PermissionError`` a refused replace does — observed live on Build 42.20.2
+#: against ``observation.snapshot.pointer`` and the heartbeat files. Before this
+#: budget existed the refusal was folded into :class:`DocumentError`, which made
+#: a locked file indistinguishable from a corrupt one and silently degraded a
+#: poll to a miss. The budget is deliberately much smaller than the write one:
+#: a reader sits inside a ~125ms tick loop, so waiting the write side's half
+#: second would swallow four ticks for a document that will be polled again in
+#: one — 40ms worst case keeps the whole wait inside the current tick, and a
+#: hold that outlives it is reported as :class:`SharingViolationError` so the
+#: caller can treat "locked right now" as a miss and try next poll. Zero cost
+#: on POSIX, where an open handle never refuses a read.
+_READ_ATTEMPTS: Final = 4
+_READ_PAUSE_SECONDS: Final = 0.01
 
 
 class IpcPathError(ValueError):
@@ -208,23 +233,68 @@ def write_json_atomic(layout: IpcLayout, path: Path, document: Mapping[str, Any]
     return len(encoded)
 
 
+def _fetch_document_text(path: Path) -> str:
+    """One attempt at the stat-and-read pair, keeping the two refusals apart.
+
+    ``PermissionError`` passes through untranslated — it is the Windows
+    spelling of "another process holds this file", and the caller retries it.
+    Every other ``OSError`` (missing file, disk trouble) and a decode failure
+    are genuine document problems and become :class:`DocumentError` here, so
+    the retry loop above can never mistake corruption for contention.
+    """
+    try:
+        size = path.stat().st_size
+    except PermissionError:
+        raise
+    except OSError as exc:
+        raise DocumentError(f"{path.name}: {exc}") from exc
+    if size > MAX_DOCUMENT_BYTES:
+        raise DocumentError(f"{path.name}: {size} bytes exceeds {MAX_DOCUMENT_BYTES}")
+    try:
+        return path.read_text(encoding="utf-8")
+    except PermissionError:
+        raise
+    except (OSError, UnicodeDecodeError) as exc:
+        raise DocumentError(f"{path.name}: {exc}") from exc
+
+
+def _read_text_with_patience(path: Path) -> str:
+    """The stat-and-read pair with the bounded read budget applied.
+
+    Only ``PermissionError`` is retried, exactly as on the write side; the
+    loop is bounded by :data:`_READ_ATTEMPTS`, and exhausting it raises
+    :class:`SharingViolationError` naming the file and the budget — the typed
+    "someone held the file" refusal the write path already speaks, so a caller
+    can tell a locked document (poll again) from a corrupt one
+    (:class:`DocumentError`).
+    """
+    attempt = 0
+    while True:
+        try:
+            return _fetch_document_text(path)
+        except PermissionError as exc:
+            attempt += 1
+            if attempt >= _READ_ATTEMPTS:
+                raise SharingViolationError(
+                    f"{path.name}: could not be read; another process held it "
+                    f"open past the {_READ_ATTEMPTS * _READ_PAUSE_SECONDS:g}s budget"
+                ) from exc
+            time.sleep(_READ_PAUSE_SECONDS)
+
+
 def read_json_document(path: Path) -> dict[str, Any]:
     """Read one whole JSON object, or raise :class:`DocumentError`.
 
     A truncated file, a file holding a JSON array or scalar, and a file larger
     than :data:`MAX_DOCUMENT_BYTES` all fail the same way: callers must treat a
     document as usable only once it has been parsed in full.
+
+    A file another process holds open is a different failure entirely: the
+    read waits it out within the small budget of :data:`_READ_ATTEMPTS`, and a
+    hold that outlives even that raises :class:`SharingViolationError` — the
+    document on disk may be perfectly good, it just cannot be seen this poll.
     """
-    try:
-        size = path.stat().st_size
-    except OSError as exc:
-        raise DocumentError(f"{path.name}: {exc}") from exc
-    if size > MAX_DOCUMENT_BYTES:
-        raise DocumentError(f"{path.name}: {size} bytes exceeds {MAX_DOCUMENT_BYTES}")
-    try:
-        raw = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as exc:
-        raise DocumentError(f"{path.name}: {exc}") from exc
+    raw = _read_text_with_patience(path)
     # Depth is measured on the raw bytes before parsing: the markers the scan
     # counts are all ASCII, so re-encoding the already-decoded text costs a
     # bounded pass and never miscounts a byte inside a multibyte character.

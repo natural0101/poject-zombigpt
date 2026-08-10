@@ -54,7 +54,9 @@ from tests.fixtures.cli_worlds import CliWorld, make_world
 from tests.fixtures.ipc_builders import FakeClock
 from tests.fixtures.sidecar_worlds import (
     TEST_LIMITS,
+    ScriptedMod,
     SidecarWorld,
+    arm_for_real,
     attached_world,
     make_sidecar_world,
 )
@@ -186,7 +188,7 @@ def test_the_reflex_guard_runs_before_the_planner_is_consulted(tmp_path: Path) -
     with attached_world(tmp_path, guard=RecordingGuard(trace)) as world:
         planner = RecordingPlanner(world.session_id, trace)
         world.loop.planner = planner
-        assert world.loop.arm().armed is True
+        arm_for_real(world)
         world.observe()
 
         world.loop.tick()
@@ -218,7 +220,7 @@ def test_a_chasing_zombie_stops_the_planner_being_asked(tmp_path: Path) -> None:
     with attached_world(tmp_path) as world:
         planner = RecordingPlanner(world.session_id)
         world.loop.planner = planner
-        assert world.loop.arm().armed is True
+        arm_for_real(world)
         world.observe(
             nearby=NearbyView(
                 zombies=[
@@ -314,7 +316,7 @@ def test_panic_stop_disarms_and_keeps_the_planner_out_of_the_tick(tmp_path: Path
     with attached_world(tmp_path) as world:
         planner = RecordingPlanner(world.session_id)
         world.loop.planner = planner
-        assert world.loop.arm().armed is True
+        arm_for_real(world)
         world.panic()
         world.observe()
 
@@ -398,7 +400,7 @@ def test_arming_into_a_mode_this_build_does_not_grant_is_refused(
 
 def test_disarming_is_never_refused_even_with_no_game(tmp_path: Path) -> None:
     with attached_world(tmp_path) as world:
-        world.loop.arm()
+        arm_for_real(world)
         world.clock.advance(PAST_HEARTBEAT_TIMEOUT_MS)
 
         outcome = world.loop.disarm(reason="user asked")
@@ -415,7 +417,7 @@ def test_disarming_is_never_refused_even_with_no_game(tmp_path: Path) -> None:
 
 def test_a_restart_comes_up_in_observe_however_it_was_left(tmp_path: Path) -> None:
     with attached_world(tmp_path) as world:
-        assert world.loop.arm(SessionMode.AUTONOMOUS).armed is True
+        arm_for_real(world, mode=SessionMode.AUTONOMOUS)
 
         world.restart()
 
@@ -460,6 +462,13 @@ def test_a_fresh_arm_request_is_applied(tmp_path: Path) -> None:
         world.control.write(ControlKind.ARM, mode=SessionMode.ASSISTED)
         world.observe()
 
+        submitted = world.loop.tick()
+
+        # The request alone grants nothing: the tick submits session.arm to
+        # the mod, and only the game's own confirmation arms the next one.
+        assert submitted.armed is False
+        assert world.loop.pending_arm is not None
+        ScriptedMod(world).confirm_arm(SessionMode.ASSISTED)
         outcome = world.loop.tick()
 
         assert world.loop.armed is True
@@ -513,7 +522,7 @@ def test_a_disarm_request_older_than_the_ceiling_is_still_obeyed(tmp_path: Path)
     may never fail in.
     """
     with attached_world(tmp_path) as world:
-        assert world.loop.arm().armed is True
+        arm_for_real(world)
         world.control.write(ControlKind.DISARM)
         world.clock.advance(CONTROL_MAX_AGE_MS + 1)
         world.beat_game()
@@ -599,7 +608,7 @@ def test_the_action_rate_cap_stops_the_planner_being_consulted(tmp_path: Path) -
     with attached_world(tmp_path, limits=limits) as world:
         planner = RecordingPlanner(world.session_id)
         world.loop.planner = planner
-        world.loop.arm()
+        arm_for_real(world)
         world.observe()
 
         def keep_alive() -> bool:
