@@ -65,7 +65,10 @@ __all__ = [
     "MAX_PENDING_TTL_MS",
     "MAX_RENDERED_VALUE_CHARS",
     "MAX_SKILL_LEVEL",
+    "MAX_TARGET_FLOOR",
+    "MAX_TARGET_SQUARE",
     "MIN_GOAL_WALL_MS",
+    "MIN_TARGET_FLOOR",
     "NUMERIC_RANGES",
     "PARAM_NAMES",
     "TERMINAL_GOAL_STATES",
@@ -138,6 +141,20 @@ MAX_PENDING_TTL_MS: Final = 600_000
 #: The game's skill ceiling.
 MAX_SKILL_LEVEL: Final = 10
 
+#: The largest world-square coordinate a navigation target may name. The
+#: movement adapter itself bounds only the *shape* of a coordinate (an integer
+#: square; ``read_position``) and leaves "does that square exist" to the mod,
+#: which refuses a square that is not loaded. This ceiling therefore guards the
+#: arithmetic, not the geography: it comfortably contains the Build 42 world
+#: grid while keeping the number ordinary enough to quote in a refusal.
+MAX_TARGET_SQUARE: Final = 32_000
+
+#: The floors a navigation target may name. Build 42's world stacks basements
+#: below ground and storeys above it; both directions are finite, and a target
+#: outside them is a typo to refuse rather than a journey to attempt.
+MIN_TARGET_FLOOR: Final = -32
+MAX_TARGET_FLOOR: Final = 31
+
 #: Postcondition field *names* kept on a finished goal. Values are deliberately
 #: not kept: evidence values are forwarded from the mod, which forwards them
 #: from the game, and game-authored text is untrusted data (AGENTS.md).
@@ -208,9 +225,16 @@ class GoalKind(StrEnum):
 
     Closed, and closed for a specific reason: this is the whole width of the
     opening between a microphone or a language model and the action engine. A
-    sixth member is a reviewed change to :data:`GOAL_SPECS`, to
+    new member is a reviewed change to :data:`GOAL_SPECS`, to
     :data:`DEFAULT_BUDGETS` and to :data:`_PLANNER_KIND` together, and the tests
     fail until all three know about it.
+
+    ``NAVIGATE_TO`` is the one kind not served by a plan provider: the sidecar's
+    deterministic route executor (``pz_agent_core.navigation``) walks it square
+    by square, and :class:`~pz_agent_core.planner.provider.NullProvider` refuses
+    it by name rather than approximating it with a plan. The mapping to the
+    planner vocabulary stays total all the same, because the goal still crosses
+    the planner seam on its way to the executor.
     """
 
     SATISFY_HUNGER = "satisfy_hunger"
@@ -218,6 +242,7 @@ class GoalKind(StrEnum):
     READ_FOR_BOREDOM = "read_for_boredom"
     TRAIN_SKILL = "train_skill"
     LEARN_RECIPE = "learn_recipe"
+    NAVIGATE_TO = "navigate_to"
 
 
 class TrainableSkill(StrEnum):
@@ -332,6 +357,9 @@ NUMERIC_RANGES: Final[Mapping[str, NumericRange]] = MappingProxyType(
         "target_level": NumericRange(1, MAX_SKILL_LEVEL),
         "satisfy_to": NumericRange(0.0, 1.0),
         "pages": NumericRange(1, MAX_READ_PAGES),
+        "target_x": NumericRange(0, MAX_TARGET_SQUARE),
+        "target_y": NumericRange(0, MAX_TARGET_SQUARE),
+        "target_z": NumericRange(MIN_TARGET_FLOOR, MAX_TARGET_FLOOR),
     }
 )
 
@@ -396,6 +424,12 @@ class GoalParams:
     target_level: int | None = None
     satisfy_to: float | None = None
     pages: int | None = None
+    #: Where a ``navigate_to`` goal walks to: the world square, floor included.
+    #: Whole squares, like the movement adapter's own targets — a fractional
+    #: coordinate aims between two cells and can only be refused downstream.
+    target_x: int | None = None
+    target_y: int | None = None
+    target_z: int | None = None
 
     def __post_init__(self) -> None:
         if self.skill is not None and not isinstance(self.skill, TrainableSkill):
@@ -411,6 +445,11 @@ class GoalParams:
         if self.pages is not None:
             pages = _require_whole(self.pages, name="pages")
             NUMERIC_RANGES["pages"].check(pages, name="pages")
+        for name in ("target_x", "target_y", "target_z"):
+            value = getattr(self, name)
+            if value is not None:
+                coordinate = _require_whole(value, name=name)
+                NUMERIC_RANGES[name].check(coordinate, name=name)
 
     def present(self) -> frozenset[str]:
         """Names of the parameters that were actually supplied."""
@@ -419,7 +458,15 @@ class GoalParams:
 
 #: Declaration order of :class:`GoalParams`, restated so the spec table can be
 #: checked against it at import rather than drifting silently.
-PARAM_NAMES: Final[tuple[str, ...]] = ("skill", "target_level", "satisfy_to", "pages")
+PARAM_NAMES: Final[tuple[str, ...]] = (
+    "skill",
+    "target_level",
+    "satisfy_to",
+    "pages",
+    "target_x",
+    "target_y",
+    "target_z",
+)
 
 
 # --------------------------------------------------------------------------
@@ -475,6 +522,17 @@ class GoalSpec:
 _CONSUME_BUDGET: Final = GoalBudget(max_wall_ms=120_000, max_steps=4, pending_ttl_ms=60_000)
 _READ_BUDGET: Final = GoalBudget(max_wall_ms=600_000, max_steps=4, pending_ttl_ms=120_000)
 
+#: The navigation budget. ``max_steps`` is the goal channel's own ceiling and
+#: bounds only the requests dispatched *through the goal seam* — final-leg
+#: moves and their retries. The walking in between is bounded by the route
+#: executor's own limits (``navigation.MAX_LEGS`` legs, ``MAX_REPLANS``
+#: replans), which are deliberately not restated here: two copies of a bound
+#: is how two subsystems come to disagree about it. The wall clock is the
+#: umbrella over both.
+_NAVIGATE_BUDGET: Final = GoalBudget(
+    max_wall_ms=600_000, max_steps=MAX_GOAL_STEPS, pending_ttl_ms=120_000
+)
+
 #: The whole channel in one table. Adding a kind without adding a row here
 #: fails :func:`_check_tables` at import time, not at the first submission.
 GOAL_SPECS: Final[Mapping[GoalKind, GoalSpec]] = MappingProxyType(
@@ -503,6 +561,11 @@ GOAL_SPECS: Final[Mapping[GoalKind, GoalSpec]] = MappingProxyType(
             required=frozenset(),
             optional=frozenset({"pages"}),
             budget=_READ_BUDGET,
+        ),
+        GoalKind.NAVIGATE_TO: GoalSpec(
+            required=frozenset({"target_x", "target_y", "target_z"}),
+            optional=frozenset(),
+            budget=_NAVIGATE_BUDGET,
         ),
     }
 )
@@ -793,6 +856,11 @@ _PLANNER_KIND: Final[Mapping[GoalKind, PlannerGoalKind]] = MappingProxyType(
         GoalKind.READ_FOR_BOREDOM: PlannerGoalKind.READ_FOR_BOREDOM,
         GoalKind.TRAIN_SKILL: PlannerGoalKind.TRAIN_SKILL,
         GoalKind.LEARN_RECIPE: PlannerGoalKind.LEARN_RECIPE,
+        # Served by the deterministic route executor, never by a plan provider
+        # — NullProvider refuses the kind by name — but the mapping stays total
+        # because the goal still crosses the planner seam (the loop widens the
+        # record with to_planner_goal before the navigating planner sees it).
+        GoalKind.NAVIGATE_TO: PlannerGoalKind.NAVIGATE_TO,
     }
 )
 

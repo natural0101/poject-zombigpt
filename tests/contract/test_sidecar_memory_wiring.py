@@ -48,6 +48,7 @@ from pz_agent_cli.memory import (
     memory_store,
     read_memory_record,
 )
+from pz_agent_cli.navigation_planner import unwrap_planner
 from pz_agent_cli.runtime import LoopLimits, SidecarLoop
 from pz_agent_core.actions.adapter import Evidence
 from pz_agent_core.capabilities.probes import EAT_PERCENTAGE, MOVE_TO_SQUARE, probe_for
@@ -364,7 +365,9 @@ class Assembled:
 
     @property
     def planner(self) -> AutonomyPlanner:
-        planner = self.loop.planner
+        # The shipped assembly wraps the AutonomyPlanner in the navigating
+        # planner; the memory these tests describe lives on the wrapped one.
+        planner = unwrap_planner(self.loop.planner)
         assert isinstance(planner, AutonomyPlanner), planner
         return planner
 
@@ -409,7 +412,7 @@ def assemble(world: CliWorld, **mod_state: object) -> Assembled:
     assert session is not None
     mod.session_id = session.session_id
     mod.beat()
-    planner = loop.planner
+    planner = unwrap_planner(loop.planner)
     assert isinstance(planner, AutonomyPlanner)
     planner.backup = witness_for_the_observed_save
     # Two-phase arm: the mod executes session.arm, acks it, and its next
@@ -418,6 +421,7 @@ def assemble(world: CliWorld, **mod_state: object) -> Assembled:
     # before the test has said what the world should hold.
     armed = loop.arm(SessionMode.AUTONOMOUS)
     assert armed.pending, armed.detail
+    parked = loop.planner
     loop.planner = None
     mod.pump(0)
     mod.beat()
@@ -425,7 +429,7 @@ def assemble(world: CliWorld, **mod_state: object) -> Assembled:
     assert granted.armed, (
         armed.detail if loop.arm_resolution is None else loop.arm_resolution.detail
     )
-    loop.planner = planner
+    loop.planner = parked
     mod.observe()
     return Assembled(world=world, workspace=workspace, loop=loop, mod=mod)
 
@@ -449,7 +453,7 @@ def test_build_loop_wires_a_memory_rather_than_leaving_reservations_unread(
 
     loop = app.build_loop(world.ctx, workspace, limits=LIMITS)
 
-    planner = loop.planner
+    planner = unwrap_planner(loop.planner)
     assert isinstance(planner, AutonomyPlanner)
     assert isinstance(planner.memory, SidecarMemory), (
         "build_loop assembled a planner with no store behind its memory: it answers "

@@ -91,6 +91,7 @@ REQUIRED_PARAMS: dict[GoalKind, GoalParams] = {
     GoalKind.READ_FOR_BOREDOM: GoalParams(),
     GoalKind.TRAIN_SKILL: GoalParams(skill=TrainableSkill.CARPENTRY),
     GoalKind.LEARN_RECIPE: GoalParams(),
+    GoalKind.NAVIGATE_TO: GoalParams(target_x=1200, target_y=3400, target_z=0),
 }
 
 #: Tokens that are not goals. None of them resolves through ``parse_kind`` —

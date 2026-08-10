@@ -20,6 +20,7 @@ from pathlib import Path
 import pytest
 
 from pz_agent_cli.core_services import LoopGoalPort
+from pz_agent_cli.navigation_planner import NavigatingPlanner
 from pz_agent_cli.runtime import GoalPlanner, LoopError
 from pz_agent_core.actions import ActionRequest
 from pz_agent_core.goals import (
@@ -208,6 +209,104 @@ class TestTheGoalReachesThePlanner:
             assert queue is not None
             assert queue.active is None
             assert record_of(world, record.goal_id).state is GoalState.PENDING
+
+
+def navigate_request(x: int, y: int, z: int = 0, key: str = "nav-key") -> GoalRequest:
+    return GoalRequest(
+        kind=GoalKind.NAVIGATE_TO,
+        idempotency_key=key,
+        params=GoalParams(target_x=x, target_y=y, target_z=z),
+    )
+
+
+def navigating_world(
+    tmp_path: Path, inner: RecordingGoalPlanner | None = None
+) -> tuple[SidecarWorld, NavigatingPlanner]:
+    """A goal world whose planner is the navigating wrapper, bound to the loop."""
+    world = goal_world(tmp_path)
+    wrapper = NavigatingPlanner(inner)
+    world.loop.planner = wrapper
+    wrapper.bind(world.loop)
+    return world, wrapper
+
+
+class TestNavigateGoalsAreServedByTheExecutor:
+    """The sixth kind inside the running loop: deterministic, typed, bounded.
+
+    The fake-mod idiom of the rest of this file: a real loop over a real
+    exchange directory, the wrapper standing exactly where the shipped
+    assembly puts it, and every assertion on the queue's or the loop's own
+    answers. The mod is not taught to walk, so the *dispatch* is what these
+    tests observe — the engine's terminal refusal for an adapter this
+    registry does not carry is still proof the executor's request reached the
+    engine with no planner involved.
+    """
+
+    def test_an_unroutable_target_ends_the_goal_typed_with_no_planner_at_all(
+        self, tmp_path: Path
+    ) -> None:
+        """planner=None end to end: the wrapper alone activates and serves it."""
+        world, wrapper = navigating_world(tmp_path)
+        with world:
+            armed_autonomous(world)
+            # One floor up with no stairs remembered anywhere: the executor can
+            # prove NO_ROUTE from the map alone, no action needed.
+            record = submit(world, navigate_request(1200, 3400, z=1))
+            observation = world.observe()
+
+            world.loop.tick()
+
+            ended = record_of(world, record.goal_id)
+            assert ended.state is GoalState.FAILED
+            assert ended.reason_code is ReasonCode.PATH_NOT_FOUND
+            assert "NO_ROUTE" in ended.detail
+            # The map was fed from the loop's real observation flow, not by a
+            # test reaching around it.
+            assert wrapper.map.revision == observation.seq
+            assert len(wrapper.map) >= 1
+
+    def test_a_navigate_goal_reaches_the_engine_without_asking_the_planner(
+        self, tmp_path: Path
+    ) -> None:
+        spy = RecordingGoalPlanner()
+        world, _wrapper = navigating_world(tmp_path, spy)
+        with world:
+            armed_autonomous(world)
+            record = submit(world, navigate_request(1205, 3400))
+            world.observe()
+
+            outcome = world.loop.tick()
+
+            assert [result.action for result in outcome.results] == ["movement.move_to"]
+            assert spy.goal_calls == [], "navigate_to must never reach the wrapped planner"
+            assert spy.propose_calls == 0, "the goal outranks the planner's own initiative"
+            served = record_of(world, record.goal_id)
+            # This registry carries no movement adapter, so the dispatch came
+            # back a refusal — which the queue charges as one honest step.
+            assert served.steps_used == 1
+
+    def test_the_journey_dies_with_its_cancelled_goal(self, tmp_path: Path) -> None:
+        world, wrapper = navigating_world(tmp_path)
+        with world:
+            armed_autonomous(world)
+            # Sixty squares: the first leg is intermediate and travels the
+            # loop's action channel, so cancelling mid-route leaves work the
+            # wrapper must abandon rather than leak.
+            record = submit(world, navigate_request(1260, 3400))
+            world.observe()
+            world.loop.tick()
+            assert wrapper.tracked_journeys == 1
+            channel = world.loop.actions
+            assert channel is not None and channel.pending_count == 1
+
+            cancellation = LoopGoalPort(loop=world.loop).cancel(record.goal_id)
+            assert cancellation.requested is True
+            world.beat_game()
+            world.loop.tick()
+
+            ended = record_of(world, record.goal_id)
+            assert ended.state is GoalState.CANCELLED
+            assert wrapper.tracked_journeys == 0, "the journey must die with its goal"
 
 
 class TestActionOutcomesSettleTheGoal:

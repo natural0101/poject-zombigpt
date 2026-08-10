@@ -57,6 +57,19 @@ pytestmark = pytest.mark.contract
 
 SCHEMA_PATH: Final = Path(__file__).resolve().parents[2] / "schemas" / "goal.schema.json"
 
+#: Kinds the core carries that the *remote wire* deliberately does not yet.
+#: ``navigate_to`` is served locally by the sidecar's deterministic route
+#: executor; putting it on the remote link is a protocol change — a
+#: ``schemas/goal.schema.json`` edit plus a ``version.py`` bump — that this
+#: epic does not make. The gap is pinned both ways below: the schema must not
+#: quietly grow the kind, and a payload naming it must *fail* validation, so a
+#: remote submission is a loud refusal rather than a silently dropped goal.
+NOT_YET_ON_THE_WIRE: Final[frozenset[str]] = frozenset({"navigate_to"})
+
+#: The parameters only those kinds carry, absent from the wire schema for the
+#: same reason and pinned the same way.
+LOCAL_ONLY_PARAMS: Final[frozenset[str]] = frozenset({"target_x", "target_y", "target_z"})
+
 
 def _document() -> dict[str, Any]:
     loaded: Any = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
@@ -162,7 +175,24 @@ class TestInbound:
 
 class TestTheClosedSetsAgree:
     def test_the_kinds_are_the_goal_kind_enum(self) -> None:
-        assert set(_document()["$defs"]["kind"]["enum"]) == {m.value for m in GoalKind}
+        published = set(_document()["$defs"]["kind"]["enum"])
+        assert published == {m.value for m in GoalKind} - NOT_YET_ON_THE_WIRE
+        # Both directions of the carve-out: the schema must not have grown the
+        # kind without the protocol change, and the core must still carry it.
+        assert published & NOT_YET_ON_THE_WIRE == set()
+        assert {m.value for m in GoalKind} >= NOT_YET_ON_THE_WIRE
+
+    def test_a_local_only_kind_fails_wire_validation_loudly(
+        self, schema: Draft202012Validator
+    ) -> None:
+        """The gap is a refusal at the wire, never a silently dropped goal."""
+        for kind in sorted(NOT_YET_ON_THE_WIRE):
+            payload = {
+                "kind": kind,
+                "idempotency_key": "client:goal.8",
+                "params": {"target_x": 1200, "target_y": 3400, "target_z": 0},
+            }
+            assert not schema.is_valid(payload), kind
 
     def test_the_skills_are_the_trainable_skill_enum(self) -> None:
         skills = _document()["$defs"]["params"]["properties"]["skill"]["enum"]
@@ -175,8 +205,15 @@ class TestTheClosedSetsAgree:
     def test_the_numeric_ranges_are_the_models_ranges(self) -> None:
         params = _document()["$defs"]["params"]["properties"]
         for name, bound in NUMERIC_RANGES.items():
+            if name in LOCAL_ONLY_PARAMS:
+                # Not on the wire yet, and pinned absent rather than skipped:
+                # a schema that grew the property without the protocol change
+                # would put half of navigate_to on the link.
+                assert name not in params, name
+                continue
             assert params[name]["minimum"] == bound.minimum, name
             assert params[name]["maximum"] == bound.maximum, name
+        assert set(NUMERIC_RANGES) >= LOCAL_ONLY_PARAMS
 
     def test_the_budget_bounds_are_the_models_bounds(self) -> None:
         budget = _document()["$defs"]["budget"]["properties"]

@@ -43,11 +43,16 @@ downstream into a plan for something else.
 
 from __future__ import annotations
 
+import threading
+from dataclasses import dataclass, field
 from typing import Final
 
 import pytest
 
+from pz_agent_cli.navigation_planner import NavigatingPlanner
+from pz_agent_cli.runtime import ActionChannel
 from pz_agent_core.actions import ActionEngine, AdapterRegistry, register_builtins
+from pz_agent_core.actions.engine import ActionRequest as EngineActionRequest
 from pz_agent_core.goals import (
     GoalKind,
     GoalParams,
@@ -102,8 +107,14 @@ CHANNEL_KINDS: Final[frozenset[str]] = frozenset(
         "read_for_boredom",
         "train_skill",
         "learn_recipe",
+        "navigate_to",
     }
 )
+
+#: The one kind no plan provider serves: the deterministic route executor
+#: walks it (``pz_agent_core.navigation``, behind the CLI's NavigatingPlanner).
+#: Written out by hand for the same reason CHANNEL_KINDS is.
+EXECUTOR_KINDS: Final[frozenset[str]] = frozenset({"navigate_to"})
 
 #: The empty parameter set, as a singleton because :class:`GoalParams` is frozen
 #: and a default argument that constructs one is a call at import time.
@@ -437,6 +448,11 @@ class TestEveryAdmissibleKindIsServable:
 
         served: dict[str, tuple[str, ...]] = {}
         for index, kind in enumerate(GoalKind):
+            if kind.value in EXECUTOR_KINDS:
+                # Served below by the route executor, and *refused* by the
+                # provider — TestNavigateToIsServedByTheExecutor owns both
+                # halves of that claim.
+                continue
             params = (
                 GoalParams(skill=TrainableSkill.CARPENTRY)
                 if kind is GoalKind.TRAIN_SKILL
@@ -447,7 +463,7 @@ class TestEveryAdmissibleKindIsServable:
             assert not proposal.refused, f"{kind.value}: {proposal.detail}"
             served[kind.value] = plan_step_refs(proposal)
 
-        assert set(served) == CHANNEL_KINDS
+        assert set(served) == CHANNEL_KINDS - EXECUTOR_KINDS
         # The two consumables and the skill book are decided by the goal, not by
         # a shared default: three of the five answers must be distinct items.
         assert served["satisfy_hunger"] == (item_ref("beans"),)
@@ -459,6 +475,89 @@ class TestEveryAdmissibleKindIsServable:
 # --------------------------------------------------------------------------
 # refused at submission, not reinterpreted later
 # --------------------------------------------------------------------------
+
+
+class SpyGoalPlanner:
+    """A goal-capable planner that must never be asked; every ask is recorded."""
+
+    def __init__(self) -> None:
+        self.propose_calls = 0
+        self.goal_calls: list[PlannerGoal] = []
+
+    def propose(self, observation: Observation) -> EngineActionRequest | None:
+        self.propose_calls += 1
+        return None
+
+    def propose_for_goal(
+        self, goal: PlannerGoal, observation: Observation
+    ) -> EngineActionRequest | None:
+        self.goal_calls.append(goal)
+        return None
+
+
+@dataclass
+class ExecutorHost:
+    """The three loop attributes the navigating planner binds to, no loop needed."""
+
+    goals: GoalQueue | None
+    goal_lock: threading.Lock = field(default_factory=threading.Lock)
+    actions: ActionChannel | None = None
+
+
+class TestNavigateToIsServedByTheExecutor:
+    """The sixth kind's half of the seam: the executor answers, no provider does.
+
+    The same joins the rest of this file proves for the provider-served kinds,
+    proven for ``navigate_to``: a real queue admits and activates it, the real
+    ``to_planner_goal`` widens it, and the real :class:`NavigatingPlanner`
+    turns it into the ``movement.move_to`` the engine already serves — while
+    the wrapped planner, a spy, is never asked anything at all.
+    """
+
+    def navigate_params(self) -> GoalParams:
+        # Five squares east of the player fixture's own square (1200, 3400, 0):
+        # near enough for a single final leg, far enough that a move is needed.
+        return GoalParams(target_x=1205, target_y=3400, target_z=0)
+
+    def test_null_provider_refuses_navigate_to_by_name(self) -> None:
+        """The deterministic provider's honest answer is a typed refusal.
+
+        This is what makes a mis-assembled loop — a goal-capable planner with
+        no navigating wrapper around it — safe: the goal is refused and ends
+        on its budgets, never approximated with a plan to eat or read.
+        """
+        record = activated(channel(), GoalKind.NAVIGATE_TO, params=self.navigate_params())
+
+        proposal = proposed_for(record, world(pantry(), needy()))
+
+        assert proposal.refused
+        assert proposal.reason_code is ReasonCode.CAPABILITY_UNAVAILABLE
+        assert "route executor" in proposal.detail
+
+    def test_the_wrapper_answers_with_a_move_and_never_asks_the_planner(self) -> None:
+        queue = channel()
+        spy = SpyGoalPlanner()
+        wrapper = NavigatingPlanner(spy)
+        wrapper.bind(ExecutorHost(goals=queue, actions=ActionChannel(clock=FakeClock())))
+        record = activated(queue, GoalKind.NAVIGATE_TO, params=self.navigate_params())
+
+        value = wrapper.propose_for_goal(to_planner_goal(record), world(pantry()))
+
+        assert value is not None
+        assert value.action is ActionName.MOVEMENT_MOVE_TO
+        assert value.args["target"] == {"x": 1205, "y": 3400, "z": 0}
+        assert value.args["allow_doors"] is True
+        assert value.args["allow_stairs"] is True
+        # Attribution, as everywhere in this file: the request is the goal's.
+        assert value.idempotency_key.startswith(f"nav:{record.goal_id}")
+        assert spy.goal_calls == [] and spy.propose_calls == 0, (
+            "navigate_to must never reach a plan provider"
+        )
+
+    def test_every_channel_kind_is_owned_by_exactly_one_server(self) -> None:
+        """Provider-served and executor-served partition the vocabulary."""
+        assert EXECUTOR_KINDS <= CHANNEL_KINDS
+        assert {kind.value for kind in GoalKind} == CHANNEL_KINDS
 
 
 class TestAKindThePlannerCannotServeIsRefusedAtSubmission:

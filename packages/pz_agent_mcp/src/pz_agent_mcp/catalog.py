@@ -1559,6 +1559,27 @@ TOOLS: Final[tuple[ToolSpec, ...]] = (
                     "minimum": NUMERIC_RANGES["pages"].minimum,
                     "maximum": NUMERIC_RANGES["pages"].maximum,
                 },
+                # The three below belong to 'navigate_to' and to nothing else:
+                # the world square the deterministic route executor walks to.
+                # Whole squares, exactly as movement.move_to takes them.
+                "target_x": {
+                    "type": "integer",
+                    "description": "World square X a 'navigate_to' goal walks to.",
+                    "minimum": NUMERIC_RANGES["target_x"].minimum,
+                    "maximum": NUMERIC_RANGES["target_x"].maximum,
+                },
+                "target_y": {
+                    "type": "integer",
+                    "description": "World square Y a 'navigate_to' goal walks to.",
+                    "minimum": NUMERIC_RANGES["target_y"].minimum,
+                    "maximum": NUMERIC_RANGES["target_y"].maximum,
+                },
+                "target_z": {
+                    "type": "integer",
+                    "description": "Floor of the target square; 0 is ground level.",
+                    "minimum": NUMERIC_RANGES["target_z"].minimum,
+                    "maximum": NUMERIC_RANGES["target_z"].maximum,
+                },
             },
             required=("kind",),
         ),

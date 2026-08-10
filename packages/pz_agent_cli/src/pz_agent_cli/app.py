@@ -74,6 +74,7 @@ from .modinstall import (
     install_mod,
     uninstall_mod,
 )
+from .navigation_planner import NavigatingPlanner, unwrap_planner
 from .output import Printer
 from .runtime import (
     CAPABILITY_FILE_NAME,
@@ -558,6 +559,10 @@ def build_loop(
     planner, record = _build_planner(
         ctx, workspace, registry=registry, capabilities=capabilities, memory=memory
     )
+    # The navigating wrapper is always on: navigate_to goals are walked by the
+    # deterministic route executor whatever planner (or none) sits behind it,
+    # and every other kind passes through to the wrapped planner untouched.
+    navigating = NavigatingPlanner(planner)
     loop = SidecarLoop(
         layout=IpcLayout(ipc_root),
         state_dir=workspace.state_dir,
@@ -566,7 +571,7 @@ def build_loop(
         limits=limits,
         pid_file=build_supervisor(ctx, workspace).pid_file,
         capabilities=capabilities,
-        planner=planner,
+        planner=navigating,
         trace=trace,
         # The typed goal channel, on the loop's own clock and born disarmed —
         # SidecarLoop.arm is the only thing that arms it, the same rule the
@@ -575,6 +580,10 @@ def build_loop(
         # planner that could not would admit goals nothing ever activates.
         goals=GoalQueue(clock=ctx.clock_ms, armed=False),
     )
+    # Bound after construction because the loop takes its planner as a
+    # constructor argument: the wrapper needs the loop's queue, lock and
+    # action channel, and until this call it serves navigation to nobody.
+    navigating.bind(loop)
     publish_planner_record(
         workspace.state_dir / PLANNER_FILE_NAME,
         # Read off the loop, not off the intent above: this is the field that
@@ -612,7 +621,9 @@ def _planner_memory(loop: SidecarLoop) -> object | None:
     that stopped short of the planner is a fact ``status`` reports rather than
     an assembly that only looks right.
     """
-    planner = loop.planner
+    # The navigating wrapper serves navigate_to itself and delegates every
+    # other kind; the memory-holding planner is the one it wraps.
+    planner = unwrap_planner(loop.planner)
     return planner.memory if isinstance(planner, AutonomyPlanner) else None
 
 

@@ -77,6 +77,7 @@ DOCUMENTED_KINDS: Final[frozenset[str]] = frozenset(
         "read_for_boredom",
         "train_skill",
         "learn_recipe",
+        "navigate_to",
     }
 )
 
@@ -365,6 +366,11 @@ def test_the_numeric_bounds_are_the_channels_own() -> None:
     assert (properties["target_level"]["minimum"], properties["target_level"]["maximum"]) == (1, 10)
     assert (properties["satisfy_to"]["minimum"], properties["satisfy_to"]["maximum"]) == (0.0, 1.0)
     assert (properties["pages"]["minimum"], properties["pages"]["maximum"]) == (1, 200)
+    # The navigation target: 0..32000 is the world-grid guard rail and -32..31
+    # the floors Build 42 can stack; the mod refuses unloaded squares itself.
+    assert (properties["target_x"]["minimum"], properties["target_x"]["maximum"]) == (0, 32_000)
+    assert (properties["target_y"]["minimum"], properties["target_y"]["maximum"]) == (0, 32_000)
+    assert (properties["target_z"]["minimum"], properties["target_z"]["maximum"]) == (-32, 31)
     # …and those literals are what the channel itself will check against.
     assert properties["target_level"]["maximum"] == MAX_SKILL_LEVEL
     assert properties["pages"]["maximum"] == MAX_READ_PAGES
@@ -378,6 +384,8 @@ def test_the_numeric_bounds_are_the_channels_own() -> None:
         {"kind": "satisfy_hunger", "satisfy_to": 1.5},
         {"kind": "read_for_boredom", "pages": 0},
         {"kind": "read_for_boredom", "pages": MAX_READ_PAGES + 1},
+        {"kind": "navigate_to", "target_x": -1, "target_y": 3400, "target_z": 0},
+        {"kind": "navigate_to", "target_x": 1200, "target_y": 3400, "target_z": 99},
     ],
 )
 def test_a_parameter_outside_the_channels_range_never_reaches_it(arguments: JsonDict) -> None:
@@ -435,6 +443,27 @@ def test_submit_hands_the_channel_a_typed_request() -> None:
     assert request.idempotency_key == "goal-1:attempt-1"
     assert payload["data"]["kind"] == "train_skill"
     assert payload["data"]["params"] == {"skill": "carpentry", "target_level": 4}
+
+
+def test_submit_hands_the_channel_a_typed_navigation_request() -> None:
+    """The three coordinates cross the boundary as numbers, none dropped.
+
+    A schema that published them while the router dropped them would refuse
+    every navigate_to submission as missing its required parameters — the
+    drift this test exists to catch.
+    """
+    router, goals, _ = wired()
+
+    payload = submit(router, kind="navigate_to", target_x=1200, target_y=3400, target_z=0)
+
+    request = goals.submitted[0]
+    assert len(goals.submitted) == 1
+    assert request.kind is GoalKind.NAVIGATE_TO
+    assert request.params.target_x == 1200
+    assert request.params.target_y == 3400
+    assert request.params.target_z == 0
+    assert payload["data"]["kind"] == "navigate_to"
+    assert payload["data"]["params"] == {"target_x": 1200, "target_y": 3400, "target_z": 0}
 
 
 def test_an_admitted_goal_is_pending_and_is_not_called_started() -> None:

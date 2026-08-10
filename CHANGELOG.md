@@ -12,6 +12,27 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Added
 
+- **A deterministic navigation executor walks routes without an LLM call per
+  square** (`epic/p1-doors-navigation`, wave 2). New `pz_agent_core.navigation`
+  package: a bounded `LocalMap` (4096 cells, oldest-seen evicted first) that
+  remembers only what observations proved — visited squares, obstacles, stairs
+  as floor links, and doors as tri-state knowledge with their refs — and a
+  `Journey` executor that plans A* legs bounded by the mod's 30-square walk
+  limit, lets `allow_doors` handle closed unlocked doors in-walk, issues an
+  explicit `door.open` only on the retry path after a door-shaped failure,
+  folds `DOOR_LOCKED`/`DOOR_BARRICADED` answers back into the map and replans
+  around them, and declares arrival only from an observed position — a
+  `succeeded` move ack alone is never arrival. Every budget (search nodes,
+  legs, replans, consecutive failures) is a typed refusal. `navigate_to` is
+  now a first-class goal served entirely by this executor: the wrapped LLM
+  planner is never asked (pinned by a spy in the contract test), and a loop
+  with no planner configured at all still navigates. Voice deliberately
+  refuses to carry it — coordinates are not dictated over a microphone, and a
+  misheard digit walks the character somewhere else; the carve-out is
+  import-checked. The remote RPC wire schema intentionally does not yet carry
+  the kind (a `navigate_to` submission over RPC is a loud validation refusal,
+  pinned both directions); local MCP and CLI serving is complete.
+
 - **Doors are observable, addressable and operable**
   (`epic/p1-doors-navigation`). The 2026-08-08 live run found real doors and
   could decide nothing about them: the snapshot said only `kind=door`, the

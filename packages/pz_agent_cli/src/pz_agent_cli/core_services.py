@@ -150,6 +150,7 @@ from pz_agent_mcp.remote.server import NO_GOAL_CHANNEL, CoreRouter
 from .autonomy import AutonomyPlanner
 from .doctor import DoctorReport
 from .memory import SidecarMemory
+from .navigation_planner import unwrap_planner
 from .runtime import ActionChannel, ControlDecision, GoalPlanner, LoopError, SidecarLoop
 from .supervisor import ControlChannel, ControlKind, RpcEndpoint, SidecarSupervisor
 
@@ -854,7 +855,10 @@ def core_services_over(
     port this module refuses to build.
     """
     planner = loop.planner
-    candidate = planner.memory if isinstance(planner, AutonomyPlanner) else None
+    # The navigating wrapper serves navigate_to itself and delegates the rest;
+    # the memory-holding planner is the one it wraps.
+    unwrapped = unwrap_planner(planner)
+    candidate = unwrapped.memory if isinstance(unwrapped, AutonomyPlanner) else None
     memory = candidate if isinstance(candidate, SidecarMemory) else None
     waiter = _ControlWaiter(loop=loop, wait_s=control_wait_s, sleep=sleep, monotonic=monotonic)
     serves_goals = loop.goals is not None and isinstance(planner, GoalPlanner)

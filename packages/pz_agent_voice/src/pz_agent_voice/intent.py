@@ -75,6 +75,8 @@ __all__ = [
     "STOP_WORDS",
     "UNIT_WINDOW",
     "UNIT_WORDS",
+    "UNSPEAKABLE_KINDS",
+    "UNSPEAKABLE_PARAMS",
     "GoalResolution",
     "IntentMatch",
     "check_grammar",
@@ -304,6 +306,23 @@ SKILL_WORDS: Final[dict[TrainableSkill, frozenset[str]]] = {
     TrainableSkill.FIRST_AID: frozenset({"медицину", "медицина", "медицине", "перевязку"}),
 }
 
+#: Kinds deliberately absent from the spoken grammar. ``navigate_to`` requires
+#: an exact world square, and three coordinates dictated over a microphone are
+#: a guess wearing numbers: one misheard digit walks the character hundreds of
+#: squares from where the speaker stood watching, silently, which is precisely
+#: the kind of invention this module refuses everywhere else. The kind travels
+#: through ``pz_goal_submit``, where the caller types the square. The grammar
+#: checks below still hold: a *new* kind must land either in
+#: :data:`KIND_WORDS` or here — a kind in neither refuses the import, and a
+#: kind in both refuses it too.
+UNSPEAKABLE_KINDS: Final[frozenset[GoalKind]] = frozenset({GoalKind.NAVIGATE_TO})
+
+#: The parameters only those kinds carry, excluded from the unit-word table
+#: for the same reason the kinds are excluded from the phrasing table. Held by
+#: :func:`_check_channel_tables` against :data:`~pz_agent_core.goals.GOAL_SPECS`
+#: so no speakable kind can ever require a parameter speech cannot supply.
+UNSPEAKABLE_PARAMS: Final[frozenset[str]] = frozenset({"target_x", "target_y", "target_z"})
+
 #: The unit word that gives a bare number its parameter. Keyed by the parameter
 #: name so :func:`check_grammar` can hold this table against
 #: :data:`~pz_agent_core.goals.NUMERIC_RANGES`.
@@ -402,12 +421,21 @@ def check_grammar(vocabularies: Mapping[str, frozenset[str]]) -> None:
     """
     declared = set(vocabularies)
     known = {kind.value for kind in GoalKind}
+    unspeakable = {kind.value for kind in UNSPEAKABLE_KINDS}
     unknown = declared - known
     if unknown:
         raise RuntimeError(
             f"the intent grammar names goal kind(s) that do not exist: {sorted(unknown)}"
         )
-    missing = known - declared
+    spoken_anyway = declared & unspeakable
+    if spoken_anyway:
+        # Both tables claiming a kind is the drift this check exists for: a
+        # phrasing for a kind the grammar refuses on purpose is one of the two
+        # declarations being wrong, and neither may win silently.
+        raise RuntimeError(
+            f"goal kind(s) {sorted(spoken_anyway)} are declared unspeakable and phrased anyway"
+        )
+    missing = known - declared - unspeakable
     if missing:
         raise RuntimeError(f"no Russian phrasing for goal kind(s) {sorted(missing)}")
     empty = sorted(name for name, words in vocabularies.items() if not words)
@@ -457,10 +485,23 @@ def _check_channel_tables() -> None:
             first = seen.setdefault(word, owner)
             if first != owner:
                 raise RuntimeError(f"{word!r} is claimed by both {first} and {owner}")
-    if set(UNIT_WORDS) != set(NUMERIC_RANGES):
+    if set(UNIT_WORDS) & UNSPEAKABLE_PARAMS:
+        raise RuntimeError("a parameter declared unspeakable has a unit word anyway")
+    if set(UNIT_WORDS) | UNSPEAKABLE_PARAMS != set(NUMERIC_RANGES):
         raise RuntimeError("UNIT_WORDS and NUMERIC_RANGES describe different parameters")
-    if set(UNIT_WORDS) | {"skill"} != set(PARAM_NAMES):
+    if set(UNIT_WORDS) | {"skill"} | UNSPEAKABLE_PARAMS != set(PARAM_NAMES):
         raise RuntimeError("a goal parameter has no unit word and cannot be spoken")
+    for kind, spec in GOAL_SPECS.items():
+        if kind in UNSPEAKABLE_KINDS:
+            continue
+        leaked = (spec.required | spec.optional) & UNSPEAKABLE_PARAMS
+        if leaked:
+            # The partition must stay clean both ways: a speakable kind taking
+            # an unspeakable parameter would admit goals speech can start and
+            # never finish.
+            raise RuntimeError(
+                f"{kind.value} is speakable but takes unspeakable parameter(s) {sorted(leaked)}"
+            )
     if set(_SPOKEN_AS_PERCENT) - set(NUMERIC_RANGES):
         raise RuntimeError("a percentage parameter has no declared range")
     for kind, parameter in BARE_NUMBER_PARAM.items():
@@ -469,9 +510,16 @@ def _check_channel_tables() -> None:
             raise RuntimeError(f"{parameter} has no declared range and cannot be a bare number")
         if parameter not in spec.required | spec.optional:
             raise RuntimeError(f"{kind.value} does not accept {parameter} as a bare number")
-    if set(CAPABILITY_FOR_KIND) != set(GoalKind):
-        raise RuntimeError("every goal kind must name the capability it needs")
-    required = {name for spec in GOAL_SPECS.values() for name in spec.required}
+    if set(CAPABILITY_FOR_KIND) & UNSPEAKABLE_KINDS:
+        raise RuntimeError("a kind declared unspeakable names a capability anyway")
+    if set(CAPABILITY_FOR_KIND) | UNSPEAKABLE_KINDS != set(GoalKind):
+        raise RuntimeError("every speakable goal kind must name the capability it needs")
+    required = {
+        name
+        for kind, spec in GOAL_SPECS.items()
+        if kind not in UNSPEAKABLE_KINDS
+        for name in spec.required
+    }
     unspoken = required - set(_MISSING_PARAM_REFUSAL)
     if unspoken:
         raise RuntimeError(f"no refusal names the missing parameter(s) {sorted(unspoken)}")

@@ -92,6 +92,12 @@ class GoalKind(StrEnum):
     (AGENTS.md: "The model may express a *goal*; it never picks the sandwich"),
     so the set of goals is a reviewed list rather than a free string that a
     provider could stretch into an instruction.
+
+    ``NAVIGATE_TO`` is in the vocabulary and deliberately not in any provider's
+    repertoire: routes are walked by the deterministic executor in
+    :mod:`pz_agent_core.navigation`, one observed square at a time, and a
+    provider asked for it answers with a typed refusal naming that executor —
+    never with a plan that approximates walking with something else.
     """
 
     SATISFY_HUNGER = "satisfy_hunger"
@@ -99,6 +105,7 @@ class GoalKind(StrEnum):
     READ_FOR_BOREDOM = "read_for_boredom"
     TRAIN_SKILL = "train_skill"
     LEARN_RECIPE = "learn_recipe"
+    NAVIGATE_TO = "navigate_to"
 
 
 @dataclass(frozen=True, slots=True)
@@ -235,6 +242,15 @@ class NullProvider:
 
     def propose(self, request: PlanRequest) -> PlanProposal:
         """Serve *request* from the policy modules, or explain why nothing fits."""
+        if request.goal.kind is GoalKind.NAVIGATE_TO:
+            # Refused before the inventory gate: walking needs no inventory,
+            # and the honest refusal names the component that does serve it.
+            return PlanProposal.refusal(
+                ReasonCode.CAPABILITY_UNAVAILABLE,
+                "navigate_to is walked by the deterministic route executor, not planned "
+                "by a provider; a sidecar without the navigating planner wired cannot "
+                "serve it.",
+            )
         if request.observation.inventory is None:
             return PlanProposal.refusal(
                 ReasonCode.CAPABILITY_UNAVAILABLE,

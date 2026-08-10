@@ -163,6 +163,8 @@ def params_for(kind: GoalKind) -> GoalParams:
     """The smallest parameter set *kind* will accept."""
     if kind is GoalKind.TRAIN_SKILL:
         return GoalParams(skill=TrainableSkill.COOKING)
+    if kind is GoalKind.NAVIGATE_TO:
+        return GoalParams(target_x=1200, target_y=3400, target_z=0)
     return GoalParams()
 
 
@@ -238,7 +240,7 @@ def outside_values(name: str) -> tuple[object, object]:
 
 
 class TestClosedVocabulary:
-    def test_goal_kinds_are_exactly_these_five(self) -> None:
+    def test_goal_kinds_are_exactly_these_six(self) -> None:
         # Hand-written. Adding a kind is a reviewed change to three tables, and
         # this literal is the thing that makes the review happen.
         assert {k.value for k in GoalKind} == {
@@ -247,6 +249,7 @@ class TestClosedVocabulary:
             "read_for_boredom",
             "train_skill",
             "learn_recipe",
+            "navigate_to",
         }
 
     def test_trainable_skills_are_exactly_these_eleven(self) -> None:
@@ -301,7 +304,7 @@ class TestClosedVocabulary:
         # strips deliberately; the constructor does neither.
         with pytest.raises(ValueError, match="is not a valid"):
             GoalKind(unknown)
-        assert len(GoalKind) == 5
+        assert len(GoalKind) == 6
 
     def test_no_lookup_hook_invents_a_member(self) -> None:
         # ``_missing_`` is the one hook that can turn an unrecognised value into
@@ -334,6 +337,7 @@ class TestClosedVocabulary:
             "read_for_boredom": (set(), {"pages"}),
             "train_skill": ({"skill"}, {"target_level", "pages"}),
             "learn_recipe": (set(), {"pages"}),
+            "navigate_to": ({"target_x", "target_y", "target_z"}, set()),
         }
         actual = {
             kind.value: (set(spec.required), set(spec.optional))
@@ -355,6 +359,9 @@ class TestNoFreeText:
             "target_level": "int | None",
             "satisfy_to": "float | None",
             "pages": "int | None",
+            "target_x": "int | None",
+            "target_y": "int | None",
+            "target_z": "int | None",
         }
         assert tuple(annotations) == PARAM_NAMES
 
@@ -504,6 +511,9 @@ class TestTypedParameterSurface:
             "target_level": 3,
             "satisfy_to": 0.5,
             "pages": 10,
+            "target_x": 1200,
+            "target_y": 3400,
+            "target_z": 0,
         }
         assert set(samples) == set(PARAM_NAMES)
         for kind, spec in GOAL_SPECS.items():
@@ -520,8 +530,15 @@ class TestTypedParameterSurface:
                         params=GoalParams(**supplied),  # type: ignore[arg-type]
                     )
             for name in sorted(spec.required):
+                # Everything required except the one under test, so the
+                # refusal names exactly the parameter that is missing.
+                rest = {n: samples[n] for n in spec.required if n != name}
                 with pytest.raises(ValueError, match=rf"{kind.value} requires \['{name}'\]"):
-                    GoalRequest(kind=kind, idempotency_key="k", params=GoalParams())
+                    GoalRequest(
+                        kind=kind,
+                        idempotency_key="k",
+                        params=GoalParams(**rest),  # type: ignore[arg-type]
+                    )
 
     def test_the_parameters_a_kind_declares_are_accepted_together(self) -> None:
         # The other side of the previous test: a kind that refuses everything
@@ -532,6 +549,9 @@ class TestTypedParameterSurface:
             "target_level": 3,
             "satisfy_to": 0.5,
             "pages": 10,
+            "target_x": 1200,
+            "target_y": 3400,
+            "target_z": 0,
         }
         for kind, spec in GOAL_SPECS.items():
             declared = spec.required | spec.optional
@@ -557,6 +577,9 @@ class TestNumericRanges:
             "target_level": (1, 10),
             "satisfy_to": (0.0, 1.0),
             "pages": (1, 200),
+            "target_x": (0, 32_000),
+            "target_y": (0, 32_000),
+            "target_z": (-32, 31),
         }
 
     def test_every_declared_numeric_parameter_has_a_range(self) -> None:
@@ -2281,13 +2304,8 @@ class TestPlannerBridge:
     def test_the_mapping_is_total(self) -> None:
         queue = make_queue(FakeClock(), max_open=len(GoalKind))
         for index, kind in enumerate(GoalKind):
-            params = (
-                GoalParams(skill=TrainableSkill.COOKING)
-                if kind is GoalKind.TRAIN_SKILL
-                else GoalParams()
-            )
             admitted = queue.submit(
-                GoalRequest(kind=kind, idempotency_key=f"k-{index}", params=params)
+                GoalRequest(kind=kind, idempotency_key=f"k-{index}", params=params_for(kind))
             )
             assert admitted.goal is not None
             to_planner_goal(admitted.goal)

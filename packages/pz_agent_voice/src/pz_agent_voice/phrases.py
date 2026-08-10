@@ -28,7 +28,7 @@ from pz_agent_core.protocol import DangerLevel, ReasonCode
 # this module — and it buys the guarantee that a capability the matcher can
 # refuse on always has a sentence, checked at import instead of at the
 # loudspeaker.
-from .intent import ALL_VOICE_CAPABILITIES
+from .intent import ALL_VOICE_CAPABILITIES, UNSPEAKABLE_KINDS, UNSPEAKABLE_PARAMS
 from .messages import MAX_TEXT_CHARS, IntentRefusal, VoiceGoal
 
 __all__ = [
@@ -243,12 +243,23 @@ def _known_parameter(name: str, *, ranged: bool) -> str:
 
 def _check_speech_tables() -> None:
     """Refuse to import a table that cannot say something it may be asked to."""
-    missing_kinds = set(GoalKind) - set(KIND_ACCEPTED)
+    # The unspeakable kinds and their parameters (see ``intent.UNSPEAKABLE_KINDS``)
+    # are excluded on both sides of every comparison: speech can neither start
+    # such a goal nor be asked to pronounce its parameters, so a sentence for one
+    # would be a row nothing can reach — and a row for one appearing anyway is
+    # the two tables disagreeing, which stays an import-time refusal.
+    if set(KIND_ACCEPTED) & UNSPEAKABLE_KINDS:
+        raise RuntimeError("a kind declared unspeakable has an acceptance sentence anyway")
+    missing_kinds = set(GoalKind) - set(KIND_ACCEPTED) - UNSPEAKABLE_KINDS
     if missing_kinds:
         raise RuntimeError(f"nothing to say for goal kind(s) {sorted(missing_kinds)}")
-    if set(PARAM_NOUNS) != set(PARAM_NAMES):
+    if set(PARAM_NOUNS) & UNSPEAKABLE_PARAMS:
+        raise RuntimeError("a parameter declared unspeakable has a spoken noun anyway")
+    if set(PARAM_NOUNS) | UNSPEAKABLE_PARAMS != set(PARAM_NAMES):
         raise RuntimeError("PARAM_NOUNS has drifted from the core's parameter names")
-    if set(_RANGE_SPOKEN_AS) != set(NUMERIC_RANGES):
+    if set(_RANGE_SPOKEN_AS) & UNSPEAKABLE_PARAMS:
+        raise RuntimeError("a parameter declared unspeakable has a spoken range anyway")
+    if set(_RANGE_SPOKEN_AS) | UNSPEAKABLE_PARAMS != set(NUMERIC_RANGES):
         raise RuntimeError("_RANGE_SPOKEN_AS has drifted from NUMERIC_RANGES")
     if set(CAPABILITY_NOUNS) != ALL_VOICE_CAPABILITIES:
         raise RuntimeError("a capability the matcher can refuse on has no spoken form")
@@ -271,7 +282,11 @@ def _check_speech_tables() -> None:
             f"parameter_out_of_range:{name}",
             intent_refusal(IntentRefusal.PARAMETER_OUT_OF_RANGE, parameter=name),
         )
+        # The unspeakable parameters have no spoken range: the matcher can
+        # never bind a number to one, so no refusal will ever be asked to say
+        # its bounds — and intent_refusal refuses the name outright.
         for name in NUMERIC_RANGES
+        if name not in UNSPEAKABLE_PARAMS
     ]
     spoken_forms += [
         (

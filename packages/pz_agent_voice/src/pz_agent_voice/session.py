@@ -69,7 +69,7 @@ from .config import (
     VoiceConfig,
 )
 from .events import TtsEventStream
-from .intent import classify, extract_quantities, is_stop
+from .intent import UNSPEAKABLE_PARAMS, classify, extract_quantities, is_stop
 from .messages import (
     IntentRefusal,
     OutputKind,
@@ -173,7 +173,12 @@ def _check_goal_tables() -> None:
                 f"{goal.value} maps to {kind.value}, which requires {sorted(required)}; "
                 "no phrasing in this package supplies them"
             )
-    if set(_SPOKEN_PER_CORE_UNIT) != set(NUMERIC_RANGES):
+    if set(_SPOKEN_PER_CORE_UNIT) & UNSPEAKABLE_PARAMS:
+        raise RuntimeError("a parameter declared unspeakable has a spoken unit scale anyway")
+    if set(_SPOKEN_PER_CORE_UNIT) | UNSPEAKABLE_PARAMS != set(NUMERIC_RANGES):
+        # The unspeakable parameters (intent.UNSPEAKABLE_PARAMS) carry no spoken
+        # scale on purpose: the matcher never binds a number to one, so there is
+        # no utterance whose units this table could convert.
         raise RuntimeError("_SPOKEN_PER_CORE_UNIT has drifted from NUMERIC_RANGES")
     # The budget a spoken goal carries is built from VoiceConfig, so the config's
     # own ceilings have to fit inside the channel's. They do today; a config that

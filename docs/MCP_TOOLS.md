@@ -559,11 +559,21 @@ Ask the typed goal channel for one of the things it carries. The kind set is clo
 
 | Argument | Required | Schema |
 | --- | --- | --- |
-| `kind` | yes | one of `learn_recipe`, `read_for_boredom`, `satisfy_hunger`, `satisfy_thirst`, `train_skill` |
+| `kind` | yes | one of `learn_recipe`, `navigate_to`, `read_for_boredom`, `satisfy_hunger`, `satisfy_thirst`, `train_skill` |
 | `skill` | no | one of `carpentry`, `cooking`, `electrical`, `farming`, `first_aid`, `fishing`, `foraging`, `mechanics`, `metalworking`, `tailoring`, `trapping` |
 | `target_level` | no | `integer`; minimum 1; maximum 10 |
 | `satisfy_to` | no | `number`; minimum 0.0; maximum 1.0 |
 | `pages` | no | `integer`; minimum 1; maximum 200 |
+| `target_x` | no | `integer`; minimum 0; maximum 32000 |
+| `target_y` | no | `integer`; minimum 0; maximum 32000 |
+| `target_z` | no | `integer`; minimum -32; maximum 31 |
+
+`navigate_to` requires all three `target_*` coordinates and takes nothing
+else: the sidecar's deterministic route executor walks the character to that
+world square — doors, stairs, blocked passages and stuck detection handled
+locally, with no model call per square — and the goal ends on the *observed*
+arrival or with the executor's typed refusal (`DOOR_LOCKED`,
+`DOOR_BARRICADED`, `PATH_NOT_FOUND`, `PATH_STUCK`, `NO_PROGRESS`).
 | `idempotency_key` | yes | `string`; minLength 1; maxLength 64; pattern `^[A-Za-z0-9][A-Za-z0-9_.:\-]{0,63}$` |
 
 ### `pz_goal_status`
