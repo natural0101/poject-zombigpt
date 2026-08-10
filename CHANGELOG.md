@@ -12,6 +12,32 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Added
 
+- **Goals survive a sidecar restart, honestly** (`epic/p2-goal-controller`,
+  wave 1). One versioned `goals.json` beside the memory dir, written
+  atomically at most once per tick and only when a goal actually changed
+  state. On the next start the previous ACTIVE goal answers terminal
+  `FAILED`/`SESSION_TERMINATED` — "the sidecar restarted while this goal was
+  active" — never silence; PENDING goals come back under their original ids
+  and idempotency digests (a resubmitted key resolves to the same goal, and a
+  TTL that ran out during the downtime expires on the first tick). A corrupt
+  file is set aside as `goals.json.corrupt` with a typed diagnostic, and the
+  channel starts empty rather than guessing.
+- **«Домой» is a word the agent obeys.** `return_home` (parameterless, the
+  first new speakable voice goal since the voice epic) walks the character to
+  the remembered home point through the deterministic navigation executor; no
+  home set answers the exact remedy — "stand at home and run: pz-agent
+  remember home". `explore_area` sweeps the unknown frontier of the local map
+  within a scope (radius by default — exploring one's own room is a no-op),
+  approaches each waypoint through a Journey, records locked doors as named
+  skips, and claims `complete` only when no frontier cell remains. Nine goal
+  kinds; four of them deterministic missions the LLM never touches.
+- **`pz_goal_status` finally says what phase the work is in.** Additive
+  `progress` (closed phase tokens + counters: approach/open/inspect/transfer,
+  legs walked, waypoints visited), `paused` (the manual-takeover marker,
+  invisible since the arm epic, now projected with its reason quarantined as
+  untrusted text), and `report` (the loot/explore mission ledger, scrubbed,
+  live or sealed). An LLM-served goal answers `progress: null` honestly — a
+  deterministic phase is a claim only a deterministic server may make.
 - **«Облутай квартиру» is now a typed goal** (`epic/p1-loot-area`, wave 2).
   `loot_area` (7 goal kinds) takes a scope — `room` (default), `building`, or
   `radius` 1..30 — plus `take_all` and an optional closed category list, and

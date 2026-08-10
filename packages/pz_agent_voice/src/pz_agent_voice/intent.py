@@ -46,7 +46,12 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Final
 
-from pz_agent_core.capabilities import DRINK_CARRIED, EAT_PERCENTAGE, READ_LITERATURE
+from pz_agent_core.capabilities import (
+    DRINK_CARRIED,
+    EAT_PERCENTAGE,
+    MOVE_TO_SQUARE,
+    READ_LITERATURE,
+)
 from pz_agent_core.goals import (
     GOAL_SPECS,
     NUMERIC_RANGES,
@@ -269,6 +274,23 @@ KIND_WORDS: Final[dict[GoalKind, frozenset[str]]] = {
     GoalKind.LEARN_RECIPE: frozenset(
         {"рецепт", "рецепты", "рецептов", "рецепту", "выучи", "выучить", "recipe"}
     ),
+    # The first parameterless kind added since the voice epic, speakable for
+    # the same reason satisfy_hunger is: the bare word carries the whole
+    # goal. «домой» / «идём домой» / «возвращайся домой» all reach the same
+    # member through these tokens; where home *is* stays in the save's
+    # memory, so nothing spoken here ever becomes a coordinate.
+    GoalKind.RETURN_HOME: frozenset(
+        {
+            "домой",
+            "дом",
+            "дому",
+            "возвращайся",
+            "вернись",
+            "вернуться",
+            "возвращаться",
+            "home",
+        }
+    ),
 }
 
 #: The three kinds served by the same in-game action. Their overlap is resolved
@@ -325,11 +347,23 @@ SKILL_WORDS: Final[dict[TrainableSkill, frozenset[str]]] = {
 #: sentence a vocabulary therefore means first giving the grammar closed-token
 #: parameters, which is the voice epic's change, not the loot epic's; until
 #: then the kind travels through ``pz_goal_submit`` like navigation does.
+#: ``explore_area`` sits here by loot_area's own argument, one wave later:
+#: the bare goal is speakable in principle, but its optional parameters — the
+#: scope token and the radius — are the very tokens this grammar declares
+#: unspeakable, and the partition check refuses a speakable kind that takes
+#: unspeakable parameters even optionally. A spoken «исследуй только двор»
+#: that swept the default radius instead would be the invention that check
+#: exists to prevent; the kind travels through ``pz_goal_submit`` until the
+#: grammar grows closed-token parameters.
+#:
+#: ``return_home`` is deliberately *not* here: it takes no parameter at all,
+#: so it is the first kind since the voice epic to clear the partition check
+#: as speakable, and :data:`KIND_WORDS` carries its vocabulary.
 #: The grammar checks below still hold: a *new* kind must land either in
 #: :data:`KIND_WORDS` or here — a kind in neither refuses the import, and a
 #: kind in both refuses it too.
 UNSPEAKABLE_KINDS: Final[frozenset[GoalKind]] = frozenset(
-    {GoalKind.NAVIGATE_TO, GoalKind.LOOT_AREA}
+    {GoalKind.NAVIGATE_TO, GoalKind.LOOT_AREA, GoalKind.EXPLORE_AREA}
 )
 
 #: The parameters only those kinds carry, excluded from the unit-word table
@@ -410,6 +444,10 @@ CAPABILITY_FOR_KIND: Final[dict[GoalKind, str]] = {
     GoalKind.READ_FOR_BOREDOM: READ_LITERATURE,
     GoalKind.TRAIN_SKILL: READ_LITERATURE,
     GoalKind.LEARN_RECIPE: READ_LITERATURE,
+    # Walking home is the movement capability and nothing else: the target
+    # comes from memory, and the journey's doors and stairs ride the same
+    # move the probe verified.
+    GoalKind.RETURN_HOME: MOVE_TO_SQUARE,
 }
 
 ALL_VOICE_CAPABILITIES: Final[frozenset[str]] = frozenset(CAPABILITY_FOR_KIND.values())

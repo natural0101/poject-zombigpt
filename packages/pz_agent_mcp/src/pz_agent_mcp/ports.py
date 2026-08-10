@@ -32,9 +32,10 @@ returning ``bool`` is not enough to tell a client what happened.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Final, Protocol
 
 from pz_agent_core.actions import ActionRequest
 from pz_agent_core.capabilities.model import CapabilityReport
@@ -51,6 +52,7 @@ from pz_agent_core.protocol import (
 )
 
 __all__ = [
+    "MAX_PROGRESS_COUNTERS",
     "ActionPort",
     "ActionRecord",
     "CapabilityPort",
@@ -60,10 +62,12 @@ __all__ = [
     "GoalCancellation",
     "GoalChannelStatus",
     "GoalPort",
+    "GoalProgress",
     "LogRecord",
     "MemoryPort",
     "MemoryRecord",
     "ObservationPort",
+    "PausedGoalRecord",
     "PlanPort",
     "PlanRecord",
     "PlanRequest",
@@ -191,6 +195,87 @@ class PlanRecord:
             raise ValueError(f"step_index must be non-negative, got {self.step_index}")
 
 
+#: Counters one progress answer may carry. The producers today use two; the
+#: bound exists so a drive growing a ledger could only ever widen a status
+#: answer this much, never without limit.
+MAX_PROGRESS_COUNTERS: Final = 8
+
+#: What a phase or a counter name may look like: a short lowercase token. The
+#: values are minted by our own deterministic drives — a journey state, a
+#: mission pipeline phase — and a value that is not one is a producer bug, so
+#: the constructor refuses it rather than quarantining a sentence into a field
+#: a client is told is closed.
+_PROGRESS_TOKEN: Final = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
+
+
+@dataclass(frozen=True, slots=True)
+class GoalProgress:
+    """Where the deterministic drive serving one goal stands, right now.
+
+    ``phase`` is a closed token the drive itself minted — a journey's
+    ``planning``/``moving``/``arrived``/``refused``, a loot mission's
+    ``start``/``approach``/``open``/``inspect``/``transfer``, an explore
+    mission's ``start``/``approach`` — never caller or game text. It is the
+    "progress only on phase change" primitive: the value moves exactly when
+    the work does, so a client reports transitions instead of poll-spamming.
+
+    ``counters`` carries the drive's own detail-free numbers (legs walked,
+    containers inspected). Numbers and closed tokens only, both enforced here:
+    a port answer is another process's word, and a sentence smuggled into a
+    counter name would leave this boundary looking like data.
+
+    A goal served by a plan provider has no instance of this at all — an
+    LLM-served goal honestly has no deterministic phase — which is why the
+    field carrying it is optional everywhere it appears.
+    """
+
+    phase: str
+    counters: Mapping[str, int] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not _PROGRESS_TOKEN.fullmatch(self.phase):
+            raise ValueError(f"a progress phase must be a closed token, got {self.phase!r}")
+        if len(self.counters) > MAX_PROGRESS_COUNTERS:
+            raise ValueError(
+                f"a progress answer carries at most {MAX_PROGRESS_COUNTERS} counters, "
+                f"got {len(self.counters)}"
+            )
+        for name, value in self.counters.items():
+            if not isinstance(name, str) or not _PROGRESS_TOKEN.fullmatch(name):
+                raise ValueError(f"a counter name must be a closed token, got {name!r}")
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"counter {name} must be a non-negative integer, got {value!r}")
+
+
+@dataclass(frozen=True, slots=True)
+class PausedGoalRecord:
+    """The goal a user's takeover parked, as the status surface reports it.
+
+    The queue's own record honestly ended ``CANCELLED`` — the goals package
+    has no ``PAUSED`` state — and this marker is the other half of the truth:
+    paused by the user's own hand, not abandoned by the agent. It stays in the
+    answer until an explicit fresh activation replaces it; nothing resumes the
+    goal implicitly.
+
+    ``reason`` is the loop's own sentence ("manual takeover"). It is carried
+    as the string it is and quarantined on the way out like every other free
+    text, rather than trusted on the strength of who wrote it.
+    """
+
+    goal_id: str
+    kind: str
+    reason: str
+    paused_at_ms: int
+
+    def __post_init__(self) -> None:
+        if not self.goal_id:
+            raise ValueError("a paused marker must name the goal it parked")
+        if not self.kind:
+            raise ValueError("a paused marker must carry the goal's kind")
+        if self.paused_at_ms < 0:
+            raise ValueError(f"paused_at_ms must be non-negative, got {self.paused_at_ms}")
+
+
 @dataclass(frozen=True, slots=True)
 class GoalChannelStatus:
     """The goal channel as it stands, plus the one goal the caller asked about.
@@ -205,11 +290,27 @@ class GoalChannelStatus:
     :attr:`~pz_agent_core.goals.GoalQueue.pending` orders it: by admission
     sequence and never by timestamp, because Windows' wall clock advances in
     ~15.6 ms granules and two goals submitted in one granule carry the same one.
+
+    The three optional tails are additive and each defaults to the honest
+    nothing, so a port that cannot answer them — a bundle without the
+    deterministic wrapper, a core link whose codec does not carry them yet —
+    answers ``None`` rather than an invented value:
+
+    * ``progress`` describes the goal this answer is *about* — the named goal
+      when an id was asked, the active one otherwise — and only while a live
+      deterministic drive serves it. An LLM-served goal has none.
+    * ``paused`` mirrors the loop's paused-by-takeover marker.
+    * ``report`` is the loot or explore mission's ledger document for the
+      named goal: the live snapshot while the mission runs, the sealed report
+      after it ends, for as long as the bounded ledger keeps it.
     """
 
     active: GoalRecord | None = None
     pending: tuple[GoalRecord, ...] = ()
     named: GoalRecord | None = None
+    progress: GoalProgress | None = None
+    paused: PausedGoalRecord | None = None
+    report: JsonDict | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -105,7 +105,15 @@ from pz_agent_core.capabilities import (
     save_report,
 )
 from pz_agent_core.diagnostics import DiagnosticsError, TraceError, TraceWriter
-from pz_agent_core.goals import GoalQueue, GoalRecord, to_planner_goal
+from pz_agent_core.goals import (
+    GoalDocumentError,
+    GoalQueue,
+    GoalRecord,
+    GoalState,
+    GoalStore,
+    GoalStoreError,
+    to_planner_goal,
+)
 from pz_agent_core.ipc.clocks import Clock, system_clock_ms
 from pz_agent_core.ipc.journal import JournalReader, probe_truncation
 from pz_agent_core.ipc.layout import IpcLayout
@@ -1553,6 +1561,11 @@ class SidecarLoop:
     #: adapter then leaves ``actions`` as the named refusal rather than
     #: admitting submissions nothing would ever drain.
     actions: ActionChannel | None = None
+    #: Where the goal channel survives this process, when it does. Set by
+    #: :meth:`adopt_goal_store` — never assigned directly, because adoption is
+    #: also the restore — and left ``None`` for a loop whose goals are
+    #: deliberately mortal (most tests, and any loop without a queue).
+    goal_store: GoalStore | None = None
     #: The one seam through which two threads reach :attr:`goals`.
     #: :class:`~pz_agent_core.goals.GoalQueue` is not thread-safe, so every
     #: touch of it — the tick thread's activation, settlement, tick, disarm and
@@ -1570,6 +1583,10 @@ class SidecarLoop:
     _pending_disarm: PendingArm | None = field(default=None, init=False)
     _disarm_notice: DisarmNotice | None = field(default=None, init=False)
     _paused_goal: PausedGoal | None = field(default=None, init=False)
+    #: The queue revision the goal store last wrote, so a tick that moved no
+    #: goal writes no file. ``-1`` is "never written", distinct from the fresh
+    #: queue's revision 0.
+    _goal_flushed_revision: int = field(default=-1, init=False)
     _control_decision: ControlDecision | None = field(default=None, init=False)
     _tick: int = field(default=0, init=False)
     _budget: ActionBudget = field(init=False)
@@ -1868,6 +1885,10 @@ class SidecarLoop:
             # its own disarm keeps the record honest for as long as it exists.
             with self.goal_lock:
                 self.goals.disarm()
+            # And the goal store does not die with it: the disarm's terminal
+            # record and the surviving backlog go to disk, so the next sidecar
+            # restores a channel that says what this one actually did.
+            self._flush_goals()
         if self.actions is not None:
             # Same reasoning one channel over: a submission still waiting when
             # the loop dies must end with a record that says so, because its
@@ -2442,6 +2463,11 @@ class SidecarLoop:
         if memory is not None and results:
             self._feed_inspections(memory, results, now)
 
+        # The goal-persistence seam: whatever this tick (or the serving thread
+        # since the last one) did to the channel reaches disk before the tick
+        # ends. Skipped without IO when no goal moved; see _flush_goals.
+        self._flush_goals()
+
         self._publish_heartbeat()
         self._refresh_pid_record()
         return TickOutcome(
@@ -2969,6 +2995,122 @@ class SidecarLoop:
             return
         with self.goal_lock:
             queue.panic_stop()
+
+    def adopt_goal_store(self, store: GoalStore) -> tuple[str, ...]:
+        """Restore the persisted goal channel into this loop's fresh queue, and
+        keep it persisted from here on.
+
+        Called once at assembly, after construction and before the first tick —
+        the queue is fresh and nothing else is running, so the restore is
+        race-free; the ``goal_lock`` is still taken because the discipline is
+        cheaper to keep than to reason about an exception for. What the restore
+        does with each record is the queue's own honest reading
+        (:meth:`~pz_agent_core.goals.GoalQueue.restore`): the previous ACTIVE
+        goal becomes terminal ``FAILED`` / ``SESSION_TERMINATED``, the pending
+        backlog comes back pending under its original ids, digests and
+        submission times, and the terminal history comes back so an old goal id
+        still answers over ``pz_goal_status``.
+
+        A file that cannot be read or is not a channel this build wrote is
+        never guessed at: the diagnostic goes to :attr:`state_problems`, the
+        file is set aside as ``goals.json.corrupt`` so the evidence survives,
+        and the channel starts empty. Returns the notes it recorded plus a
+        summary of what was restored, for the caller that wants to log them.
+        """
+        queue = self.goals
+        if queue is None:
+            # No channel, nothing to persist; the store is not adopted, so the
+            # loop never writes a file claiming to describe goals it cannot hold.
+            return ("this sidecar was assembled without a goal queue, so no goals persist",)
+        self.goal_store = store
+        notes: list[str] = []
+        snapshot = None
+        try:
+            snapshot = store.load()
+        except (GoalStoreError, GoalDocumentError) as exc:
+            notes.append(self._quarantine_goals(store, exc))
+        if snapshot is not None and snapshot.records:
+            now = self.clock()
+            try:
+                with self.goal_lock:
+                    lost = queue.restore(snapshot, now_ms=now)
+            except ValueError as exc:
+                # Parsed, but not a channel any queue could have written (an id
+                # twice, an over-full backlog). Same evidence rule as above;
+                # restore left the queue untouched, so empty is what starts.
+                notes.append(self._quarantine_goals(store, exc))
+            else:
+                pending = sum(1 for r in snapshot.records if r.state is GoalState.PENDING)
+                notes.append(
+                    f"restored {pending} pending goal(s) and "
+                    f"{len(snapshot.records) - pending - len(lost)} finished record(s) from "
+                    f"{store.path.name}; {len(lost)} goal(s) active at the previous "
+                    "shutdown are recorded failed (session_terminated)"
+                )
+        # Persist what adoption itself established — including the restored
+        # ACTIVE goal's terminal record, so a second restart before the first
+        # tick still answers for it. A first run with no file writes nothing:
+        # the flush below sees revision unchanged and the file appears with the
+        # first real transition.
+        if snapshot is not None:
+            self._flush_goals(force=True)
+        else:
+            with self.goal_lock:
+                self._goal_flushed_revision = queue.revision
+        return tuple(notes)
+
+    def _quarantine_goals(self, store: GoalStore, cause: Exception) -> str:
+        """Set the unreadable goals file aside; say what happened either way."""
+        try:
+            aside = store.quarantine()
+        except GoalStoreError as rename_failure:
+            note = (
+                f"the stored goals could not be read ({cause}) and the file could not be "
+                f"set aside either ({rename_failure}); the goal channel starts empty"
+            )
+        else:
+            note = (
+                f"the stored goals could not be read ({cause}); the file was set aside as "
+                f"{aside.name} and the goal channel starts empty"
+            )
+        self._note_state_problem(note)
+        return note
+
+    def _flush_goals(self, *, force: bool = False) -> None:
+        """Write the goal channel to its store when a transition made it stale.
+
+        The cadence, stated once: at most one write per tick, and none on a
+        tick in which no goal changed — the queue's ``revision`` counts record
+        mutations, and an unchanged revision is skipped without even building
+        the snapshot. Transitions made between ticks by the serving thread
+        (a submit over the port) are caught by the next tick's flush, and
+        :meth:`shutdown` flushes once more after its disarm, so the last state
+        a client can be told is also the last state on disk. The snapshot is
+        taken under ``goal_lock``; the write happens after it is released,
+        keeping that lock's no-IO promise.
+
+        E12-M03-T004 for goals: a write that fails is reported on
+        :attr:`state_problems` and retried on the next transition (or next
+        tick, the revision being still unflushed) rather than ending a session
+        that is driving a character over its own bookkeeping.
+        """
+        store = self.goal_store
+        queue = self.goals
+        if store is None or queue is None:
+            return
+        with self.goal_lock:
+            if not force and queue.revision == self._goal_flushed_revision:
+                return
+            snapshot = queue.snapshot()
+        try:
+            store.save_snapshot(snapshot)
+        except GoalStoreError as exc:
+            self._note_state_problem(
+                f"the goal channel could not be persisted ({exc}); a restart before the "
+                "next successful write will not remember these goals"
+            )
+            return
+        self._goal_flushed_revision = snapshot.revision
 
     def _panic_actions(self) -> None:
         """End every waiting remote submission as the panic stop's own casualty.

@@ -85,6 +85,8 @@ DOCUMENTED_KINDS: Final[frozenset[str]] = frozenset(
         "learn_recipe",
         "navigate_to",
         "loot_area",
+        "return_home",
+        "explore_area",
     }
 )
 

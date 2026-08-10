@@ -21,9 +21,14 @@ import pytest
 
 from pz_agent_cli.core_services import LoopGoalPort
 from pz_agent_cli.navigation_planner import NavigatingPlanner
-from pz_agent_cli.runtime import GoalPlanner, LoopError
+from pz_agent_cli.runtime import GoalPlanner, LoopError, SidecarLoop
 from pz_agent_core.actions import ActionRequest
+from pz_agent_core.actions.adapter import AdapterRegistry
+from pz_agent_core.actions.builtin import register_builtins
 from pz_agent_core.goals import (
+    GOALS_FILE_NAME,
+    GOALS_QUARANTINE_NAME,
+    RESTART_LOST_DETAIL,
     GoalAdmission,
     GoalBudget,
     GoalKind,
@@ -31,7 +36,9 @@ from pz_agent_core.goals import (
     GoalQueue,
     GoalRecord,
     GoalRequest,
+    GoalSnapshot,
     GoalState,
+    GoalStore,
     TrainableSkill,
 )
 from pz_agent_core.planner import Goal as PlannerGoal
@@ -622,3 +629,302 @@ class TestLootGoalsAreServedByTheMission:
             report = wrapper.loot_report(record.goal_id)
             assert report is not None, "the report survives the goal it describes"
             assert report["ended"] == "cancelled"
+
+
+# --------------------------------------------------------------------------
+# the eighth and ninth kinds: return_home and explore_area in the loop
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class RememberedSquare:
+    """A remembered grid square, as much of one as the wrapper reads."""
+
+    x: int
+    y: int
+    z: int = 0
+
+
+@dataclass(frozen=True)
+class HomeMemory:
+    """A memory answering ``home_point``, standing where the sidecar's would."""
+
+    square: RememberedSquare
+
+    def home_point(self) -> RememberedSquare:
+        return self.square
+
+
+def home_request(key: str = "home-key") -> GoalRequest:
+    """The bare goal, exactly as «домой» submits it: no params at all."""
+    return GoalRequest(kind=GoalKind.RETURN_HOME, idempotency_key=key)
+
+
+def explore_request(key: str = "explore-key") -> GoalRequest:
+    """The bare goal: no params, and the mission reads the radius default."""
+    return GoalRequest(kind=GoalKind.EXPLORE_AREA, idempotency_key=key)
+
+
+class TestReturnHomeGoalsAreServedByTheExecutor:
+    """``return_home`` end to end through the loop, planner-less and typed."""
+
+    def test_no_home_point_ends_the_goal_typed_with_the_remedy(self, tmp_path: Path) -> None:
+        """planner=None, memory=None end to end: the refusal *is* the remedy."""
+        world, _wrapper = navigating_world(tmp_path)
+        with world:
+            armed_autonomous(world)
+            record = submit(world, home_request())
+            world.observe()
+
+            world.loop.tick()
+
+            ended = record_of(world, record.goal_id)
+            assert ended.state is GoalState.FAILED
+            assert ended.reason_code is ReasonCode.PRECONDITION_FAILED
+            assert "pz-agent remember home" in ended.detail
+
+    def test_a_home_goal_reaches_the_engine_without_asking_the_planner(
+        self, tmp_path: Path
+    ) -> None:
+        spy = RecordingGoalPlanner()
+        world = goal_world(tmp_path)
+        wrapper = NavigatingPlanner(spy, loot_memory=HomeMemory(RememberedSquare(1205, 3400)))
+        world.loop.planner = wrapper
+        wrapper.bind(world.loop)
+        with world:
+            armed_autonomous(world)
+            record = submit(world, home_request())
+            world.observe()
+
+            outcome = world.loop.tick()
+
+            # Five squares is one final leg out the goal seam; this registry
+            # carries no movement adapter, so the dispatch came back the
+            # engine's own refusal — still proof of the join, charged as one
+            # honest step against the goal.
+            assert [result.action for result in outcome.results] == ["movement.move_to"]
+            assert spy.goal_calls == [], "return_home must never reach the wrapped planner"
+            assert spy.propose_calls == 0, "the goal outranks the planner's own initiative"
+            served = record_of(world, record.goal_id)
+            assert served.steps_used == 1
+
+
+class TestExploreGoalsAreServedByTheMission:
+    """``explore_area`` end to end through the loop, planner-less and bounded."""
+
+    def test_an_explore_goal_probes_the_engine_without_asking_the_planner(
+        self, tmp_path: Path
+    ) -> None:
+        spy = RecordingGoalPlanner()
+        world, wrapper = navigating_world(tmp_path, spy)
+        with world:
+            armed_autonomous(world)
+            record = submit(world, explore_request())
+            world.observe()
+
+            outcome = world.loop.tick()
+
+            # The default radius sweep around the one observed square
+            # resolves within arrival reach, so the mission's completion
+            # probe goes out the goal seam; the engine's refusal for an
+            # adapter this registry does not carry is still proof of the
+            # join, and it charges the goal one honest step.
+            assert [result.action for result in outcome.results] == ["movement.move_to"]
+            assert spy.goal_calls == [], "explore_area must never reach the wrapped planner"
+            assert spy.propose_calls == 0, "the goal outranks the planner's own initiative"
+            served = record_of(world, record.goal_id)
+            assert served.steps_used == 1
+            report = wrapper.explore_report(record.goal_id)
+            assert report is not None
+            assert report["scope"]["scope"] == "radius"
+
+    def test_the_mission_dies_with_its_cancelled_goal_and_keeps_the_report(
+        self, tmp_path: Path
+    ) -> None:
+        world, wrapper = navigating_world(tmp_path)
+        with world:
+            armed_autonomous(world)
+            record = submit(world, explore_request())
+            world.observe()
+            world.loop.tick()
+            assert wrapper.tracked_explores <= 1
+
+            cancellation = LoopGoalPort(loop=world.loop).cancel(record.goal_id)
+            assert cancellation.requested is True
+            world.beat_game()
+            world.loop.tick()
+
+            ended = record_of(world, record.goal_id)
+            assert ended.state is GoalState.CANCELLED
+            assert wrapper.tracked_explores == 0, "the mission must die with its goal"
+            report = wrapper.explore_report(record.goal_id)
+            assert report is not None, "the report survives the goal it describes"
+
+
+# --------------------------------------------------------------------------
+# goals survive a sidecar restart, honestly
+# --------------------------------------------------------------------------
+
+
+class CountingGoalStore(GoalStore):
+    """The real store, counting its writes, so the cadence is pinnable."""
+
+    def __init__(self, state_dir: Path) -> None:
+        super().__init__(state_dir)
+        self.saves = 0
+
+    def save_snapshot(self, snapshot: GoalSnapshot) -> int:
+        self.saves += 1
+        return super().save_snapshot(snapshot)
+
+
+def revenant_loop(world: SidecarWorld) -> SidecarLoop:
+    """The next sidecar over the same state directory — the previous one was
+    killed, not shut down, so nothing here inherits from the loop in *world*
+    except what reached disk."""
+    return SidecarLoop(
+        layout=world.layout,
+        state_dir=world.state_dir,
+        registry=register_builtins(AdapterRegistry()),
+        clock=world.clock,
+        goals=GoalQueue(clock=world.clock, armed=False),
+    )
+
+
+class TestGoalsSurviveARestart:
+    def test_a_killed_sidecars_goals_answer_honestly_from_the_next_one(
+        self, tmp_path: Path
+    ) -> None:
+        """The whole restart, loop to loop: the old ACTIVE id answers
+        FAILED/SESSION_TERMINATED over the same port a client polls, the
+        backlog is still pending, and the old idempotency key still resolves
+        to the goal it named."""
+        planner = RecordingGoalPlanner()
+        with goal_world(tmp_path, planner) as world:
+            world.loop.adopt_goal_store(GoalStore(world.state_dir))
+            armed_autonomous(world)
+            running = submit(world, a_goal("restart-running"))
+            waiting = submit(world, a_goal("restart-waiting", satisfy_to=0.5))
+            world.observe()
+            world.loop.tick()
+            assert record_of(world, running.goal_id).state is GoalState.ACTIVE
+
+            # The kill: no shutdown, no disarm. A fresh loop simply comes up
+            # over the same state directory and adopts the same store.
+            revenant = revenant_loop(world)
+            revenant.adopt_goal_store(GoalStore(world.state_dir))
+            port = LoopGoalPort(loop=revenant)
+
+            ended = port.status(running.goal_id).named
+            assert ended is not None
+            assert ended.state is GoalState.FAILED
+            assert ended.reason_code is ReasonCode.SESSION_TERMINATED
+            assert ended.detail == RESTART_LOST_DETAIL
+            assert ended.detail == "the sidecar restarted while this goal was active"
+
+            still = port.status(waiting.goal_id).named
+            assert still is not None
+            assert still.state is GoalState.PENDING
+            assert still.submitted_at_ms == waiting.submitted_at_ms
+
+            again = port.submit(a_goal("restart-waiting", satisfy_to=0.5))
+            assert again.duplicate is True
+            assert again.goal is not None
+            assert again.goal.goal_id == waiting.goal_id
+
+    def test_a_goal_that_expired_while_the_sidecar_was_down_expires_on_the_first_tick(
+        self, tmp_path: Path
+    ) -> None:
+        with goal_world(tmp_path) as world:
+            world.loop.adopt_goal_store(GoalStore(world.state_dir))
+            record = submit(world, a_goal("downtime-key"))
+            world.loop.tick()
+
+            world.clock.advance(record.budget.pending_ttl_ms + 1)
+            revenant = revenant_loop(world)
+            revenant.adopt_goal_store(GoalStore(world.state_dir))
+            queue = revenant.goals
+            assert queue is not None
+            assert queue.record(record.goal_id) is not None
+
+            transitions = queue.tick()
+
+            assert [(t.goal_id, t.state) for t in transitions] == [
+                (record.goal_id, GoalState.EXPIRED)
+            ]
+
+    def test_no_write_happens_on_a_tick_without_a_goal_transition(self, tmp_path: Path) -> None:
+        """The cadence, pinned: adoption with no file writes nothing, a
+        transition writes once on its tick, a tick that moves no goal writes
+        nothing at all."""
+        with goal_world(tmp_path) as world:
+            store = CountingGoalStore(world.state_dir)
+            world.loop.adopt_goal_store(store)
+            assert store.saves == 0, "a first run with no goals mints no file"
+
+            world.loop.tick()
+            assert store.saves == 0
+
+            record = submit(world, a_goal("cadence-key"))
+            world.loop.tick()
+            assert store.saves == 1, "the submission reaches disk on the next tick"
+
+            world.loop.tick()
+            world.loop.tick()
+            assert store.saves == 1, "ticks that move no goal must not write"
+
+            world.clock.advance(record.budget.pending_ttl_ms + 1)
+            world.loop.tick()
+            assert store.saves == 2, "the expiry transition is one more write"
+            assert record_of(world, record.goal_id).state is GoalState.EXPIRED
+
+    def test_shutdown_writes_the_channel_as_it_ended(self, tmp_path: Path) -> None:
+        """An orderly shutdown persists its own honesty: the disarm's CANCELLED
+        record and the surviving backlog, so the next sidecar restores what
+        this one actually did rather than inventing a SESSION_TERMINATED."""
+        planner = RecordingGoalPlanner()
+        with goal_world(tmp_path, planner) as world:
+            world.loop.adopt_goal_store(GoalStore(world.state_dir))
+            armed_autonomous(world)
+            running = submit(world, a_goal("bye-running"))
+            waiting = submit(world, a_goal("bye-waiting", satisfy_to=0.5))
+            world.observe()
+            world.loop.tick()
+            assert record_of(world, running.goal_id).state is GoalState.ACTIVE
+
+            world.loop.shutdown(reason="test shutdown")
+
+            loaded = GoalStore(world.state_dir).load()
+            assert loaded is not None
+            by_id = {record.goal_id: record for record in loaded.records}
+            ended = by_id[running.goal_id]
+            assert ended.state is GoalState.CANCELLED
+            assert ended.reason_code is ReasonCode.NOT_ARMED
+            assert by_id[waiting.goal_id].state is GoalState.PENDING
+
+    def test_an_unreadable_goals_file_is_set_aside_and_the_channel_starts_empty(
+        self, tmp_path: Path
+    ) -> None:
+        with goal_world(tmp_path) as world:
+            (world.state_dir / GOALS_FILE_NAME).write_text("{broken", encoding="utf-8")
+
+            notes = world.loop.adopt_goal_store(GoalStore(world.state_dir))
+
+            assert any("could not be read" in note for note in notes)
+            assert any("could not be read" in problem for problem in world.loop.state_problems)
+            aside = world.state_dir / GOALS_QUARANTINE_NAME
+            assert aside.read_text(encoding="utf-8") == "{broken", "the evidence survives"
+            assert not (world.state_dir / GOALS_FILE_NAME).exists()
+            queue = world.loop.goals
+            assert queue is not None
+            assert queue.open_count == 0
+
+    def test_a_loop_without_a_queue_adopts_nothing_and_says_so(self, tmp_path: Path) -> None:
+        with attached_world(tmp_path) as world:
+            notes = world.loop.adopt_goal_store(GoalStore(world.state_dir))
+
+            assert notes == (
+                "this sidecar was assembled without a goal queue, so no goals persist",
+            )
+            assert world.loop.goal_store is None
+            assert not (world.state_dir / GOALS_FILE_NAME).exists()

@@ -606,11 +606,11 @@ No arguments.
 
 ### `pz_goal_submit`
 
-Ask the typed goal channel for one of the things it carries. The kind set is closed and there is no free-text field at all: an invented kind is refused, never approximated. The channel admits the goal to a bounded backlog and answers with its id and state — 'pending' is the honest word for a goal nothing has started yet, and every goal carries a wall-clock, step and time-to-live budget so that it reaches a terminal state whether or not it is served. Which sandwich satisfies a hunger goal is never decided here. A 'loot_area' goal finishes on one provable criterion — every reachable container in scope was inspected or has a recorded skip reason — and its terminal answer reports the looted scope (the pinned room, building or sweep), the containers inspected, the containers skipped each with its reason, and the items taken per category and left per reason.
+Ask the typed goal channel for one of the things it carries. The kind set is closed and there is no free-text field at all: an invented kind is refused, never approximated. The channel admits the goal to a bounded backlog and answers with its id and state — 'pending' is the honest word for a goal nothing has started yet, and every goal carries a wall-clock, step and time-to-live budget so that it reaches a terminal state whether or not it is served. Which sandwich satisfies a hunger goal is never decided here. A 'loot_area' goal finishes on one provable criterion — every reachable container in scope was inspected or has a recorded skip reason — and its terminal answer reports the looted scope (the pinned room, building or sweep), the containers inspected, the containers skipped each with its reason, and the items taken per category and left per reason. An 'explore_area' goal finishes on the matching criterion — no frontier square remains in scope: every scope square is known to the local map or carries a recorded skip reason — and its report carries the pinned scope, the map growth (cells_discovered), the waypoints visited, and each skipped square with its reason (a locked or barricaded door named by reference, a proven no-route). A 'return_home' goal takes no parameters at all: the target is the save's remembered home point ('pz-agent remember home'), no home set is a typed PRECONDITION_FAILED whose detail is the remedy, and the goal succeeds only on the observed arrival.
 
 | Argument | Required | Schema |
 | --- | --- | --- |
-| `kind` | yes | one of `learn_recipe`, `loot_area`, `navigate_to`, `read_for_boredom`, `satisfy_hunger`, `satisfy_thirst`, `train_skill` |
+| `kind` | yes | one of `explore_area`, `learn_recipe`, `loot_area`, `navigate_to`, `read_for_boredom`, `return_home`, `satisfy_hunger`, `satisfy_thirst`, `train_skill` |
 | `skill` | no | one of `carpentry`, `cooking`, `electrical`, `farming`, `first_aid`, `fishing`, `foraging`, `mechanics`, `metalworking`, `tailoring`, `trapping` |
 | `target_level` | no | `integer`; minimum 1; maximum 10 |
 | `satisfy_to` | no | `number`; minimum 0.0; maximum 1.0 |
@@ -650,13 +650,79 @@ ran out appears in the terminal answer with that reason, never silently
 dropped; `take_all` widens the selection to every category but never
 overrides the user's reserved items.
 
+`return_home` takes no parameters at all: where home is comes from the
+save's memory, set by `pz-agent remember home`, and a spoken or submitted
+parameter would be a second definition of home that could disagree with the
+remembered one. The sidecar walks it with the same deterministic route
+executor `navigate_to` uses — doors, stairs, blocked passages and stuck
+detection handled locally — and the goal succeeds only on the *observed*
+arrival at the remembered square. No home point readable is a typed
+`PRECONDITION_FAILED` whose detail is the remedy verbatim ("stand at home
+and run: pz-agent remember home"); a home the map can prove unreachable —
+another floor with no remembered stairs, a route sealed by walls — is the
+executor's own typed refusal (`PATH_NOT_FOUND`, `DOOR_LOCKED`,
+`DOOR_BARRICADED`).
+
+`explore_area` takes only `scope` and `radius`, both optional, and the
+absent scope means `radius` — deliberately not loot's `room` default,
+because the room the character stands in is the one patch of world already
+observed and exploring it is a no-op. The sidecar's deterministic explore
+mission serves it with no model call per square: it reads the session's
+local map, finds the frontier — unknown squares bordering squares the map
+has proven walkable — walks a bounded journey at the nearest one
+(deterministic tie-break by coordinates), and lets the observations
+gathered on the way sweep squares into the map; a waypoint that becomes
+known mid-approach is done without the arrival. Scope semantics are
+loot_area's: `room` and `building` are pinned from the observation at
+activation and refused with a typed failure naming `radius` where the
+reader is unavailable; `radius` (a Chebyshev sweep around the activation
+square) always works. The mission ends `complete` when no frontier square
+remains in scope — every scope square known or skipped with a recorded
+reason — and `no_progress` after three consecutive failed approaches or an
+exhausted waypoint budget. The report is honest both ways: `cells_discovered`
+is the map's real growth, and every square skipped for a locked door (named
+by reference) or a proven no-route appears with that reason, never silently
+dropped.
+
 ### `pz_goal_status`
 
-The goal channel: which goal is active, what is waiting behind it, and — when 'goal_id' names one — that goal's state, budget and how much of it is left. An id the channel has finished and forgotten is refused rather than answered as 'no such goal', because the two are not the same fact.
+The goal channel: which goal is active, what is waiting behind it, and — when 'goal_id' names one — that goal's state, budget and how much of it is left. An id the channel has finished and forgotten is refused rather than answered as 'no such goal', because the two are not the same fact. Three additive keys, each null when there is nothing to say: 'progress' is the deterministic drive's phase (a journey's planning/moving/arrived/refused; a loot sweep's start/approach/open/inspect/transfer; an explore sweep's start/approach) plus detail-free counters, for the named goal or, with no id, the active one — a goal a plan provider serves has no deterministic phase and honestly answers null; 'paused' is the goal a manual takeover parked, visible until a fresh activation replaces it; 'report' is the named loot or explore goal's ledger, live while the mission runs and sealed after it ends. The phase is the progress-messaging primitive: tell the user about transitions, when the value changes — it moves exactly when the work does, so polling faster buys nothing worth relaying.
 
 | Argument | Required | Schema |
 | --- | --- | --- |
 | `goal_id` | no | `string`; maxLength 36; pattern `^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$` |
+
+The three additive payload keys in detail:
+
+* `progress` — `{phase, counters}` for the goal the answer is about: the
+  named goal when `goal_id` was passed, the active goal otherwise, and only
+  while the sidecar's deterministic wrapper is live-driving it. `phase` is a
+  closed token minted by the drive itself — `planning`/`moving`/`arrived`/
+  `refused` for `navigate_to` and `return_home`, `start`/`approach`/`open`/
+  `inspect`/`transfer` for `loot_area`, `start`/`approach` for
+  `explore_area` — and `counters` carries the drive's own detail-free
+  numbers (`legs_used`; `containers_inspected` and `containers_skipped`;
+  `waypoints_visited` and `cells_discovered`). A goal served by a plan
+  provider has no deterministic phase and answers `null`, honestly, as does
+  a goal whose drive already ended. **Clients should report progress on
+  phase *transitions*, not on every poll**: the field only changes when the
+  work actually moves, which is the whole point of publishing it.
+* `paused` — the goal a manual takeover parked, as
+  `{goal_id, kind, paused_at_ms}` with the loop's one-line reason carried
+  under the usual `untrusted_text` quarantine. The queue's own record for
+  that goal honestly ended `cancelled` (user input always wins); this marker
+  is the other half — paused by the user's own hand, not abandoned — and it
+  stays visible until an explicit fresh activation replaces it.
+* `report` — the named `loot_area` or `explore_area` goal's full ledger
+  document: the live snapshot while the mission runs, the sealed report
+  after it ends, for as long as the bounded ledger keeps it (the last few
+  missions per kind). Room and building names are redacted at source and
+  the document is scrubbed again at this boundary, so every free string in
+  it (skip reasons included) arrives under the `untrusted_text` quarantine.
+
+Over the two-process assembly these three keys additionally require the Core
+RPC link to carry them; a link whose codec predates them answers `null` for
+all three rather than inventing a value.
 
 ### `pz_goal_cancel`
 

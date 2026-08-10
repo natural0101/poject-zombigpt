@@ -64,7 +64,12 @@ SCHEMA_PATH: Final = Path(__file__).resolve().parents[2] / "schemas" / "goal.sch
 #: epic does not make. The gap is pinned both ways below: the schema must not
 #: quietly grow the kind, and a payload naming it must *fail* validation, so a
 #: remote submission is a loud refusal rather than a silently dropped goal.
-NOT_YET_ON_THE_WIRE: Final[frozenset[str]] = frozenset({"navigate_to", "loot_area"})
+#: ``return_home`` and ``explore_area`` join the carve-out on the same terms:
+#: both are served locally by the sidecar's deterministic servers, and putting
+#: either on the remote link is the same protocol change.
+NOT_YET_ON_THE_WIRE: Final[frozenset[str]] = frozenset(
+    {"navigate_to", "loot_area", "return_home", "explore_area"}
+)
 
 #: The *numeric* parameters only those kinds carry, absent from the wire
 #: schema for the same reason and pinned the same way. (Every name here must
@@ -196,6 +201,8 @@ class TestTheClosedSetsAgree:
         local_params: dict[str, dict[str, Any]] = {
             "navigate_to": {"target_x": 1200, "target_y": 3400, "target_z": 0},
             "loot_area": {"scope": "room"},
+            "return_home": {},
+            "explore_area": {"scope": "radius", "radius": 8},
         }
         assert set(local_params) == set(NOT_YET_ON_THE_WIRE)
         for kind, params in sorted(local_params.items()):

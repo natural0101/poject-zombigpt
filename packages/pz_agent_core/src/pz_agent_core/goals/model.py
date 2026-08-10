@@ -76,6 +76,7 @@ __all__ = [
     "NUMERIC_RANGES",
     "PARAM_NAMES",
     "TERMINAL_GOAL_STATES",
+    "AreaScope",
     "GoalAdmission",
     "GoalBudget",
     "GoalKind",
@@ -253,15 +254,18 @@ class GoalKind(StrEnum):
     :data:`DEFAULT_BUDGETS` and to :data:`_PLANNER_KIND` together, and the tests
     fail until all three know about it.
 
-    ``NAVIGATE_TO`` and ``LOOT_AREA`` are the two kinds not served by a plan
-    provider: the sidecar's deterministic route executor
-    (``pz_agent_core.navigation``) walks the first square by square, the CLI's
-    deterministic loot mission (``pz_agent_cli.loot_mission``) drives the
-    second container by container, and
-    :class:`~pz_agent_core.planner.provider.NullProvider` refuses both by name
-    rather than approximating them with a plan. The mapping to the planner
-    vocabulary stays total all the same, because both goals still cross the
-    planner seam on their way to the deterministic server.
+    ``NAVIGATE_TO``, ``LOOT_AREA``, ``RETURN_HOME`` and ``EXPLORE_AREA`` are
+    the kinds not served by a plan provider: the sidecar's deterministic route
+    executor (``pz_agent_core.navigation``) walks the first square by square,
+    the CLI's deterministic loot mission (``pz_agent_cli.loot_mission``)
+    drives the second container by container, ``RETURN_HOME`` is one journey
+    to the square the save's memory remembers as home, and ``EXPLORE_AREA``
+    is the CLI's deterministic explore mission
+    (``pz_agent_cli.explore_mission``), driven frontier square by frontier
+    square. :class:`~pz_agent_core.planner.provider.NullProvider` refuses all
+    four by name rather than approximating them with a plan. The mapping to
+    the planner vocabulary stays total all the same, because these goals
+    still cross the planner seam on their way to the deterministic server.
     """
 
     SATISFY_HUNGER = "satisfy_hunger"
@@ -271,10 +275,12 @@ class GoalKind(StrEnum):
     LEARN_RECIPE = "learn_recipe"
     NAVIGATE_TO = "navigate_to"
     LOOT_AREA = "loot_area"
+    RETURN_HOME = "return_home"
+    EXPLORE_AREA = "explore_area"
 
 
 class LootScope(StrEnum):
-    """What "the area" means to a ``loot_area`` goal.
+    """What "the area" means to a ``loot_area`` or ``explore_area`` goal.
 
     Closed for the same reason every other vocabulary here is: the scope is
     the widest thing about the goal — it decides how far the character may
@@ -285,11 +291,23 @@ class LootScope(StrEnum):
     :data:`NUMERIC_RANGES`'s ``radius`` squares around it. A build whose room
     reader is unavailable refuses ``ROOM`` and ``BUILDING`` with a typed
     failure naming ``RADIUS`` as the alternative — it never guesses.
+
+    The name keeps the loot epic's spelling although two kinds now share the
+    vocabulary; :data:`AreaScope` below is the same enum under the neutral
+    name, so new call sites need not pretend they are looting. One enum, not
+    two: a second scope vocabulary would be two definitions of how far the
+    character may wander, and the one that drifted would win somewhere.
     """
 
     ROOM = "room"
     BUILDING = "building"
     RADIUS = "radius"
+
+
+#: The scope vocabulary under its kind-neutral name — the very same enum, so
+#: ``AreaScope.RADIUS is LootScope.RADIUS`` and no import ever has to choose
+#: which of two vocabularies is authoritative.
+AreaScope = LootScope
 
 
 class TrainableSkill(StrEnum):
@@ -693,6 +711,23 @@ _LOOT_BUDGET: Final = GoalBudget(
     max_wall_ms=MAX_GOAL_WALL_MS, max_steps=MAX_GOAL_STEPS, pending_ttl_ms=120_000
 )
 
+#: The homeward budget. Navigate-sized, because ``return_home`` *is* one
+#: journey — the only difference from ``navigate_to`` is where the target
+#: comes from (the save's remembered home point instead of three submitted
+#: coordinates), and a different budget for the same walk would be a claim
+#: that walking home is a different amount of work than walking anywhere.
+_RETURN_HOME_BUDGET: Final = _NAVIGATE_BUDGET
+
+#: The explore budget. Sized like :data:`_LOOT_BUDGET` and for the same
+#: reason: ``max_steps`` bounds only the goal-seam requests (completion
+#: probes), every approach leg travels the loop's action channel, and the
+#: mission's own bounds (waypoints per mission, consecutive failures, the
+#: journey budgets under each approach) bound the real work. A frontier sweep
+#: is mission-shaped like a loot sweep, and the wall clock is the umbrella.
+_EXPLORE_BUDGET: Final = GoalBudget(
+    max_wall_ms=MAX_GOAL_WALL_MS, max_steps=MAX_GOAL_STEPS, pending_ttl_ms=120_000
+)
+
 #: The whole channel in one table. Adding a kind without adding a row here
 #: fails :func:`_check_tables` at import time, not at the first submission.
 GOAL_SPECS: Final[Mapping[GoalKind, GoalSpec]] = MappingProxyType(
@@ -735,6 +770,25 @@ GOAL_SPECS: Final[Mapping[GoalKind, GoalSpec]] = MappingProxyType(
             required=frozenset(),
             optional=frozenset({"scope", "radius", "take_all", "categories"}),
             budget=_LOOT_BUDGET,
+        ),
+        # A bare goal on purpose: «домой» carries everything it means. Where
+        # home is comes from the save's memory (`pz-agent remember home`), and
+        # a parameter here would be a second, spoken definition of home that
+        # could disagree with the remembered one.
+        GoalKind.RETURN_HOME: GoalSpec(
+            required=frozenset(),
+            optional=frozenset(),
+            budget=_RETURN_HOME_BUDGET,
+        ),
+        # Both optional, and the absent scope means RADIUS — deliberately not
+        # loot's ROOM default: the room the character stands in is the one
+        # patch of world already observed, so "explore my own room" is a
+        # no-op, while a bounded sweep around where they stand is the thing
+        # the bare goal plausibly asks for. The mission reads the absence.
+        GoalKind.EXPLORE_AREA: GoalSpec(
+            required=frozenset(),
+            optional=frozenset({"scope", "radius"}),
+            budget=_EXPLORE_BUDGET,
         ),
     }
 )
@@ -836,6 +890,18 @@ class GoalRequest:
             # they bounded a sweep that is actually scoped to a room; the
             # mismatch is refused at the door, where it can still be fixed.
             raise ValueError("radius is meaningful only with scope=radius; set that scope too")
+        if (
+            self.kind is GoalKind.EXPLORE_AREA
+            and self.params.radius is not None
+            and self.params.scope not in (None, LootScope.RADIUS)
+        ):
+            # Same rule with explore's own default: the *absent* scope already
+            # means radius here (the kind's spec says so), so a bare radius is
+            # meaningful — only a radius beside room or building is the sweep
+            # bound the mission would silently ignore.
+            raise ValueError(
+                "radius is meaningful only with scope=radius; drop the scope or set that one"
+            )
 
     @property
     def effective_budget(self) -> GoalBudget:
@@ -1047,6 +1113,11 @@ _PLANNER_KIND: Final[Mapping[GoalKind, PlannerGoalKind]] = MappingProxyType(
         # mission serves it behind the same wrapper, and NullProvider refuses
         # it by name for a loop assembled without that wrapper.
         GoalKind.LOOT_AREA: PlannerGoalKind.LOOT_AREA,
+        # And the wave after that, twice over: one journey to the remembered
+        # home point, and one frontier-driven explore mission — both served
+        # behind the same wrapper, both refused by name by NullProvider.
+        GoalKind.RETURN_HOME: PlannerGoalKind.RETURN_HOME,
+        GoalKind.EXPLORE_AREA: PlannerGoalKind.EXPLORE_AREA,
     }
 )
 

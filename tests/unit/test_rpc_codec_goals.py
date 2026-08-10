@@ -98,6 +98,11 @@ REQUIRED_PARAMS: dict[GoalKind, GoalParams] = {
     # to the sidecar and not on this wire — the schema-conformance contract
     # test pins that carve-out, the same one navigate_to's coordinates carry.
     GoalKind.LOOT_AREA: GoalParams(),
+    # Bare goals both, by their kinds' own specs: home's whereabouts live in
+    # the save's memory, and explore's scope/radius are local to the sidecar,
+    # under the same not-on-the-wire carve-out the loot parameters carry.
+    GoalKind.RETURN_HOME: GoalParams(),
+    GoalKind.EXPLORE_AREA: GoalParams(),
 }
 
 #: Tokens that are not goals. None of them resolves through ``parse_kind`` —

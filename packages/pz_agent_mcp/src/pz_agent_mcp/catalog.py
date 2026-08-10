@@ -1609,7 +1609,17 @@ TOOLS: Final[tuple[ToolSpec, ...]] = (
             "skip reason — and its terminal answer reports the looted scope "
             "(the pinned room, building or sweep), the containers inspected, "
             "the containers skipped each with its reason, and the items "
-            "taken per category and left per reason."
+            "taken per category and left per reason. An 'explore_area' goal "
+            "finishes on the matching criterion — no frontier square remains "
+            "in scope: every scope square is known to the local map or "
+            "carries a recorded skip reason — and its report carries the "
+            "pinned scope, the map growth (cells_discovered), the waypoints "
+            "visited, and each skipped square with its reason (a locked or "
+            "barricaded door named by reference, a proven no-route). A "
+            "'return_home' goal takes no parameters at all: the target is "
+            "the save's remembered home point ('pz-agent remember home'), "
+            "no home set is a typed PRECONDITION_FAILED whose detail is the "
+            "remedy, and the goal succeeds only on the observed arrival."
         ),
         input_schema=_goal_channel(
             {
@@ -1676,22 +1686,26 @@ TOOLS: Final[tuple[ToolSpec, ...]] = (
                 "scope": {
                     "type": "string",
                     "description": (
-                        "What 'the area' means to a 'loot_area' goal: the room "
-                        "or building the character stands in when the goal "
-                        "activates, or a bounded sweep around the activation "
-                        "square. Absent means room. 'room' and 'building' need "
-                        "a build that reports rooms and are refused with a "
-                        "typed failure naming 'radius' otherwise; 'radius' "
-                        "always works."
+                        "What 'the area' means to a 'loot_area' or "
+                        "'explore_area' goal: the room or building the "
+                        "character stands in when the goal activates, or a "
+                        "bounded sweep around the activation square. Absent "
+                        "means room for loot_area and radius for explore_area "
+                        "— exploring the room already observed is a no-op. "
+                        "'room' and 'building' need a build that reports "
+                        "rooms and are refused with a typed failure naming "
+                        "'radius' otherwise; 'radius' always works."
                     ),
                     "enum": sorted(scope.value for scope in LootScope),
                 },
                 "radius": {
                     "type": "integer",
                     "description": (
-                        "Chebyshev sweep of a 'loot_area' goal, in squares "
-                        "around the activation square. Meaningful only with "
-                        "scope 'radius' and refused beside any other scope."
+                        "Chebyshev sweep of a 'loot_area' or 'explore_area' "
+                        "goal, in squares around the activation square. "
+                        "Meaningful only with scope 'radius' — which for "
+                        "explore_area is also what the absent scope means — "
+                        "and refused beside 'room' or 'building'."
                     ),
                     "minimum": NUMERIC_RANGES["radius"].minimum,
                     "maximum": NUMERIC_RANGES["radius"].maximum,
@@ -1729,7 +1743,19 @@ TOOLS: Final[tuple[ToolSpec, ...]] = (
             "and — when 'goal_id' names one — that goal's state, budget and how "
             "much of it is left. An id the channel has finished and forgotten is "
             "refused rather than answered as 'no such goal', because the two are "
-            "not the same fact."
+            "not the same fact. Three additive keys, each null when there is "
+            "nothing to say: 'progress' is the deterministic drive's phase (a "
+            "journey's planning/moving/arrived/refused; a loot sweep's "
+            "start/approach/open/inspect/transfer; an explore sweep's "
+            "start/approach) plus detail-free counters, for the named goal or, "
+            "with no id, the active one — a goal a plan provider serves has no "
+            "deterministic phase and honestly answers null; 'paused' is the goal "
+            "a manual takeover parked, visible until a fresh activation replaces "
+            "it; 'report' is the named loot or explore goal's ledger, live while "
+            "the mission runs and sealed after it ends. The phase is the "
+            "progress-messaging primitive: tell the user about transitions, when "
+            "the value changes — it moves exactly when the work does, so polling "
+            "faster buys nothing worth relaying."
         ),
         input_schema={
             "type": "object",

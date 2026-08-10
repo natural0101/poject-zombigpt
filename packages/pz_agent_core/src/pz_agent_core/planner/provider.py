@@ -93,13 +93,17 @@ class GoalKind(StrEnum):
     so the set of goals is a reviewed list rather than a free string that a
     provider could stretch into an instruction.
 
-    ``NAVIGATE_TO`` and ``LOOT_AREA`` are in the vocabulary and deliberately
-    not in any provider's repertoire: routes are walked by the deterministic
-    executor in :mod:`pz_agent_core.navigation`, one observed square at a
-    time, and loot sweeps are driven by the CLI's deterministic loot mission,
-    one observed container at a time. A provider asked for either answers with
-    a typed refusal naming the deterministic server — never with a plan that
-    approximates the work with something else.
+    ``NAVIGATE_TO``, ``LOOT_AREA``, ``RETURN_HOME`` and ``EXPLORE_AREA`` are
+    in the vocabulary and deliberately not in any provider's repertoire:
+    routes are walked by the deterministic executor in
+    :mod:`pz_agent_core.navigation`, one observed square at a time — a
+    ``return_home`` is that same walk with its target read from the save's
+    memory — loot sweeps are driven by the CLI's deterministic loot mission,
+    one observed container at a time, and explore sweeps by the CLI's
+    deterministic explore mission, one frontier square at a time. A provider
+    asked for any of them answers with a typed refusal naming the
+    deterministic server — never with a plan that approximates the work with
+    something else.
     """
 
     SATISFY_HUNGER = "satisfy_hunger"
@@ -109,6 +113,8 @@ class GoalKind(StrEnum):
     LEARN_RECIPE = "learn_recipe"
     NAVIGATE_TO = "navigate_to"
     LOOT_AREA = "loot_area"
+    RETURN_HOME = "return_home"
+    EXPLORE_AREA = "explore_area"
 
 
 @dataclass(frozen=True, slots=True)
@@ -264,6 +270,24 @@ class NullProvider:
                 "loot_area is driven by the deterministic loot mission, not planned by "
                 "a provider; a sidecar without the navigating planner wired cannot "
                 "serve it.",
+            )
+        if request.goal.kind is GoalKind.RETURN_HOME:
+            # The same walk as navigate_to with its target read from the
+            # save's memory; a provider holds neither the memory nor the map.
+            return PlanProposal.refusal(
+                ReasonCode.CAPABILITY_UNAVAILABLE,
+                "return_home is walked by the deterministic route executor to the "
+                "remembered home point, not planned by a provider; a sidecar without "
+                "the navigating planner wired cannot serve it.",
+            )
+        if request.goal.kind is GoalKind.EXPLORE_AREA:
+            # Frontier selection is arithmetic over the local map, and the map
+            # lives behind the navigating wrapper, not behind any provider.
+            return PlanProposal.refusal(
+                ReasonCode.CAPABILITY_UNAVAILABLE,
+                "explore_area is driven by the deterministic explore mission, not "
+                "planned by a provider; a sidecar without the navigating planner "
+                "wired cannot serve it.",
             )
         if request.observation.inventory is None:
             return PlanProposal.refusal(

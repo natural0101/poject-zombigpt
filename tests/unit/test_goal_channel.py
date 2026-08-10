@@ -248,7 +248,7 @@ def outside_values(name: str) -> tuple[object, object]:
 
 
 class TestClosedVocabulary:
-    def test_goal_kinds_are_exactly_these_seven(self) -> None:
+    def test_goal_kinds_are_exactly_these_nine(self) -> None:
         # Hand-written. Adding a kind is a reviewed change to three tables, and
         # this literal is the thing that makes the review happen.
         assert {k.value for k in GoalKind} == {
@@ -259,6 +259,8 @@ class TestClosedVocabulary:
             "learn_recipe",
             "navigate_to",
             "loot_area",
+            "return_home",
+            "explore_area",
         }
 
     def test_trainable_skills_are_exactly_these_eleven(self) -> None:
@@ -313,7 +315,7 @@ class TestClosedVocabulary:
         # strips deliberately; the constructor does neither.
         with pytest.raises(ValueError, match="is not a valid"):
             GoalKind(unknown)
-        assert len(GoalKind) == 7
+        assert len(GoalKind) == 9
 
     def test_no_lookup_hook_invents_a_member(self) -> None:
         # ``_missing_`` is the one hook that can turn an unrecognised value into
@@ -350,6 +352,13 @@ class TestClosedVocabulary:
             # Everything optional on purpose: the bare goal is «облутай
             # квартиру», and it means scope=room with useful_only selection.
             "loot_area": (set(), {"scope", "radius", "take_all", "categories"}),
+            # A bare goal: where home is stays in the save's memory, and a
+            # parameter here would be a second definition of home.
+            "return_home": (set(), set()),
+            # Scope and radius only, and the absent scope means RADIUS — not
+            # loot's ROOM — because exploring the room already observed is a
+            # no-op. The mission reads the absence.
+            "explore_area": (set(), {"scope", "radius"}),
         }
         actual = {
             kind.value: (set(spec.required), set(spec.optional))
@@ -680,6 +689,36 @@ class TestLootParameters:
         request = GoalRequest(kind=GoalKind.LOOT_AREA, idempotency_key="k")
         assert request.params.present() == frozenset()
         assert request.effective_budget == GOAL_SPECS[GoalKind.LOOT_AREA].budget
+
+    def test_an_explore_radius_rides_the_default_scope_but_not_the_others(self) -> None:
+        # Explore's absent scope already *means* radius (the kind's spec
+        # default, unlike loot's room), so a bare radius is meaningful and
+        # admitted — only a radius beside room or building is the sweep bound
+        # the mission would silently ignore, refused at the door like loot's.
+        bare = GoalRequest(
+            kind=GoalKind.EXPLORE_AREA,
+            idempotency_key="k",
+            params=GoalParams(radius=5),
+        )
+        assert bare.params.present() == {"radius"}
+        paired = GoalRequest(
+            kind=GoalKind.EXPLORE_AREA,
+            idempotency_key="k",
+            params=GoalParams(scope=goal_model.LootScope.RADIUS, radius=5),
+        )
+        assert paired.params.present() == {"scope", "radius"}
+        for scope in (goal_model.LootScope.ROOM, goal_model.LootScope.BUILDING):
+            with pytest.raises(ValueError, match="scope=radius"):
+                GoalRequest(
+                    kind=GoalKind.EXPLORE_AREA,
+                    idempotency_key="k",
+                    params=GoalParams(scope=scope, radius=5),
+                )
+
+    def test_area_scope_is_the_loot_scope_enum_itself(self) -> None:
+        # One scope vocabulary for both area kinds: the alias is identity,
+        # not a second enum that could drift.
+        assert goal_model.AreaScope is goal_model.LootScope
 
 
 # --------------------------------------------------------------------------

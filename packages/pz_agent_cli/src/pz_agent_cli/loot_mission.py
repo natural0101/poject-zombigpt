@@ -113,11 +113,17 @@ __all__ = [
     "ENDED_IN_PROGRESS",
     "ENDED_NO_PROGRESS",
     "ENDED_UNPINNED",
+    "LOOT_PHASES",
     "MAX_BATCHES_PER_CONTAINER",
     "MAX_CANDIDATES_PER_MISSION",
     "MAX_COMPLETION_PROBES",
     "MAX_CONSECUTIVE_FAILURES",
     "MAX_DISCOVERIES_PER_OBSERVATION",
+    "PHASE_APPROACH",
+    "PHASE_INSPECT",
+    "PHASE_OPEN",
+    "PHASE_START",
+    "PHASE_TRANSFER",
     "SKIP_UNCHANGED",
     "ContainerUnchanged",
     "IsReserved",
@@ -308,12 +314,20 @@ class _Candidate:
         self.index = index
 
 
-#: The per-candidate pipeline stages, in the order they run.
-_STAGE_START: Final = "start"
-_STAGE_APPROACH: Final = "approach"
-_STAGE_OPEN: Final = "open"
-_STAGE_INSPECT: Final = "inspect"
-_STAGE_TRANSFER: Final = "transfer"
+#: The per-candidate pipeline phases, in the order they run. Public because
+#: :attr:`LootMission.phase` reports the current one and a status surface may
+#: publish it verbatim: each is a closed token minted here, never caller or
+#: game text. The explore mission reuses the first two rather than restating
+#: them, for the same reason it imports the move vocabulary — the wrapper must
+#: not come to read the two missions' phases differently.
+PHASE_START: Final = "start"
+PHASE_APPROACH: Final = "approach"
+PHASE_OPEN: Final = "open"
+PHASE_INSPECT: Final = "inspect"
+PHASE_TRANSFER: Final = "transfer"
+
+#: The closed set, in pipeline order, for tests and documentation to pin.
+LOOT_PHASES: Final = (PHASE_START, PHASE_APPROACH, PHASE_OPEN, PHASE_INSPECT, PHASE_TRANSFER)
 
 
 def _chebyshev(a: GridSquare, b: GridSquare) -> int:
@@ -391,7 +405,7 @@ class LootMission:
         self._truncated = False
 
         self._current: _Candidate | None = None
-        self._stage = _STAGE_START
+        self._stage = PHASE_START
         self._journey: Journey | None = None
         self._pending_action: str | None = None
         self._last_selection: Selection | None = None
@@ -420,6 +434,19 @@ class LootMission:
     @property
     def ended(self) -> str:
         return self._ended
+
+    @property
+    def phase(self) -> str:
+        """Where the current candidate's pipeline stands: one of :data:`LOOT_PHASES`.
+
+        Closed tokens minted by this module, never caller or game text, so a
+        status surface may publish the value verbatim. ``start`` covers both
+        "not yet begun" and "between candidates" — the phase describes the
+        pipeline, and the pipeline genuinely is at its start in both — and a
+        mission that already ended keeps the phase it stopped in, because
+        whether it ended is :attr:`ended`'s answer, not this one's.
+        """
+        return self._stage
 
     @property
     def any_success(self) -> bool:
@@ -497,7 +524,7 @@ class LootMission:
         if expected is None or result.action != expected:
             return
         self._pending_action = None
-        if self._stage == _STAGE_APPROACH:
+        if self._stage == PHASE_APPROACH:
             journey = self._journey
             if journey is not None:
                 journey.note_result(result)
@@ -506,11 +533,11 @@ class LootMission:
             return
         if result.status is ActionStatus.SUCCEEDED:
             self._note_success()
-            if self._stage == _STAGE_OPEN:
-                self._stage = _STAGE_INSPECT
-            elif self._stage == _STAGE_INSPECT:
-                self._stage = _STAGE_TRANSFER
-            elif self._stage == _STAGE_TRANSFER:
+            if self._stage == PHASE_OPEN:
+                self._stage = PHASE_INSPECT
+            elif self._stage == PHASE_INSPECT:
+                self._stage = PHASE_TRANSFER
+            elif self._stage == PHASE_TRANSFER:
                 self._note_batch_landed()
             return
         self._note_failure(result)
@@ -541,7 +568,7 @@ class LootMission:
         current = self._current
         reason = result.reason_code
         door = _door_named(reason, self._door_ref_of(result))
-        if self._stage in (_STAGE_OPEN, _STAGE_INSPECT):
+        if self._stage in (PHASE_OPEN, PHASE_INSPECT):
             if door is not None:
                 # A sealed door is a typed fact about the world, not the
                 # mission failing to make progress; it costs no failure.
@@ -551,7 +578,7 @@ class LootMission:
             if current is not None:
                 self._skip_current(f"{result.action} failed: {self._reason_token(reason)}")
             return
-        if self._stage == _STAGE_TRANSFER:
+        if self._stage == PHASE_TRANSFER:
             selection = self._last_selection
             self._last_selection = None
             if reason is ReasonCode.CONTAINER_FULL and selection is not None:
@@ -745,7 +772,7 @@ class LootMission:
                 self._skipped.append((candidate.ref, SKIP_UNCHANGED))
                 continue
             self._current = candidate
-            self._stage = _STAGE_START
+            self._stage = PHASE_START
             self._journey = None
             self._batches = 0
             self._last_selection = None
@@ -756,7 +783,7 @@ class LootMission:
     def _drive_current(self, observation: Observation) -> NextMissionMove:
         candidate = self._current
         assert candidate is not None
-        if self._stage == _STAGE_START:
+        if self._stage == PHASE_START:
             here = square_of(observation.player.position)
             if (
                 _chebyshev(here, candidate.square) > _APPROACH_DISTANCE
@@ -773,18 +800,18 @@ class LootMission:
                     journey_id=f"{self._key_stem[: MAX_JOURNEY_ID_LEN - 8]}.c{candidate.index}",
                     limits=self._journey_limits,
                 )
-                self._stage = _STAGE_APPROACH
+                self._stage = PHASE_APPROACH
             else:
-                self._stage = _STAGE_OPEN
-        if self._stage == _STAGE_APPROACH:
+                self._stage = PHASE_OPEN
+        if self._stage == PHASE_APPROACH:
             return self._drive_journey(observation)
-        if self._stage == _STAGE_OPEN:
+        if self._stage == PHASE_OPEN:
             return self._emit(
                 observation,
                 ActionName.CONTAINER_OPEN_NEARBY,
                 {"container_ref": candidate.ref},
             )
-        if self._stage == _STAGE_INSPECT:
+        if self._stage == PHASE_INSPECT:
             return self._emit(
                 observation,
                 ActionName.CONTAINER_INSPECT,
@@ -798,7 +825,7 @@ class LootMission:
         value = journey.next_step(observation)
         if isinstance(value, Arrived):
             self._journey = None
-            self._stage = _STAGE_OPEN
+            self._stage = PHASE_OPEN
             return None
         if isinstance(value, Refused):
             self._journey = None
@@ -944,7 +971,7 @@ class LootMission:
     def _reset_candidate(self) -> None:
         self._current = None
         self._journey = None
-        self._stage = _STAGE_START
+        self._stage = PHASE_START
         self._batches = 0
         self._last_selection = None
 

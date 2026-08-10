@@ -112,15 +112,22 @@ CHANNEL_KINDS: Final[frozenset[str]] = frozenset(
         "learn_recipe",
         "navigate_to",
         "loot_area",
+        "return_home",
+        "explore_area",
     }
 )
 
 #: The kinds no plan provider serves: the deterministic route executor walks
-#: ``navigate_to`` (``pz_agent_core.navigation``) and the deterministic loot
-#: mission drives ``loot_area`` (``pz_agent_cli.loot_mission``), both behind
+#: ``navigate_to`` and ``return_home`` (``pz_agent_core.navigation`` — the
+#: homeward kind is the same walk with its target read from the save's
+#: memory), the deterministic loot mission drives ``loot_area``
+#: (``pz_agent_cli.loot_mission``) and the deterministic explore mission
+#: drives ``explore_area`` (``pz_agent_cli.explore_mission``), all behind
 #: the CLI's NavigatingPlanner. Written out by hand for the same reason
 #: CHANNEL_KINDS is.
-EXECUTOR_KINDS: Final[frozenset[str]] = frozenset({"navigate_to", "loot_area"})
+EXECUTOR_KINDS: Final[frozenset[str]] = frozenset(
+    {"navigate_to", "loot_area", "return_home", "explore_area"}
+)
 
 #: The empty parameter set, as a singleton because :class:`GoalParams` is frozen
 #: and a default argument that constructs one is a call at import time.
@@ -632,6 +639,89 @@ class TestLootAreaIsServedByTheMission:
         assert request.idempotency_key.startswith(f"loot:{record.goal_id}")
         assert spy.goal_calls == [] and spy.propose_calls == 0, (
             "loot_area must never reach a plan provider"
+        )
+
+
+@dataclass(frozen=True)
+class RememberedSquare:
+    """A remembered grid square, as much of one as the wrapper reads."""
+
+    x: int
+    y: int
+    z: int = 0
+
+
+@dataclass(frozen=True)
+class HomeMemory:
+    """A memory answering ``home_point``, standing where the sidecar's would."""
+
+    square: RememberedSquare
+
+    def home_point(self) -> RememberedSquare:
+        return self.square
+
+
+class TestReturnHomeIsServedByTheExecutor:
+    """The eighth kind's half of the seam: the same walk, the target from memory."""
+
+    def test_null_provider_refuses_return_home_by_name(self) -> None:
+        record = activated(channel(), GoalKind.RETURN_HOME)
+
+        proposal = proposed_for(record, world(pantry(), needy()))
+
+        assert proposal.refused
+        assert proposal.reason_code is ReasonCode.CAPABILITY_UNAVAILABLE
+        assert "route executor" in proposal.detail
+        assert "home" in proposal.detail
+
+    def test_the_wrapper_walks_home_and_never_asks_the_planner(self) -> None:
+        queue = channel()
+        spy = SpyGoalPlanner()
+        wrapper = NavigatingPlanner(spy, loot_memory=HomeMemory(RememberedSquare(1205, 3400)))
+        wrapper.bind(ExecutorHost(goals=queue, actions=ActionChannel(clock=FakeClock())))
+        record = activated(queue, GoalKind.RETURN_HOME)
+
+        value = wrapper.propose_for_goal(to_planner_goal(record), world(pantry()))
+
+        # Five squares is one final leg, so the request goes out the goal
+        # seam carrying the *remembered* square — nothing was submitted.
+        assert value is not None
+        assert value.action is ActionName.MOVEMENT_MOVE_TO
+        assert value.args["target"] == {"x": 1205, "y": 3400, "z": 0}
+        assert spy.goal_calls == [] and spy.propose_calls == 0, (
+            "return_home must never reach a plan provider"
+        )
+
+
+class TestExploreAreaIsServedByTheMission:
+    """The ninth kind's half of the seam: the explore mission answers."""
+
+    def test_null_provider_refuses_explore_area_by_name(self) -> None:
+        record = activated(channel(), GoalKind.EXPLORE_AREA)
+
+        proposal = proposed_for(record, world(pantry(), needy()))
+
+        assert proposal.refused
+        assert proposal.reason_code is ReasonCode.CAPABILITY_UNAVAILABLE
+        assert "explore mission" in proposal.detail
+
+    def test_the_wrapper_drives_the_mission_and_never_asks_the_planner(self) -> None:
+        queue = channel()
+        spy = SpyGoalPlanner()
+        wrapper = NavigatingPlanner(spy)
+        wrapper.bind(ExecutorHost(goals=queue, actions=ActionChannel(clock=FakeClock())))
+        record = activated(queue, GoalKind.EXPLORE_AREA)
+
+        value = wrapper.propose_for_goal(to_planner_goal(record), world(pantry()))
+
+        # The default radius sweep around a single known square resolves in
+        # arrival reach, so the mission's completion probe goes out the goal
+        # seam — a real engine request the loop settles the goal with.
+        assert value is not None
+        assert value.action is ActionName.MOVEMENT_MOVE_TO
+        assert value.idempotency_key.startswith(f"explore:{record.goal_id}")
+        assert spy.goal_calls == [] and spy.propose_calls == 0, (
+            "explore_area must never reach a plan provider"
         )
 
 

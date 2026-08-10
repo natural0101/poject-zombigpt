@@ -19,7 +19,12 @@ from __future__ import annotations
 # ruff: noqa: RUF001
 from typing import Final
 
-from pz_agent_core.capabilities import DRINK_CARRIED, EAT_PERCENTAGE, READ_LITERATURE
+from pz_agent_core.capabilities import (
+    DRINK_CARRIED,
+    EAT_PERCENTAGE,
+    MOVE_TO_SQUARE,
+    READ_LITERATURE,
+)
 from pz_agent_core.goals import NUMERIC_RANGES, PARAM_NAMES, GoalKind
 from pz_agent_core.protocol import DangerLevel, ReasonCode
 
@@ -144,6 +149,7 @@ KIND_ACCEPTED: Final[dict[GoalKind, str]] = {
     GoalKind.READ_FOR_BOREDOM: "Ищу, что почитать.",
     GoalKind.TRAIN_SKILL: "Ищу книгу по навыку.",
     GoalKind.LEARN_RECIPE: "Ищу книгу с рецептами.",
+    GoalKind.RETURN_HOME: "Иду домой.",
 }
 
 #: How to say each goal parameter, in the nominative singular so one sentence
@@ -173,6 +179,7 @@ CAPABILITY_NOUNS: Final[dict[str, str]] = {
     EAT_PERCENTAGE: "приём пищи",
     DRINK_CARRIED: "питьё",
     READ_LITERATURE: "чтение",
+    MOVE_TO_SQUARE: "передвижение",
 }
 
 #: The refusals whose whole sentence is a constant. The other three name

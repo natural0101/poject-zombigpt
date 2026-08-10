@@ -126,6 +126,7 @@ from pz_agent_core.ipc.atomic import guard_managed
 from pz_agent_core.memory.store import SaveMemory
 from pz_agent_core.protocol import (
     DangerLevel,
+    JsonDict,
     Observation,
     ReasonCode,
     SessionMode,
@@ -138,8 +139,10 @@ from pz_agent_mcp.ports import (
     DoctorCheck,
     GoalCancellation,
     GoalChannelStatus,
+    GoalProgress,
     LogRecord,
     MemoryRecord,
+    PausedGoalRecord,
     PlanRecord,
     PlanRequest,
     SessionSnapshot,
@@ -150,7 +153,7 @@ from pz_agent_mcp.remote.server import NO_GOAL_CHANNEL, CoreRouter
 from .autonomy import AutonomyPlanner
 from .doctor import DoctorReport
 from .memory import SidecarMemory
-from .navigation_planner import unwrap_planner
+from .navigation_planner import NavigatingPlanner, unwrap_planner
 from .runtime import ActionChannel, ControlDecision, GoalPlanner, LoopError, SidecarLoop
 from .supervisor import ControlChannel, ControlKind, RpcEndpoint, SidecarSupervisor
 
@@ -590,11 +593,61 @@ class LoopGoalPort:
         ``named`` is ``None`` both for "no id asked about" and for an id this
         channel never minted or has forgotten; the router knows which it
         passed and turns the second into its own refusal.
+
+        The three optional tails are read outside the goal lock, on purpose:
+
+        * ``progress`` and ``report`` come from the deterministic wrapper's
+          own registries and ledgers, when the loop's planner *is* the
+          :class:`~pz_agent_cli.navigation_planner.NavigatingPlanner` — the
+          shipped assembly's shape. Everything read there is replaced whole by
+          the tick thread and never mutated in place, so a cross-thread read
+          yields one tick's honest answer or the next one's, exactly the
+          copy-on-read reasoning :class:`LoopMemoryPort` documents. A planner
+          of any other shape honestly answers ``None`` — an LLM-served goal
+          has no deterministic phase.
+        * ``paused`` is the loop's own takeover marker, a frozen value the
+          tick thread swaps whole.
+
+        ``progress`` describes the goal this answer is about — the named one
+        when an id was asked, the active one otherwise — and ``report`` only
+        the named goal, because a report is the deliverable of the specific
+        mission a caller is following up on, not ambient channel state.
         """
         queue = self._queue()
         with self.loop.goal_lock:
             named = queue.record(goal_id) if goal_id is not None else None
-            return GoalChannelStatus(active=queue.active, pending=queue.pending, named=named)
+            active = queue.active
+            pending = queue.pending
+        progress: GoalProgress | None = None
+        report: JsonDict | None = None
+        planner = self.loop.planner
+        if isinstance(planner, NavigatingPlanner):
+            subject = named if goal_id is not None else active
+            if subject is not None:
+                progress = planner.goal_progress(subject.goal_id)
+            if goal_id is not None:
+                report = planner.loot_report(goal_id)
+                if report is None:
+                    report = planner.explore_report(goal_id)
+        parked = self.loop.paused_goal
+        paused = (
+            None
+            if parked is None
+            else PausedGoalRecord(
+                goal_id=parked.goal_id,
+                kind=parked.kind,
+                reason=parked.reason,
+                paused_at_ms=parked.paused_at_ms,
+            )
+        )
+        return GoalChannelStatus(
+            active=active,
+            pending=pending,
+            named=named,
+            progress=progress,
+            paused=paused,
+            report=report,
+        )
 
     def cancel(self, goal_id: str) -> GoalCancellation:
         """Ask the queue to end *goal_id*; report what the ask did, nothing more."""

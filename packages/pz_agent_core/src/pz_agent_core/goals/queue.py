@@ -46,7 +46,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Final
 
 from ..ipc.clocks import Clock
@@ -62,7 +62,14 @@ from .model import (
     normalise_evidence_keys,
 )
 
-__all__ = ["DEFAULT_MAX_OPEN", "DEFAULT_MAX_REMEMBERED", "GoalQueue", "UnknownGoalError"]
+__all__ = [
+    "DEFAULT_MAX_OPEN",
+    "DEFAULT_MAX_REMEMBERED",
+    "RESTART_LOST_DETAIL",
+    "GoalQueue",
+    "GoalSnapshot",
+    "UnknownGoalError",
+]
 
 #: Goals that may be open — pending plus active — at one time. Small because a
 #: backlog of user goals is a backlog of stale intentions: by the time the
@@ -73,6 +80,29 @@ DEFAULT_MAX_OPEN: Final = 4
 #: stay long enough that a retried submission returns *it* rather than starting
 #: the work again, and no longer.
 DEFAULT_MAX_REMEMBERED: Final = 32
+
+
+#: The detail a previous session's ACTIVE goal ends with when a fresh queue
+#: restores it. One constant rather than an f-string at the call site, because
+#: it is the sentence a client polling the old goal id will read, and a test
+#: pins it verbatim: the goal was not cancelled and did not run out of budget —
+#: the process serving it died under it, and the record says exactly that.
+RESTART_LOST_DETAIL: Final = "the sidecar restarted while this goal was active"
+
+
+@dataclass(frozen=True, slots=True)
+class GoalSnapshot:
+    """Everything the queue holds, frozen, in the queue's own retention order.
+
+    The unit persistence works in. ``records`` shares the queue's immutable
+    :class:`~.model.GoalRecord` objects — nothing is copied and nothing can be
+    mutated through it — and ``revision`` is the mutation count the records
+    were read at, so a writer can tell "the channel moved since my last write"
+    from "this tick changed nothing" without comparing documents.
+    """
+
+    records: tuple[GoalRecord, ...]
+    revision: int
 
 
 class UnknownGoalError(LookupError):
@@ -116,6 +146,10 @@ class GoalQueue:
         self._armed = armed
         self._now = 0
         self._sequence = 0
+        #: Counts every record mutation — admission, activation, a spent step,
+        #: a terminal transition, a restore. Read by the persistence seam to
+        #: skip the write on a tick that changed nothing; never reset.
+        self._revision = 0
         #: Every record this queue has minted and not yet evicted, oldest first.
         #: Open goals are never evicted, which is why max_remembered >= max_open.
         self._records: OrderedDict[str, GoalRecord] = OrderedDict()
@@ -157,6 +191,106 @@ class GoalQueue:
     def record(self, goal_id: str) -> GoalRecord | None:
         """The record for *goal_id*, or None once it has been forgotten."""
         return self._records.get(goal_id)
+
+    @property
+    def revision(self) -> int:
+        """How many record mutations this queue has made. Monotonic, never reset."""
+        return self._revision
+
+    def snapshot(self) -> GoalSnapshot:
+        """A frozen view of every held record, for persistence.
+
+        Called under the same lock discipline as every other method — the queue
+        has no lock of its own, the loop's ``goal_lock`` governs — and cheap
+        enough to take on every tick: one tuple over at most ``max_remembered``
+        immutable records, no copying, no IO.
+        """
+        return GoalSnapshot(records=tuple(self._records.values()), revision=self._revision)
+
+    def restore(self, snapshot: GoalSnapshot, *, now_ms: int) -> tuple[GoalRecord, ...]:
+        """Refill a fresh queue from a previous process's snapshot, honestly.
+
+        The three cases, each the truthful reading of what the restart did:
+
+        * A ``PENDING`` record comes back pending, with its original id,
+          submission time and idempotency digest — so a client resubmitting the
+          same key resolves to the *same* goal across the restart, and the
+          pending time to live keeps counting from the original submission: a
+          goal whose TTL ran out while the sidecar was down expires on the
+          first tick rather than being granted a second life.
+        * An ``ACTIVE`` record is recorded terminal ``FAILED`` with
+          ``SESSION_TERMINATED`` and :data:`RESTART_LOST_DETAIL`. The process
+          serving it died under it and nobody observed how far it got;
+          ``GoalState`` stays closed — no ``LOST`` member — because "failed,
+          because the session ended" is that fact in the vocabulary every
+          client already reads. The returned tuple is these records, so the
+          caller can log what the restart cost.
+        * A terminal record comes back as terminal history, so a client
+          polling a recently finished goal id still gets its answer.
+
+        All-or-nothing: the new state is built aside and committed at the end,
+        so a snapshot that is refused leaves the queue exactly as fresh as it
+        was. Refusals are ``ValueError`` because every one of them means the
+        snapshot is not something this queue could ever have written — the
+        caller's honest move is to set the file aside, not to guess.
+
+        Raises:
+            ValueError: the queue already holds goals, the snapshot repeats a
+                goal id or an idempotency digest, or it carries more pending
+                goals than this queue's ``max_open`` admits.
+        """
+        if self._records or self._by_digest:
+            raise ValueError("restore only fills a fresh queue; this one already holds goals")
+        self._now = max(self._now, now_ms)
+        pending = sum(1 for record in snapshot.records if record.state is GoalState.PENDING)
+        if pending > self._max_open:
+            raise ValueError(
+                f"the snapshot holds {pending} pending goal(s), over this channel's cap of "
+                f"{self._max_open}; refusing to guess which to drop"
+            )
+        records: OrderedDict[str, GoalRecord] = OrderedDict()
+        by_digest: OrderedDict[str, str] = OrderedDict()
+        lost: list[GoalRecord] = []
+        sequence = self._sequence
+        for record in snapshot.records:
+            if record.goal_id in records:
+                raise ValueError("the snapshot names one goal id twice; refusing to pick one")
+            if record.key_digest in by_digest:
+                raise ValueError(
+                    "the snapshot reuses one idempotency digest across goals; refusing to pick one"
+                )
+            adopted = record
+            if record.state is GoalState.ACTIVE:
+                started = (
+                    record.started_at_ms
+                    if record.started_at_ms is not None
+                    else record.submitted_at_ms
+                )
+                adopted = replace(
+                    record,
+                    state=GoalState.FAILED,
+                    reason_code=ReasonCode.SESSION_TERMINATED,
+                    # Clamped so a wall clock that stepped back across the
+                    # restart cannot mint a goal that finished before it began.
+                    finished_at_ms=max(self._now, started, record.submitted_at_ms),
+                    evidence_keys=(),
+                    detail=RESTART_LOST_DETAIL,
+                )
+                lost.append(adopted)
+            records[adopted.goal_id] = adopted
+            by_digest[adopted.key_digest] = adopted.goal_id
+            sequence = max(sequence, adopted.sequence)
+        self._records = records
+        self._by_digest = by_digest
+        self._sequence = sequence
+        self._revision += 1
+        # Overflow falls to the ordinary retention rules: terminal history past
+        # the cap is evicted oldest-first, exactly as it would have been had
+        # this queue lived through the records itself. Open goals never are —
+        # the pending check above is what guarantees a victim exists.
+        self._evict()
+        self._trim_digests()
+        return tuple(lost)
 
     # -- admission ---------------------------------------------------------
 
@@ -523,6 +657,7 @@ class GoalQueue:
     def _remember(self, record: GoalRecord) -> None:
         self._records[record.goal_id] = record
         self._records.move_to_end(record.goal_id)
+        self._revision += 1
         self._evict()
 
     def _evict(self) -> None:
