@@ -8,6 +8,7 @@ third-party runtime dependencies at all. That constraint is what makes
 from __future__ import annotations
 
 from .version import (
+    MOD_INFO_PZVERSION,
     MOD_VERSION,
     PRODUCT_VERSION,
     PROTOCOL_VERSION,
@@ -17,6 +18,7 @@ from .version import (
 )
 
 __all__ = [
+    "MOD_INFO_PZVERSION",
     "MOD_VERSION",
     "PRODUCT_VERSION",
     "PROTOCOL_VERSION",

@@ -22,6 +22,9 @@ local Support = {}
 local MOD_LUA = "pz-mod/42/media/lua/"
 
 local MODULES = {
+  -- Compat first: the command modules reference PZAgent.Compat at call time,
+  -- and in the game the shared tree loads before any client file does.
+  "shared/PZAgent/Compat.lua",
   "client/PZAgent/CommandReader.lua",
   "client/PZAgent/CommandDispatcher.lua",
   "client/PZAgent/CapabilityRuntime.lua",

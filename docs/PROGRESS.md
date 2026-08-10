@@ -2,6 +2,27 @@
 
 The handover point between work sessions: read it first, update it last.
 
+> **2026-08-10, the game-agent directive.** The first live session
+> (2026-08-08, Build 42.20.2) both confirmed the design — the mod loaded,
+> published structured observation, moved the character, opened a door — and
+> produced thirteen concrete defect findings, recorded in
+> [`GAME_API_VERIFICATION.md`](GAME_API_VERIFICATION.md). The product goal has
+> been raised from "a set of MCP commands" to "an agent you can tell
+> «облутай квартиру»". The work is cut into reviewable epics; each lands as
+> its own PR and is not called done without live evidence:
+>
+> | Epic | Status |
+> | --- | --- |
+> | `P0-build42-live-compat` — the 13 live-confirmed fixes | **wip** — this branch |
+> | `P0-windows-ipc-arm-recovery` — single-producer queues, pointer contention, two-phase arm, action status/wait tools | todo |
+> | `P1-doors-navigation` — door state/actions, local navigation executor | todo |
+> | `P1-loot-area` — container primitives + `loot_area` goal | todo |
+> | `P2-continuous-goal-controller` — long-lived goals, needs arbitration | todo |
+> | `P3-survival-knowledge` — machine-readable gameplay knowledge base | todo |
+> | `P4-assisted-combat` → `P4-autonomous-combat-live-gated` | todo |
+> | `P5-crafting-building` | todo |
+> | `UX-one-command-play-and-docs` — one-command launch, goal CLI | todo |
+
 > **2026-08-08, the today-finalization push.** The integration branch of
 > record is `rescue/today-finalization`; `docs/control/TODAY_SWARM.yaml`,
 > `TODAY_EVIDENCE.md` and `MERGE_QUEUE.json` carry the swarm's ledger. Every

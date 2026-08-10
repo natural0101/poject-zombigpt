@@ -51,10 +51,18 @@ do
   equal(Json.encode("\226\152\131"), '"\\u2603"', "a BMP symbol becomes one escape")
   equal(Json.encode("\240\159\146\169"), '"\\ud83d\\udca9"', "an astral code point becomes a surrogate pair")
 
-  isNil(Json.encode("\255\254"), "invalid UTF-8 is refused rather than mangled")
-  isNil(Json.encode("\192\175"), "an overlong encoding of '/' is refused")
-  isNil(Json.encode("\237\160\128"), "a UTF-8 encoded surrogate is refused")
-  isNil(Json.encode("\226\152"), "a truncated sequence is refused")
+  -- A byte that does not begin valid UTF-8 no longer refuses the string: it
+  -- falls back to the Latin-1 reading, because through Kahlua's byte() a Java
+  -- string of U+0080..U+00FF characters is indistinguishable from such a byte
+  -- string (the live Build 42.20.2 failure). The fallback is per-byte and
+  -- deterministic, and it never re-opens the overlong hole -- "\192\175"
+  -- becomes À¯, which is not "/".
+  equal(Json.encode("\255\254"), '"\\u00ff\\u00fe"', "invalid UTF-8 falls back to Latin-1 per byte")
+  equal(Json.encode("\192\175"), '"\\u00c0\\u00af"', "an overlong encoding of '/' never decodes to '/'")
+  equal(Json.encode("\237\160\128"), '"\\u00ed\\u00a0\\u0080"', "a UTF-8 encoded surrogate is read as Latin-1 bytes")
+  equal(Json.encode("\226\152"), '"\\u00e2\\u0098"', "a truncated sequence falls back to Latin-1")
+  equal(Json.encode("caf\233"), '"caf\\u00e9"', "a Latin-1 byte string encodes its accents as \\u00XX")
+  equal(Json.encode("\128"), '"\\u0080"', "even an implausible Latin-1 byte encodes deterministically")
 end
 
 Harness.group("unrepresentable values")
@@ -155,6 +163,121 @@ do
   equal(Json.decode('"\\/"'), "/", "an escaped solidus decodes")
   equal(Json.decode('"\\ud83d\\udca9"'), "\240\159\146\169", "a surrogate pair decodes to UTF-8")
   equal(Json.decode('"\\u0414"'), "\208\148", "a BMP escape decodes to UTF-8")
+end
+
+-- ---------------------------------------------------------------------------
+-- Kahlua/Java string units
+-- ---------------------------------------------------------------------------
+--[[
+Under Kahlua a Java string answers string.byte with UTF-16 code units, which
+can exceed 0xFF; under lua5.4 a string is bytes and byte() never can. To test
+the unit-model paths the module is loaded a SECOND time into an environment
+whose string table proxies byte(), so that a registered placeholder string
+yields a synthetic unit sequence instead of its bytes. The placeholder has the
+same length as the unit sequence, which is all the encoder observes besides
+byte(). The global module loaded by the harness is untouched -- the proxied
+build lives in its own PZAgent table -- so the two can be compared directly.
+]]
+
+local function loadJsonWithUnits()
+  local registry = {}
+  local counter = 0
+  local proxied = {}
+  for name, fn in pairs(string) do
+    proxied[name] = fn
+  end
+  proxied.byte = function(text, from, to)
+    local units = registry[text]
+    if units == nil then
+      return string.byte(text, from, to)
+    end
+    from = from or 1
+    -- The harness runs under lua5.4, which spells 5.1's unpack as table.unpack.
+    return table.unpack(units, from, to or from) -- luacheck: ignore 143
+  end
+  local env = {
+    PZAgent = nil,
+    math = math,
+    table = table,
+    string = proxied,
+    setmetatable = setmetatable,
+    getmetatable = getmetatable,
+    type = type,
+    pairs = pairs,
+    tonumber = tonumber,
+  }
+  local path = Harness.root .. "pz-mod/42/media/lua/shared/PZAgent/Json.lua"
+  local file = assert(io.open(path, "rb"))
+  local source = file:read("a")
+  file:close()
+  local chunk = assert(load(source, "@" .. path, "t", env))
+  chunk()
+  --- Register a synthetic Java string. Each registration uses a distinct fill
+  --- byte, so two unit sequences of the same length get distinct placeholders.
+  local function javaString(units)
+    counter = counter + 1
+    local placeholder = string.rep(string.char(counter), #units)
+    registry[placeholder] = units
+    return placeholder
+  end
+  return env.PZAgent.Json, javaString
+end
+
+Harness.group("Kahlua/Java string units")
+do
+  local JJson, javaString = loadJsonWithUnits()
+
+  -- Regression: byte strings must encode byte-identically in both builds.
+  local utf8Privet = "\208\191\209\128\208\184\208\178\208\181\209\130"
+  local escapedPrivet = '"\\u043f\\u0440\\u0438\\u0432\\u0435\\u0442"'
+  equal(Json.encode(utf8Privet), escapedPrivet, "UTF-8 privet escapes as before")
+  equal(JJson.encode(utf8Privet), escapedPrivet, "the proxied build encodes the same byte string identically")
+  equal(JJson.encode("plain"), '"plain"', "pure ASCII is unchanged under the proxied build")
+
+  -- THE key equivalence: the same text spelled as UTF-16 units must encode to
+  -- the same bytes as its UTF-8 spelling, or snapshots would differ by which
+  -- side of the Kahlua boundary a string came from.
+  local unitsPrivet = javaString({ 0x043F, 0x0440, 0x0438, 0x0432, 0x0435, 0x0442 })
+  equal(JJson.encode(unitsPrivet), escapedPrivet, "UTF-16 units encode identically to the UTF-8 spelling")
+
+  local astral = javaString({ 0xD83D, 0xDE00 })
+  equal(JJson.encode(astral), '"\\ud83d\\ude00"', "a surrogate pair combines to the astral escape")
+
+  -- A unit string never gets the UTF-8 reading of 0x80..0xFF: one unit above
+  -- 0xFF commits the whole string to the unit model.
+  local mixed = javaString({ 0x043F, 0xE9 })
+  equal(JJson.encode(mixed), '"\\u043f\\u00e9"', "classification is per-string, not per-character")
+
+  -- A Latin-1 Java string has no unit above 0xFF, so through byte() it is a
+  -- byte string; 0xE9 alone is invalid UTF-8, so only the fallback saves it.
+  local latin = javaString({ 0x63, 0x61, 0x66, 0xE9 })
+  equal(JJson.encode(latin), '"caf\\u00e9"', "a Latin-1 Java string rides the byte-model fallback")
+
+  local encoded, err = JJson.encode(javaString({ 0x41, 0xD83D }))
+  isNil(encoded, "a lone high surrogate is refused")
+  contains(err, "surrogate", "the high-surrogate refusal says so")
+  contains(err, "offset 2", "the high-surrogate refusal names the offset")
+
+  encoded, err = JJson.encode(javaString({ 0xD83D, 0x0041 }))
+  isNil(encoded, "a high surrogate followed by a non-low unit is refused")
+  contains(err, "surrogate", "the mispaired refusal says so")
+
+  encoded, err = JJson.encode(javaString({ 0xDC00 }))
+  isNil(encoded, "a lone low surrogate is refused")
+  contains(err, "low surrogate", "the low-surrogate refusal says so")
+  contains(err, "offset 1", "the low-surrogate refusal names the offset")
+
+  encoded, err = JJson.encode(javaString({ 0x41, 0x110000 }))
+  isNil(encoded, "a unit above 0xFFFF is refused")
+  contains(err, "0x110000", "the impossible-unit refusal names the value")
+  contains(err, "offset 2", "the impossible-unit refusal names the offset")
+
+  -- One bad string must fail the containing document as nil, message, with
+  -- the key path the encoder already reports.
+  encoded, err = JJson.encode({ name = javaString({ 0xD83D }) })
+  isNil(encoded, "one unencodable string fails the whole document")
+  contains(err, "name", "the document-level message includes the key path")
+  contains(err, "surrogate", "the document-level message keeps the cause")
 end
 
 Harness.finish("test_json")

@@ -34,6 +34,44 @@ every accessor string handed to a probing reader, every direct global lookup,
 and every `Events.*` registration in `pz-mod/42/media/lua`. If a symbol is in
 the code and not here, that is a bug in this file.
 
+## Live run 2026-08-08 — Build 42.20.2, Windows (first confirmed contact)
+
+One live session has now touched this surface. It does not retire the table —
+most rows below are still `requires_live` because the run exercised the boot
+path, observation, movement and one door, not the full playbook — but it turned
+several assumptions from guesses into findings, and every finding produced a
+code change in the `P0-build42-live-compat` epic:
+
+- **The mod list refused `pzversion=42.20`.** On the real install the mod only
+  appears with `pzversion=42`, and the empty `require=` line has to go.
+  `mod.info` now says so; `TARGET_BUILD` (`42.20`) remains what the heartbeat
+  reports — the two are different facts.
+- **Adapter load order is not alphabetical-safe.** Eight adapters executed
+  before `PZAgent.Adapters.Toolkit` existed and now carry an explicit
+  `require "PZAgent/adapters/Toolkit"`.
+- **Kahlua provides `pairs` but not the global `next`.** Every `next(t) == nil`
+  emptiness check crashed its handler — `CommandDispatcher`, `ActionRuntime`,
+  `CapabilityRuntime`, `adapters/Medical` were all hit. The shared shim is
+  `PZAgent.Compat.hasEntries`, and a contract test now bans the global.
+- **`string.byte` on a Java string returns UTF-16 code units, not bytes.** A
+  Cyrillic display name yields units like `0x043F`, which the byte-oriented
+  UTF-8 encoder refused, losing the whole observation. `Json.lua` now
+  classifies each string once and escapes UTF-16 units, surrogate pairs
+  included.
+- **The game never read `session.json`.** `pz_session_arm` armed only the
+  sidecar; the game kept publishing `armed=false, mode=OFF`. `Runtime` now
+  reads the offer and feeds it to the session manager it always had.
+- **Windows really does hold files open.** `os.replace` on the sidecar side
+  took intermittent `PermissionError`s, and the game repeatedly failed to open
+  the observation pointer for writing while the sidecar polled it.
+
+Confirmed working as designed, first time live: the mod loaded and published
+structured observation; real coordinates, health, moodles, inventory, nearby
+objects, containers and doors were read; the character moved and a door was
+opened. Part of the movement was driven by the system-input fallback because of
+the command/ack defects above — that fallback is a diagnostic tool, not the
+product, and the fixes exist so it never has to be.
+
 ## How to read a row
 
 - **Symbol** — the engine name the mod looks up. Slash-separated names are a

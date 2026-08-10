@@ -22,6 +22,12 @@ action, so reach fails and says so rather than a door being opened nobody asked
 about.
 ]]
 
+-- Load-order guard, live-proven 2026-08-08 on Build 42.20.2: the engine walked
+-- adapters/ in an order that ran this file before Toolkit.lua. The statement
+-- form is deliberate -- the paren form is banned as dynamic loading -- and the
+-- test harness pre-resolves this module, so there the require is a no-op.
+require "PZAgent/adapters/Toolkit"
+
 PZAgent = PZAgent or {}
 PZAgent.Adapters = PZAgent.Adapters or {}
 

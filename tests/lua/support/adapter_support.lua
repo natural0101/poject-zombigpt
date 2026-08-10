@@ -25,19 +25,36 @@ local Support = {}
 
 local MOD_LUA = "pz-mod/42/media/lua/"
 
---- Load the adapter modules named by `names`, Toolkit first.
+--- Load the adapter modules named by `names`, Compat then Toolkit first.
+---
+--- Compat comes first because the adapters reference PZAgent.Compat at call
+--- time, and loading it here rather than leaning on the shared harness keeps
+--- this file self-contained the way the other support files are.
+---
+--- After Toolkit runs, its require name is marked already loaded: the shipped
+--- adapters open with the statement-form `require "PZAgent/adapters/Toolkit"`
+--- as a load-order guard for the engine, and under lua5.4 that line must stay
+--- a no-op safety net rather than become the load mechanism -- the harness's
+--- contract is that every file is executed into the shared global namespace
+--- and must not depend on being required.
 function Support.loadModules(root, names)
-  local ordered = { "Toolkit" }
+  local prefix = (root or "") .. MOD_LUA
+  local paths = {
+    prefix .. "shared/PZAgent/Compat.lua",
+    prefix .. "client/PZAgent/adapters/Toolkit.lua",
+  }
   for index = 1, #(names or {}) do
-    ordered[#ordered + 1] = names[index]
+    paths[#paths + 1] = prefix .. "client/PZAgent/adapters/" .. names[index] .. ".lua"
   end
-  for index = 1, #ordered do
-    local path = (root or "") .. MOD_LUA .. "client/PZAgent/adapters/" .. ordered[index] .. ".lua"
-    local chunk, err = loadfile(path)
+  for index = 1, #paths do
+    local chunk, err = loadfile(paths[index])
     if chunk == nil then
-      error("could not load " .. path .. ": " .. tostring(err), 0)
+      error("could not load " .. paths[index] .. ": " .. tostring(err), 0)
     end
     chunk()
+    if paths[index]:find("Toolkit.lua", 1, true) ~= nil then
+      package.loaded["PZAgent/adapters/Toolkit"] = true
+    end
   end
   return PZAgent
 end

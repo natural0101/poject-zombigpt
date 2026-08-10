@@ -18,6 +18,11 @@ Invariants this file is responsible for:
   supervisor.
 * Nothing here decides who owns a queue entry or whether an action may run;
   those are PZAgent.Ownership and PZAgent.Safety.
+* A session offer on disk is read once per tick and decided at most once per
+  document. A rejected or unreadable offer never touches the session that is
+  already open: the offer file lives in a directory the player can edit and
+  any local process can write, so a bad document there must cost nothing but
+  a recorded refusal.
 ]]
 
 PZAgent = PZAgent or {}
@@ -79,6 +84,68 @@ function Runtime.readSidecarHeartbeat(agent, nowMs)
   return false
 end
 
+--- The exact text Ipc.readDocument returns for a file that is missing or
+--- empty. Matched so that an exchange directory with no session.json -- the
+--- ordinary state of a game started before the sidecar -- is not reported as
+--- an error on every tick. Coupled to Ipc by wording; test_runtime covers the
+--- pairing, so a reworded Ipc fails a test instead of silently turning
+--- "no offer yet" into a permanent HUD error.
+local NO_DOCUMENT = "document is empty or absent"
+
+--- Poll the sidecar's session offer (session.json) and, when it holds a
+--- document not yet decided on, offer it to the session holder.
+---
+--- The mirror of readSidecarHeartbeat: one bounded read per tick, and nothing
+--- inside the document is trusted until Session.evaluate has accepted it.
+--- Every refusal -- unreadable file, malformed JSON, rejected offer -- leaves
+--- the current session exactly as it was and is reported through
+--- safety.last_error, the same single overwritten slot every other per-tick
+--- failure uses, so a permanently broken file occupies one field forever
+--- instead of filling a journal.
+---
+--- Returns true plus the decision when a session was accepted; false
+--- otherwise (with the decision as the second value when one was evaluated).
+function Runtime.readSession(agent, nowMs)
+  local document, readError = agent.ipc:readDocument("session")
+  if document == nil then
+    if readError ~= nil and readError ~= NO_DOCUMENT then
+      agent.safety.last_error = "session offer unreadable: " .. tostring(readError)
+    end
+    return false
+  end
+  if type(document) ~= "table" then
+    agent.safety.last_error = "session offer unreadable: the document is not an object"
+    return false
+  end
+  local nonce = document.nonce
+  if type(nonce) == "string" and nonce == agent.session_offer_marker then
+    -- Already decided. The decided offer staying on disk is the steady state
+    -- of the exchange directory, not a fresh attempt, so it is skipped without
+    -- re-evaluating and without recording another refusal.
+    return false
+  end
+  local sidecarFresh = not PZAgent.Safety.sidecarStale(agent.safety, nowMs)
+  local decision = agent.session:offer(document, nowMs, { sidecarFresh = sidecarFresh })
+  if decision.accepted then
+    agent.session_offer_marker = nonce
+    return true, decision
+  end
+  if sidecarFresh and type(nonce) == "string" then
+    -- Rejected with a live sidecar watching: re-presenting the identical
+    -- document cannot change the answer, so its nonce is remembered and it is
+    -- refused exactly once. A rejection with the sidecar gone is different --
+    -- the same offer may become acceptable the moment the sidecar's heartbeat
+    -- appears, so it stays eligible for the next tick.
+    agent.session_offer_marker = nonce
+  end
+  agent.safety.last_error = string.format(
+    "session offer refused: %s (%s)",
+    tostring(decision.reason_code),
+    tostring(decision.detail)
+  )
+  return false, decision
+end
+
 --- Refresh the cheap per-tick state: which player exists, what the queue holds,
 --- whether the sidecar is still there.
 function Runtime.refresh(agent, nowMs)
@@ -110,7 +177,11 @@ function Runtime.refresh(agent, nowMs)
     agent.queue_readable = true
   end
 
+  -- Order matters: the heartbeat read first, so an offer written in the same
+  -- inter-tick window as the sidecar's first heartbeat is judged against the
+  -- freshest liveness observation instead of last tick's.
   Runtime.readSidecarHeartbeat(agent, nowMs)
+  Runtime.readSession(agent, nowMs)
   return agent
 end
 

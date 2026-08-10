@@ -41,6 +41,15 @@ SUPPORTED_BUILDS: Final = ("42.20",)
 #: Build the compatibility probes were authored against.
 TARGET_BUILD: Final = "42.20"
 
+#: What ``mod.info`` declares as ``pzversion``. Deliberately *not*
+#: :data:`TARGET_BUILD`: that constant is the point release the heartbeat
+#: reports and the probes were authored against, but the real Build 42.20.2
+#: mod list refuses to show a mod whose ``pzversion`` is anything but the
+#: major ``"42"`` (live-proven 2026-08-08). The two constants restate the same
+#: game at different precisions, so they are declared side by side and the
+#: contract test pins ``mod.info`` to this one.
+MOD_INFO_PZVERSION: Final = "42"
+
 
 def protocol_major(version: str) -> int:
     """Return the major component of a ``MAJOR.MINOR`` protocol version.

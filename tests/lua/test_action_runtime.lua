@@ -924,4 +924,195 @@ do
   isNil(terminal.evidence, "and no trimmed half of the proof was published")
 end
 
+-- ---------------------------------------------------------------------------
+-- exception hardening: a raise is a failure, never an escape
+--
+-- On the 2026-08-08 live run (Build 42.20.2) ActionRuntime.verify raised on a
+-- Kahlua gap after session.arm; the exception escaped the event handler, the
+-- terminal ack never appeared, and the runtime held its in-flight slot
+-- forever. These groups pin the contract that replaced that behaviour: any
+-- raise in start, poll, verify or the ack write path ends its command as
+-- failed/INTERNAL_ERROR with the phase named in the detail, clears the slot,
+-- and leaves the runtime able to run safety.stop and the next valid command.
+-- ---------------------------------------------------------------------------
+
+Harness.group("a raise inside verify is a terminal INTERNAL_ERROR, never a success")
+do
+  local spy = Support.spyAdapter("movement.move_to", { evidence = { position = "1,2,0" } })
+  local good = Support.spyAdapter("inventory.transfer", { evidence = { item_ref = "x" } })
+  local agent, fs, runtime = Support.runtime(Mock, { spy, good }, { maxWorkPerTick = 8 })
+  Support.publish(fs, { Support.command({ action = "movement.move_to", args = {} }) })
+
+  local realVerify = ActionRuntime.verify
+  ActionRuntime.verify = function()
+    error("boom", 0)
+  end
+  local summary = runtime:tick(agent, NOW)
+  ActionRuntime.verify = realVerify
+
+  ok(summary ~= nil, "the tick survived the raise")
+  local terminal = lastTerminal(fs)
+  equal(terminal.status, STATUS.FAILED, "the command failed -- a raise has no route to succeeded")
+  equal(terminal.reason_code, REASON.INTERNAL_ERROR, "with INTERNAL_ERROR")
+  contains(terminal.message, "verify raised", "the detail names the phase that raised")
+  contains(terminal.message, "boom", "and carries what it said")
+  isNil(runtime:inFlight(), "the slot was cleared")
+
+  Support.appendRaw(fs, Support.line(Support.command({ action = "inventory.transfer", args = {} })))
+  runtime:tick(agent, NOW + 1)
+  local following = lastTerminal(fs)
+  equal(following.action, "inventory.transfer", "the next valid command was accepted")
+  equal(following.status, STATUS.SUCCEEDED, "and ran to its own terminal state")
+end
+
+Harness.group("a raise inside start names the phase and frees the runtime")
+do
+  local raising = Support.spyAdapter("movement.move_to", { raise = true })
+  local good = Support.spyAdapter("inventory.transfer", { evidence = { item_ref = "x" } })
+  local agent, fs, runtime = Support.runtime(Mock, { raising, good }, { maxWorkPerTick = 8 })
+  Support.publish(fs, { Support.command({ action = "movement.move_to", args = {} }) })
+  runtime:tick(agent, NOW)
+
+  local terminal = lastTerminal(fs)
+  equal(terminal.status, STATUS.FAILED, "the command failed")
+  equal(terminal.reason_code, REASON.INTERNAL_ERROR, "with INTERNAL_ERROR")
+  contains(terminal.message, "start raised", "the detail names start")
+  isNil(runtime:inFlight(), "nothing was left in flight")
+
+  Support.appendRaw(fs, Support.line(Support.command({ action = "inventory.transfer", args = {} })))
+  runtime:tick(agent, NOW + 1)
+  local following = lastTerminal(fs)
+  equal(following.action, "inventory.transfer", "the next valid command was accepted")
+  equal(following.status, STATUS.SUCCEEDED, "and ran to terminal")
+end
+
+Harness.group("a raise inside poll names the phase and frees the runtime")
+do
+  local polls = 0
+  local exploding = {
+    action = "movement.move_to",
+    required_symbols = {},
+    start = function(context)
+      context.state.evidence = { position_before = "0,0,0" }
+      -- `true`: queued and running, the game-facing convention.
+      return true
+    end,
+    poll = function()
+      polls = polls + 1
+      error("poll exploded", 0)
+    end,
+  }
+  local good = Support.spyAdapter("inventory.transfer", { evidence = { item_ref = "x" } })
+  local agent, fs, runtime = Support.runtime(Mock, { exploding, good }, { maxWorkPerTick = 8 })
+  Support.publish(fs, { Support.command({ action = "movement.move_to", args = {} }) })
+  runtime:tick(agent, NOW)
+  ok(runtime:inFlight() ~= nil, "the command is running")
+
+  runtime:tick(agent, NOW + 1)
+  equal(polls, 1, "the poll ran once and raised")
+  local terminal = lastTerminal(fs)
+  equal(terminal.status, STATUS.FAILED, "the command failed")
+  equal(terminal.reason_code, REASON.INTERNAL_ERROR, "with INTERNAL_ERROR")
+  contains(terminal.message, "poll raised", "the detail names poll")
+  contains(terminal.message, "poll exploded", "and carries what it said")
+  isNil(runtime:inFlight(), "the slot was cleared")
+
+  Support.appendRaw(fs, Support.line(Support.command({ action = "inventory.transfer", args = {} })))
+  runtime:tick(agent, NOW + 2)
+  local following = lastTerminal(fs)
+  equal(following.action, "inventory.transfer", "the next valid command was accepted")
+  equal(following.status, STATUS.SUCCEEDED, "and ran to terminal")
+end
+
+Harness.group("safety.stop still works after an exception-failed command")
+do
+  local raising = Support.spyAdapter("movement.move_to", { raise = true })
+  local agent, fs, runtime = Support.runtime(Mock, { raising }, { controls = true, maxWorkPerTick = 8 })
+  Mock.installActionQueue({})
+  Support.publish(fs, { Support.command({ action = "movement.move_to", args = {} }) })
+  runtime:tick(agent, NOW)
+  equal(lastTerminal(fs).reason_code, REASON.INTERNAL_ERROR, "the raise failed its command")
+
+  Support.appendRaw(fs, Support.line(Support.command({ action = "safety.stop", args = {} })))
+  runtime:tick(agent, NOW + 1)
+  local stop = lastTerminal(fs)
+  equal(stop.action, "safety.stop", "the stop is the last thing acked")
+  equal(stop.status, STATUS.SUCCEEDED, "and it succeeded")
+  equal(agent.safety.armed, false, "the agent is disarmed")
+  Mock.removeActionQueue()
+end
+
+Harness.group("an ack write that raises still clears the slot and surfaces the failure")
+do
+  local spy = Support.spyAdapter("movement.move_to", { polls = 1, evidence = { position = "8,8,0" } })
+  local agent, fs, runtime = Support.runtime(Mock, { spy }, { maxWorkPerTick = 8 })
+  Support.publish(fs, { Support.command({ action = "movement.move_to", args = {} }) })
+  runtime:tick(agent, NOW)
+  ok(runtime:inFlight() ~= nil, "the command is running against a healthy journal")
+
+  -- The journal write itself now raises: worse than refusing, and exactly the
+  -- shape a wedged file handle takes on Windows. The runtime must not hang on
+  -- work whose terminal ack cannot be written.
+  local realAppend = agent.ipc.appendRecord
+  agent.ipc.appendRecord = function()
+    error("the ack journal is gone", 0)
+  end
+  local summary = runtime:tick(agent, NOW + 1)
+  agent.ipc.appendRecord = realAppend
+
+  ok(summary ~= nil, "the tick survived the raising journal")
+  isNil(runtime:inFlight(), "the slot was cleared even without a written ack")
+  contains(agent.safety.last_error, "succeeded ack raised",
+    "and the failure is surfaced through safety.last_error, phase named")
+  isNil(lastTerminal(fs), "no terminal ack was fabricated for it")
+
+  Support.appendRaw(fs, Support.line(Support.command({ action = "movement.move_to", args = {} })))
+  runtime:tick(agent, NOW + 2)
+  runtime:tick(agent, NOW + 3)
+  local following = lastTerminal(fs)
+  equal(following.status, STATUS.SUCCEEDED, "the next command ran to a terminal ack once the journal healed")
+end
+
+Harness.group("the evidence emptiness checks hold with the global next removed")
+do
+  -- The live run proved Kahlua ships `pairs` but not the global `next`; the
+  -- two emptiness checks this file's module used to make through it now go
+  -- through PZAgent.Compat.hasEntries. Removing `next` for the duration of
+  -- the ticks proves no hidden dependency is left anywhere a command travels
+  -- -- admission, verify, the ack write, the capability note. It is restored
+  -- immediately after each tick, because lua5.4's own libraries (unlike the
+  -- mod code) may legitimately use it.
+  local full = Support.spyAdapter("movement.move_to", { evidence = { position = "6,6,0" } })
+  local empty = {
+    action = "inventory.transfer",
+    required_symbols = {},
+    start = function()
+      return { done = true, evidence = {} }
+    end,
+  }
+  local agent, fs, runtime = Support.runtime(Mock, { full, empty }, { maxWorkPerTick = 8 })
+  Support.publish(fs, { Support.command({ action = "movement.move_to", args = {} }) })
+
+  local realNext = next
+  _G.next = nil
+  local okFirst, firstErr = pcall(runtime.tick, runtime, agent, NOW)
+  _G.next = realNext
+  ok(okFirst, "the tick ran without the global next (" .. tostring(firstErr) .. ")")
+  local terminal = lastTerminal(fs)
+  equal(terminal.status, STATUS.SUCCEEDED, "a populated evidence bag still reads as evidence")
+  equal(terminal.evidence.position, "6,6,0", "and travels on the ack")
+
+  Support.appendRaw(fs, Support.line(Support.command({ action = "inventory.transfer", args = {} })))
+  _G.next = nil
+  local okSecond, secondErr = pcall(runtime.tick, runtime, agent, NOW + 1)
+  _G.next = realNext
+  ok(okSecond, "the second tick ran without the global next (" .. tostring(secondErr) .. ")")
+  local emptyTerminal = lastTerminal(fs)
+  equal(emptyTerminal.action, "inventory.transfer", "the empty-evidence command is the one that ended")
+  equal(emptyTerminal.status, STATUS.FAILED, "an empty evidence bag still fails the success gate")
+  equal(emptyTerminal.reason_code, REASON.POSTCONDITION_FAILED, "as a postcondition failure")
+  contains(emptyTerminal.message, "without evidence", "with the message that says so")
+  isNil(emptyTerminal.evidence, "and no empty bag was attached to the ack")
+end
+
 Harness.finish("test_action_runtime")

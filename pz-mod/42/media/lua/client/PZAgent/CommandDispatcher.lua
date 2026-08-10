@@ -90,13 +90,16 @@ local function checkArgSpec(action, name, spec)
   if not known then
     return nil, string.format("%s: argument %q declares unknown type %s", action, name, tostring(kind))
   end
+  -- Emptiness via PZAgent.Compat, not the global `next`: the 2026-08-08 live
+  -- run proved Kahlua does not provide it, and hasEntries answers false for a
+  -- non-table, which keeps the "not a table" branch these checks had.
   if kind == CommandDispatcher.ARG.ENUM then
-    if type(spec.values) ~= "table" or next(spec.values) == nil then
+    if not PZAgent.Compat.hasEntries(spec.values) then
       return nil, string.format("%s: enum argument %q declares no values", action, name)
     end
   end
   if kind == CommandDispatcher.ARG.REF then
-    if type(spec.kinds) ~= "table" or next(spec.kinds) == nil then
+    if not PZAgent.Compat.hasEntries(spec.kinds) then
       return nil, string.format("%s: ref argument %q declares no accepted ref kinds", action, name)
     end
   end

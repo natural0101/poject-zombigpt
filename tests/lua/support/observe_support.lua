@@ -17,6 +17,9 @@ local Support = {}
 local MOD_LUA = "pz-mod/42/media/lua/"
 
 local MODULES = {
+  -- Compat first, mirroring the game's shared-before-client order, so an
+  -- observation module that reaches for PZAgent.Compat at call time finds it.
+  "shared/PZAgent/Compat.lua",
   "shared/PZAgent/ObserveModel.lua",
   "client/PZAgent/Observe.lua",
 }

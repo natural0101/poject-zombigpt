@@ -12,6 +12,60 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **The thirteen defects the first live session proved, fixed at their roots**
+  (`epic/p0-build42-live-compat`; live run 2026-08-08, Project Zomboid Build
+  42.20.2, Windows — the findings themselves are recorded in
+  `docs/GAME_API_VERIFICATION.md`):
+  - *The mod now appears in the Build 42.20 mod list.* `mod.info` declares
+    `pzversion=42` (the real installer refuses `42.20`) and the empty
+    `require=` line is gone. `TARGET_BUILD` stays `42.20` for the heartbeat;
+    the new `MOD_INFO_PZVERSION` constant records the split, and the contract
+    test pins both files to it.
+  - *Adapters no longer depend on lucky load order.* Eight adapters
+    (`Consumption`, `Containers`, `Equipment`, `Inventory`, `Literature`,
+    `Medical`, `Rest`, `Sleep`) open with a statement-form
+    `require "PZAgent/adapters/Toolkit"`; the dynamic-loading ban still holds
+    (`require(` stays forbidden, and a new contract asserts every require in
+    the mod names a `PZAgent/` module and nothing aliases the token).
+  - *Kahlua has no global `next`, so the mod no longer calls it.* Every
+    `next(t) == nil` emptiness check (`CommandDispatcher`, `ActionRuntime`,
+    `CapabilityRuntime`, `adapters/Medical`) now goes through the new shared
+    `PZAgent.Compat.hasEntries`, built on `pairs`, which the live game does
+    provide. A contract test bans the global across the whole mod tree with no
+    allowlist, and the ActionRuntime tests re-run the full command path with
+    `_G.next` removed.
+  - *An exception in the adapter lifecycle is now a terminal answer, not a
+    wedge.* Live, `ActionRuntime.verify` crashed (on the missing `next`) after
+    `session.arm`, the terminal ack never appeared, and the runtime hung on its
+    current work forever. Every raise escaping `start`/`poll`/`verify`/
+    `finalize` — and the runtime's own ack writes — now becomes a bounded
+    terminal `failed`/`INTERNAL_ERROR` naming the phase, clears the in-flight
+    slot, and leaves the runtime able to take `safety.stop` and the next valid
+    command. An exception has no route to `succeeded`.
+  - *The game now reads the session offer it was always supposed to read.*
+    `pz_session_arm` armed only the sidecar; the game kept publishing
+    `armed=false, mode=OFF` because nothing ever read `session.json`. The new
+    `Runtime.readSession` reads the offer once per tick through the same `Ipc`
+    primitive the heartbeat reader uses and feeds it to the session manager
+    the mod always had (`Session.evaluate`: freshness, nonce replay, sidecar
+    liveness). A nonce is only remembered once decidable — an offer rejected
+    solely for a missing sidecar heartbeat is retried and accepted when
+    liveness appears, which is exactly the ordering race the live run hit.
+  - *A Russian item name no longer costs the whole observation.* Kahlua's
+    `string.byte` on a Java string returns UTF-16 code units (Cyrillic "п" is
+    `0x043F`, not two UTF-8 bytes), which the byte-oriented encoder refused.
+    `PZAgent.Json` now classifies each string once — any unit above `0xFF`
+    commits the string to the UTF-16 model, surrogate pairs combine, lone
+    surrogates are refused by offset — while valid UTF-8 byte strings encode
+    byte-identically to before and a lone high byte falls back to Latin-1
+    deterministically. The overlong-encoding hole stays closed.
+  - *The sidecar's atomic writer waits out Windows sharing violations.*
+    `write_json_atomic` retries `os.replace` on `PermissionError` with the
+    same bounded budget journal rotation uses (10 × 0.05 s), raises a typed
+    `SharingViolationError` naming the target when a reader never lets go, and
+    takes its scratch file with it on every failure path — including naming
+    the leaked path honestly when even removal is refused.
+
 - **Journal rotation no longer crashes on Windows when a reader is mid-poll.**
   `JournalWriter.rotate` moved and deleted files with `os.replace`/`unlink`,
   which on POSIX succeed under any open handle but on Windows raise

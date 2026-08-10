@@ -36,6 +36,17 @@ immediately before every step, not only when the command arrived, because a
 command can sit behind a long action and reach the front against a world that
 moved on.
 
+**A raise is a failure, never an escape.** The 2026-08-08 live run on Build
+42.20.2 showed what an escaping exception costs: `verify` raised on a Kahlua
+gap after session.arm, the terminal ack never appeared, and the runtime held
+its in-flight slot forever -- hung on work nobody could end. Every adapter call
+and every ack write is therefore driven under pcall at this layer: whatever
+raises ends its command as failed with INTERNAL_ERROR, the detail names the
+phase that raised (with the captured message bounded, never embedded whole),
+the slot is cleared even when the ack write itself is what raised, and
+safety.stop and the next valid command still work. An exception has no route
+to `succeeded` -- a raise is always a failure.
+
 **The tick is bounded.** A fixed work budget per tick, a bounded pending queue,
 a bounded number of records read per poll. A long queue costs frames, never the
 game thread.
@@ -258,7 +269,10 @@ function Handle:ack(agent, work, phase, reasonCode, options)
   if phase == PHASE.SUCCEEDED then
     record.progress = 1.0
   end
-  if type(options.evidence) == "table" and next(options.evidence) ~= nil then
+  -- Emptiness via PZAgent.Compat, not the global `next`, which the 2026-08-08
+  -- live run proved Kahlua does not provide; hasEntries also answers false for
+  -- a non-table, preserving the type check this line used to spell out.
+  if PZAgent.Compat.hasEntries(options.evidence) then
     record.evidence = options.evidence
   end
   local written, writeError = agent.ipc:appendRecord("command_ack", record)
@@ -314,6 +328,23 @@ function Handle:replay(agent, command, stored, nowMs)
   return record
 end
 
+--- Append one ack without letting a raise escape into the tick.
+---
+--- The ack path crosses sequence numbering, Json encoding and the Ipc file
+--- API, and on the live 2026-08-08 run it crossed a missing Kahlua global too.
+--- Any of those raising must cost one ack, never the runtime: an exception
+--- that escapes mid-lifecycle takes the event handler with it, leaves the
+--- in-flight slot occupied forever, and the sidecar waiting on a terminal ack
+--- that will never come. Returns the record, or nil plus an honest reason,
+--- whether the ack refused or raised.
+local function tryAck(self, agent, work, phase, reasonCode, options)
+  local ok, record, ackError = pcall(Handle.ack, self, agent, work, phase, reasonCode, options)
+  if not ok then
+    return nil, string.format("the %s ack raised: %s", tostring(phase), truncate(record))
+  end
+  return record, ackError
+end
+
 -- ---------------------------------------------------------------------------
 -- lifecycle
 -- ---------------------------------------------------------------------------
@@ -358,10 +389,15 @@ local function contextFor(self, agent, work, nowMs)
 end
 
 --- End `work` in a terminal phase, freeing the in-flight slot.
+---
+--- The slot is cleared even when the ack write refused or raised: a work item
+--- whose terminal ack cannot be written must not keep holding the runtime,
+--- and the failure is surfaced through safety.last_error -- which the next
+--- heartbeat carries -- rather than by wedging on work nobody can end.
 function Handle:finish(agent, work, phase, reasonCode, nowMs, options)
   options = options or {}
   options.now_ms = nowMs
-  local record, ackError = self:ack(agent, work, phase, reasonCode, options)
+  local record, ackError = tryAck(self, agent, work, phase, reasonCode, options)
   if record == nil then
     agent.safety.last_error = ackError
   end
@@ -528,10 +564,12 @@ function ActionRuntime.verify(work, outcome)
   local reasons = PZAgent.Protocol.REASON
   local action = (work.command and work.command.action) or "the action"
   local evidence = collectEvidence(work, outcome)
-  if evidence == nil or next(evidence) == nil then
-    -- The adapter says it finished but observed nothing. That is exactly the
-    -- fabricated success this project treats as a defect, so it is reported as
-    -- the postcondition failure it is.
+  if not PZAgent.Compat.hasEntries(evidence) then
+    -- The adapter says it finished but observed nothing -- no bag at all, or an
+    -- empty one; hasEntries answers false for both, the way `evidence == nil or
+    -- next(evidence) == nil` used to before the live run proved Kahlua ships no
+    -- global `next`. That is exactly the fabricated success this project treats
+    -- as a defect, so it is reported as the postcondition failure it is.
     return nil, reasons.POSTCONDITION_FAILED, string.format("%s reported completion without evidence", action)
   end
   local found, unchanged = ActionRuntime.observedPairs(evidence)
@@ -605,7 +643,17 @@ local function applyOutcome(self, agent, work, outcome, nowMs)
     -- adapter has nothing left to do; whether that amounts to an observed
     -- postcondition is decided by ActionRuntime.verify, against the readings the
     -- adapter recorded and against each other.
-    local evidence, verifyReason, verifyDetail = ActionRuntime.verify(work, outcome)
+    --
+    -- Under pcall because verify walks tables the adapter built and, on the
+    -- live 2026-08-08 run, raised on a missing Kahlua global: a raise inside
+    -- the success gate must read as a failure of this command, never escape
+    -- the tick, and above all never fall through to the succeeded branch.
+    local verified, evidence, verifyReason, verifyDetail = pcall(ActionRuntime.verify, work, outcome)
+    if not verified then
+      return self:finish(agent, work, PHASE.FAILED, reasons.INTERNAL_ERROR, nowMs, {
+        detail = "verify raised: " .. truncate(evidence),
+      })
+    end
     if evidence == nil then
       return self:finish(agent, work, PHASE.FAILED, verifyReason, nowMs, { detail = verifyDetail })
     end
@@ -636,7 +684,7 @@ local function applyOutcome(self, agent, work, outcome, nowMs)
   self.inflight = work
   if work.phase ~= PHASE.RUNNING then
     work.started_at_ms = work.started_at_ms or nowMs
-    local record, ackError = self:ack(agent, work, PHASE.RUNNING, nil, {
+    local record, ackError = tryAck(self, agent, work, PHASE.RUNNING, nil, {
       now_ms = nowMs,
       progress = outcome.progress,
     })
@@ -649,7 +697,7 @@ local function applyOutcome(self, agent, work, outcome, nowMs)
   local progress = outcome.progress
   if type(progress) == "number" and progress >= (work.progress or 0) + ActionRuntime.PROGRESS_STEP then
     work.progress = progress
-    local record, ackError = self:ack(agent, work, PHASE.RUNNING, nil, {
+    local record, ackError = tryAck(self, agent, work, PHASE.RUNNING, nil, {
       now_ms = nowMs,
       progress = progress,
       status = PZAgent.Protocol.STATUS.PROGRESS,
@@ -662,9 +710,28 @@ local function applyOutcome(self, agent, work, outcome, nowMs)
   return nil
 end
 
+--- Apply an outcome with the runtime, not the tick, owning any raise.
+---
+--- applyOutcome crosses ActionRuntime.verify, the control adapters that finish
+--- inside it (a stop cancels work, which writes acks) and the ack path itself.
+--- A raise anywhere in there used to escape `begin` and `step`, kill the event
+--- handler mid-lifecycle and leave the slot held forever. It now ends the
+--- command as an INTERNAL_ERROR failure naming the phase whose outcome was
+--- being applied, through `finish`, which clears the slot and cannot itself
+--- raise -- so the pcall chain bottoms out here instead of recursing.
+local function applyProtected(self, agent, work, outcome, nowMs, phaseName)
+  local ok, result = pcall(applyOutcome, self, agent, work, outcome, nowMs)
+  if ok then
+    return result
+  end
+  return self:finish(agent, work, PHASE.FAILED, PZAgent.Protocol.REASON.INTERNAL_ERROR, nowMs, {
+    detail = string.format("applying the %s outcome raised: %s", phaseName, truncate(result)),
+  })
+end
+
 --- Call `start` on the adapter and act on what it returns.
 function Handle:begin(agent, work, nowMs)
-  local record, ackError = self:ack(agent, work, PHASE.PREPARING, nil, { now_ms = nowMs })
+  local record, ackError = tryAck(self, agent, work, PHASE.PREPARING, nil, { now_ms = nowMs })
   if record == nil then
     agent.safety.last_error = ackError
   end
@@ -677,10 +744,10 @@ function Handle:begin(agent, work, nowMs)
   local ok, first, second, third = pcall(work.adapter.start, context, work.args)
   if not ok then
     return self:finish(agent, work, PHASE.FAILED, PZAgent.Protocol.REASON.INTERNAL_ERROR, nowMs, {
-      detail = tostring(first),
+      detail = "start raised: " .. truncate(first),
     })
   end
-  return applyOutcome(self, agent, work, normaliseOutcome(work, first, second, third), nowMs)
+  return applyProtected(self, agent, work, normaliseOutcome(work, first, second, third), nowMs, "start")
 end
 
 --- The reason a running command must stop now, or nil when it may continue.
@@ -760,10 +827,10 @@ function Handle:step(agent, nowMs)
   local ok, first, second, third = pcall(work.adapter.poll, context, work.args)
   if not ok then
     return self:finish(agent, work, PHASE.FAILED, PZAgent.Protocol.REASON.INTERNAL_ERROR, nowMs, {
-      detail = tostring(first),
+      detail = "poll raised: " .. truncate(first),
     })
   end
-  return applyOutcome(self, agent, work, normaliseOutcome(work, first, second, third), nowMs)
+  return applyProtected(self, agent, work, normaliseOutcome(work, first, second, third), nowMs, "poll")
 end
 
 --- End the in-flight command, if there is one. Returns its command id, or nil.
@@ -851,7 +918,7 @@ function Handle:admit(agent, command, nowMs)
   end
 
   local work = newWork(command, adapter, args, sessionId, nowMs)
-  local record, ackError = self:ack(agent, work, PHASE.ACCEPTED, nil, { now_ms = nowMs })
+  local record, ackError = tryAck(self, agent, work, PHASE.ACCEPTED, nil, { now_ms = nowMs })
   if record == nil then
     agent.safety.last_error = ackError
   end
@@ -881,7 +948,7 @@ function Handle:admit(agent, command, nowMs)
       })
     end
     self.pending[#self.pending + 1] = work
-    local queued, queueAckError = self:ack(agent, work, PHASE.QUEUED, nil, {
+    local queued, queueAckError = tryAck(self, agent, work, PHASE.QUEUED, nil, {
       now_ms = nowMs,
       detail = string.format("waiting behind %s", self.inflight.command.action),
     })
@@ -986,7 +1053,13 @@ function Handle:tick(agent, nowMs)
       self:admit(agent, entry.command, nowMs)
       summary.admitted = summary.admitted + 1
     elseif entry.kind == KIND.REPLAY then
-      local record, replayError = self:replay(agent, entry.command, entry.ack, nowMs)
+      -- Under pcall for the same reason every other ack write is: a replay
+      -- crosses the same encode-and-append path, and a raise there must cost
+      -- one replayed ack, not the whole tick.
+      local replayOk, record, replayError = pcall(Handle.replay, self, agent, entry.command, entry.ack, nowMs)
+      if not replayOk then
+        record, replayError = nil, "the replay ack raised: " .. truncate(record)
+      end
       if record == nil then
         agent.safety.last_error = replayError
       end

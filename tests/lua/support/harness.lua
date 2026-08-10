@@ -27,8 +27,11 @@ Harness.root = repositoryRoot()
 
 local MOD_LUA = "pz-mod/42/media/lua/"
 
---- Load order mirrors the game's: shared before client.
+--- Load order mirrors the game's: shared before client. Compat is first
+--- because it is first in the game too (shared files load alphabetically) and
+--- because every other module may reference PZAgent.Compat at call time.
 local MODULES = {
+  "shared/PZAgent/Compat.lua",
   "shared/PZAgent/Json.lua",
   "shared/PZAgent/Protocol.lua",
   "shared/PZAgent/Refs.lua",

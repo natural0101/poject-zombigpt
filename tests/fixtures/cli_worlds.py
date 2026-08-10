@@ -128,8 +128,10 @@ def make_mod_source(base: Path, *, version: str = "0.1.0") -> Path:
     source = base / "pz-mod" / "42"
     (source / "media" / "lua" / "shared" / "PZAgent").mkdir(parents=True, exist_ok=True)
     (source / "media" / "lua" / "client" / "PZAgent").mkdir(parents=True, exist_ok=True)
+    # pzversion mirrors the real mod.info: the major "42", never the point
+    # release — the live Build 42.20.2 mod list hides a mod that declares one.
     (source / "mod.info").write_text(
-        f"name=PZ Agent Bridge\nid=pz_agent_bridge\nmodversion={version}\npzversion=42.20\n",
+        f"name=PZ Agent Bridge\nid=pz_agent_bridge\nmodversion={version}\npzversion=42\n",
         encoding="utf-8",
     )
     (source / "media" / "lua" / "shared" / "PZAgent" / "Json.lua").write_text(

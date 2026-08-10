@@ -19,6 +19,12 @@ against; a build that orders them differently produces a bandage that does not
 land, and the postcondition below is what refuses to call that a success.
 ]]
 
+-- Load-order guard, live-proven 2026-08-08 on Build 42.20.2: the engine walked
+-- adapters/ in an order that ran this file before Toolkit.lua. The statement
+-- form is deliberate -- the paren form is banned as dynamic loading -- and the
+-- test harness pre-resolves this module, so there the require is a no-op.
+require "PZAgent/adapters/Toolkit"
+
 PZAgent = PZAgent or {}
 PZAgent.Adapters = PZAgent.Adapters or {}
 
@@ -174,7 +180,10 @@ local function bandageSpec(args, ctx)
     return nil, checkCode, checkDetail
   end
   local snapshot = Toolkit.snapshot(ctx)
-  if type(snapshot.body) ~= "table" or next(snapshot.body) == nil then
+  -- Emptiness via PZAgent.Compat, not the global `next`, which the 2026-08-08
+  -- live run proved Kahlua does not provide; hasEntries also answers false for
+  -- a non-table, preserving the type check this line used to spell out.
+  if not PZAgent.Compat.hasEntries(snapshot.body) then
     return Toolkit.unavailable("BodyDamage.getBodyParts")
   end
   local partName, part

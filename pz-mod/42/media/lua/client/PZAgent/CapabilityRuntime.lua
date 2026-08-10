@@ -228,7 +228,10 @@ function Handle:noteAck(ack)
   local states = Protocol.CAPABILITY
 
   if ack.status == Protocol.STATUS.SUCCEEDED then
-    if type(ack.evidence) ~= "table" or next(ack.evidence) == nil then
+    -- Emptiness via PZAgent.Compat, not the global `next`, which the 2026-08-08
+    -- live run proved Kahlua does not provide; hasEntries also answers false
+    -- for a non-table, preserving the type check this line used to spell out.
+    if not PZAgent.Compat.hasEntries(ack.evidence) then
       return false, "a succeeded ack without evidence proves nothing"
     end
     if entry.state == states.UNSUPPORTED or entry.state == states.DISABLED_BY_POLICY then

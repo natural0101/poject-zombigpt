@@ -265,6 +265,193 @@ do
   equal(third.seq, second.seq + 1, "and the third follows the second")
 end
 
+-- ---------------------------------------------------------------------------
+-- session offers read from the exchange directory
+-- ---------------------------------------------------------------------------
+
+local OTHER_SESSION = "11111111-2222-3333-4444-555555555555"
+
+--- A session offer document as the sidecar writes it, encoded onto the mock
+--- disk. Field defaults mirror the accepted request of test_session.lua.
+local function offerText(overrides)
+  local base = {
+    protocol_version = "1.0",
+    session_id = SESSION,
+    created_at_ms = NOW - 100,
+    nonce = "offer-one",
+    mode = "autonomous",
+  }
+  for key, value in pairs(overrides or {}) do
+    base[key] = value
+  end
+  local text = Json.encode(base)
+  ok(text ~= nil, "the test's offer document must itself encode")
+  return text
+end
+
+local function putSidecarHeartbeat(fs, seq)
+  fs:put(
+    PZ.Ipc.pathFor("sidecar_heartbeat"),
+    string.format('{"peer":"sidecar","seq":%d,"session_id":"s","timestamp_ms":%d}', seq, seq)
+  )
+end
+
+Harness.group("a session offer on disk is read and accepted by a tick")
+do
+  getSpecificPlayer = function()
+    return Mock.newPlayer()
+  end
+  Mock.installActionQueue({})
+  local agent, fs = newAgent({ session = false })
+
+  -- No offer written yet: the empty exchange directory is the ordinary state
+  -- of a game started before the sidecar, never an error.
+  Runtime.tick(agent, NOW - 100)
+  isNil(agent.safety.last_error, "an absent session.json is not reported as an error")
+
+  putSidecarHeartbeat(fs, 1)
+  fs:put(PZ.Ipc.pathFor("session"), offerText())
+  local document = Runtime.tick(agent, NOW)
+
+  equal(agent.session:id(), SESSION, "the offered session id is now the open session")
+  equal(agent.session:current().mode, Protocol.MODE.AUTONOMOUS, "the offered mode is carried through")
+  equal(agent.session:current().armed, false, "accepting an offer never arms")
+  equal(agent.safety.armed, false, "and the safety state stays disarmed too")
+  equal(document.session_open, true, "the same tick's heartbeat reports the session as open")
+  equal(document.session_id, SESSION, "with the accepted session id")
+  equal(document.nonce, agent.session:current().game_nonce, "and the nonce the mod minted for the reply")
+  equal(document.sidecar_nonce, "offer-one", "and the sidecar's own nonce echoed back")
+  isNil(agent.safety.last_error, "nothing was refused along the way")
+end
+
+Harness.group("the same offer document is decided once, not once per tick")
+do
+  getSpecificPlayer = function()
+    return Mock.newPlayer()
+  end
+  Mock.installActionQueue({})
+  local agent, fs = newAgent({ session = false })
+  putSidecarHeartbeat(fs, 1)
+  fs:put(PZ.Ipc.pathFor("session"), offerText())
+  Runtime.tick(agent, NOW)
+  equal(agent.session:current().generation, 1, "the first tick accepted the offer")
+  local firstNonce = agent.session:current().game_nonce
+
+  Runtime.tick(agent, NOW + 100)
+  Runtime.tick(agent, NOW + 200)
+  equal(agent.session:current().generation, 1, "later ticks do not re-offer the same document")
+  equal(agent.session:current().game_nonce, firstNonce, "so the session is byte-for-byte the one accepted")
+  isNil(agent.safety.last_error, "and the steady state records no refusal at all")
+  equal(#journalRecords(fs), 0, "and writes nothing to the journal")
+end
+
+Harness.group("a malformed offer is refused without touching the live session")
+do
+  getSpecificPlayer = function()
+    return Mock.newPlayer()
+  end
+  Mock.installActionQueue({})
+  local agent, fs = newAgent({ session = false })
+  putSidecarHeartbeat(fs, 1)
+  fs:put(PZ.Ipc.pathFor("session"), offerText())
+  Runtime.tick(agent, NOW)
+  equal(agent.session:id(), SESSION, "a session is live before the corruption")
+
+  fs:put(PZ.Ipc.pathFor("session"), '{"session_id": "trunc')
+  Runtime.tick(agent, NOW + 100)
+  equal(agent.session:id(), SESSION, "truncated JSON does not tear down the live session")
+  equal(agent.session:current().generation, 1, "which is untouched in every respect")
+  contains(agent.safety.last_error, "session offer", "while the refusal names the offer as the problem")
+
+  -- Bounded: a permanently broken file occupies the one last_error slot and
+  -- nothing else, tick after tick.
+  Runtime.tick(agent, NOW + 200)
+  contains(agent.safety.last_error, "session offer", "a still-broken file keeps the same single field")
+  equal(#journalRecords(fs), 0, "and never reaches the journal")
+end
+
+Harness.group("a stale offer is refused once, quietly thereafter")
+do
+  getSpecificPlayer = function()
+    return Mock.newPlayer()
+  end
+  Mock.installActionQueue({})
+  local agent, fs = newAgent({ session = false })
+  putSidecarHeartbeat(fs, 1)
+  fs:put(
+    PZ.Ipc.pathFor("session"),
+    offerText({ created_at_ms = NOW - PZ.Session.MAX_AGE_MS - 1000 })
+  )
+  Runtime.tick(agent, NOW)
+  isNil(agent.session:id(), "an offer older than the age limit opens nothing")
+  contains(agent.safety.last_error, REASON.STALE_SESSION, "and the refusal carries the reason code")
+
+  agent.safety.last_error = nil
+  Runtime.tick(agent, NOW + 100)
+  isNil(agent.safety.last_error, "the same stale document is not refused again on the next tick")
+end
+
+Harness.group("an offer with no live sidecar waits for the sidecar, not forever")
+do
+  getSpecificPlayer = function()
+    return Mock.newPlayer()
+  end
+  Mock.installActionQueue({})
+  local agent, fs = newAgent({ session = false })
+  fs:put(PZ.Ipc.pathFor("session"), offerText())
+  Runtime.tick(agent, NOW)
+  isNil(agent.session:id(), "with no sidecar heartbeat the offer is rejected")
+  contains(agent.safety.last_error, REASON.STALE_SESSION, "as STALE_SESSION")
+
+  -- The sidecar may write session.json before its first heartbeat lands. That
+  -- ordering race must delay acceptance by a tick, not veto the document for
+  -- good -- this is exactly the live failure where the game never accepted an
+  -- offer the sidecar considered delivered.
+  agent.safety.last_error = nil
+  putSidecarHeartbeat(fs, 1)
+  Runtime.tick(agent, NOW + 100)
+  equal(agent.session:id(), SESSION, "the same document is accepted once the sidecar is live")
+  isNil(agent.safety.last_error, "with no refusal left over")
+end
+
+Harness.group("a new offer with a fresh nonce replaces the live session")
+do
+  getSpecificPlayer = function()
+    return Mock.newPlayer()
+  end
+  Mock.installActionQueue({})
+  local agent, fs = newAgent({ session = false })
+  putSidecarHeartbeat(fs, 1)
+  fs:put(PZ.Ipc.pathFor("session"), offerText())
+  Runtime.tick(agent, NOW)
+  local firstGameNonce = agent.session:current().game_nonce
+
+  fs:put(
+    PZ.Ipc.pathFor("session"),
+    offerText({ session_id = OTHER_SESSION, nonce = "offer-two", mode = "observe" })
+  )
+  local document = Runtime.tick(agent, NOW + 100)
+
+  equal(agent.session:id(), OTHER_SESSION, "the new offer's session is now the open one")
+  equal(agent.session:current().generation, 2, "the generation advances")
+  equal(agent.session:current().mode, Protocol.MODE.OBSERVE, "with the new offer's mode")
+  equal(agent.session:current().armed, false, "still not armed by acceptance")
+  equal(agent.session.previous.terminated, true, "and the displaced session is marked terminated")
+  Harness.notEqual(agent.session:current().game_nonce, firstGameNonce, "each session gets its own mod nonce")
+  equal(document.session_id, OTHER_SESSION, "the heartbeat follows the replacement immediately")
+end
+
+Harness.group("the absence wording this file matches is the one Ipc uses")
+do
+  -- Runtime.readSession stays quiet on the exact "empty or absent" message
+  -- Ipc.readDocument produces. If Ipc rewords it, absence would start being
+  -- reported as a permanent error; this pins the pairing.
+  local agent = newAgent({ session = false })
+  local document, err = agent.ipc:readDocument("session")
+  isNil(document, "an absent session.json reads as no document")
+  equal(err, "document is empty or absent", "with the wording Runtime.readSession treats as silence")
+end
+
 getSpecificPlayer = nil
 Mock.removeActionQueue()
 Harness.finish("test_runtime")

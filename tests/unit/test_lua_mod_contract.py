@@ -39,6 +39,7 @@ from pz_agent_core.protocol.enums import (
 from pz_agent_core.protocol.reason_codes import ReasonCode
 from pz_agent_core.session.heartbeat import Heartbeat, Peer
 from pz_agent_core.version import (
+    MOD_INFO_PZVERSION,
     MOD_VERSION,
     PROTOCOL_VERSION,
     SCHEMA_VERSION,
@@ -111,10 +112,19 @@ def test_versions_match_python(protocol_lua: str) -> None:
 
 
 def test_mod_info_declares_the_same_mod_version() -> None:
+    """``mod.info`` is what the game's mod list reads, and it is picky.
+
+    The 2026-08-08 live run on Build 42.20.2 proved two of its rules the hard
+    way — the mod simply did not appear in the list. ``pzversion`` must be the
+    major ``42`` (:data:`MOD_INFO_PZVERSION`), not the point release the
+    heartbeat reports; and an empty ``require=`` line must be absent entirely,
+    because the game reads it as a dependency named "" and hides the mod.
+    """
     for info in (REPO_ROOT / "pz-mod" / "mod.info", REPO_ROOT / "pz-mod" / "42" / "mod.info"):
         declared = dict(line.split("=", 1) for line in _read(info).splitlines() if "=" in line)
         assert declared["modversion"] == MOD_VERSION
-        assert declared["pzversion"] == TARGET_BUILD
+        assert declared["pzversion"] == MOD_INFO_PZVERSION
+        assert "require" not in declared, f"{info} carries a require= line the mod list chokes on"
 
 
 def test_action_whitelist_is_complete_and_ordered(protocol_lua: str) -> None:
@@ -280,10 +290,71 @@ def test_the_heartbeat_the_mod_writes_is_one_the_sidecar_can_read() -> None:
     assert payload["sidecar_nonce"] == "sidecar-nonce"
 
 
+def _without_lua_comments(text: str) -> str:
+    """*text* with ``--[[ ]]`` blocks and ``--`` line comments removed.
+
+    Shallow on purpose, like the rest of this module's parsing: the mod's
+    sources use only the plain comment forms, and a ``--`` inside a string
+    literal would cost a false *negative* on the scans below, never a false
+    ban.
+    """
+    text = re.sub(
+        r"--\[\[.*?\]\]", lambda match: "\n" * match.group(0).count("\n"), text, flags=re.DOTALL
+    )
+    return re.sub(r"--[^\n]*", "", text)
+
+
 def test_every_mod_source_is_free_of_dynamic_loading() -> None:
-    """Restates the CI gate locally, where a failure is cheap to diagnose."""
+    """Restates the CI gate locally, where a failure is cheap to diagnose.
+
+    ``require(`` — the call form — stays banned as dynamic loading. The
+    statement form ``require "PZAgent/..."`` is allowed because the adapters
+    need it as a load-order guard (the 2026-08-08 live run loaded adapters/
+    before Toolkit.lua), and the second loop is what keeps that opening from
+    widening: every statement-form require must name a PZAgent module, so the
+    guard cannot become a way to pull in arbitrary code.
+    """
     banned = ("loadstring", "dofile", "require(")
     for path in sorted(MOD_LUA_ROOT.rglob("*.lua")):
         text = path.read_text(encoding="utf-8")
         for token in banned:
             assert token not in text, f"{path.relative_to(REPO_ROOT)} uses {token}"
+        # Outside comments, the only permitted spelling of `require` is the
+        # statement form naming a PZAgent module. Anything else — an alias
+        # (`local r = require`), a single-quoted or long-bracket string, a
+        # module outside the PZAgent tree — fails here by not matching.
+        code = _without_lua_comments(text)
+        statements = re.findall(r'\brequire\s*"([^"]*)"', code)
+        bare_uses = re.findall(r"\brequire\b", code)
+        assert len(bare_uses) == len(statements), (
+            f"{path.relative_to(REPO_ROOT)} uses require other than the "
+            'statement form require "PZAgent/..."'
+        )
+        for module in statements:
+            assert module.startswith("PZAgent/"), (
+                f"{path.relative_to(REPO_ROOT)} requires {module!r}, which is not a PZAgent module"
+            )
+
+
+def test_no_mod_source_calls_the_global_next() -> None:
+    """Kahlua on Build 42.20.2 has no global ``next`` — live-proven 2026-08-08.
+
+    The live run showed the VM ships ``pairs`` but not ``next``, so every
+    ``next(t) == nil`` emptiness check crashed the event handler around it.
+    The Kahlua-safe spelling is ``PZAgent.Compat.hasEntries``, and this scan is
+    what keeps the sweep swept: any global ``next(`` call anywhere in the mod
+    tree fails here, with no allowlist. Method calls (``queue:next(...)``,
+    ``iterator.next(...)``) are a different thing — Java objects the engine
+    hands over really do answer those — so the pattern exempts anything
+    reached through ``:`` or ``.`` or spelled as part of a longer name.
+    """
+    global_next = re.compile(r"(?<![:.\w])next\(")
+    offenders = [
+        f"{path.relative_to(REPO_ROOT)}:{number}"
+        for path in sorted((REPO_ROOT / "pz-mod").rglob("*.lua"))
+        for number, line in enumerate(
+            _without_lua_comments(path.read_text(encoding="utf-8")).splitlines(), start=1
+        )
+        if global_next.search(line) is not None
+    ]
+    assert offenders == [], f"global next() calls crash under Kahlua: {offenders}"

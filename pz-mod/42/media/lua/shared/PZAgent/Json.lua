@@ -12,6 +12,30 @@ therefore the same bytes, which is what makes a snapshot diffable and what
 keeps this side byte-compatible with pz_agent_core.ipc.atomic, which serialises
 with sort_keys and ensure_ascii.
 
+Strings arrive in two shapes. A plain Lua string is a byte string, and when it
+carries non-ASCII text those bytes are UTF-8 -- that is what our own modules
+produce. But under Kahlua a Java string (an item display name, a room name)
+answers string.byte with UTF-16 code units, not bytes: the Cyrillic letter pe
+(U+043F) comes back as the single value 0x043F, and a value above 0xFF is
+impossible in a byte string. The two models disagree about what 0x80..0xFF means, so every
+string is classified ONCE, by one bounded scan, before any of it is encoded:
+if any unit exceeds 0xFF the whole string is UTF-16 units, otherwise it is
+bytes. Mixing the interpretations inside a single string would fabricate
+characters that were never there.
+
+In the byte model, a byte 0x80..0xFF that does not begin a valid UTF-8
+sequence is read as a Latin-1 code point and escaped \u00XX: a Java string
+whose characters all fall in U+0000..U+00FF is indistinguishable, through
+byte(), from such a byte string, and refusing it was the live failure that
+made a whole observation snapshot unencodable over one Russian display name.
+The cost is that a genuinely corrupt byte string is also encoded as Latin-1
+rather than refused; that trade is deliberate -- the fallback is per-byte,
+deterministic, and states honestly which values byte() returned, and it keeps
+one string we cannot interrogate further from sinking an entire snapshot.
+Valid UTF-8 still encodes exactly as it always has. What is still refused,
+with the offset named, is what no reader could round-trip at all: a lone or
+mispaired UTF-16 surrogate, and any unit above 0xFFFF.
+
 Decoding is a hand-written recursive-descent parser. Dynamic code evaluation is
 forbidden by the project rules, and it would in any case hand the sidecar (and
 anything that can write to the exchange directory) arbitrary execution inside
@@ -151,8 +175,35 @@ local function escapeCodepoint(codepoint)
   return format("\\u%04x\\u%04x", high, low)
 end
 
---- Quote and escape a Lua string. Returns nil, message when it is not UTF-8.
+--- Decide which string model applies to `text` (see the header): "bytes" for
+--- a byte string, "units" when any value byte() yields exceeds 0xFF, which
+--- only a Java string seen through Kahlua can produce. One bounded pass over
+--- the whole string, because the answer must hold for the whole string --
+--- classifying per-character would mix the two interpretations.
+--- Returns nil, message when a unit fits neither model.
+local function classifyString(text)
+  local model = "bytes"
+  for index = 1, #text do
+    local code = byte(text, index)
+    if code > 0xFFFF then
+      return nil, format("string unit 0x%X at offset %d fits neither a byte string nor UTF-16 units", code, index)
+    end
+    if code > 0xFF then
+      model = "units"
+    end
+  end
+  return model
+end
+
+--- Quote and escape a string in whichever model classifyString assigns it.
+--- Returns nil, message only for what no reader could round-trip: a lone or
+--- mispaired surrogate, or a unit above 0xFFFF. U+FFFD substitution is not an
+--- option there, because it would silently alter game data.
 local function encodeString(text)
+  local model, modelErr = classifyString(text)
+  if model == nil then
+    return nil, modelErr
+  end
   local pieces = { "\"" }
   local count = 1
   local index = 1
@@ -169,13 +220,31 @@ local function encodeString(text)
     elseif code < 0x80 then
       piece = char(code)
       index = index + 1
-    else
+    elseif model == "bytes" then
       local codepoint, nextIndex = utf8Decode(text, index)
       if codepoint == nil then
-        return nil, nextIndex
+        -- Not UTF-8 at this position, so the Latin-1 reading of the single
+        -- byte is the only deterministic one left; the header documents why
+        -- this is a fallback and not a refusal. The discarded value in
+        -- nextIndex is the UTF-8 diagnostic, which no longer signals an error.
+        piece = escapeCodepoint(code)
+        index = index + 1
+      else
+        piece = escapeCodepoint(codepoint)
+        index = nextIndex
       end
-      piece = escapeCodepoint(codepoint)
-      index = nextIndex
+    elseif code >= 0xD800 and code <= 0xDBFF then
+      local low = index < length and byte(text, index + 1)
+      if not low or low < 0xDC00 or low > 0xDFFF then
+        return nil, format("lone or mispaired high surrogate 0x%04X at offset %d", code, index)
+      end
+      piece = escapeCodepoint(0x10000 + (code - 0xD800) * 0x400 + (low - 0xDC00))
+      index = index + 2
+    elseif code >= 0xDC00 and code <= 0xDFFF then
+      return nil, format("lone low surrogate 0x%04X at offset %d", code, index)
+    else
+      piece = escapeCodepoint(code)
+      index = index + 1
     end
     count = count + 1
     pieces[count] = piece
