@@ -23,6 +23,7 @@ Two rules run through every record:
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
@@ -32,7 +33,9 @@ from ..observation.compact import redact_text
 from ..protocol import ContainerKind, ContainerRef, RefError
 
 __all__ = [
+    "CONTENT_REVISION_HEX_LEN",
     "MAX_CATEGORY_LEN",
+    "MAX_CONTENT_REVISION_LEN",
     "MAX_DETAIL_LEN",
     "MAX_FULL_TYPE_LEN",
     "MAX_LABEL_LEN",
@@ -50,6 +53,7 @@ __all__ = [
     "TaskOutcome",
     "TaskRecord",
     "container_tail",
+    "content_revision_of",
     "read_int",
     "read_str",
 ]
@@ -64,6 +68,14 @@ MAX_FULL_TYPE_LEN: Final = 96
 MAX_CATEGORY_LEN: Final = 32
 MAX_PREFERENCE_KEY_LEN: Final = 48
 MAX_PREFERENCE_VALUE_LEN: Final = 64
+
+#: Hex digits :func:`content_revision_of` keeps of the digest it computes.
+CONTENT_REVISION_HEX_LEN: Final = 16
+
+#: Bound on the stored revision string. Wider than what this build computes so
+#: a future build may lengthen the digest without a migration, but still small
+#: enough that a hand-edited document cannot smuggle a paragraph into the field.
+MAX_CONTENT_REVISION_LEN: Final = 64
 
 #: What the tail of a rememberable container starts with. Mirrors
 #: :attr:`~pz_agent_core.protocol.ContainerRef.is_world`; anything else travels
@@ -202,6 +214,41 @@ def _square_from_tail(tail: str) -> Square | None:
         return None
 
 
+def content_revision_of(items: Iterable[tuple[str, int]]) -> str:
+    """A short digest of one container's *observed* contents.
+
+    *items* is (full type, count) pairs. Repeats of a type are summed before
+    hashing, so ``("A", 1), ("A", 1)`` and ``("A", 2)`` — the same shelf,
+    grouped differently — produce the same revision, and the pairs are sorted
+    so the enumeration order of one observation cannot change the answer.
+
+    This is a change *detector*, not an inventory. Sixteen hex digits cannot
+    name what is in the container and are not meant to: two different worlds
+    may collide, but a changed world almost never keeps its revision, and
+    "should I search this again?" only needs the second property. The store
+    answers that question honestly through
+    :meth:`~pz_agent_core.memory.store.SaveMemory.container_unchanged`; nothing
+    may read a full_type back out of this string because there is none in it.
+
+    An empty enumeration hashes to a real revision on purpose: "opened and
+    found empty" is a fact about the contents, and the empty string stays
+    reserved for "never enumerated".
+    """
+    totals: dict[str, int] = {}
+    for full_type, count in items:
+        totals[full_type] = totals.get(full_type, 0) + count
+    digest = hashlib.sha256()
+    for full_type in sorted(totals):
+        # NUL-separated so a full_type ending in a digit cannot run into its
+        # count and alias a different shelf. Game strings never contain NUL by
+        # the time they reach here, and a hostile one only perturbs a digest.
+        digest.update(full_type.encode("utf-8", errors="replace"))
+        digest.update(b"\x00")
+        digest.update(str(totals[full_type]).encode("ascii"))
+        digest.update(b"\x00")
+    return digest.hexdigest()[:CONTENT_REVISION_HEX_LEN]
+
+
 def _bounded_categories(categories: Iterable[str], *, limit: int) -> tuple[str, ...]:
     """Deduplicate, sort and cap the category list of one container.
 
@@ -223,6 +270,13 @@ class KnownContainer:
     is when its contents were last enumerated. They are separate because
     "I walked past it" and "I know what is in it" justify very different plans,
     and collapsing them would let a glance masquerade as a search.
+
+    ``content_revision`` and ``item_count`` describe what that enumeration
+    found: the :func:`content_revision_of` digest of the (full type, count)
+    pairs, and how many items were counted. Empty and ``-1`` mean the same
+    thing from two angles — the contents have never been enumerated — which is
+    a different fact from "enumerated and found empty" (a real digest, count
+    ``0``), and the two must not read alike.
     """
 
     tail: str
@@ -232,6 +286,8 @@ class KnownContainer:
     last_seen_ms: int
     last_inspected_ms: int = 0
     categories: tuple[str, ...] = ()
+    content_revision: str = ""
+    item_count: int = -1
 
     def __post_init__(self) -> None:
         if not self.tail or len(self.tail) > MAX_TAIL_LEN:
@@ -253,6 +309,14 @@ class KnownContainer:
             raise MemoryValueError(
                 "a container cannot have been inspected after the last time it was seen"
             )
+        if len(self.content_revision) > MAX_CONTENT_REVISION_LEN:
+            raise MemoryValueError(
+                f"a content revision must be at most {MAX_CONTENT_REVISION_LEN} characters"
+            )
+        if self.item_count < -1:
+            raise MemoryValueError(
+                f"item_count must be -1 (never enumerated) or non-negative, got {self.item_count}"
+            )
 
     @classmethod
     def observed(
@@ -265,6 +329,8 @@ class KnownContainer:
         inspected_at_ms: int = 0,
         categories: Iterable[str] = (),
         category_limit: int,
+        content_revision: str = "",
+        item_count: int = -1,
     ) -> KnownContainer:
         """Build a record from what the mod reported this session."""
         tail = container_tail(container_ref)
@@ -276,6 +342,8 @@ class KnownContainer:
             last_seen_ms=seen_at_ms,
             last_inspected_ms=inspected_at_ms,
             categories=_bounded_categories(categories, limit=category_limit),
+            content_revision=content_revision,
+            item_count=item_count,
         )
 
     def ref_in_session(self, session_id: str) -> str:
@@ -298,6 +366,10 @@ class KnownContainer:
             out["square"] = self.square.to_dict()
         if self.categories:
             out["categories"] = list(self.categories)
+        if self.content_revision:
+            out["content_revision"] = self.content_revision
+        if self.item_count >= 0:
+            out["item_count"] = self.item_count
         return out
 
     @classmethod
@@ -328,6 +400,16 @@ class KnownContainer:
             categories=_bounded_categories(
                 _as_str_sequence(payload.get("categories", ()), field_name="container.categories"),
                 limit=category_limit,
+            ),
+            content_revision=read_str(
+                payload,
+                "content_revision",
+                field_name="container.content_revision",
+                max_len=MAX_CONTENT_REVISION_LEN,
+                required=False,
+            ),
+            item_count=read_int(
+                payload, "item_count", field_name="container.item_count", default=-1
             ),
         )
 

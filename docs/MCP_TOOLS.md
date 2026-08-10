@@ -23,7 +23,7 @@ Transport: stdio. The server registers itself as `pz-agent`.
 | `product_version` | `0.1.0` |
 | `protocol_version` | `1.1` |
 | `capability_gated` | `true` |
-| tools | 40 |
+| tools | 41 |
 | resources | 7 |
 
 `--describe` reports the **whole** catalogue. A running server publishes a
@@ -35,7 +35,7 @@ See *Capability gating* below.
 ## Semantics that apply to every tool
 
 **Every input schema is closed.** `additionalProperties` is `false` on all
-40 tools, so an argument this document does not list is rejected rather
+41 tools, so an argument this document does not list is rejected rather
 than ignored.
 
 **The advertised bound is the enforced bound.** `catalog.py` imports its numbers
@@ -54,7 +54,7 @@ the `write` tools and for nothing else:
 | --- | --- | --- | --- |
 | `read` | 11 | not required | Answered from state the sidecar already holds |
 | `query` | 3 | not required | Submits one of the protocol's `READ_ONLY_ACTIONS`; comes back with an action id, but the character neither moves nor touches anything |
-| `write` | 20 | **required** | Changes the world; refused with `NOT_ARMED` on a disarmed session |
+| `write` | 21 | **required** | Changes the world; refused with `NOT_ARMED` on a disarmed session |
 | `control` | 6 | not required | Arm, disarm, cancel, stop and the goal verbs — how a disarmed or panicking session is driven |
 
 `pz_action_open_container` is a `write` tool, whatever its name suggests: it
@@ -69,19 +69,20 @@ document does not soften it. Waiting on a disarmed session is refused.
 
 **`risk` is the base tier, not a worst case.** It is the tier the adapter
 declares. Several adapters assess higher per call — `movement.move_to` becomes
-`P3` when the destination changes floor or leaves the safe radius,
-`inventory.transfer` becomes `P3` when the source is a world container — and
-neither is visible from the tool name, so neither is published.
+`P3` when the destination changes floor or leaves the safe radius, and both
+transfer forms, `inventory.transfer` and `inventory.transfer_batch`, become
+`P3` when a source is a world container — and none of that is visible from the
+tool name, so none of it is published.
 
 **Long-running tools return an action id.** `long_running` is `true` for
-22 tools. The call returns immediately with an `action_id`; you poll it with
+23 tools. The call returns immediately with an `action_id`; you poll it with
 `pz_action_status`, wait on it with `pz_action_await`, or call again with the
 same `idempotency_key`, which replays the call and refreshes it to the action's
 current state. It does not block the transport and it does not report success
 early.
 
 **Idempotency.** Every tool that submits a command takes a required
-`idempotency_key`; 26 tools do. Twenty-four of them accept 1–120 characters with
+`idempotency_key`; 27 tools do. Twenty-five of them accept 1–120 characters with
 no further shape; the two goal verbs, `pz_goal_submit` and `pz_goal_cancel`,
 take 1–64 matching `^[A-Za-z0-9][A-Za-z0-9_.:\-]{0,63}$`, because the goal
 channel carries the key into its own record and a key is not a place to smuggle
@@ -89,7 +90,7 @@ text. Calling twice with the same key does not perform the action twice — the
 original result is replayed with `replayed: true`.
 
 **`timeout_ms`** is that one command's lease: integer, 100–300000 ms, default
-15000. Twenty-three tools take it — every one that submits a single command.
+15000. Twenty-four tools take it — every one that submits a single command.
 `pz_plan_execute` does not, because a plan is bounded by
 `limits.max_real_seconds` instead, and publishing an argument no handler reads
 would be a lie shaped like an option. One tool reuses the name for a different
@@ -125,6 +126,7 @@ an enum member, or a lower-case token matching
 | `pz_action_close_door` | write | P3 | yes | yes | `door_toggle` |
 | `pz_action_unlock_door` | write | P3 | yes | yes | `door_toggle` |
 | `pz_action_transfer` | write | P1 | yes | yes | `inventory_transfer` |
+| `pz_action_transfer_batch` | write | P1 | yes | yes | `inventory_transfer` |
 | `pz_action_ensure_main` | write | P1 | yes | yes | `inventory_transfer` |
 | `pz_action_eat` | write | P2 | yes | yes | `eat_percentage` |
 | `pz_action_drink` | write | P2 | yes | yes | `drink_carried` |
@@ -354,6 +356,30 @@ Move one item into a container. Verified by the item resolving inside the destin
 | `source_container_ref` | no | `string`; maxLength 220; pattern `^container:[A-Za-z0-9:_.\-]{1,200}$` |
 | `idempotency_key` | yes | `string`; minLength 1; maxLength 120 |
 | `timeout_ms` | no | `integer`; minimum 100; maximum 300000; default `15000` |
+
+### `pz_action_transfer_batch`
+
+Move up to eight named items into one container, each by the game's own transfer, with capacity re-checked before every item and the batch stopped at the first that would not fit. Succeeded only when every requested item is observed in the destination afterwards; a stop partway is a CONTAINER_FULL failure whose evidence carries the honest partial record — what landed, what stopped, and why. Each reference moves as one item, exactly as `pz_action_transfer` moves it.
+
+| Argument | Required | Schema |
+| --- | --- | --- |
+| `item_refs` | yes | array; minItems 1; maxItems 8; uniqueItems; items `string`; maxLength 220; pattern `^item:[A-Za-z0-9:_.\-]{1,200}$` |
+| `destination_container_ref` | yes | `string`; maxLength 220; pattern `^container:[A-Za-z0-9:_.\-]{1,200}$` |
+| `idempotency_key` | yes | `string`; minLength 1; maxLength 120 |
+| `timeout_ms` | no | `integer`; minimum 100; maximum 300000; default `15000` |
+
+The items may live in different source containers; the destination is the one
+thing they share. `succeeded` means **all of them**: the evidence
+(`items_in_destination_container`) reports `destination_ref`, `requested`,
+`transferred` — the references observed in the destination — `stopped`, each
+entry an item with its `reason_code` and detail, and `destination_count_delta`.
+A batch the capacity check ends partway is a **failed** terminal with
+`CONTAINER_FULL` carrying that same record: three items in and five stopped is
+never reported as anything but three in and five stopped, and what to do with
+the remainder — free space, pick another container, shorten the list — is the
+planner's decision, made on the record rather than on a rounded-up claim.
+Duplicates are refused by the schema (`uniqueItems`), because a reference named
+twice has no second transfer to perform.
 
 ### `pz_action_ensure_main`
 
@@ -629,7 +655,7 @@ Recent structured log records, redacted and bounded.
 
 ## Capability gating
 
-Seventeen of the 40 tools name a capability. `published_tools()` offers a
+Eighteen of the 41 tools name a capability. `published_tools()` offers a
 tool only when `CapabilityReport.usable()` is true for its capability, which
 means `verified` or `available_unverified`; `experimental`, `unsupported` and
 `disabled_by_policy` are all unusable. `withheld_tools()` returns the withheld
@@ -640,7 +666,7 @@ tool is an answer rather than an error.
 | --- | --- |
 | `move_to_square` | `pz_action_move_to`, `pz_action_move_near`, `pz_action_open_container` |
 | `door_toggle` | `pz_action_open_door`, `pz_action_close_door`, `pz_action_unlock_door` |
-| `inventory_transfer` | `pz_action_transfer`, `pz_action_ensure_main` |
+| `inventory_transfer` | `pz_action_transfer`, `pz_action_transfer_batch`, `pz_action_ensure_main` |
 | `eat_percentage` | `pz_action_eat` |
 | `drink_carried` | `pz_action_drink` |
 | `drink_world_source` | `pz_action_drink_source` |

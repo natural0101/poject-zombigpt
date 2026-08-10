@@ -30,7 +30,9 @@ from .migrations import (
     migrate_document,
 )
 from .model import (
+    CONTENT_REVISION_HEX_LEN,
     MAX_CATEGORY_LEN,
+    MAX_CONTENT_REVISION_LEN,
     MAX_DETAIL_LEN,
     MAX_FULL_TYPE_LEN,
     MAX_LABEL_LEN,
@@ -48,6 +50,7 @@ from .model import (
     TaskOutcome,
     TaskRecord,
     container_tail,
+    content_revision_of,
 )
 from .persistence import (
     MAX_MEMORY_BYTES,
@@ -66,8 +69,10 @@ from .store import (
 
 __all__ = [
     "CEILINGS",
+    "CONTENT_REVISION_HEX_LEN",
     "DEFAULT_MEMORY_CONFIG",
     "MAX_CATEGORY_LEN",
+    "MAX_CONTENT_REVISION_LEN",
     "MAX_DETAIL_LEN",
     "MAX_FULL_TYPE_LEN",
     "MAX_LABEL_LEN",
@@ -96,6 +101,7 @@ __all__ = [
     "TaskOutcome",
     "TaskRecord",
     "container_tail",
+    "content_revision_of",
     "document_version",
     "migrate_document",
 ]

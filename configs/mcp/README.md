@@ -99,7 +99,7 @@ one.
 
 ## What the server publishes
 
-Forty tools, in seven groups. The names are stable and the schemas are served
+Forty-one tools, in seven groups. The names are stable and the schemas are served
 with them:
 
 - **session** — `pz_session_status`, `pz_session_arm`, `pz_session_disarm`
@@ -116,7 +116,10 @@ with them:
   `pz_action_close_door` and `pz_action_unlock_door` — all riding the single
   `door_toggle` capability, with a merely-closed door never an error and
   locked/barricaded answered as `DOOR_LOCKED`/`DOOR_BARRICADED` —
-  `pz_action_transfer`, `pz_action_ensure_main`,
+  `pz_action_transfer`, `pz_action_transfer_batch` — up to eight items into
+  one container, `succeeded` only when every one of them is observed there; a
+  capacity stop partway is a `CONTAINER_FULL` failure whose evidence says
+  honestly what landed and what stopped — `pz_action_ensure_main`,
   `pz_action_eat`, `pz_action_drink`, `pz_action_drink_source`,
   `pz_action_read`, `pz_action_equip`,
   `pz_action_unequip`, `pz_action_bandage`, `pz_action_rest`,

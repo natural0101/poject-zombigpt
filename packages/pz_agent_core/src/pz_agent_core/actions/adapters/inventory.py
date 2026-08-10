@@ -21,6 +21,16 @@ the main inventory. It is the preparation step every consumption and reading
 action depends on (§4.7), which is why it is an action with its own command id
 and its own evidence rather than something the eat adapter does on the side.
 
+``inventory.transfer_batch`` is the loot-area version of the same move: up to
+eight item references, each moved as one item by the game's own transfer, into
+one destination. The single-transfer postcondition scales without weakening —
+succeeded means *every* requested item is observed in the destination
+afterwards, each by runtime id and counted exactly once. A batch the mod
+stopped partway (capacity is re-checked before every item) is a failed terminal
+whose ack carries the honest partial record; this side never upgrades a partial
+landing into evidence, because a planner told "done" would loot on past items
+still sitting in the crate.
+
 ``inventory.search`` sits alongside them and changes nothing at all. It is a
 reading of what the character carries, and its postcondition is the one thing
 worth guaranteeing about a list of references handed to a planner: every
@@ -47,8 +57,11 @@ from ...protocol import (
     JsonDict,
     Observation,
     ReasonCode,
+    RefError,
     RefKind,
     RiskClass,
+    belongs_to_session,
+    ref_kind,
 )
 from ..adapter import Evidence, PreconditionFailed
 from .common import (
@@ -74,14 +87,17 @@ from .common import (
 )
 
 __all__ = [
+    "DEFAULT_BATCH_TIMEOUT_MS",
     "DEFAULT_ENSURE_MAIN_TIMEOUT_MS",
     "DEFAULT_SEARCH_POLL_MS",
     "DEFAULT_SEARCH_TIMEOUT_MS",
     "DEFAULT_TRANSFER_POLL_MS",
     "DEFAULT_TRANSFER_TIMEOUT_MS",
+    "MAX_BATCH_ITEMS",
     "MAX_SEARCH_RESULTS",
     "MAX_TRANSFER_QUANTITY",
     "WORLD_REACH_SQUARES",
+    "BatchTransferAdapter",
     "EnsureMainAdapter",
     "SearchAdapter",
     "TransferAdapter",
@@ -89,10 +105,17 @@ __all__ = [
 ]
 
 #: One reference names one item, so one command moves one item. Bulk movement
-#: is a plan of several commands, each individually verifiable — which is the
-#: point: a partially completed batch under a single command id has no honest
-#: terminal result.
+#: under a single command id used to be forbidden outright for lack of an honest
+#: terminal result; ``inventory.transfer_batch`` earned one by making a partial
+#: batch a *failed* terminal whose evidence records exactly what landed, so this
+#: rule keeps holding for the single transfer: its ``quantity`` stays 1.
 MAX_TRANSFER_QUANTITY: Final = 1
+
+#: Items one batch may name. The mod's dispatcher caps a declared list at the
+#: same eight (``CommandDispatcher.MAX_LIST_ITEMS``), and the MCP schema
+#: restates it; every item is verified individually in the destination, so a
+#: wider batch is a longer list of claims one command id has to answer for.
+MAX_BATCH_ITEMS: Final = 8
 
 #: Squares within which a world container counts as reachable without walking.
 WORLD_REACH_SQUARES: Final = 1
@@ -103,6 +126,11 @@ _QUANTITY_CEILING: Final = 64
 
 DEFAULT_TRANSFER_TIMEOUT_MS: Final = 10_000
 DEFAULT_TRANSFER_POLL_MS: Final = 200
+
+#: The batch runs up to :data:`MAX_BATCH_ITEMS` of the game's own transfer
+#: actions back to back, so its budget is the single transfer's, scaled by the
+#: batch bound — derived rather than invented, and still finite.
+DEFAULT_BATCH_TIMEOUT_MS: Final = MAX_BATCH_ITEMS * DEFAULT_TRANSFER_TIMEOUT_MS
 
 DEFAULT_ENSURE_MAIN_TIMEOUT_MS: Final = 15_000
 
@@ -440,6 +468,279 @@ class TransferAdapter:
         )
         if container_kind_is_world(source) or container_kind_is_world(destination):
             return RiskClass.P3
+        return self.risk
+
+
+# --------------------------------------------------------------------------
+# inventory.transfer_batch
+# --------------------------------------------------------------------------
+
+
+def _read_item_refs(command: Command) -> tuple[str, ...]:
+    """Read the batch's item list, refusing by index so the caller can fix one.
+
+    The checks mirror :func:`~.common.read_ref` element by element — same
+    codes, same session rule — and the bounds mirror the mod's own list
+    checker (``CommandDispatcher.checkList``): 1..:data:`MAX_BATCH_ITEMS`
+    elements, dense, no duplicates. A duplicate is one object asked to move
+    twice; the second copy could only succeed by lying about the first.
+    """
+    raw = command.args.get("item_refs")
+    if not isinstance(raw, list):
+        raise PreconditionFailed(
+            "item_refs must be a list of item references",
+            reason_code=ReasonCode.INVALID_ARGUMENT,
+        )
+    if not raw:
+        raise PreconditionFailed(
+            "item_refs must name at least one item",
+            reason_code=ReasonCode.INVALID_ARGUMENT,
+        )
+    if len(raw) > MAX_BATCH_ITEMS:
+        raise PreconditionFailed(
+            f"item_refs may name at most {MAX_BATCH_ITEMS} items, got {len(raw)}",
+            reason_code=ReasonCode.INVALID_ARGUMENT,
+        )
+    refs: list[str] = []
+    seen: dict[str, int] = {}
+    for index, element in enumerate(raw):
+        if not isinstance(element, str) or not element:
+            raise PreconditionFailed(
+                f"item_refs[{index}] must be a non-empty reference string",
+                reason_code=ReasonCode.INVALID_ARGUMENT,
+            )
+        try:
+            actual = ref_kind(element)
+        except RefError as exc:
+            raise PreconditionFailed(
+                f"item_refs[{index}] is not a reference: {element!r}",
+                reason_code=ReasonCode.INVALID_REF,
+            ) from exc
+        if actual is not RefKind.ITEM:
+            raise PreconditionFailed(
+                f"item_refs[{index}] must be an item reference, got a {actual.value} reference",
+                reason_code=ReasonCode.INVALID_REF,
+            )
+        if not belongs_to_session(element, command.session_id):
+            raise PreconditionFailed(
+                f"item_refs[{index}] was minted by a different session",
+                reason_code=ReasonCode.INVALID_REF,
+            )
+        earlier = seen.get(element)
+        if earlier is not None:
+            raise PreconditionFailed(
+                f"item_refs[{index}] repeats item_refs[{earlier}]",
+                reason_code=ReasonCode.INVALID_ARGUMENT,
+            )
+        seen[element] = index
+        refs.append(element)
+    return tuple(refs)
+
+
+@dataclass(frozen=True, slots=True)
+class _BatchSpec:
+    item_refs: tuple[str, ...]
+    destination_ref: str
+
+    @classmethod
+    def parse(cls, command: Command) -> _BatchSpec:
+        check_args(
+            command,
+            allowed=("item_refs", "destination_container_ref"),
+            required=("item_refs", "destination_container_ref"),
+        )
+        return cls(
+            item_refs=_read_item_refs(command),
+            destination_ref=read_ref(command, "destination_container_ref", kind=RefKind.CONTAINER),
+        )
+
+
+def _resolve_batch(inventory: InventoryView, spec: _BatchSpec) -> tuple[ItemView, ...]:
+    """Every named item, or the first ``INVALID_REF`` with its index named."""
+    items: list[ItemView] = []
+    for index, ref in enumerate(spec.item_refs):
+        item = inventory.item(ref)
+        if item is None:
+            raise PreconditionFailed(
+                f"item_refs[{index}] {ref} is not in the observed inventory",
+                reason_code=ReasonCode.INVALID_REF,
+                evidence={"item_ref": ref, "index": index},
+            )
+        items.append(item)
+    return tuple(items)
+
+
+def _check_batch_capacity(destination: ContainerView, items: tuple[ItemView, ...]) -> None:
+    """Refuse a batch whose observed weights cannot all fit, naming the prefix.
+
+    The mod re-checks capacity before every item and stops the batch at the
+    first that would not fit, so a batch this check can already see failing
+    would ship only to come back a partial failure. The refusal names how many
+    items *would* fit — "the first k of n" — so the planner can resubmit the
+    prefix instead of guessing. A destination whose capacity the game does not
+    report is let through, exactly like the single transfer: the mod is the
+    judge, and inventing a limit would refuse a move that would have worked.
+    """
+    free = destination.free_capacity
+    if free is None:
+        return
+    total = 0.0
+    fits = 0
+    for item in items:
+        total += item.weight
+        if total <= free:
+            fits += 1
+    if total <= free:
+        return
+    raise PreconditionFailed(
+        f"{destination.name} has {free:.2f} free and the batch weighs {total:.2f}; "
+        f"the destination has room for the first {fits} of {len(items)}",
+        reason_code=ReasonCode.CONTAINER_FULL,
+        evidence={
+            "destination_ref": destination.ref,
+            "free_capacity": free,
+            "batch_weight": total,
+            "prefix_that_fits": fits,
+            "requested": len(items),
+        },
+    )
+
+
+def _destination_count(observation: Observation, destination_ref: str) -> int | None:
+    """How many items the observation shows inside the destination, or None."""
+    if observation.inventory is None:
+        return None
+    return sum(1 for item in observation.inventory.items if item.container_ref == destination_ref)
+
+
+@dataclass(frozen=True, slots=True)
+class BatchTransferAdapter:
+    """``inventory.transfer_batch``: move up to eight named items into one container.
+
+    Succeeded only when *every* requested item is observed in the destination
+    afterwards — each matched by runtime id and counted exactly once, the same
+    duplication rule the single transfer lives by. Any item missing means no
+    evidence at all: the mod's failed ack is where a partial batch is recorded
+    (what landed, what stopped, why), and ``verify`` refusing to bless the
+    partial state is what keeps that record honest rather than a lie about
+    full success.
+    """
+
+    timeout_ms: int = DEFAULT_BATCH_TIMEOUT_MS
+    poll_interval_ms: int = DEFAULT_TRANSFER_POLL_MS
+
+    name: ClassVar[ActionName] = ActionName.INVENTORY_TRANSFER_BATCH
+    risk: ClassVar[RiskClass] = RiskClass.P1
+    required_capability: ClassVar[str | None] = INVENTORY_TRANSFER
+
+    def validate(self, command: Command, observation: Observation) -> None:
+        spec = _BatchSpec.parse(command)
+        inventory = require_inventory(observation)
+        destination = resolve_container(
+            inventory, spec.destination_ref, field_name="destination_container_ref"
+        )
+        items = _resolve_batch(inventory, spec)
+        for item in items:
+            _check_equipped(item, observation)
+        _check_reachable(
+            container_chain(inventory, destination),
+            observation,
+            field_name="destination_container_ref",
+        )
+        # The items may live in different source containers; each distinct one
+        # is checked for reach once, because the character stands in one place
+        # for the whole batch and every source must be openable from there.
+        checked_sources: set[str] = set()
+        for item in items:
+            if item.container_ref in checked_sources:
+                continue
+            checked_sources.add(item.container_ref)
+            source = resolve_container(
+                inventory, item.container_ref, field_name="source_container_ref"
+            )
+            _check_reachable(
+                container_chain(inventory, source), observation, field_name="source_container_ref"
+            )
+        for item in items:
+            _check_not_into_itself(inventory, item, destination)
+        _check_batch_capacity(destination, items)
+
+    def build_args(self, command: Command, observation: Observation) -> JsonDict:
+        # Called for the refusal, not the values: the payload is exactly the
+        # declared shape, but a batch naming an item the observation does not
+        # show must be refused here rather than at the far end of the wire.
+        spec = _BatchSpec.parse(command)
+        _resolve_batch(require_inventory(observation), spec)
+        return {
+            "item_refs": list(spec.item_refs),
+            "destination_container_ref": spec.destination_ref,
+        }
+
+    def verify(self, command: Command, before: Observation, after: Observation) -> Evidence | None:
+        spec = _BatchSpec.parse(command)
+        if after.inventory is None:
+            return None
+        if after.inventory.container(spec.destination_ref) is None:
+            return None
+        transferred: list[str] = []
+        for ref in spec.item_refs:
+            landed = _verify_landed(identity_of(ref), spec.destination_ref, after)
+            if landed is None:
+                # One item not (or twice) observed in the destination unproves
+                # the whole batch; a partial landing is the mod's failed ack to
+                # report, never this side's success.
+                return None
+            transferred.append(landed.ref)
+        before_count = _destination_count(before, spec.destination_ref)
+        after_count = _destination_count(after, spec.destination_ref)
+        return Evidence(
+            kind="items_in_destination_container",
+            observation_seq=after.seq,
+            observed={
+                "destination_ref": spec.destination_ref,
+                "requested": len(spec.item_refs),
+                "transferred": transferred,
+                # Every requested item was observed to land, so nothing
+                # stopped; the key is still here because the evidence shape is
+                # the contract's, shared with the mod's partial record.
+                "stopped": [],
+                # None when the before-observation had no inventory tier: a
+                # delta nobody observed is not a fact to put in evidence.
+                "destination_count_delta": (
+                    None
+                    if before_count is None or after_count is None
+                    else after_count - before_count
+                ),
+            },
+        )
+
+    def progress(self, command: Command, before: Observation, latest: Observation) -> float | None:
+        """Items observed to have landed, over items requested."""
+        spec = _BatchSpec.parse(command)
+        if latest.inventory is None:
+            return None
+        landed = sum(
+            1
+            for ref in spec.item_refs
+            if _verify_landed(identity_of(ref), spec.destination_ref, latest) is not None
+        )
+        return landed / len(spec.item_refs)
+
+    def risk_for(self, command: Command, observation: Observation) -> RiskClass:
+        """P1 while every endpoint travels with the character, P3 once the world is involved."""
+        spec = _BatchSpec.parse(command)
+        inventory = require_inventory(observation)
+        destination = resolve_container(
+            inventory, spec.destination_ref, field_name="destination_container_ref"
+        )
+        if container_kind_is_world(destination):
+            return RiskClass.P3
+        for item in _resolve_batch(inventory, spec):
+            source = resolve_container(
+                inventory, item.container_ref, field_name="source_container_ref"
+            )
+            if container_kind_is_world(source):
+                return RiskClass.P3
         return self.risk
 
 

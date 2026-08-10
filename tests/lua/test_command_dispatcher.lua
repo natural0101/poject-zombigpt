@@ -302,4 +302,280 @@ do
   end
 end
 
+-- ---------------------------------------------------------------------------
+-- LIST arguments
+-- ---------------------------------------------------------------------------
+
+local notEqual = Harness.notEqual
+
+--- A distinct valid item ref per `index`, so a list test can tell its elements
+--- apart and a duplicate is something the test placed, never an accident.
+local function listItemRef(index, sessionId)
+  local ref, err = PZ.Refs.buildItem(sessionId or SESSION, "player-main", tostring(1000 + index), 0)
+  if ref == nil then
+    error("could not build a test item ref: " .. tostring(err), 0)
+  end
+  return ref
+end
+
+Harness.group("a list declaration is checked at registration, not at dispatch")
+do
+  local function listAdapter(args)
+    return { action = "movement.move_to", start = function() end, args = args }
+  end
+  local cases = {
+    {
+      name = "a list without an element kind",
+      args = { items = { type = ARG.LIST, max_items = 4, kinds = { item = true } } },
+      needle = "ref or string",
+    },
+    {
+      name = "a list of numbers",
+      args = { items = { type = ARG.LIST, of = ARG.NUMBER, max_items = 4 } },
+      needle = "ref or string",
+    },
+    {
+      name = "a list of lists",
+      args = { items = { type = ARG.LIST, of = ARG.LIST, max_items = 4 } },
+      needle = "ref or string",
+    },
+    {
+      name = "a list without max_items",
+      args = { items = { type = ARG.LIST, of = ARG.STRING } },
+      needle = "max_items in 1..8",
+    },
+    {
+      name = "a zero max_items",
+      args = { items = { type = ARG.LIST, of = ARG.STRING, max_items = 0 } },
+      needle = "max_items in 1..8",
+    },
+    {
+      name = "a max_items above the ceiling",
+      args = {
+        items = { type = ARG.LIST, of = ARG.STRING, max_items = Dispatcher.MAX_LIST_ITEMS + 1 },
+      },
+      needle = "max_items in 1..8",
+    },
+    {
+      name = "a fractional max_items",
+      args = { items = { type = ARG.LIST, of = ARG.STRING, max_items = 2.5 } },
+      needle = "max_items in 1..8",
+    },
+    {
+      name = "a max_items that is not a number",
+      args = { items = { type = ARG.LIST, of = ARG.STRING, max_items = "4" } },
+      needle = "max_items in 1..8",
+    },
+    {
+      name = "a ref list without kinds",
+      args = { items = { type = ARG.LIST, of = ARG.REF, max_items = 4 } },
+      needle = "ref kinds",
+    },
+    {
+      name = "an argument type the dispatcher does not know",
+      args = { items = { type = "list-of-refs" } },
+      needle = "unknown type",
+    },
+  }
+  for index = 1, #cases do
+    local registry = Dispatcher.new()
+    local registered, reason = registry:register(listAdapter(cases[index].args))
+    isNil(registered, cases[index].name .. " is refused")
+    contains(reason, cases[index].needle, "and the reason names the problem")
+  end
+end
+
+Harness.group("a dense array of valid refs passes, element-checked and rebuilt")
+do
+  local spy = Support.spyAdapter("inventory.transfer_batch", {
+    args = {
+      item_refs = {
+        type = ARG.LIST, of = ARG.REF, required = true, max_items = 4, kinds = { item = true },
+      },
+    },
+  })
+  local registry = Dispatcher.new()
+  ok(registry:register(spy), "the list adapter registers")
+  local supplied = { listItemRef(1), listItemRef(2), listItemRef(3) }
+  local adapter, args = registry:resolve({
+    action = "inventory.transfer_batch",
+    args = { item_refs = supplied },
+  }, SESSION)
+  ok(adapter ~= nil, "a dense array of valid refs resolves")
+  same(args.item_refs, { listItemRef(1), listItemRef(2), listItemRef(3) },
+    "every element passes through in order")
+  notEqual(args.item_refs, supplied, "into a fresh table, never the caller's")
+  supplied[1] = "mutated.after.resolve"
+  equal(args.item_refs[1], listItemRef(1),
+    "so a later mutation of the payload cannot reach the adapter")
+end
+
+Harness.group("a list that is not a dense array of fresh in-session refs is refused")
+do
+  local spy = Support.spyAdapter("inventory.transfer_batch", {
+    args = {
+      item_refs = {
+        type = ARG.LIST, of = ARG.REF, required = true, max_items = 4, kinds = { item = true },
+      },
+    },
+  })
+  local registry = Dispatcher.new()
+  ok(registry:register(spy), "the list adapter registers")
+  local r1, r2 = listItemRef(1), listItemRef(2)
+  local sparse = {}
+  sparse[1] = r1
+  sparse[3] = r2
+  local cases = {
+    {
+      name = "a scalar where a list belongs",
+      value = "not-a-list",
+      reason = REASON.INVALID_ARGUMENT,
+      needle = "must be a list",
+    },
+    {
+      name = "an empty list",
+      value = {},
+      reason = REASON.INVALID_ARGUMENT,
+      needle = "at least one item",
+    },
+    {
+      name = "a sparse table",
+      value = sparse,
+      reason = REASON.INVALID_ARGUMENT,
+      needle = "dense array",
+    },
+    {
+      name = "a keyed table",
+      value = { first = r1 },
+      reason = REASON.INVALID_ARGUMENT,
+      needle = "dense array",
+    },
+    {
+      name = "one item over the declared bound",
+      value = { listItemRef(1), listItemRef(2), listItemRef(3), listItemRef(4), listItemRef(5) },
+      reason = REASON.INVALID_ARGUMENT,
+      needle = "more than 4 items",
+    },
+    {
+      name = "a duplicate element",
+      value = { r1, r2, r1 },
+      reason = REASON.INVALID_ARGUMENT,
+      needle = "item 3 repeats item 1",
+    },
+    {
+      name = "a Java class name as an element",
+      value = { r1, "zombie.inventory.ItemContainer" },
+      reason = REASON.INVALID_REF,
+      needle = "item 2",
+    },
+    {
+      name = "an element minted by another session",
+      value = { r1, listItemRef(2, Support.OTHER_SESSION) },
+      reason = REASON.INVALID_REF,
+      needle = "item 2",
+    },
+    {
+      name = "an element of the wrong ref kind",
+      value = { r1, PZ.Refs.buildSquare(SESSION, 10, 20, 0) },
+      reason = REASON.INVALID_REF,
+      needle = "item 2",
+    },
+    {
+      name = "a null element",
+      value = { r1, PZ.Json.null },
+      reason = REASON.INVALID_REF,
+      needle = "item 2",
+    },
+    {
+      name = "a nested table element",
+      value = { r1, { r2 } },
+      reason = REASON.INVALID_REF,
+      needle = "item 2",
+    },
+  }
+  for index = 1, #cases do
+    local case = cases[index]
+    local adapter, reasonCode, detail = registry:resolve({
+      action = "inventory.transfer_batch",
+      args = { item_refs = case.value },
+    }, SESSION)
+    isNil(adapter, case.name .. " is refused")
+    equal(reasonCode, case.reason, case.name .. " carries the right reason")
+    contains(detail, case.needle, "and the detail names the problem")
+  end
+  equal(spy.starts, 0, "the adapter was never called")
+  isNil(spy.last_args, "and never saw an argument table")
+end
+
+Harness.group("a table for a non-list declaration is still refused as a scalar, verbatim")
+do
+  local spy = Support.spyAdapter("inventory.transfer", {
+    args = { item = { type = ARG.REF, required = true, kinds = { item = true } } },
+  })
+  local registry = Dispatcher.new()
+  ok(registry:register(spy), "the scalar adapter registers")
+  local adapter, reasonCode, detail = registry:resolve({
+    action = "inventory.transfer",
+    args = { item = { itemRef() } },
+  }, SESSION)
+  isNil(adapter, "a table where a ref belongs is refused")
+  equal(reasonCode, REASON.INVALID_ARGUMENT, "with INVALID_ARGUMENT")
+  equal(detail, 'argument "item" must be a scalar',
+    "and the scalar refusal is word for word what it always was")
+  equal(spy.starts, 0, "the adapter was never called")
+end
+
+Harness.group("a list of strings runs each element through the token checks")
+do
+  local spy = Support.spyAdapter("world.inspect", {
+    args = { notes = { type = ARG.LIST, of = ARG.STRING, max_items = 3, max_bytes = 8 } },
+  })
+  local registry = Dispatcher.new()
+  ok(registry:register(spy), "a string list registers with a byte bound and no kinds")
+  local adapter, args = registry:resolve({
+    action = "world.inspect",
+    args = { notes = { "kitchen", "shed-2" } },
+  }, SESSION)
+  ok(adapter ~= nil, "plain tokens pass")
+  same(args.notes, { "kitchen", "shed-2" }, "in order")
+
+  local refused = {
+    { value = { "with space" }, needle = "item 1" },
+    { value = { "kitchen", "123456789" }, needle = "item 2 must be 1..8 bytes" },
+    { value = { "" }, needle = "item 1 must be 1..8 bytes" },
+    { value = { 42 }, needle = "item 1 must be a string" },
+    { value = { "twice", "twice" }, needle = "item 2 repeats item 1" },
+  }
+  for index = 1, #refused do
+    local case = refused[index]
+    local resolved, reasonCode, detail = registry:resolve({
+      action = "world.inspect",
+      args = { notes = case.value },
+    }, SESSION)
+    isNil(resolved, string.format("string list %d is refused", index))
+    equal(reasonCode, REASON.INVALID_ARGUMENT, "with INVALID_ARGUMENT")
+    contains(detail, case.needle, "and the detail names the element")
+  end
+end
+
+Harness.group("a list counts as one argument against MAX_ARGS")
+do
+  local declaration = {
+    items = { type = ARG.LIST, of = ARG.STRING, max_items = Dispatcher.MAX_LIST_ITEMS },
+  }
+  for index = 1, Dispatcher.MAX_ARGS - 1 do
+    declaration["k" .. index] = { type = ARG.STRING }
+  end
+  local spy = Support.spyAdapter("world.inspect", { args = declaration })
+  local registry = Dispatcher.new()
+  ok(registry:register(spy), "eight declarations, one a full-width list, register")
+  local payload = { items = { "a", "b", "c", "d", "e", "f", "g", "h" } }
+  for index = 1, Dispatcher.MAX_ARGS - 1 do
+    payload["k" .. index] = "v" .. index
+  end
+  local adapter, args = registry:resolve({ action = "world.inspect", args = payload }, SESSION)
+  ok(adapter ~= nil, "eight arguments carrying eight list items resolve")
+  equal(#args.items, Dispatcher.MAX_LIST_ITEMS, "with every item present")
+end
+
 Harness.finish("test_command_dispatcher")

@@ -64,6 +64,16 @@ local function declarationOf(adapter)
     if spec.integer == true then
       entry.integer = true
     end
+    -- A list declaration carries its element kind and its own length bound;
+    -- `kinds` (when of == "ref") and `max_bytes` (when of == "string") ride
+    -- the generic branches above, so a list dumps as
+    -- {type:"list", of:"ref", max_items:8, kinds:[...]}.
+    if spec.of ~= nil then
+      entry.of = spec.of
+    end
+    if spec.max_items ~= nil then
+      entry.max_items = spec.max_items
+    end
     if spec.values ~= nil then
       local values = {}
       for value in pairs(spec.values) do

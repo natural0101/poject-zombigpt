@@ -266,6 +266,7 @@ class ToolRouter:
             "pz_action_close_door": self._submit,
             "pz_action_unlock_door": self._submit,
             "pz_action_transfer": self._submit,
+            "pz_action_transfer_batch": self._submit,
             "pz_action_ensure_main": self._submit,
             "pz_action_eat": self._submit,
             "pz_action_drink": self._submit,

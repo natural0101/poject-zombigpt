@@ -981,6 +981,14 @@ def every_payload(router: ToolRouter) -> Iterator[tuple[str, Any]]:
                 "idempotency_key": "t1",
             },
         ),
+        (
+            "pz_action_transfer_batch",
+            {
+                "item_refs": [BEAN_REF, BOOK_REF],
+                "destination_container_ref": backpack_container_ref(),
+                "idempotency_key": "tb1",
+            },
+        ),
         ("pz_action_ensure_main", {"item_ref": BOOK_REF, "idempotency_key": "em1"}),
         ("pz_action_eat", {"item_ref": BEAN_REF, "idempotency_key": "e1"}),
         ("pz_action_drink", {"item_ref": BEAN_REF, "idempotency_key": "d1"}),

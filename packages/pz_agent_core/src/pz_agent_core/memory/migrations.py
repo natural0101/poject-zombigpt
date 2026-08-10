@@ -40,7 +40,10 @@ __all__ = [
 #: * 2 — containers gained ``last_inspected_ms`` and ``categories``,
 #:   reservations became objects with a reason and a creation time, and
 #:   ``safe_zones`` and ``preferences`` were added.
-MEMORY_SCHEMA_VERSION: Final = 2
+#: * 3 — containers gained ``content_revision`` (a digest of the enumerated
+#:   contents; empty means never enumerated) and ``item_count`` (the count at
+#:   the last enumeration; ``-1`` means never enumerated).
+MEMORY_SCHEMA_VERSION: Final = 3
 
 #: Oldest version this build will still upgrade. A document below it is refused
 #: rather than migrated through code nobody has exercised in years.
@@ -128,9 +131,26 @@ def _v1_to_v2(document: Mapping[str, Any]) -> dict[str, Any]:
     return upgraded
 
 
+def _v2_to_v3(document: Mapping[str, Any]) -> dict[str, Any]:
+    """Upgrade to the layout whose containers say what an enumeration found.
+
+    No writer of schema 2 ever enumerated contents, so every migrated container
+    honestly gets the "never enumerated" defaults: an empty revision and a count
+    of ``-1``. Inventing a revision here would make the loot planner skip a
+    container this build has never actually looked inside.
+    """
+    upgraded = dict(document)
+    upgraded["containers"] = [
+        {"content_revision": "", "item_count": -1, **_as_dict(container)}
+        for container in _as_list(document.get("containers", []))
+    ]
+    return upgraded
+
+
 #: version -> the function that turns it into version + 1.
 _MIGRATIONS: Final[Mapping[int, Callable[[Mapping[str, Any]], dict[str, Any]]]] = {
     1: _v1_to_v2,
+    2: _v2_to_v3,
 }
 
 

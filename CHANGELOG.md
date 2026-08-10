@@ -12,7 +12,33 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Added
 
-- **A deterministic navigation executor walks routes without an LLM call per
+- **One command now moves a batch, and stopping honestly is part of the
+  contract** (`epic/p1-loot-area`, wave 1). The dispatcher grew its first
+  structured argument type: a declared, bounded LIST (dense array, 1..8
+  elements, refs or plain strings, element-wise session checks, duplicates
+  refused, a fresh sanitised copy handed to the adapter — and the
+  type-dispatch fall-through that would have silently treated an unknown
+  declared type as a ref is now a load-time refusal). On it rides
+  `inventory.transfer_batch` (26 actions): up to eight items, possibly from
+  different source containers, moved one at a time by the game's own transfer
+  action with capacity re-checked before every enqueue. `succeeded` only when
+  every requested item is observed in the destination; a capacity stop
+  partway is a FAILED `CONTAINER_FULL` whose evidence carries the honest
+  partial record — what landed, what stopped and why, what the batch never
+  attempted. The Python half pre-checks the summed weights and, when only a
+  prefix fits, refuses naming "the first k of n". MCP tool:
+  `pz_action_transfer_batch` (41 tools).
+- **The sidecar finally remembers what it saw in containers.** The
+  long-orphaned `KnownContainer` store is now fed: every world container in
+  an observation lands as a sighting, every enumeration (`container.inspect`,
+  transfer evidence) lands as an inspection carrying `item_count` and a
+  `content_revision` — a 16-hex change detector over the observed contents,
+  documented as a detector, not an inventory. New queries for the loot
+  planner: `container_unchanged(tail, revision)` (three-state honest: an
+  empty revision is never "unchanged") and `uninspected_tails()`. Writes are
+  batched (one flush per 10 s, plus shutdown), and a memory file another
+  process wrote in between is re-read, never clobbered — the user's
+  reservations outrank re-derivable sightings.
   square** (`epic/p1-doors-navigation`, wave 2). New `pz_agent_core.navigation`
   package: a bounded `LocalMap` (4096 cells, oldest-seen evicted first) that
   remembers only what observations proved — visited squares, obstacles, stairs

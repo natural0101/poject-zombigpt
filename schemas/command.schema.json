@@ -78,7 +78,8 @@
         "plan.cancel",
         "door.open",
         "door.close",
-        "door.unlock"
+        "door.unlock",
+        "inventory.transfer_batch"
       ]
     },
     "args": {

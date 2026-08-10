@@ -77,8 +77,10 @@ _INTERPRETERS: Final = ("lua5.4", "lua")
 _MOD_MAX_STRING_BYTES: Final = 64
 _TOKEN_PATTERN: Final = re.compile(r"[A-Za-z0-9_.\-]+")
 
-#: A Lua declaration type, and what a JSON value must be to satisfy it. The mod
-#: refuses a table-valued argument outright, so every accepted value is scalar.
+#: A Lua declaration type, and what a JSON value must be to satisfy it. The one
+#: structured value the mod accepts is a declared ``list`` — a dense, bounded
+#: array of refs or plain strings, checked element-wise below; everything else
+#: table-valued is refused outright, so every other accepted value is scalar.
 _PYTHON_TYPE_OF: Final[dict[str, tuple[type, ...]]] = {
     "number": (int, float),
     "string": (str,),
@@ -86,6 +88,11 @@ _PYTHON_TYPE_OF: Final[dict[str, tuple[type, ...]]] = {
     "enum": (str,),
     "ref": (str,),
 }
+
+#: Element kinds a declared list may carry, and the ceiling no ``max_items``
+#: may raise — both mirrored from ``CommandDispatcher.checkArgSpec``.
+_LIST_ELEMENT_KINDS: Final = frozenset({"ref", "string"})
+_MOD_MAX_LIST_ITEMS: Final = 8
 
 
 def _interpreter() -> str:
@@ -175,6 +182,21 @@ def _cases() -> list[tuple[ActionName, Command, Observation]]:
             a_command(
                 ActionName.INVENTORY_TRANSFER,
                 {"item_ref": stashed.ref, "destination_container_ref": MAIN_REF},
+            ),
+            world,
+        ),
+        # Three items from two source containers into the crate underfoot: the
+        # one list-typed argument on the wire, exercised with more than one
+        # element so an element-shape disagreement cannot hide behind a
+        # singleton.
+        (
+            ActionName.INVENTORY_TRANSFER_BATCH,
+            a_command(
+                ActionName.INVENTORY_TRANSFER_BATCH,
+                {
+                    "item_refs": [apple.ref, bandage.ref, stashed.ref],
+                    "destination_container_ref": CRATE_REF,
+                },
             ),
             world,
         ),
@@ -308,6 +330,77 @@ def _cases() -> list[tuple[ActionName, Command, Observation]]:
     ]
 
 
+def _check_list(
+    action: ActionName,
+    key: str,
+    value: Any,
+    spec: dict[str, Any],
+) -> list[str]:
+    """Every way one list-valued argument would be refused, as plain sentences.
+
+    Mirrors ``CommandDispatcher.checkList``: a dense array of 1..``max_items``
+    elements, no duplicates, each element passing the same check its kind gets
+    when it stands alone — the ref-kind gate for ``of == "ref"``, the token
+    alphabet and byte bound for ``of == "string"``.
+    """
+    problems: list[str] = []
+    if not isinstance(value, list):
+        return [
+            f"{action.value} sends {key}={value!r} ({type(value).__name__}), "
+            f"but the adapter declares it as a list"
+        ]
+    max_items = int(spec["max_items"])
+    if not value:
+        problems.append(f"{action.value} sends an empty {key}, which the mod's list check refuses")
+    if len(value) > max_items:
+        problems.append(
+            f"{action.value} sends {len(value)} elements in {key}, "
+            f"above the declared max_items {max_items}"
+        )
+    element_kind = str(spec["of"])
+    assert element_kind in _LIST_ELEMENT_KINDS, (
+        f"{action.value}.{key} declares list elements of {element_kind!r}, "
+        f"which the dispatcher does not accept"
+    )
+    seen: dict[Any, int] = {}
+    for index, element in enumerate(value):
+        if not isinstance(element, str) or not element:
+            problems.append(
+                f"{action.value} sends {key}[{index}]={element!r}, "
+                f"which is not the non-empty string a {element_kind} element must be"
+            )
+            continue
+        if element_kind == "ref":
+            kind = ref_kind(element)
+            allowed = {str(k) for k in spec.get("kinds", [])}
+            if kind is None or kind.value not in allowed:
+                problems.append(
+                    f"{action.value} sends {key}[{index}] as a "
+                    f"{kind.value if kind else 'unparseable'} reference, "
+                    f"but the adapter accepts {sorted(allowed)}"
+                )
+        else:
+            limit = int(spec.get("max_bytes", _MOD_MAX_STRING_BYTES))
+            if len(element.encode()) > limit:
+                problems.append(
+                    f"{action.value} sends {key}[{index}]={element!r}, "
+                    f"outside the 1..{limit} byte bound"
+                )
+            elif _TOKEN_PATTERN.fullmatch(element) is None:
+                problems.append(
+                    f"{action.value} sends {key}[{index}]={element!r}, which is not a "
+                    f"plain token the mod's string check accepts"
+                )
+        earlier = seen.get(element)
+        if earlier is not None:
+            problems.append(
+                f"{action.value} sends {key}[{index}] repeating {key}[{earlier}], "
+                f"which the mod's list check refuses as one object asked to move twice"
+            )
+        seen.setdefault(element, index)
+    return problems
+
+
 def _check_payload(
     action: ActionName,
     payload: dict[str, Any],
@@ -322,6 +415,9 @@ def _check_payload(
                 f"{action.value} sends {key!r}, which the adapter does not declare; "
                 f"the dispatcher refuses the whole command"
             )
+            continue
+        if spec["type"] == "list":
+            problems.extend(_check_list(action, key, value, spec))
             continue
         expected = _PYTHON_TYPE_OF.get(str(spec["type"]))
         assert expected is not None, f"unknown declared type {spec['type']!r} for {key}"
@@ -436,18 +532,34 @@ def test_the_case_table_covers_every_action_that_builds_arguments(
     )
 
 
-def test_no_declaration_accepts_a_structured_value(
+def test_no_declaration_accepts_an_unchecked_structured_value(
     declarations: dict[str, dict[str, Any]],
 ) -> None:
-    """The wire carries scalars, and that is a property worth pinning.
+    """The wire carries scalars and bounded lists of them, and nothing else.
 
-    ``CommandDispatcher.checkArgs`` refuses a table-valued argument outright, so
-    an adapter that declared one would be declaring something no command could
-    satisfy. This catches the mistake at the declaration rather than at the
-    first refused command.
+    ``CommandDispatcher.checkArgs`` refuses any other table-valued argument
+    outright, so an adapter that declared one would be declaring something no
+    command could satisfy. The one structured shape it earned is the declared
+    ``list``: elements limited to refs and plain strings, ``max_items`` capped
+    by the dispatcher's own ceiling, and a ref-list naming its accepted kinds.
+    This catches the mistake at the declaration rather than at the first
+    refused command.
     """
     for action, declared in declarations.items():
         for key, spec in declared.items():
+            if spec["type"] == "list":
+                assert spec.get("of") in _LIST_ELEMENT_KINDS, (
+                    f"{action} declares {key} as a list of {spec.get('of')!r}, "
+                    f"which the dispatcher refuses to register"
+                )
+                max_items = spec.get("max_items")
+                assert isinstance(max_items, int) and 1 <= max_items <= _MOD_MAX_LIST_ITEMS, (
+                    f"{action}.{key} declares max_items {max_items!r} "
+                    f"outside 1..{_MOD_MAX_LIST_ITEMS}"
+                )
+                if spec.get("of") == "ref":
+                    assert spec.get("kinds"), f"{action}.{key} is a ref list with no accepted kinds"
+                continue
             assert spec["type"] in _PYTHON_TYPE_OF, (
                 f"{action} declares {key} as {spec['type']!r}, which is not a scalar kind"
             )
@@ -459,7 +571,9 @@ def test_every_ref_declaration_names_kinds_that_exist(
     known = {kind.value for kind in RefKind}
     for action, declared in declarations.items():
         for key, spec in declared.items():
-            if spec["type"] != "ref":
+            # A ref list carries the same `kinds` table a lone ref does, and a
+            # kind that does not exist is just as unsatisfiable there.
+            if spec["type"] != "ref" and not (spec["type"] == "list" and spec.get("of") == "ref"):
                 continue
             kinds = set(spec.get("kinds", []))
             assert kinds, f"{action} declares {key} as a ref with no accepted kinds"

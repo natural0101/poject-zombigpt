@@ -30,9 +30,10 @@ Three properties of the set are decided here rather than in the handlers:
 ``risk`` is the *base* tier of the action a tool submits — the one its adapter
 declares — and never a worst case invented here. Several adapters assess a
 higher tier per call: ``movement.move_to`` is ``P3`` when the destination
-changes floor or leaves the safe radius, and ``inventory.transfer`` is ``P3``
-when the source is a world container. Neither is visible from the tool name, so
-neither can be published; what the descriptor states is the floor a caller needs
+changes floor or leaves the safe radius, and both transfer forms —
+``inventory.transfer`` and ``inventory.transfer_batch`` — are ``P3`` when a
+source is a world container. None of that is visible from the tool name, so
+none of it can be published; what the descriptor states is the floor a caller needs
 before the permission engine has seen the arguments. Publishing the escalated
 tier instead would tell a caller holding a ``P2`` grant that a step across the
 room is out of reach, and the engine would then allow it.
@@ -137,6 +138,7 @@ __all__ = [
     "DEFAULT_TAIL_RECORDS",
     "EXAMPLE_SESSION_ID",
     "MAX_ACTION_WAIT_MS",
+    "MAX_BATCH_ITEMS",
     "MAX_GOAL_CHARS",
     "MAX_IDEMPOTENCY_KEY_CHARS",
     "MAX_MEMORY_RESULTS",
@@ -182,6 +184,15 @@ MIN_ACTION_WAIT_MS: Final = 100
 MAX_ACTION_WAIT_MS: Final = 60_000
 DEFAULT_ACTION_WAIT_MS: Final = 5_000
 
+#: Items one ``inventory.transfer_batch`` may name: the batch contract's own
+#: ceiling, the same eight the adapter reads ``item_refs`` against. Small on
+#: purpose — every item is verified individually in the destination, so a wider
+#: batch is a longer list of claims one command id has to answer for.
+#: Restated from the contract rather than imported, and the seam check in
+#: ``tests/contract/test_mcp_action_coverage.py`` is what keeps the two sides
+#: of the wire agreeing about it.
+MAX_BATCH_ITEMS: Final = 8
+
 #: The floor ``movement.move_near`` applies to an approach radius. Restated
 #: rather than imported because the adapter inlines it in its own reader instead
 #: of naming it; a radius this schema waved through would be one the adapter
@@ -195,6 +206,12 @@ MIN_APPROACH_RADIUS: Final = 0.1
 EXAMPLE_SESSION_ID: Final = "00000000-0000-4000-8000-000000000001"
 
 _EXAMPLE_ITEM: Final = f"item:{EXAMPLE_SESSION_ID}:worn:Back:99001:4210:0"
+
+#: A second carried item, distinct in its runtime id. The batch example must
+#: show a list that is really a list, and two copies of one reference would be
+#: exactly the duplicate its schema refuses.
+_EXAMPLE_ITEM_2: Final = f"item:{EXAMPLE_SESSION_ID}:worn:Back:99001:4211:0"
+
 _EXAMPLE_MAIN: Final = f"container:{EXAMPLE_SESSION_ID}:player-main"
 _EXAMPLE_CRATE: Final = f"container:{EXAMPLE_SESSION_ID}:world:1200:3400:0:0:0"
 _EXAMPLE_SQUARE: Final = f"square:{EXAMPLE_SESSION_ID}:1200:3400:0"
@@ -989,6 +1006,48 @@ TOOLS: Final[tuple[ToolSpec, ...]] = (
         ),
         example={
             "item_ref": _EXAMPLE_ITEM,
+            "destination_container_ref": _EXAMPLE_MAIN,
+            "idempotency_key": "goal-1:step-1:attempt-1",
+        },
+    ),
+    ToolSpec(
+        name="pz_action_transfer_batch",
+        kind=ToolKind.WRITE,
+        risk=RiskClass.P1,
+        summary=(
+            "Move up to eight named items into one container, each by the "
+            "game's own transfer, with capacity re-checked before every item "
+            "and the batch stopped at the first that would not fit. Succeeded "
+            "only when every requested item is observed in the destination "
+            "afterwards; a stop partway is a CONTAINER_FULL failure whose "
+            "evidence carries the honest partial record — what landed, what "
+            "stopped, and why. Each reference moves as one item, exactly as "
+            "pz_action_transfer moves it."
+        ),
+        required_capability=INVENTORY_TRANSFER,
+        action=ActionName.INVENTORY_TRANSFER_BATCH,
+        long_running=True,
+        input_schema=_mutating(
+            {
+                "item_refs": {
+                    "type": "array",
+                    "description": (
+                        "The items to move, each named once; they may live in "
+                        "different source containers."
+                    ),
+                    "minItems": 1,
+                    "maxItems": MAX_BATCH_ITEMS,
+                    "uniqueItems": True,
+                    "items": _ref_schema(RefKind.ITEM, "One item to move."),
+                },
+                "destination_container_ref": _ref_schema(
+                    RefKind.CONTAINER, "Where every one of them must end up."
+                ),
+            },
+            required=("item_refs", "destination_container_ref"),
+        ),
+        example={
+            "item_refs": [_EXAMPLE_ITEM, _EXAMPLE_ITEM_2],
             "destination_container_ref": _EXAMPLE_MAIN,
             "idempotency_key": "goal-1:step-1:attempt-1",
         },

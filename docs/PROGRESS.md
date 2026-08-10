@@ -16,7 +16,7 @@ The handover point between work sessions: read it first, update it last.
 > | `P0-build42-live-compat` — the 13 live-confirmed fixes | **done here, awaits live** — PR #1 |
 > | `P0-windows-ipc-arm-recovery` — single-producer queues, pointer contention, two-phase arm, action status/await tools | **done here, awaits live** — stacked on PR #1; latency p95 instrumentation still open |
 > | `P1-doors-navigation` — door state/actions, local navigation executor | **done here, awaits live** — doors observable/operable, `allow_doors` real, `pz-agent latency`, `navigate_to` goal on a deterministic A* executor over a bounded local map (no LLM per square); remote-RPC wire for `navigate_to` deliberately deferred |
-> | `P1-loot-area` — container primitives + `loot_area` goal | todo |
+> | `P1-loot-area` — container primitives + `loot_area` goal | **wave 1 done here, awaits live** — LIST arg type, `inventory.transfer_batch` with honest partial stops, container memory fed (revision/visited); wave 2 open: `loot_area` goal, category policy, corpse/vehicle/floor observation |
 > | `P2-continuous-goal-controller` — long-lived goals, needs arbitration | todo |
 > | `P3-survival-knowledge` — machine-readable gameplay knowledge base | todo |
 > | `P4-assisted-combat` → `P4-autonomous-combat-live-gated` | todo |

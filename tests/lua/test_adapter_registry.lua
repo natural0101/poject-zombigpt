@@ -55,6 +55,7 @@ local GAME_ACTIONS = {
   "door.unlock",
   "inventory.search",
   "inventory.transfer",
+  "inventory.transfer_batch",
   "inventory.ensure_main",
   "consume.eat",
   "consume.drink",

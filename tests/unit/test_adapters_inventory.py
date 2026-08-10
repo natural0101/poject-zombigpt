@@ -16,9 +16,14 @@ from pz_agent_core.actions import (
     AdapterRegistry,
     PreconditionFailed,
 )
-from pz_agent_core.actions.adapters import ContainerChain, EnsureMainAdapter, TransferAdapter
+from pz_agent_core.actions.adapters import (
+    BatchTransferAdapter,
+    ContainerChain,
+    EnsureMainAdapter,
+    TransferAdapter,
+)
 from pz_agent_core.actions.adapters.common import MAX_CONTAINER_DEPTH
-from pz_agent_core.actions.adapters.inventory import MAX_TRANSFER_QUANTITY
+from pz_agent_core.actions.adapters.inventory import MAX_BATCH_ITEMS, MAX_TRANSFER_QUANTITY
 from pz_agent_core.protocol import (
     ActionName,
     ActionResult,
@@ -570,11 +575,18 @@ def test_ensure_main_from_a_world_container_is_the_world_tier() -> None:
     [
         (TransferAdapter(), transfer_command()),
         (EnsureMainAdapter(), ensure_command()),
+        (
+            BatchTransferAdapter(),
+            a_command(
+                ActionName.INVENTORY_TRANSFER_BATCH,
+                {"item_refs": [BEANS.ref], "destination_container_ref": MAIN_REF},
+            ),
+        ),
     ],
-    ids=["transfer", "ensure_main"],
+    ids=["transfer", "ensure_main", "transfer_batch"],
 )
 def test_the_adapter_can_read_back_the_arguments_it_ships(
-    adapter: TransferAdapter | EnsureMainAdapter,
+    adapter: TransferAdapter | EnsureMainAdapter | BatchTransferAdapter,
     command: Command,
 ) -> None:
     """``build_args`` output must survive the adapter's own parser, unchanged.
@@ -682,3 +694,281 @@ def test_an_empty_inventory_view_is_not_a_missing_one() -> None:
             transfer_command(), a_world(inventory=InventoryView(containers=[main_container()]))
         )
     assert caught.value.reason_code is ReasonCode.INVALID_REF
+
+
+# --------------------------------------------------------------------------
+# transfer_batch
+# --------------------------------------------------------------------------
+
+RICE = an_item("43", container_ref=BAG_REF, display_name="Rice")
+
+
+def batch_command(item_refs: object = None, *, destination: str = MAIN_REF) -> Command:
+    """A batch draft; ``item_refs`` is typed loosely so refusal tests can miswrite it."""
+    return a_command(
+        ActionName.INVENTORY_TRANSFER_BATCH,
+        {
+            "item_refs": [BEANS.ref, RICE.ref] if item_refs is None else item_refs,
+            "destination_container_ref": destination,
+        },
+    )
+
+
+def test_the_batch_ships_exactly_the_declared_shape() -> None:
+    """No per-item quantity, no source hints: the list and the destination."""
+    world = carrying(BEANS, RICE)
+
+    args = BatchTransferAdapter().build_args(batch_command(), world)
+
+    assert args == {
+        "item_refs": [BEANS.ref, RICE.ref],
+        "destination_container_ref": MAIN_REF,
+    }
+
+
+def test_a_batch_item_refs_that_is_not_a_list_is_refused() -> None:
+    with pytest.raises(PreconditionFailed) as caught:
+        BatchTransferAdapter().validate(batch_command(BEANS.ref), carrying(BEANS))
+    assert caught.value.reason_code is ReasonCode.INVALID_ARGUMENT
+    assert "must be a list" in str(caught.value)
+
+
+def test_an_empty_batch_is_refused() -> None:
+    with pytest.raises(PreconditionFailed) as caught:
+        BatchTransferAdapter().validate(batch_command([]), carrying(BEANS))
+    assert caught.value.reason_code is ReasonCode.INVALID_ARGUMENT
+    assert "at least one" in str(caught.value)
+
+
+def test_a_batch_wider_than_the_bound_is_refused_with_the_bound_named() -> None:
+    too_many: list[object] = [
+        an_item(str(100 + n), container_ref=BAG_REF).ref for n in range(MAX_BATCH_ITEMS + 1)
+    ]
+    with pytest.raises(PreconditionFailed) as caught:
+        BatchTransferAdapter().validate(batch_command(too_many), carrying(BEANS))
+    assert caught.value.reason_code is ReasonCode.INVALID_ARGUMENT
+    assert str(MAX_BATCH_ITEMS) in str(caught.value)
+
+
+def test_a_non_string_element_is_refused_by_index() -> None:
+    with pytest.raises(PreconditionFailed) as caught:
+        BatchTransferAdapter().validate(batch_command([BEANS.ref, 7]), carrying(BEANS))
+    assert caught.value.reason_code is ReasonCode.INVALID_ARGUMENT
+    assert "item_refs[1]" in str(caught.value)
+
+
+def test_a_duplicated_element_is_refused_naming_both_indices() -> None:
+    """One object asked to move twice; the second copy could only lie."""
+    with pytest.raises(PreconditionFailed) as caught:
+        BatchTransferAdapter().validate(
+            batch_command([BEANS.ref, RICE.ref, BEANS.ref]), carrying(BEANS, RICE)
+        )
+    assert caught.value.reason_code is ReasonCode.INVALID_ARGUMENT
+    assert "item_refs[2] repeats item_refs[0]" in str(caught.value)
+
+
+def test_an_element_that_is_not_an_item_reference_is_an_invalid_ref_by_index() -> None:
+    with pytest.raises(PreconditionFailed) as caught:
+        BatchTransferAdapter().validate(batch_command([BEANS.ref, BAG_REF]), carrying(BEANS))
+    assert caught.value.reason_code is ReasonCode.INVALID_REF
+    assert "item_refs[1]" in str(caught.value)
+
+
+def test_an_element_from_another_session_is_an_invalid_ref_by_index() -> None:
+    foreign = "item:11111111-2222-3333-4444-555555555555:player-main:42:0"
+    with pytest.raises(PreconditionFailed) as caught:
+        BatchTransferAdapter().validate(batch_command([foreign]), carrying(BEANS))
+    assert caught.value.reason_code is ReasonCode.INVALID_REF
+    assert "item_refs[0]" in str(caught.value)
+
+
+def test_an_element_the_observation_does_not_show_is_an_invalid_ref_by_index() -> None:
+    unseen = an_item("99", container_ref=BAG_REF)
+    with pytest.raises(PreconditionFailed) as caught:
+        BatchTransferAdapter().validate(
+            batch_command([BEANS.ref, unseen.ref]), carrying(BEANS, RICE)
+        )
+    assert caught.value.reason_code is ReasonCode.INVALID_REF
+    assert "item_refs[1]" in str(caught.value)
+    assert caught.value.evidence["index"] == 1
+
+
+def test_an_equipped_item_anywhere_in_the_batch_is_refused_with_its_unequip() -> None:
+    equipped = an_item("43", container_ref=BAG_REF, display_name="Rice", equipped=True)
+    with pytest.raises(PreconditionFailed) as caught:
+        BatchTransferAdapter().validate(batch_command(), carrying(BEANS, equipped))
+
+    assert caught.value.reason_code is ReasonCode.POLICY_DENIED
+    prerequisites = caught.value.evidence["prerequisites"]
+    assert prerequisites[0]["action"] == ActionName.EQUIPMENT_UNEQUIP.value
+    assert prerequisites[0]["args"]["item_ref"] == equipped.ref
+
+
+def test_a_batch_item_cannot_be_moved_into_the_container_it_provides() -> None:
+    bag_item = an_item("77001", container_ref=MAIN_REF, display_name="Duffel Bag")
+    with pytest.raises(PreconditionFailed) as caught:
+        BatchTransferAdapter().validate(
+            batch_command([bag_item.ref], destination=BAG_REF), carrying(bag_item)
+        )
+    assert caught.value.reason_code is ReasonCode.INVALID_ARGUMENT
+
+
+def test_a_far_away_source_in_the_batch_asks_to_be_walked_to_first() -> None:
+    stashed = an_item("44", container_ref=FAR_CRATE_REF)
+    observation = carrying(
+        BEANS,
+        stashed,
+        containers=[main_container(), bag_container(), crate_container(FAR_CRATE_REF)],
+    )
+
+    with pytest.raises(PreconditionFailed) as caught:
+        BatchTransferAdapter().validate(batch_command([BEANS.ref, stashed.ref]), observation)
+    assert caught.value.reason_code is ReasonCode.PRECONDITION_FAILED
+    assert caught.value.evidence["prerequisites"][0]["action"] == ActionName.MOVEMENT_MOVE_TO.value
+
+
+def test_a_batch_whose_sum_does_not_fit_names_the_prefix_that_would() -> None:
+    """CONTAINER_FULL before shipping, with the resubmittable prefix counted.
+
+    Free 1.5, three items of 0.8: the first fits, the second already does not,
+    so the refusal says "the first 1 of 3" and the planner can resubmit that
+    prefix instead of learning the same fact from a failed partial batch.
+    """
+    third = an_item("44", container_ref=BAG_REF)
+    observation = carrying(
+        BEANS,
+        RICE,
+        third,
+        containers=[main_container(capacity=10.0, used_capacity=8.5), bag_container()],
+    )
+
+    with pytest.raises(PreconditionFailed) as caught:
+        BatchTransferAdapter().validate(
+            batch_command([BEANS.ref, RICE.ref, third.ref]), observation
+        )
+    assert caught.value.reason_code is ReasonCode.CONTAINER_FULL
+    assert "the first 1 of 3" in str(caught.value)
+    assert caught.value.evidence["prefix_that_fits"] == 1
+    assert caught.value.evidence["requested"] == 3
+    assert caught.value.evidence["free_capacity"] == pytest.approx(1.5)
+
+
+def test_a_batch_into_a_container_of_unreported_capacity_is_not_guessed_at() -> None:
+    observation = carrying(
+        BEANS,
+        RICE,
+        containers=[main_container(capacity=None, used_capacity=None), bag_container()],
+    )
+
+    BatchTransferAdapter().validate(batch_command(), observation)
+
+
+def test_every_item_observed_in_the_destination_is_the_batch_evidence() -> None:
+    adapter = BatchTransferAdapter()
+    before = carrying(BEANS, RICE)
+    command = prepare(adapter, batch_command(), before)
+
+    after = carrying(moved(BEANS, MAIN_REF), moved(RICE, MAIN_REF), seq=2)
+    evidence = adapter.verify(command, before, after)
+
+    assert evidence is not None
+    assert evidence.kind == "items_in_destination_container"
+    assert evidence.observed["destination_ref"] == MAIN_REF
+    assert evidence.observed["requested"] == 2
+    assert evidence.observed["transferred"] == [
+        item_ref_in("42", MAIN_REF),
+        item_ref_in("43", MAIN_REF),
+    ]
+    assert evidence.observed["stopped"] == []
+    assert evidence.observed["destination_count_delta"] == 2
+
+
+def test_one_item_still_in_the_bag_unproves_the_whole_batch() -> None:
+    adapter = BatchTransferAdapter()
+    before = carrying(BEANS, RICE)
+    command = prepare(adapter, batch_command(), before)
+
+    partial = carrying(moved(BEANS, MAIN_REF), RICE, seq=2)
+
+    assert adapter.verify(command, before, partial) is None
+
+
+def test_a_duplicated_item_unproves_the_whole_batch() -> None:
+    """An item observed in both containers is a duplication, never a success."""
+    adapter = BatchTransferAdapter()
+    before = carrying(BEANS, RICE)
+    command = prepare(adapter, batch_command(), before)
+
+    duplicated = carrying(BEANS, moved(BEANS, MAIN_REF), moved(RICE, MAIN_REF), seq=2)
+
+    assert adapter.verify(command, before, duplicated) is None
+
+
+def test_the_batch_delta_counts_only_the_destination_and_only_the_change() -> None:
+    """An unrelated item already in the destination does not inflate the delta."""
+    adapter = BatchTransferAdapter()
+    resident = an_item("50", container_ref=MAIN_REF)
+    before = carrying(BEANS, RICE, resident)
+    command = prepare(adapter, batch_command(), before)
+
+    after = carrying(moved(BEANS, MAIN_REF), moved(RICE, MAIN_REF), resident, seq=2)
+    evidence = adapter.verify(command, before, after)
+
+    assert evidence is not None
+    assert evidence.observed["destination_count_delta"] == 2
+
+
+def test_a_delta_nobody_observed_is_reported_as_unknown_not_invented() -> None:
+    adapter = BatchTransferAdapter()
+    before = carrying(BEANS, RICE)
+    command = prepare(adapter, batch_command(), before)
+    after = carrying(moved(BEANS, MAIN_REF), moved(RICE, MAIN_REF), seq=2)
+
+    evidence = adapter.verify(command, a_world(seq=1, no_inventory=True), after)
+
+    assert evidence is not None
+    assert evidence.observed["destination_count_delta"] is None
+
+
+def test_a_batch_observation_without_an_inventory_proves_nothing() -> None:
+    adapter = BatchTransferAdapter()
+    before = carrying(BEANS, RICE)
+    command = prepare(adapter, batch_command(), before)
+
+    assert adapter.verify(command, before, a_world(seq=2, no_inventory=True)) is None
+
+
+def test_batch_progress_is_items_landed_over_items_requested() -> None:
+    adapter = BatchTransferAdapter()
+    before = carrying(BEANS, RICE)
+    command = prepare(adapter, batch_command(), before)
+
+    assert adapter.progress(command, before, carrying(BEANS, RICE, seq=2)) == 0.0
+    halfway = carrying(moved(BEANS, MAIN_REF), RICE, seq=2)
+    assert adapter.progress(command, before, halfway) == 0.5
+    done = carrying(moved(BEANS, MAIN_REF), moved(RICE, MAIN_REF), seq=2)
+    assert adapter.progress(command, before, done) == 1.0
+    assert adapter.progress(command, before, a_world(seq=2, no_inventory=True)) is None
+
+
+def test_a_batch_touching_a_world_container_raises_the_permission_tier() -> None:
+    adapter = BatchTransferAdapter()
+    stashed = an_item("44", container_ref=CRATE_REF)
+    observation = carrying(
+        BEANS, stashed, containers=[main_container(), bag_container(), crate_container()]
+    )
+
+    assert adapter.risk is RiskClass.P1
+    assert adapter.risk_for(batch_command(), carrying(BEANS, RICE)) is RiskClass.P1
+    source_in_world = batch_command([BEANS.ref, stashed.ref])
+    assert adapter.risk_for(source_in_world, observation) is RiskClass.P3
+    into_world = batch_command([BEANS.ref], destination=CRATE_REF)
+    assert adapter.risk_for(into_world, observation) is RiskClass.P3
+
+
+def test_the_batch_rides_the_single_transfer_capability() -> None:
+    """No new probe: the batch is the same game transfer, run several times."""
+    adapter = BatchTransferAdapter()
+
+    assert adapter.required_capability == TransferAdapter.required_capability
+    assert adapter.name is ActionName.INVENTORY_TRANSFER_BATCH

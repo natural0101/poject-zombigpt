@@ -689,6 +689,14 @@ def _memory_records(loaded: SaveMemory) -> Iterator[MemoryRecord]:
         data: dict[str, float | int | bool | None] = {
             "last_seen_ms": container.last_seen_ms,
             "last_inspected_ms": container.last_inspected_ms,
+            # -1 keeps its stored meaning: the contents were never enumerated.
+            "item_count": container.item_count,
+            # The revision digest itself is a string, and the boundary record's
+            # ``data`` holds numbers and booleans only — by design, so a store
+            # has nowhere to smuggle unquarantined text. Comparing revisions is
+            # SaveMemory.container_unchanged's job on this side of the wire;
+            # what a client can honestly use is whether one exists.
+            "content_revision_known": bool(container.content_revision),
         }
         if square is not None:
             data.update({"x": square.x, "y": square.y, "z": square.z})

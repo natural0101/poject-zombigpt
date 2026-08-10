@@ -7,7 +7,8 @@ the only statement, and this module is its interpreter.
 
 It understands the subset of JSON Schema the tool inputs are written in: types,
 ``enum``, ``required``, ``properties`` with ``additionalProperties: false``,
-numeric and length bounds, ``pattern``, ``items``, and ``default``. Anything
+numeric and length bounds, ``pattern``, ``items``, ``uniqueItems``, and
+``default``. Anything
 outside that subset appearing in a schema is a programming error and is reported
 as one, rather than being silently treated as satisfied.
 
@@ -61,6 +62,7 @@ _KNOWN_KEYWORDS: Final[frozenset[str]] = frozenset(
         "required",
         "title",
         "type",
+        "uniqueItems",
     }
 )
 
@@ -227,7 +229,16 @@ def _array(schema: Mapping[str, Any], value: Any, *, path: str, depth: int) -> l
     items = schema.get("items")
     if not isinstance(items, Mapping):
         raise SchemaError(f"{path}: an array schema must describe its items")
-    return [
+    validated = [
         _validate(items, element, path=f"{path}[{index}]", depth=depth + 1)
         for index, element in enumerate(value)
     ]
+    if schema.get("uniqueItems") is True:
+        # After element validation, so a repeated value that is also the wrong
+        # type is reported for the type. Quadratic on purpose: MAX_ARRAY_ITEMS
+        # caps the scan at 32 elements, and equality spares an assumption that
+        # every element is hashable.
+        for index, element in enumerate(validated):
+            if element in validated[:index]:
+                raise _fail(f"{path}[{index}]", "repeats an earlier element; each may appear once")
+    return validated

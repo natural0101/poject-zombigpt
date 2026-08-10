@@ -1,4 +1,4 @@
-"""The seventeen-action surface: its bounds, its arming, and its examples.
+"""The action-tool surface: its bounds, its arming, and its examples.
 
 ``test_mcp_catalog.py`` covers the shape of the catalogue as a whole. This file
 is about the declarations the action tools make, and it asks three questions of
@@ -153,6 +153,14 @@ DECLARED_BOUNDS: Final[tuple[tuple[str, str, str, Any], ...]] = (
     ("pz_action_sleep", "hours", "maximum", MAX_SLEEP_HOURS),
     ("pz_action_sleep", "max_wait_ms", "minimum", MIN_WAIT_MS),
     ("pz_action_sleep", "max_wait_ms", "maximum", MAX_SLEEP_WAIT_MS),
+    # The batch ceiling is the wire contract's own number, written out rather
+    # than imported from the catalogue that declares it — importing the value
+    # under test would make the check agree with itself. The adapter reading
+    # item_refs declares the same eight, and the coverage seam
+    # (tests/contract/test_mcp_action_coverage.py) holds the two sides together.
+    ("pz_action_transfer_batch", "item_refs", "minItems", 1),
+    ("pz_action_transfer_batch", "item_refs", "maxItems", 8),
+    ("pz_action_transfer_batch", "item_refs", "uniqueItems", True),
 )
 
 
@@ -162,6 +170,20 @@ def test_a_published_bound_is_the_adapters_own_number(
 ) -> None:
     assert properties(tool)[argument][keyword] == expected
 
+
+#: Nine distinct items: one more than the batch contract admits.
+_ONE_TOO_MANY_ITEMS: Final[list[str]] = [
+    f"item:{EXAMPLE_SESSION_ID}:worn:Back:99001:{4300 + index}:0" for index in range(9)
+]
+
+#: One item named twice. The batch's per-item verification has no honest answer
+#: for a reference it was handed twice — the second copy is neither a second
+#: transfer nor a refusal the adapter should have to invent — so the schema is
+#: where the duplicate dies.
+_TWICE_THE_SAME_ITEM: Final[list[str]] = [
+    f"item:{EXAMPLE_SESSION_ID}:worn:Back:99001:4210:0",
+    f"item:{EXAMPLE_SESSION_ID}:worn:Back:99001:4210:0",
+]
 
 #: One value past each ceiling. A bound that is advertised and not enforced is
 #: the failure mode this catches: the schema is the only statement of the
@@ -191,6 +213,10 @@ OVER_THE_LINE: Final[tuple[tuple[str, dict[str, Any]], ...]] = (
     ("pz_action_open_door", {"door_ref": "container:not-a-door"}),
     ("pz_action_close_door", {"radius": MIN_DOOR_RADIUS / 2}),
     ("pz_action_unlock_door", {"radius": MAX_ARRIVAL_RADIUS + 0.5}),
+    ("pz_action_transfer_batch", {"item_refs": _ONE_TOO_MANY_ITEMS}),
+    ("pz_action_transfer_batch", {"item_refs": _TWICE_THE_SAME_ITEM}),
+    ("pz_action_transfer_batch", {"item_refs": ["container:not-an-item"]}),
+    ("pz_action_transfer_batch", {"item_refs": []}),
 )
 
 
