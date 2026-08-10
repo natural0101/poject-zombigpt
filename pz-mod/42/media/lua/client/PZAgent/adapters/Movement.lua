@@ -19,6 +19,18 @@ instead of being waited out until the lease expires.
 The floor is compared exactly and separately from the plane distance. A
 character on the storey above the target is nowhere near it, however short the
 plane distance reads, so `z` is never folded into the radius.
+
+Doors are the one exception to "the walk action is the only mutation", and a
+narrow one: when a walk is already failing -- the stall fired, or the queue
+drained short -- and the command said allow_doors, the squares beside the
+character are searched for a closed door toward the target. A door that reads
+unlocked and unbarricaded is toggled by the game's own call, the toggle is
+verified by re-reading the door open, and the walk to the original target is
+queued again. Everything about it is bounded and honest: at most
+Movement.DOORS_PER_WALK attempts per command, every attempt on the evidence, a
+locked door is DOOR_LOCKED naming its square, a barricaded one DOOR_BARRICADED,
+and a door whose state cannot be read is left alone -- it cannot be proven safe
+to open, so the walk fails the way it always did.
 ]]
 
 PZAgent = PZAgent or {}
@@ -52,6 +64,11 @@ Movement.PROGRESS_EPSILON = 0.1
 
 Movement.TIMEOUT_MS = 30000
 
+--- Door-opening attempts one walk may spend before it fails honestly. Counts
+--- attempts rather than openings, so a toggle that keeps not taking runs the
+--- budget down instead of retrying the same door until the lease expires.
+Movement.DOORS_PER_WALK = 3
+
 --- Engine symbols both commands stand on. Every one is probed through
 --- PZAgent.Adapters.Toolkit before it is touched, so a build that spells one
 --- differently costs a CAPABILITY_UNAVAILABLE naming it rather than an error.
@@ -71,6 +88,7 @@ local REQUIRED_SYMBOLS = {
 local ARG = {
   NUMBER = "number",
   REF = "ref",
+  BOOLEAN = "boolean",
 }
 
 --- Mirrors PZAgent.Adapters.Toolkit.CAPABILITY.MOVE_TO_SQUARE, for the same
@@ -216,6 +234,9 @@ local function beginWalk(ctx, goal, radius, options)
       string.format("the target is %.0f squares away, past the %d one move covers", squares, Movement.MAX_DISTANCE)
   end
   noteDeparture(ctx, goal, radius, position, options.evidence)
+  -- Not-false rather than truthy: an adapter reached without the dispatcher's
+  -- default still behaves as the declaration promises, doors allowed.
+  Toolkit.state(ctx).allow_doors = options.allow_doors ~= false
   if arrived(position, goal, radius) then
     local evidence = noteArrival(ctx, position)
     -- An outcome table rather than the bare "done": on this path the three
@@ -264,7 +285,170 @@ local function beginWalk(ctx, goal, radius, options)
   if queued == nil then
     return nil, queueCode, queueDetail
   end
+  -- Kept for the door rescue: a re-enqueued walk goes to the square the first
+  -- walk was aimed at, never to a square recomputed mid-failure.
+  Toolkit.state(ctx).destination = destination
   return true
+end
+
+-- ---------------------------------------------------------------------------
+-- doors on the route
+-- ---------------------------------------------------------------------------
+
+--- True when `object` is a door as far as this build will say.
+---
+--- The engine's own class test first, exactly as world.inspect classifies:
+--- `instanceof` is the only authority worth trusting about a Java class.
+--- Accessor shape second, and the pair matters -- `isBarricaded` alone would
+--- also match a window, so it is the lock beside the open state that says
+--- "door".
+local function isDoorObject(object)
+  local Toolkit = PZAgent.Adapters.Toolkit
+  -- Build 42: IsoDoor.
+  if type(instanceof) == "function" then
+    local ok, result = pcall(instanceof, object, "IsoDoor")
+    if ok and result == true then
+      return true
+    end
+  end
+  return Toolkit.method(object, "isLocked") ~= nil and Toolkit.method(object, "IsOpen") ~= nil
+end
+
+--- The door's open, locked and barricaded readings, each nil when this build
+--- exposes no reader. nil is never collapsed to false: a door whose lock
+--- cannot be read is not thereby unlocked.
+local function doorState(object)
+  local Toolkit = PZAgent.Adapters.Toolkit
+  -- Build 42: IsoDoor:IsOpen(), :isLocked(), :isBarricaded() -- the same
+  -- spellings the observation reads.
+  return Toolkit.readBooleanOf(object, { "IsOpen", "isOpen" }),
+    Toolkit.readBooleanOf(object, { "isLocked", "isLockedByKey" }),
+    Toolkit.readBooleanOf(object, { "isBarricaded" })
+end
+
+--- Squares a rescue may look at, the character's own first. The whole ring
+--- sits within arm's reach (~1.5 squares) by construction -- the farthest
+--- candidate is one diagonal away -- so no door the character could not touch
+--- is ever toggled.
+local DOOR_SCAN = {
+  { 0, 0 },
+  { 1, 0 },
+  { -1, 0 },
+  { 0, 1 },
+  { 0, -1 },
+  { 1, 1 },
+  { 1, -1 },
+  { -1, 1 },
+  { -1, -1 },
+}
+
+--- The first closed door beside the character that stands toward the goal.
+---
+--- Returns door, square, locked, barricaded -- or nil when no square beside
+--- the character holds one. The character's own square is always a candidate,
+--- because the door frame the pathfinder wedged them against is on it; a
+--- neighbour counts only when its offset points toward the goal (a plain dot
+--- product), so a door behind the character is never opened for a walk that
+--- leads away from it.
+local function blockingDoor(position, goal)
+  local Toolkit = PZAgent.Adapters.Toolkit
+  local baseX, baseY = math.floor(position.x), math.floor(position.y)
+  local dirX, dirY = goal.x - position.x, goal.y - position.y
+  for index = 1, #DOOR_SCAN do
+    local dx, dy = DOOR_SCAN[index][1], DOOR_SCAN[index][2]
+    if (dx == 0 and dy == 0) or (dx * dirX + dy * dirY) > 0 then
+      local square = Toolkit.gridSquare(baseX + dx, baseY + dy, position.z)
+      if square ~= nil then
+        local ok, objects = Toolkit.call(square, "getObjects")
+        if ok and objects ~= nil then
+          local size = Toolkit.listSize(objects) or 0
+          local scanned = math.min(size, Toolkit.MAX_SQUARE_OBJECTS)
+          for objectIndex = 0, scanned - 1 do
+            local object = Toolkit.listGet(objects, objectIndex)
+            if object ~= nil and isDoorObject(object) then
+              local open, locked, barricaded = doorState(object)
+              if open == false then
+                return object, { x = baseX + dx, y = baseY + dy, z = position.z }, locked, barricaded
+              end
+            end
+          end
+        end
+      end
+    end
+  end
+  return nil
+end
+
+--- Try to clear a failing walk by opening one door.
+---
+--- Called only from the two branches where the walk is already lost -- the
+--- stall fired, or the queue drained short -- so a walk that is merely slow
+--- never has a door opened for it. Returns "reenqueued" when a door was
+--- verified open and the walk queued again; nil plus DOOR_LOCKED or
+--- DOOR_BARRICADED when the blocking door needs a key or a detour; false when
+--- nothing here helps and the caller's own failure code stands.
+local function tryDoorRescue(ctx, position, goal)
+  local Toolkit = PZAgent.Adapters.Toolkit
+  local reasons = Toolkit.reasons()
+  local state = Toolkit.state(ctx)
+  if state.allow_doors ~= true then
+    return false
+  end
+  if (state.door_attempts or 0) >= Movement.DOORS_PER_WALK then
+    return false
+  end
+  local door, at, locked, barricaded = blockingDoor(position, goal)
+  if door == nil then
+    return false
+  end
+  local named = string.format("(%d, %d, %d)", at.x, at.y, at.z)
+  if locked == true then
+    return nil, reasons.DOOR_LOCKED, string.format("the door at %s is locked and needs a key", named)
+  end
+  if barricaded == true then
+    return nil, reasons.DOOR_BARRICADED, string.format("the door at %s is barricaded and needs a detour", named)
+  end
+  if locked ~= false or barricaded ~= false then
+    -- A reader is absent, and nil is not false: the door cannot be proven safe
+    -- to open, so it is left alone and the walk fails the way it always did.
+    return false
+  end
+  state.door_attempts = (state.door_attempts or 0) + 1
+  local evidence = state.evidence
+  local attempt = { x = at.x, y = at.y, z = at.z, opened = false }
+  if type(evidence) == "table" then
+    evidence.doors_opened = evidence.doors_opened or 0
+    evidence.doors = evidence.doors or {}
+    evidence.doors[#evidence.doors + 1] = attempt
+  end
+  -- Build 42: IsoDoor:ToggleDoor(character) -- the game's own toggle, the same
+  -- call door.open makes, never a state write. Its return is worthless either
+  -- way; what counts is the re-read below.
+  Toolkit.call(door, "ToggleDoor", ctx.player)
+  if Toolkit.readBooleanOf(door, { "IsOpen", "isOpen" }) ~= true then
+    -- The toggle did not take. The attempt stays on the record and the budget,
+    -- and the caller's failure code stands.
+    return false
+  end
+  attempt.opened = true
+  if type(evidence) == "table" then
+    evidence.doors_opened = evidence.doors_opened + 1
+  end
+  local destination = state.destination
+  if destination == nil then
+    return false
+  end
+  local queued = enqueueWalk(ctx, destination)
+  if queued == nil then
+    return false
+  end
+  -- The stall mark starts over: the door that just opened gives the pathfinder
+  -- a route it did not have, and holding the walk to the old mark would call
+  -- the very next poll stalled again. Bounded by the attempt budget above.
+  if type(state.progress_marks) == "table" then
+    state.progress_marks.distance = nil
+  end
+  return "reenqueued"
 end
 
 --- One progress step, shared by both commands.
@@ -302,7 +486,18 @@ local function pollWalk(ctx)
   local distance = Toolkit.planeDistance(position, goal.x, goal.y)
   local movement, elapsed = Toolkit.trackProgress(ctx, "distance", distance, { epsilon = Movement.PROGRESS_EPSILON })
   if movement == "stalled" then
+    -- Before the walk is called stuck: a closed door is the stall that
+    -- actually happens in a house, and opening one is cheaper for the planner
+    -- than a detour. Everything about the rescue is bounded and verified, and
+    -- with allow_doors=false it does nothing at all.
+    local rescued, doorCode, doorDetail = tryDoorRescue(ctx, position, goal)
+    if rescued == "reenqueued" then
+      return true
+    end
     noteArrival(ctx, position)
+    if doorCode ~= nil then
+      return nil, doorCode, doorDetail
+    end
     -- PATH_STUCK rather than the generic precondition failure: the sidecar's
     -- retry policy keys on this code, and "the character is wedged" is a
     -- different instruction to the planner than "the world was not ready".
@@ -320,13 +515,24 @@ local function pollWalk(ctx)
     return nil, queueCode, queueDetail
   end
   if queue == "done" then
-    noteArrival(ctx, position)
     if position.z ~= goal.z then
       -- Directly above or below the target. The plane distance can read zero
-      -- here, which is exactly why the floor is a separate test.
+      -- here, which is exactly why the floor is a separate test -- and no door
+      -- on this storey helps a walk that ended on the wrong one.
+      noteArrival(ctx, position)
       return nil,
         reasons.POSTCONDITION_FAILED,
         string.format("the walk ended on floor %d, not floor %d", position.z, goal.z)
+    end
+    -- A queue that drained short is the other face of the same door: the
+    -- pathfinder gave up on a route the closed door cut.
+    local rescued, doorCode, doorDetail = tryDoorRescue(ctx, position, goal)
+    if rescued == "reenqueued" then
+      return true
+    end
+    noteArrival(ctx, position)
+    if doorCode ~= nil then
+      return nil, doorCode, doorDetail
     end
     return nil,
       reasons.PATH_NOT_FOUND,
@@ -381,12 +587,17 @@ local MoveTo = {
     y = { type = ARG.NUMBER, required = true, integer = true },
     z = { type = ARG.NUMBER, required = true, integer = true, min = -32, max = 32 },
     radius = { type = ARG.NUMBER, min = 0.1, max = Movement.MAX_RADIUS },
+    -- The catalog promised "may open doors on the way" long before the mod
+    -- could: a closed door on the route ended as PATH_STUCK until a human
+    -- pressed E. Declared so the promise is real, defaulting on because the
+    -- door is only ever touched when the walk is already failing.
+    allow_doors = { type = ARG.BOOLEAN, default = true },
   },
 }
 
 function MoveTo.start(ctx, args)
   local goal = { x = args.x, y = args.y, z = args.z }
-  return beginWalk(ctx, goal, args.radius or Movement.DEFAULT_RADIUS)
+  return beginWalk(ctx, goal, args.radius or Movement.DEFAULT_RADIUS, { allow_doors = args.allow_doors })
 end
 
 MoveTo.poll = pollWalk
@@ -468,6 +679,9 @@ local MoveNear = {
       kinds = { square = true, container = true, item = true },
     },
     reach = { type = ARG.NUMBER, min = 0.1, max = Movement.MAX_RADIUS },
+    -- The same switch move_to declares, for the same route: both commands share
+    -- pollWalk, so both meet the same closed doors.
+    allow_doors = { type = ARG.BOOLEAN, default = true },
   },
 }
 
@@ -490,6 +704,7 @@ function MoveNear.start(ctx, args)
   local reach = args.reach or Toolkit.DEFAULT_REACH
   return beginWalk(ctx, goal, reach, {
     beside = not goal.on_person,
+    allow_doors = args.allow_doors,
     evidence = { target_ref = args.ref, on_person = goal.on_person == true },
   })
 end

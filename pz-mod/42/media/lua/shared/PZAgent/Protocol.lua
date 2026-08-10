@@ -50,6 +50,9 @@ Protocol.ACTION_NAMES = {
   "survival.rest",
   "survival.sleep",
   "plan.cancel",
+  "door.open",
+  "door.close",
+  "door.unlock",
 }
 
 local function toSet(list)
@@ -173,6 +176,8 @@ Protocol.REASON = {
   PATH_STUCK = "PATH_STUCK",
   TARGET_OUT_OF_RANGE = "TARGET_OUT_OF_RANGE",
   TARGET_NOT_LOADED = "TARGET_NOT_LOADED",
+  DOOR_LOCKED = "DOOR_LOCKED",
+  DOOR_BARRICADED = "DOOR_BARRICADED",
 
   ACTION_TIMEOUT = "ACTION_TIMEOUT",
   POSTCONDITION_FAILED = "POSTCONDITION_FAILED",

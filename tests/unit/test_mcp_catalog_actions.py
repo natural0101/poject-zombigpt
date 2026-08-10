@@ -37,6 +37,7 @@ from pz_agent_core.actions.adapters.container import (
     MAX_LISTED_ITEMS,
     MIN_OPEN_RADIUS,
 )
+from pz_agent_core.actions.adapters.doors import DEFAULT_DOOR_RADIUS, MIN_DOOR_RADIUS
 from pz_agent_core.actions.adapters.equipment import HANDS, MAX_SLOT_NAME_LEN
 from pz_agent_core.actions.adapters.inventory import MAX_SEARCH_RESULTS, MAX_TYPE_FILTER_LEN
 from pz_agent_core.actions.adapters.medical import BODY_PARTS
@@ -138,6 +139,11 @@ DECLARED_BOUNDS: Final[tuple[tuple[str, str, str, Any], ...]] = (
     ("pz_action_open_container", "radius", "maximum", MAX_ARRIVAL_RADIUS),
     ("pz_action_open_container", "radius", "minimum", MIN_OPEN_RADIUS),
     ("pz_action_open_container", "radius", "default", DEFAULT_OPEN_RADIUS),
+    ("pz_action_open_door", "radius", "maximum", MAX_ARRIVAL_RADIUS),
+    ("pz_action_open_door", "radius", "minimum", MIN_DOOR_RADIUS),
+    ("pz_action_open_door", "radius", "default", DEFAULT_DOOR_RADIUS),
+    ("pz_action_close_door", "radius", "maximum", MAX_ARRIVAL_RADIUS),
+    ("pz_action_unlock_door", "radius", "maximum", MAX_ARRIVAL_RADIUS),
     ("pz_action_unequip", "slot", "maxLength", MAX_SLOT_NAME_LEN),
     ("pz_action_rest", "target_endurance", "minimum", MIN_REST_TARGET),
     ("pz_action_rest", "target_endurance", "maximum", MAX_REST_TARGET),
@@ -181,6 +187,10 @@ OVER_THE_LINE: Final[tuple[tuple[str, dict[str, Any]], ...]] = (
     ("pz_action_sleep", {"hours": MIN_SLEEP_HOURS - 1}),
     ("pz_action_drink_source", {"fraction": 1.5}),
     ("pz_action_drink_source", {"source_ref": "container:not-a-square"}),
+    ("pz_action_open_door", {"radius": MAX_ARRIVAL_RADIUS + 0.5}),
+    ("pz_action_open_door", {"door_ref": "container:not-a-door"}),
+    ("pz_action_close_door", {"radius": MIN_DOOR_RADIUS / 2}),
+    ("pz_action_unlock_door", {"radius": MAX_ARRIVAL_RADIUS + 0.5}),
 )
 
 

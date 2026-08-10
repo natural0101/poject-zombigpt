@@ -39,6 +39,9 @@ class ActionName(StrEnum):
     SURVIVAL_REST = "survival.rest"
     SURVIVAL_SLEEP = "survival.sleep"
     PLAN_CANCEL = "plan.cancel"
+    DOOR_OPEN = "door.open"
+    DOOR_CLOSE = "door.close"
+    DOOR_UNLOCK = "door.unlock"
 
 
 #: Actions that only read state. They are permitted in OBSERVE mode and do not

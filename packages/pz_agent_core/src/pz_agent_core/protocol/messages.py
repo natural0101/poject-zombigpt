@@ -85,6 +85,12 @@ def _as_bool(value: Any, *, field_name: str) -> bool:
     return value
 
 
+def _as_optional_bool(value: Any, *, field_name: str) -> bool | None:
+    if value is None:
+        return None
+    return _as_bool(value, field_name=field_name)
+
+
 def _as_mapping(value: Any, *, field_name: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
         raise ProtocolError(f"{field_name} must be an object, got {type(value).__name__}")
@@ -862,13 +868,24 @@ class InventoryView:
 
 @dataclass(frozen=True, slots=True)
 class NearbyObject:
-    """A world object within the observation radius."""
+    """A world object within the observation radius.
+
+    The four door-state fields are tri-state on purpose: ``None`` means the
+    build did not expose the reader, which must never be conflated with an
+    observed ``False`` — "the lock could not be read" and "the door is
+    unlocked" authorise very different plans. They are ``None`` for every
+    object that is not a door.
+    """
 
     ref: str
     kind: str
     distance: float
     position: Position | None = None
     semantics: list[str] = field(default_factory=list)
+    open: bool | None = None
+    locked: bool | None = None
+    barricaded: bool | None = None
+    orientation: str | None = None
 
     def to_dict(self) -> JsonDict:
         out: JsonDict = {"ref": self.ref, "kind": self.kind, "distance": self.distance}
@@ -876,11 +893,20 @@ class NearbyObject:
             out["position"] = self.position.to_dict(with_direction=False)
         if self.semantics:
             out["semantics"] = list(self.semantics)
+        if self.open is not None:
+            out["open"] = self.open
+        if self.locked is not None:
+            out["locked"] = self.locked
+        if self.barricaded is not None:
+            out["barricaded"] = self.barricaded
+        if self.orientation is not None:
+            out["orientation"] = self.orientation
         return out
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> NearbyObject:
         position = payload.get("position")
+        orientation = payload.get("orientation")
         return cls(
             ref=_as_str(_require(payload, "ref"), field_name="object.ref"),
             kind=_as_str(_require(payload, "kind"), field_name="object.kind"),
@@ -894,6 +920,14 @@ class NearbyObject:
                 _as_str(s, field_name="object.semantics[]")
                 for s in _as_sequence(payload.get("semantics", []), field_name="object.semantics")
             ],
+            open=_as_optional_bool(payload.get("open"), field_name="object.open"),
+            locked=_as_optional_bool(payload.get("locked"), field_name="object.locked"),
+            barricaded=_as_optional_bool(payload.get("barricaded"), field_name="object.barricaded"),
+            orientation=(
+                None
+                if orientation is None
+                else _as_str(orientation, field_name="object.orientation")
+            ),
         )
 
 

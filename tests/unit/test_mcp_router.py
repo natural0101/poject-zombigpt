@@ -13,6 +13,7 @@ import pytest
 
 from pz_agent_core.actions import PreconditionFailed
 from pz_agent_core.capabilities.probes import (
+    DOOR_TOGGLE,
     DRINK_CARRIED,
     DRINK_WORLD_SOURCE,
     EAT_PERCENTAGE,
@@ -68,6 +69,7 @@ from tests.fixtures.safety_builders import make_nearby, make_object, make_zombie
 
 ALL_CAPABILITIES = (
     MOVE_TO_SQUARE,
+    DOOR_TOGGLE,
     INVENTORY_TRANSFER,
     EAT_PERCENTAGE,
     DRINK_CARRIED,
@@ -91,6 +93,7 @@ BOOK_REF = item_ref("502", "worn:Back:99001")
 MAIN_REF = main_container_ref()
 CRATE_REF = f"container:{DEFAULT_SESSION}:world:1200:3400:0:crate:0"
 SQUARE_REF = f"square:{DEFAULT_SESSION}:1200:3400:0"
+DOOR_REF = f"object:{DEFAULT_SESSION}:1200:3401:0:2"
 
 #: Windows drive paths, UNC paths and POSIX system paths — §3.13 forbids all of
 #: them from crossing this boundary in any field.
@@ -967,6 +970,9 @@ def every_payload(router: ToolRouter) -> Iterator[tuple[str, Any]]:
         ("pz_action_move_to", {"target": {"x": 1, "y": 2, "z": 0}, "idempotency_key": "m1"}),
         ("pz_action_move_near", {"object_ref": CRATE_REF, "idempotency_key": "mn1"}),
         ("pz_action_open_container", {"container_ref": CRATE_REF, "idempotency_key": "oc1"}),
+        ("pz_action_open_door", {"door_ref": DOOR_REF, "idempotency_key": "od1"}),
+        ("pz_action_close_door", {"door_ref": DOOR_REF, "idempotency_key": "cd1"}),
+        ("pz_action_unlock_door", {"door_ref": DOOR_REF, "idempotency_key": "ud1"}),
         (
             "pz_action_transfer",
             {

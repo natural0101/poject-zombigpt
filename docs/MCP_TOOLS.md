@@ -23,7 +23,7 @@ Transport: stdio. The server registers itself as `pz-agent`.
 | `product_version` | `0.1.0` |
 | `protocol_version` | `1.1` |
 | `capability_gated` | `true` |
-| tools | 37 |
+| tools | 40 |
 | resources | 7 |
 
 `--describe` reports the **whole** catalogue. A running server publishes a
@@ -35,7 +35,7 @@ See *Capability gating* below.
 ## Semantics that apply to every tool
 
 **Every input schema is closed.** `additionalProperties` is `false` on all
-37 tools, so an argument this document does not list is rejected rather
+40 tools, so an argument this document does not list is rejected rather
 than ignored.
 
 **The advertised bound is the enforced bound.** `catalog.py` imports its numbers
@@ -54,7 +54,7 @@ the `write` tools and for nothing else:
 | --- | --- | --- | --- |
 | `read` | 11 | not required | Answered from state the sidecar already holds |
 | `query` | 3 | not required | Submits one of the protocol's `READ_ONLY_ACTIONS`; comes back with an action id, but the character neither moves nor touches anything |
-| `write` | 17 | **required** | Changes the world; refused with `NOT_ARMED` on a disarmed session |
+| `write` | 20 | **required** | Changes the world; refused with `NOT_ARMED` on a disarmed session |
 | `control` | 6 | not required | Arm, disarm, cancel, stop and the goal verbs — how a disarmed or panicking session is driven |
 
 `pz_action_open_container` is a `write` tool, whatever its name suggests: it
@@ -74,14 +74,14 @@ declares. Several adapters assess higher per call — `movement.move_to` becomes
 neither is visible from the tool name, so neither is published.
 
 **Long-running tools return an action id.** `long_running` is `true` for
-19 tools. The call returns immediately with an `action_id`; you poll it with
+22 tools. The call returns immediately with an `action_id`; you poll it with
 `pz_action_status`, wait on it with `pz_action_await`, or call again with the
 same `idempotency_key`, which replays the call and refreshes it to the action's
 current state. It does not block the transport and it does not report success
 early.
 
 **Idempotency.** Every tool that submits a command takes a required
-`idempotency_key`; 23 tools do. Twenty-one of them accept 1–120 characters with
+`idempotency_key`; 26 tools do. Twenty-four of them accept 1–120 characters with
 no further shape; the two goal verbs, `pz_goal_submit` and `pz_goal_cancel`,
 take 1–64 matching `^[A-Za-z0-9][A-Za-z0-9_.:\-]{0,63}$`, because the goal
 channel carries the key into its own record and a key is not a place to smuggle
@@ -89,7 +89,7 @@ text. Calling twice with the same key does not perform the action twice — the
 original result is replayed with `replayed: true`.
 
 **`timeout_ms`** is that one command's lease: integer, 100–300000 ms, default
-15000. Twenty tools take it — every one that submits a single command.
+15000. Twenty-three tools take it — every one that submits a single command.
 `pz_plan_execute` does not, because a plan is bounded by
 `limits.max_real_seconds` instead, and publishing an argument no handler reads
 would be a lie shaped like an option. One tool reuses the name for a different
@@ -121,6 +121,9 @@ an enum member, or a lower-case token matching
 | `pz_action_move_to` | write | P3 | yes | yes | `move_to_square` |
 | `pz_action_move_near` | write | P3 | yes | yes | `move_to_square` |
 | `pz_action_open_container` | write | P3 | yes | yes | `move_to_square` |
+| `pz_action_open_door` | write | P3 | yes | yes | `door_toggle` |
+| `pz_action_close_door` | write | P3 | yes | yes | `door_toggle` |
+| `pz_action_unlock_door` | write | P3 | yes | yes | `door_toggle` |
 | `pz_action_transfer` | write | P1 | yes | yes | `inventory_transfer` |
 | `pz_action_ensure_main` | write | P1 | yes | yes | `inventory_transfer` |
 | `pz_action_eat` | write | P2 | yes | yes | `eat_percentage` |
@@ -261,6 +264,15 @@ Walk to a square. Verified by the character's observed position being within the
 | `idempotency_key` | yes | `string`; minLength 1; maxLength 120 |
 | `timeout_ms` | no | `integer`; minimum 100; maximum 300000; default `15000` |
 
+`allow_doors` now travels to the mod with the command. It used to be a
+sidecar-only flag — accepted here, and then kept on this side with the other
+policy flags, so the mod defaulted the door policy silently at the far end.
+The doors epic moved it to the wire, because it is the one flag whose decision
+cannot finish on this side: whether a closed door stands on the route is
+something only the mod discovers, mid-walk. `max_distance` and `allow_stairs`
+still stay on this side, deliberately: they are decisions the adapter has
+already made against the observation.
+
 ### `pz_action_move_near`
 
 Walk to within interaction range of something in the world. Verified against the object's *re-observed* position, not the one it had when the call was made: an object that is no longer in view cannot be proven to be within arm's reach.
@@ -270,8 +282,12 @@ Walk to within interaction range of something in the world. Verified against the
 | `object_ref` | yes | `string`; maxLength 220; pattern `^(?:container\|square\|item):[A-Za-z0-9:_.\-]{1,200}$` |
 | `radius` | no | `number`; minimum 0.1; maximum 3.0; default `1.5` |
 | `max_distance` | no | `integer`; minimum 1; maximum 30; default `20` |
+| `allow_doors` | no | `boolean`; default `true` |
 | `idempotency_key` | yes | `string`; minLength 1; maxLength 120 |
 | `timeout_ms` | no | `integer`; minimum 100; maximum 300000; default `15000` |
+
+`allow_doors` ships with the command here too — both move commands share the
+mod's walk loop, so both meet the same closed doors on the way.
 
 ### `pz_action_open_container`
 
@@ -280,6 +296,49 @@ Get within reach of a world container, so its contents can be taken. Its name re
 | Argument | Required | Schema |
 | --- | --- | --- |
 | `container_ref` | yes | `string`; maxLength 220; pattern `^container:[A-Za-z0-9:_.\-]{1,200}$` |
+| `radius` | no | `number`; minimum 0.1; maximum 3.0; default `1.6` |
+| `idempotency_key` | yes | `string`; minLength 1; maxLength 120 |
+| `timeout_ms` | no | `integer`; minimum 100; maximum 300000; default `15000` |
+
+### `pz_action_open_door`
+
+Open a named door. Verified by the following observation describing it open; a door already open comes back as an unchanged success, not an error. A door observed locked is refused with DOOR_LOCKED — it needs its key (`pz_action_unlock_door`) before it will open — and one observed barricaded with DOOR_BARRICADED, which no toggle fixes.
+
+| Argument | Required | Schema |
+| --- | --- | --- |
+| `door_ref` | yes | `string`; maxLength 220; pattern `^object:[A-Za-z0-9:_.\-]{1,200}$` |
+| `radius` | no | `number`; minimum 0.1; maximum 3.0; default `1.6` |
+| `idempotency_key` | yes | `string`; minLength 1; maxLength 120 |
+| `timeout_ms` | no | `integer`; minimum 100; maximum 300000; default `15000` |
+
+`door_ref` comes from `pz_observe_nearby`, which reports each door as an
+`object:` reference — `object:<session>:<x>:<y>:<z>:<object_index>`, the
+square it stands on and its index in that square's object list — together with
+its tri-state `open`, `locked` and `barricaded` fields. An absent field means
+the build exposes no reader for that fact, never `false`; the pre-flight
+refusals fire only on an observed `true`, and an unreadable state is passed
+through for the mod to judge against the engine object. The three door tools
+share this shape and this rule, and a "merely closed" door is not an error
+anywhere in them.
+
+### `pz_action_close_door`
+
+Close a named door. Verified by the following observation describing it closed. A lock never blocks this — a lock holds a door closed — so the one state refusal is DOOR_BARRICADED, and a door already closed comes back as an unchanged success.
+
+| Argument | Required | Schema |
+| --- | --- | --- |
+| `door_ref` | yes | `string`; maxLength 220; pattern `^object:[A-Za-z0-9:_.\-]{1,200}$` |
+| `radius` | no | `number`; minimum 0.1; maximum 3.0; default `1.6` |
+| `idempotency_key` | yes | `string`; minLength 1; maxLength 120 |
+| `timeout_ms` | no | `integer`; minimum 100; maximum 300000; default `15000` |
+
+### `pz_action_unlock_door`
+
+Unlock a named door. A matching key must be observably usable — the mod checks the character's own key ring against the engine's key ids — and a locked door with no such key aboard answers DOOR_LOCKED: a key hunt, not a retry. A barricaded door answers DOOR_BARRICADED, which is a detour. Verified by the following observation reporting the lock off; a door already unlocked is an unchanged success.
+
+| Argument | Required | Schema |
+| --- | --- | --- |
+| `door_ref` | yes | `string`; maxLength 220; pattern `^object:[A-Za-z0-9:_.\-]{1,200}$` |
 | `radius` | no | `number`; minimum 0.1; maximum 3.0; default `1.6` |
 | `idempotency_key` | yes | `string`; minLength 1; maxLength 120 |
 | `timeout_ms` | no | `integer`; minimum 100; maximum 300000; default `15000` |
@@ -560,7 +619,7 @@ Recent structured log records, redacted and bounded.
 
 ## Capability gating
 
-Fourteen of the 37 tools name a capability. `published_tools()` offers a
+Seventeen of the 40 tools name a capability. `published_tools()` offers a
 tool only when `CapabilityReport.usable()` is true for its capability, which
 means `verified` or `available_unverified`; `experimental`, `unsupported` and
 `disabled_by_policy` are all unusable. `withheld_tools()` returns the withheld
@@ -570,6 +629,7 @@ tool is an answer rather than an error.
 | Capability | Tools it gates |
 | --- | --- |
 | `move_to_square` | `pz_action_move_to`, `pz_action_move_near`, `pz_action_open_container` |
+| `door_toggle` | `pz_action_open_door`, `pz_action_close_door`, `pz_action_unlock_door` |
 | `inventory_transfer` | `pz_action_transfer`, `pz_action_ensure_main` |
 | `eat_percentage` | `pz_action_eat` |
 | `drink_carried` | `pz_action_drink` |

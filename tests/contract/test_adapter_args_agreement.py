@@ -48,6 +48,7 @@ from pz_agent_core.actions.adapters import register_game_adapters
 from pz_agent_core.actions.builtin import register_builtins
 from pz_agent_core.protocol import ActionName, Command, Observation
 from pz_agent_core.protocol.refs import RefKind, ref_kind
+from tests.fixtures import DEFAULT_SESSION
 from tests.fixtures.adapter_worlds import (
     BAG_REF,
     CRATE_REF,
@@ -61,6 +62,10 @@ from tests.fixtures.adapter_worlds import (
     main_container,
     square_ref,
 )
+
+#: A door reference in the mod's ``object:`` shape — square coordinates plus
+#: the index of the door in that square's object list.
+DOOR_REF: Final = f"object:{DEFAULT_SESSION}:1203:3400:0:2"
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[2]
 DUMPER: Final = REPO_ROOT / "tests" / "lua" / "support" / "dump_adapter_args.lua"
@@ -145,10 +150,23 @@ def _cases() -> list[tuple[ActionName, Command, Observation]]:
     # A sink is not a container, so the mod mints a square reference for it and
     # marks it with the semantic ``consume.drink_source`` gates on.
     sink = a_world_object(square_ref(1204, 3400), kind="sink", semantics=["water_source"])
+    # A door is the one thing the mod addresses with an ``object:`` reference.
+    # Closed and unlocked, so every door adapter's arguments build cleanly.
+    door = a_world_object(
+        DOOR_REF,
+        x=1203,
+        y=3400,
+        kind="door",
+        semantics=["door", "obstacle"],
+        open=False,
+        locked=False,
+        barricaded=False,
+        orientation="north",
+    )
     world = a_world(
         items=[apple, water, book, bandage, shirt, stashed],
         containers=[main_container(), bag_container(), crate_container()],
-        objects=[crate_object, sink],
+        objects=[crate_object, sink, door],
     )
 
     return [
@@ -267,6 +285,24 @@ def _cases() -> list[tuple[ActionName, Command, Observation]]:
                 ActionName.PLAN_CANCEL,
                 {"command_id": "0f0e0d0c-0b0a-4009-8807-060504030201"},
             ),
+            world,
+        ),
+        # The three door actions share one argument shape: the door's object
+        # reference plus an optional approach radius. One case each, so a key
+        # either side renames is caught for all three.
+        (
+            ActionName.DOOR_OPEN,
+            a_command(ActionName.DOOR_OPEN, {"door_ref": door.ref, "radius": 1.0}),
+            world,
+        ),
+        (
+            ActionName.DOOR_CLOSE,
+            a_command(ActionName.DOOR_CLOSE, {"door_ref": door.ref}),
+            world,
+        ),
+        (
+            ActionName.DOOR_UNLOCK,
+            a_command(ActionName.DOOR_UNLOCK, {"door_ref": door.ref}),
             world,
         ),
     ]

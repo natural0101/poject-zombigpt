@@ -64,6 +64,7 @@ from .context import (
 )
 from .core_services import serve_core_rpc
 from .doctor import check_capabilities, run_checks
+from .latency import run_latency
 from .livetest import add_live_test_parser, run_live_test
 from .memory import SidecarMemory, add_remember_parser, build_sidecar_memory, run_remember
 from .modinstall import (
@@ -113,6 +114,7 @@ COMMANDS: Final[tuple[str, ...]] = (
     "voice",
     "logs",
     "replay",
+    "latency",
     "validate-config",
     "smoke",
     "live-test",
@@ -236,6 +238,16 @@ def build_parser() -> argparse.ArgumentParser:
     replay.add_argument("trace", type=Path)
     replay.add_argument("--limit", type=int, default=DEFAULT_REPLAY_LIMIT)
     replay.add_argument("--json", action="store_true")
+
+    latency = subparsers.add_parser(
+        "latency", help="measure the latency targets from the exchange directory's journals"
+    )
+    latency.add_argument("--json", action="store_true", help="the raw report document")
+    latency.add_argument(
+        "--targets",
+        action="store_true",
+        help="compare against the P0 targets; exits non-zero only on a measured miss",
+    )
 
     validate = subparsers.add_parser("validate-config", help="validate config.toml before start")
     validate.add_argument("--json", action="store_true")
@@ -1097,6 +1109,8 @@ def dispatch(ctx: CliContext, args: argparse.Namespace) -> int:
         )
     if command == "replay":
         return run_replay(ctx, trace=args.trace, as_json=args.json, limit=args.limit)
+    if command == "latency":
+        return run_latency(ctx, as_json=args.json, targets=args.targets)
     if command == "validate-config":
         return run_validate_config(ctx, as_json=args.json)
     if command == "smoke":

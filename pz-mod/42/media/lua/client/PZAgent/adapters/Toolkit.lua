@@ -74,6 +74,7 @@ Toolkit.CAPABILITY = {
   MEDICAL_BANDAGE = "medical_bandage",
   SURVIVAL_REST = "survival_rest",
   SURVIVAL_SLEEP = "survival_sleep",
+  DOOR_TOGGLE = "door_toggle",
 }
 
 --- Health scale the game reports body parts on.

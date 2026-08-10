@@ -20,6 +20,9 @@ change proves this happened?*
 =============================  =========================================
 ``movement.move_to``           the position is inside the radius, on the floor
 ``movement.move_near``         the object is within reach, on its floor
+``door.open``                  the door is observed open in the following snapshot
+``door.close``                 the door is observed closed in the following snapshot
+``door.unlock``                the lock is observed off in the following snapshot
 ``world.inspect``              the report names squares that were asked about
 ``container.inspect``          the report names the container that was asked about
 ``container.open_nearby``      the container is reported, accessible and in reach
@@ -54,6 +57,7 @@ from .common import (
 )
 from .consume import DrinkAdapter, DrinkSourceAdapter, EatAdapter, ensure_main_prerequisite
 from .container import ContainerInspectAdapter, ContainerOpenNearbyAdapter
+from .doors import DoorCloseAdapter, DoorOpenAdapter, DoorUnlockAdapter
 from .equipment import EquipAdapter, UnequipAdapter
 from .inventory import EnsureMainAdapter, SearchAdapter, TransferAdapter, unequip_prerequisite
 from .literature import ReadAdapter
@@ -69,6 +73,9 @@ __all__ = [
     "ContainerChain",
     "ContainerInspectAdapter",
     "ContainerOpenNearbyAdapter",
+    "DoorCloseAdapter",
+    "DoorOpenAdapter",
+    "DoorUnlockAdapter",
     "DrinkAdapter",
     "DrinkSourceAdapter",
     "EatAdapter",
@@ -103,6 +110,9 @@ def register_game_adapters(registry: AdapterRegistry) -> AdapterRegistry:
     """
     registry.register(MoveToAdapter())
     registry.register(MoveNearAdapter())
+    registry.register(DoorOpenAdapter())
+    registry.register(DoorCloseAdapter())
+    registry.register(DoorUnlockAdapter())
     registry.register(WorldInspectAdapter())
     registry.register(ContainerInspectAdapter())
     registry.register(ContainerOpenNearbyAdapter())

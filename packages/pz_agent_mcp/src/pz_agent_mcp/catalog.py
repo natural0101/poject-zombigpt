@@ -75,6 +75,7 @@ from pz_agent_core.actions.adapters.container import (
     MAX_LISTED_ITEMS,
     MIN_OPEN_RADIUS,
 )
+from pz_agent_core.actions.adapters.doors import DEFAULT_DOOR_RADIUS, MIN_DOOR_RADIUS
 from pz_agent_core.actions.adapters.equipment import HANDS, MAX_SLOT_NAME_LEN
 from pz_agent_core.actions.adapters.inventory import MAX_SEARCH_RESULTS, MAX_TYPE_FILTER_LEN
 from pz_agent_core.actions.adapters.literature import DEFAULT_READ_PAGES, MAX_READ_PAGES
@@ -104,6 +105,7 @@ from pz_agent_core.actions.builtin import MAX_WAIT_GAME_SECONDS
 from pz_agent_core.actions.engine import DEFAULT_LEASE_MS
 from pz_agent_core.capabilities.model import CapabilityReport
 from pz_agent_core.capabilities.probes import (
+    DOOR_TOGGLE,
     DRINK_CARRIED,
     DRINK_WORLD_SOURCE,
     EAT_PERCENTAGE,
@@ -196,6 +198,11 @@ _EXAMPLE_ITEM: Final = f"item:{EXAMPLE_SESSION_ID}:worn:Back:99001:4210:0"
 _EXAMPLE_MAIN: Final = f"container:{EXAMPLE_SESSION_ID}:player-main"
 _EXAMPLE_CRATE: Final = f"container:{EXAMPLE_SESSION_ID}:world:1200:3400:0:0:0"
 _EXAMPLE_SQUARE: Final = f"square:{EXAMPLE_SESSION_ID}:1200:3400:0"
+
+#: A door as the observer mints one: the square it stands on and its index in
+#: that square's object list. The ``object`` kind carries no runtime id — a
+#: door is furniture, not an entity — which is why the reference is positional.
+_EXAMPLE_DOOR: Final = f"object:{EXAMPLE_SESSION_ID}:1200:3401:0:2"
 
 #: A goal id the way :func:`~pz_agent_core.goals.mint_goal_id` spells one. Not
 #: derived from :data:`EXAMPLE_SESSION_ID`: a goal id is minted by the channel
@@ -805,6 +812,11 @@ TOOLS: Final[tuple[ToolSpec, ...]] = (
                     "maximum": MAX_MOVE_DISTANCE_SQUARES,
                     "default": DEFAULT_MOVE_DISTANCE_SQUARES,
                 },
+                "allow_doors": {
+                    "type": "boolean",
+                    "description": "May open doors on the way.",
+                    "default": True,
+                },
             },
             required=("object_ref",),
         ),
@@ -840,6 +852,117 @@ TOOLS: Final[tuple[ToolSpec, ...]] = (
             required=("container_ref",),
         ),
         example={"container_ref": _EXAMPLE_CRATE, "idempotency_key": "goal-1:step-1:attempt-1"},
+    ),
+    # --- doors -------------------------------------------------------------
+    # Three tools rather than one with a mode, because the three fail
+    # differently and a planner replans them differently: a merely-closed door
+    # is not an error at all, a locked one needs a key hunt (DOOR_LOCKED), a
+    # barricaded one needs the planks off or a detour (DOOR_BARRICADED). All
+    # three ride the one `door_toggle` capability and are long-running for the
+    # same reason the container open is — a walk may precede the toggle.
+    ToolSpec(
+        name="pz_action_open_door",
+        kind=ToolKind.WRITE,
+        risk=RiskClass.P3,
+        summary=(
+            "Open a named door. Verified by the following observation "
+            "describing it open; a door already open comes back as an "
+            "unchanged success, not an error. A door observed locked is "
+            "refused with DOOR_LOCKED — it needs its key (pz_action_unlock_door) "
+            "before it will open — and one observed barricaded with "
+            "DOOR_BARRICADED, which no toggle fixes."
+        ),
+        required_capability=DOOR_TOGGLE,
+        action=ActionName.DOOR_OPEN,
+        long_running=True,
+        input_schema=_mutating(
+            {
+                "door_ref": _ref_schema(
+                    RefKind.OBJECT,
+                    "The door, as pz_observe_nearby reported it: an object "
+                    "reference naming the square it stands on and its index in "
+                    "that square's object list.",
+                ),
+                "radius": {
+                    "type": "number",
+                    "description": "How close counts as within reach of the door, in squares.",
+                    "minimum": MIN_DOOR_RADIUS,
+                    "maximum": MAX_ARRIVAL_RADIUS,
+                    "default": DEFAULT_DOOR_RADIUS,
+                },
+            },
+            required=("door_ref",),
+        ),
+        example={"door_ref": _EXAMPLE_DOOR, "idempotency_key": "goal-1:step-1:attempt-1"},
+    ),
+    ToolSpec(
+        name="pz_action_close_door",
+        kind=ToolKind.WRITE,
+        risk=RiskClass.P3,
+        summary=(
+            "Close a named door. Verified by the following observation "
+            "describing it closed. A lock never blocks this — a lock holds a "
+            "door closed — so the one state refusal is DOOR_BARRICADED, and a "
+            "door already closed comes back as an unchanged success."
+        ),
+        required_capability=DOOR_TOGGLE,
+        action=ActionName.DOOR_CLOSE,
+        long_running=True,
+        input_schema=_mutating(
+            {
+                "door_ref": _ref_schema(
+                    RefKind.OBJECT,
+                    "The door, as pz_observe_nearby reported it: an object "
+                    "reference naming the square it stands on and its index in "
+                    "that square's object list.",
+                ),
+                "radius": {
+                    "type": "number",
+                    "description": "How close counts as within reach of the door, in squares.",
+                    "minimum": MIN_DOOR_RADIUS,
+                    "maximum": MAX_ARRIVAL_RADIUS,
+                    "default": DEFAULT_DOOR_RADIUS,
+                },
+            },
+            required=("door_ref",),
+        ),
+        example={"door_ref": _EXAMPLE_DOOR, "idempotency_key": "goal-1:step-1:attempt-1"},
+    ),
+    ToolSpec(
+        name="pz_action_unlock_door",
+        kind=ToolKind.WRITE,
+        risk=RiskClass.P3,
+        summary=(
+            "Unlock a named door. A matching key must be observably usable — "
+            "the mod checks the character's own key ring against the engine's "
+            "key ids — and a locked door with no such key aboard answers "
+            "DOOR_LOCKED: a key hunt, not a retry. A barricaded door answers "
+            "DOOR_BARRICADED, which is a detour. Verified by the following "
+            "observation reporting the lock off; a door already unlocked is "
+            "an unchanged success."
+        ),
+        required_capability=DOOR_TOGGLE,
+        action=ActionName.DOOR_UNLOCK,
+        long_running=True,
+        input_schema=_mutating(
+            {
+                "door_ref": _ref_schema(
+                    RefKind.OBJECT,
+                    "The door, as pz_observe_nearby reported it: an object "
+                    "reference naming the square it stands on and its index in "
+                    "that square's object list.",
+                ),
+                "radius": {
+                    "type": "number",
+                    "description": "How close counts as within reach of the door, in squares.",
+                    "minimum": MIN_DOOR_RADIUS,
+                    "maximum": MAX_ARRIVAL_RADIUS,
+                    "default": DEFAULT_DOOR_RADIUS,
+                },
+            },
+            required=("door_ref",),
+        ),
+        example={"door_ref": _EXAMPLE_DOOR, "idempotency_key": "goal-1:step-1:attempt-1"},
     ),
     ToolSpec(
         name="pz_action_transfer",

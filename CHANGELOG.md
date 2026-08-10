@@ -10,6 +10,48 @@ drift out of sync with `pz_agent_core.version`.
 
 ## [Unreleased]
 
+### Added
+
+- **Doors are observable, addressable and operable**
+  (`epic/p1-doors-navigation`). The 2026-08-08 live run found real doors and
+  could decide nothing about them: the snapshot said only `kind=door`, the
+  door shared a `square:` ref with everything else on its tile, and opening
+  one took a human at the keyboard. Now: nearby doors carry `open`, `locked`,
+  `barricaded` and `orientation` — each tri-state, absent when the build
+  exposes no reader, because "the lock could not be read" and "unlocked"
+  authorise different plans — plus their own stable `object:` reference. Three
+  new protocol actions, `door.open`, `door.close`, `door.unlock` (25 total),
+  ride a new `door_toggle` capability end-to-end: Lua adapter (walks into
+  reach, toggles via the game's own `IsoDoor:ToggleDoor`, verifies by
+  re-reading the door — a toggle the engine swallowed is `POSTCONDITION_FAILED`,
+  never a claimed success), Python adapter (postcondition demanded from the
+  *after* observation), MCP tools `pz_action_open_door` / `pz_action_close_door`
+  / `pz_action_unlock_door`. A locked door answers the new `DOOR_LOCKED`
+  reason code and a barricaded one `DOOR_BARRICADED` — distinct codes because
+  they demand different replanning (a key hunt versus a detour). `door.unlock`
+  demands an observably usable key and unlocks only through the game's own
+  interaction, never by writing lock state.
+- **`allow_doors` is now true, not just documented.** The move tools promised
+  "may open doors on the way" while the flag was parsed sidecar-side and
+  dropped. Both movement actions now declare and ship it (default true), and
+  the mod honours it: a walk that stalls against a closed, unlocked,
+  unbarricaded door toggles the door (verified by re-read), re-enqueues the
+  walk, and records each opening in evidence — bounded at three doors per
+  command. A locked or barricaded door on the route fails the walk with the
+  door's own reason code naming the square. `allow_doors=false` behaves
+  byte-identically to before, and a door whose state cannot be read is never
+  touched.
+- **`pz-agent latency` measures the P0 targets instead of estimating them.**
+  A bounded reader joins the command and ack journals by `command_id` and
+  reports exact nearest-rank p50/p95 for submit→accepted, accepted→started,
+  started→terminal and end-to-end, plus observation cadence and heartbeat
+  facts — labelling every cross-clock delta as such (the two processes' clocks
+  are never corrected). `--targets` marks each P0 target MET/MISSED/UNMEASURED
+  and never invents a number: a gameless machine reports UNMEASURED and exits
+  0, and terminal-ack *visibility* is honestly UNMEASURED offline because no
+  on-disk record carries the moment the sidecar read an ack. Live p95 numbers
+  are the game machine's to produce.
+
 ### Fixed
 
 - **The arm a client is told about is now the arm the game confirmed**

@@ -26,6 +26,9 @@ from pz_agent_core.protocol import READ_ONLY_ACTIONS, ActionName, ReasonCode, Ri
 IMPLEMENTED = {
     ActionName.MOVEMENT_MOVE_TO,
     ActionName.MOVEMENT_MOVE_NEAR,
+    ActionName.DOOR_OPEN,
+    ActionName.DOOR_CLOSE,
+    ActionName.DOOR_UNLOCK,
     ActionName.WORLD_INSPECT,
     ActionName.CONTAINER_INSPECT,
     ActionName.CONTAINER_OPEN_NEARBY,

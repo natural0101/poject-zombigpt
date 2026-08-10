@@ -47,6 +47,7 @@ from pz_agent_core.actions.adapters import register_game_adapters
 from pz_agent_core.capabilities.model import REASON_NO_VERIFIED_API
 from pz_agent_core.capabilities.probes import (
     AUTONOMOUS_ATTACK,
+    DOOR_TOGGLE,
     DRINK_CARRIED,
     DRINK_WORLD_SOURCE,
     EAT_PERCENTAGE,
@@ -272,11 +273,44 @@ def _survival_sleep() -> Exercise:
     )
 
 
+def _door_toggle() -> Exercise:
+    door_ref = f"object:{DEFAULT_SESSION}:{HOME_X + 2}:{HOME_Y}:0:1"
+    closed = a_world_object(
+        door_ref,
+        x=HOME_X + 2,
+        y=HOME_Y,
+        kind="door",
+        semantics=["door", "obstacle"],
+        open=False,
+        locked=False,
+        barricaded=False,
+        orientation="north",
+    )
+    opened = a_world_object(
+        door_ref,
+        x=HOME_X + 2,
+        y=HOME_Y,
+        kind="door",
+        semantics=["door", "obstacle"],
+        open=True,
+        locked=False,
+        barricaded=False,
+        orientation="north",
+    )
+    return Exercise(
+        capability=DOOR_TOGGLE,
+        command=a_command(ActionName.DOOR_OPEN, {"door_ref": door_ref}),
+        before=a_world(objects=[closed]),
+        after=a_world(seq=2, objects=[opened]),
+    )
+
+
 #: One run per probe this file can drive. Hand-built for the same reason the
 #: argument-agreement table is: a generated world would prove the generator
 #: agrees with itself, and the adapters are exactly what must not be trusted.
 EXERCISES: Final[tuple[Exercise, ...]] = (
     _move_to_square(),
+    _door_toggle(),
     _inventory_transfer(),
     _eat_percentage(),
     _drink_carried(),

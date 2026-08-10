@@ -407,9 +407,11 @@ do
   local fridgeRef = "container:" .. SESSION .. ":world:102:200:0:0:0"
   equal(byKind.fridge.ref, fridgeRef, "a container is referenced as a container")
   same(byKind.fridge.semantics, { "container" }, "and says so in its semantics")
-  equal(byKind.door.ref, "square:" .. SESSION .. ":100:203:0", "everything else is referenced by its square")
+  equal(byKind.door.ref, "object:" .. SESSION .. ":100:203:0:0", "a door is referenced as its own object")
   same(byKind.door.semantics, { "door", "obstacle" }, "with the semantics its kind implies")
+  isNil(byKind.door.open, "a door whose build exposes no readers claims no state")
   same(byKind.sink.semantics, { "water_source" }, "a water source is flagged for the drink policy")
+  equal(byKind.sink.ref, "square:" .. SESSION .. ":101:200:0", "everything else is referenced by its square")
 
   equal(
     document.player.stats[Model.LIMIT_PREFIX .. "chasing_unknown"],
@@ -442,6 +444,83 @@ do
   local crowded = Observe.nearbyObjects(position)
   equal(crowded.truncated, false, "a square with one object is not truncated by a budget of one")
   Observe.MAX_OBJECTS_PER_SQUARE = perSquare
+  removeCell()
+end
+
+Harness.group("a door carries the state its build will answer, never a default")
+do
+  -- Doubles built inline because each grants exactly the readers its case is
+  -- about: removing one is how "this build cannot read that" is expressed, and
+  -- the assertion that matters most is that the missing field stays *absent*.
+  local position = { x = 100, y = 200, z = 0 }
+  local fullDoor = {
+    getObjectName = function()
+      return "Door"
+    end,
+    IsOpen = function()
+      return false
+    end,
+    isLockedByKey = function()
+      return true
+    end,
+    isBarricaded = function()
+      return false
+    end,
+    getNorth = function()
+      return true
+    end,
+  }
+  local lockless = {
+    getObjectName = function()
+      return "Door"
+    end,
+    -- The lower-case spelling, which the probe must also answer to.
+    isOpen = function()
+      return true
+    end,
+    getNorth = function()
+      return false
+    end,
+  }
+  local bench = {
+    getObjectName = function()
+      return "Bench"
+    end,
+    -- A bench that happens to answer a door-shaped reader must still carry no
+    -- door fields: the probe runs for doors only.
+    IsOpen = function()
+      return true
+    end,
+  }
+  local removeCell = Support.installCell({
+    ["101,200,0"] = Support.square({ bench, fullDoor }),
+    ["100,201,0"] = Support.square({ lockless }),
+  }, {})
+
+  local scanned = Observe.nearbyObjects(position).objects
+  local byIndex = {}
+  for index = 1, #scanned do
+    byIndex[scanned[index].kind .. ":" .. scanned[index].object_index] = scanned[index]
+  end
+
+  local full = byIndex["door:1"]
+  equal(full.object_index, 1, "a door carries its position in the square's object list")
+  equal(full.open, false, "a read false is carried as false")
+  equal(full.locked, true, "the lock state is read")
+  equal(full.barricaded, false, "and the barricade state")
+  equal(full.orientation, "north", "getNorth true is the north wall")
+
+  local partial = byIndex["door:0"]
+  equal(partial.open, true, "the lower-case isOpen spelling answers too")
+  isNil(partial.locked, "a build with no lock reader leaves the field absent, never false")
+  isNil(partial.barricaded, "and the same for the barricade")
+  equal(partial.orientation, "west", "getNorth false is the west wall")
+
+  local seat = byIndex["bench:0"]
+  equal(seat.object_index, 0, "every scanned object carries its index")
+  isNil(seat.open, "a non-door never carries door fields, whatever it answers to")
+  isNil(seat.locked, "not the lock")
+  isNil(seat.orientation, "and no orientation")
   removeCell()
 end
 

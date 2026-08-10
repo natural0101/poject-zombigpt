@@ -230,11 +230,17 @@ class _MoveToSpec:
         is a refusal, not an ignored field. ``movement.move_to`` was therefore
         refused outright, every time.
 
-        ``max_distance``, ``allow_doors``, ``allow_windows`` and
-        ``allow_stairs`` stay on this side deliberately. They are decisions, and
-        :meth:`parse` and :func:`_check_square` have already made them against
-        the observation. Sending them would ask the mod to re-derive a policy it
-        has no observation to re-derive it from.
+        ``max_distance``, ``allow_windows`` and ``allow_stairs`` stay on this
+        side deliberately. They are decisions, and :meth:`parse` and
+        :func:`_check_square` have already made them against the observation;
+        sending them would ask the mod to re-derive a policy it has no
+        observation to re-derive it from. ``allow_doors`` used to be listed
+        with them, and the doors epic moved it to the wire, because it is the
+        one flag whose decision *cannot* finish here: whether a closed door
+        stands on the route is something only the mod discovers, mid-walk,
+        when the stall fires — so ``adapters/Movement.lua`` declares the flag
+        now and the door policy travels with the command instead of being
+        silently defaulted at the far end.
         """
         del session_id  # the mod resolves the square from the coordinates
         return {
@@ -242,6 +248,7 @@ class _MoveToSpec:
             "y": self.y,
             "z": self.z,
             "radius": self.radius,
+            "allow_doors": self.allow_doors,
         }
 
     def arrived(self, position: Position) -> bool:
@@ -260,7 +267,16 @@ def _square_object(observation: Observation, x: int, y: int, z: int) -> NearbyOb
 
 
 def _check_square(square: NearbyObject, *, allow_stairs: bool, changes_floor: bool) -> None:
-    """Refuse a destination square the agent must not walk onto."""
+    """Refuse a destination square the agent must not walk onto.
+
+    No door branch, deliberately. A closed door on the route is not a property
+    of the *destination* square, and this side cannot see the route at all —
+    the mod meets the door mid-walk, when the stall fires, and ``allow_doors``
+    travels with the command so the policy is decided where the door is. A
+    square the observer could not assess keeps today's refusals unchanged;
+    inventing a door semantic here would be a second, unobserved copy of the
+    mod's judgement.
+    """
     semantics = frozenset(square.semantics)
     if SEMANTIC_LOADED not in semantics:
         raise PreconditionFailed(
@@ -412,6 +428,7 @@ class _MoveNearSpec:
     object_ref: str
     radius: float
     max_distance: int
+    allow_doors: bool
 
     @classmethod
     def parse(cls, command: Command) -> _MoveNearSpec:
@@ -419,7 +436,15 @@ class _MoveNearSpec:
         # for why both shapes have to be readable here.
         check_args(
             command,
-            allowed=("object_ref", "ref", "radius", "reach", "max_distance", "allow_windows"),
+            allowed=(
+                "object_ref",
+                "ref",
+                "radius",
+                "reach",
+                "max_distance",
+                "allow_doors",
+                "allow_windows",
+            ),
         )
         if "object_ref" not in command.args and "ref" in command.args:
             command = replace(command, args={**command.args, "object_ref": command.args["ref"]})
@@ -463,6 +488,7 @@ class _MoveNearSpec:
                 minimum=1,
                 maximum=MAX_MOVE_DISTANCE_SQUARES,
             ),
+            allow_doors=read_flag(command, "allow_doors", default=True),
         )
 
     def as_args(self) -> JsonDict:
@@ -471,11 +497,16 @@ class _MoveNearSpec:
         The command-side names (``object_ref``, ``radius``) are the planner's
         and the MCP surface's; the mod's are these. Translating here is this
         method's whole job, and sending the command's own names instead meant
-        every argument was undeclared and the command refused.
+        every argument was undeclared and the command refused. ``allow_doors``
+        travels under its own name on both sides — both move commands share
+        the mod's walk loop, so both meet the same closed doors; see
+        ``_MoveToSpec.as_args`` for why this one flag ships while the other
+        policy flags stay here.
         """
         return {
             "ref": self.object_ref,
             "reach": self.radius,
+            "allow_doors": self.allow_doors,
         }
 
 

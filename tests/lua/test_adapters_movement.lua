@@ -84,6 +84,50 @@ local function finishQueue(walk, queue)
   Support.drainQueue(queue)
 end
 
+--- A door standing on a square, built here rather than in adapter_support so
+--- this file owns the double it pins behaviour against. Only the readers the
+--- fields imply are defined: deleting one is how "this build cannot read that"
+--- is expressed, and the adapter must then leave the door alone.
+local function door(fields)
+  fields = fields or {}
+  local state = { open = fields.open == true }
+  local object = { state = state }
+  object.getObjectName = function()
+    return "Door"
+  end
+  if not fields.no_open_reader then
+    object.IsOpen = function()
+      return state.open
+    end
+  end
+  if not fields.no_lock_reader then
+    object.isLocked = function()
+      return fields.locked == true
+    end
+  end
+  if not fields.no_barricade_reader then
+    object.isBarricaded = function()
+      return fields.barricaded == true
+    end
+  end
+  object.ToggleDoor = function()
+    -- `toggle_sticks` is the door the game refused to move: the call lands and
+    -- nothing changes, which the adapter may only discover by re-reading.
+    if not fields.toggle_sticks then
+      state.open = not state.open
+    end
+  end
+  return object
+end
+
+--- Poll to mark the gap, then poll again with the stall window elapsed.
+local function stallPoll(ctx, adapter, from)
+  ctx.now_ms = from
+  equal(adapter.poll(ctx), true, "the first poll only marks where the gap stood")
+  ctx.now_ms = from + Toolkit.DEFAULT_STALL_MS
+  return adapter.poll(ctx)
+end
+
 Harness.group("the adapters declare themselves the way the dispatcher demands")
 do
   local registry = PZ.CommandDispatcher.new()
@@ -129,11 +173,18 @@ do
   code = refuse(MoveTo, { x = 105, y = 200, z = 0, radius = "close" })
   equal(code, REASON.INVALID_ARGUMENT, "a radius that is not a number is refused")
 
+  code = refuse(MoveTo, { x = 105, y = 200, z = 0, allow_doors = "yes" })
+  equal(code, REASON.INVALID_ARGUMENT, "allow_doors takes a boolean, not a word that sounds like one")
+
   local _, _, detail = accept(MoveTo, { target = { x = 105, y = 200, z = 0 } })
   contains(detail, "target", "a nested target object never reaches the adapter")
 
   local args = accept(MoveTo, { x = 105, y = 200, z = 0 })
-  same(args, { x = 105, y = 200, z = 0 }, "a valid move carries the declared keys and nothing else")
+  same(args, { x = 105, y = 200, z = 0, allow_doors = true },
+    "a valid move carries the declared keys, doors allowed by default, and nothing else")
+
+  args = accept(MoveTo, { x = 105, y = 200, z = 0, allow_doors = false })
+  equal(args.allow_doors, false, "and a caller that forbids doors is heard")
 end
 
 Harness.group("move_to queues one tagged walk and proves where it ended")
@@ -235,6 +286,173 @@ do
   equal(code, REASON.PATH_NOT_FOUND, "the path did not go where the command asked")
   contains(detail, "short", "and the detail says so")
   equal(Toolkit.state(ctx).evidence.distance_after, 5, "with the gap that was left")
+end
+
+Harness.group("a stalled walk opens the closed door in its way and carries on")
+do
+  local shut = door({ open = false })
+  local _, ctx, walk, queue = scene({ squares = { { 101, 200, 0, { shut } }, { 105, 200, 0 } } })
+  local args = accept(MoveTo, { x = 105, y = 200, z = 0 })
+  equal(MoveTo.start(ctx, args), true, "the walk starts against the closed door")
+  equal(stallPoll(ctx, MoveTo, Support.NOW), true, "the stall is spent opening the door, not failing the walk")
+  equal(shut.state.open, true, "the door was toggled open by the game's own call")
+  equal(#queue.added, 2, "and a second walk to the original target was queued")
+  equal(queue.added[2].pzAgentSession, Support.SESSION, "tagged as this session's like the first")
+
+  local evidence = Toolkit.state(ctx).evidence
+  equal(evidence.doors_opened, 1, "the evidence counts the opening")
+  same(evidence.doors[1], { x = 101, y = 200, z = 0, opened = true }, "and names the door's square")
+
+  finishQueue(walk, queue)
+  equal(MoveTo.poll(ctx), "done", "the re-enqueued walk ends at the target")
+  equal(evidence.arrived, true, "with the arrival observed, not assumed")
+end
+
+Harness.group("a walk that drained short opens the door instead of PATH_NOT_FOUND")
+do
+  local shut = door({ open = false })
+  local _, ctx, walk, queue = scene({ squares = { { 101, 200, 0, { shut } }, { 105, 200, 0 } } })
+  local args = accept(MoveTo, { x = 105, y = 200, z = 0 })
+  MoveTo.start(ctx, args)
+  Support.drainQueue(queue)
+  equal(MoveTo.poll(ctx), true, "the drained queue is spent on the door, not on a path failure")
+  equal(shut.state.open, true, "which is now open")
+  equal(#queue.added, 2, "with the walk queued again")
+  finishQueue(walk, queue)
+  equal(MoveTo.poll(ctx), "done", "and the target reached")
+end
+
+Harness.group("allow_doors=false leaves the door alone and fails exactly as before")
+do
+  local shut = door({ open = false })
+  local _, ctx, _, queue = scene({ squares = { { 101, 200, 0, { shut } }, { 105, 200, 0 } } })
+  local args = accept(MoveTo, { x = 105, y = 200, z = 0, allow_doors = false })
+  MoveTo.start(ctx, args)
+  local outcome, code, detail = stallPoll(ctx, MoveTo, Support.NOW)
+  isNil(outcome, "the stall stays a stall")
+  equal(code, REASON.PATH_STUCK, "with the exact code a doorless build reports")
+  contains(detail, "squares short", "and the same detail")
+  equal(shut.state.open, false, "the door was never touched")
+  equal(#queue.added, 1, "and nothing extra was queued")
+  isNil(Toolkit.state(ctx).evidence.doors_opened, "the evidence claims no door work it did not do")
+
+  local _, drained, _, drainedQueue = scene({ squares = { { 101, 200, 0, { door({ open = false }) } } } })
+  MoveTo.start(drained, args)
+  Support.drainQueue(drainedQueue)
+  outcome, code = MoveTo.poll(drained)
+  isNil(outcome, "the drained-short walk stays a failure too")
+  equal(code, REASON.PATH_NOT_FOUND, "with the exact code a doorless build reports")
+end
+
+Harness.group("a locked door fails the walk naming the square that needs a key")
+do
+  local shut = door({ open = false, locked = true })
+  local _, ctx, _, queue = scene({ squares = { { 101, 200, 0, { shut } }, { 105, 200, 0 } } })
+  local args = accept(MoveTo, { x = 105, y = 200, z = 0 })
+  MoveTo.start(ctx, args)
+  local outcome, code, detail = stallPoll(ctx, MoveTo, Support.NOW)
+  isNil(outcome, "a locked door is not opened")
+  equal(code, REASON.DOOR_LOCKED, "it is the key hunt the planner has to hear about")
+  contains(detail, "101", "naming the square the door stands on")
+  equal(shut.state.open, false, "the door was never toggled")
+  equal(#queue.added, 1, "and no second walk was queued")
+  equal(Toolkit.state(ctx).evidence.arrived, false, "the evidence records where the walk ended")
+end
+
+Harness.group("a barricaded door fails the walk naming the square that needs a detour")
+do
+  local shut = door({ open = false, barricaded = true })
+  local _, ctx = scene({ squares = { { 101, 200, 0, { shut } }, { 105, 200, 0 } } })
+  local args = accept(MoveTo, { x = 105, y = 200, z = 0 })
+  MoveTo.start(ctx, args)
+  local outcome, code, detail = stallPoll(ctx, MoveTo, Support.NOW)
+  isNil(outcome, "a barricaded door is not opened")
+  equal(code, REASON.DOOR_BARRICADED, "it is a detour, not a key hunt")
+  contains(detail, "101", "naming the square")
+  equal(shut.state.open, false, "the door was never toggled")
+end
+
+Harness.group("a door whose state cannot be read is left alone")
+do
+  -- No barricade reader: open and locked both read fine, but nil is not false,
+  -- so the door cannot be proven safe to open and the walk fails as it always
+  -- did -- honestly, without touching what it cannot see.
+  local unreadable = door({ open = false, no_barricade_reader = true })
+  local _, ctx = scene({ squares = { { 101, 200, 0, { unreadable } }, { 105, 200, 0 } } })
+  local args = accept(MoveTo, { x = 105, y = 200, z = 0 })
+  MoveTo.start(ctx, args)
+  local outcome, code = stallPoll(ctx, MoveTo, Support.NOW)
+  isNil(outcome, "the unreadable door does not rescue the walk")
+  equal(code, REASON.PATH_STUCK, "which fails with the code a doorless build reports")
+  equal(unreadable.state.open, false, "and the door was never touched")
+  isNil(Toolkit.state(ctx).evidence.doors, "no attempt was recorded, because none was made")
+end
+
+Harness.group("a toggle that does not take falls through with the attempt on record")
+do
+  local stuckDoor = door({ open = false, toggle_sticks = true })
+  local _, ctx, _, queue = scene({ squares = { { 101, 200, 0, { stuckDoor } }, { 105, 200, 0 } } })
+  local args = accept(MoveTo, { x = 105, y = 200, z = 0 })
+  MoveTo.start(ctx, args)
+  local outcome, code = stallPoll(ctx, MoveTo, Support.NOW)
+  isNil(outcome, "a door still shut after the toggle rescues nothing")
+  equal(code, REASON.PATH_STUCK, "so the walk fails with its own code")
+  equal(#queue.added, 1, "no second walk was queued for a door still shut")
+  local evidence = Toolkit.state(ctx).evidence
+  equal(evidence.doors_opened, 0, "no opening is claimed")
+  same(evidence.doors[1], { x = 101, y = 200, z = 0, opened = false },
+    "but the attempt is on the record, square and all")
+end
+
+Harness.group("the door budget is three openings, then the walk fails honestly")
+do
+  local doors = {
+    door({ open = false }),
+    door({ open = false }),
+    door({ open = false }),
+    door({ open = false }),
+  }
+  local player, ctx, _, _ = scene({
+    squares = {
+      { 101, 200, 0, { doors[1] } },
+      { 102, 200, 0, { doors[2] } },
+      { 103, 200, 0, { doors[3] } },
+      { 104, 200, 0, { doors[4] } },
+      { 105, 200, 0 },
+    },
+  })
+  local args = accept(MoveTo, { x = 105, y = 200, z = 0 })
+  MoveTo.start(ctx, args)
+  local now = Support.NOW
+  for step = 1, 3 do
+    equal(stallPoll(ctx, MoveTo, now), true, "door " .. step .. " is opened and the walk re-enqueued")
+    equal(doors[step].state.open, true, "door " .. step .. " reads open")
+    -- The game walks the character one square before the next door wedges them.
+    player.state.x = 100 + step
+    now = now + Toolkit.DEFAULT_STALL_MS
+  end
+  local outcome, code = stallPoll(ctx, MoveTo, now)
+  isNil(outcome, "the fourth door is past the budget")
+  equal(code, REASON.PATH_STUCK, "so the walk fails with its own code rather than looping on doors")
+  equal(doors[4].state.open, false, "and the fourth door stays shut")
+  equal(Toolkit.state(ctx).evidence.doors_opened, 3, "the evidence counts exactly the budget")
+end
+
+Harness.group("move_near meets the same doors through the shared poll")
+do
+  local crate = Support.worldObject({ name = "Crate", container = Support.container({}) })
+  local shut = door({ open = false })
+  local _, ctx, walk, queue = scene({
+    squares = { { 101, 200, 0, { shut } }, { 104, 200, 0, { crate } } },
+  })
+  local args = accept(MoveNear, { ref = Support.worldContainerRef(104, 200, 0, 0) })
+  equal(args.allow_doors, true, "move_near declares the same switch, on by default")
+  equal(MoveNear.start(ctx, args), true, "the approach starts against the closed door")
+  equal(stallPoll(ctx, MoveNear, Support.NOW), true, "and spends the stall opening it")
+  equal(shut.state.open, true, "the door reads open")
+  finishQueue(walk, queue)
+  equal(MoveNear.poll(ctx), "done", "the approach ends within reach")
+  equal(Toolkit.state(ctx).evidence.doors_opened, 1, "with the opening on the evidence")
 end
 
 Harness.group("an interruption ends the walk and still says where the character got to")

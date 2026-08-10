@@ -75,7 +75,10 @@
         "medical.bandage",
         "survival.rest",
         "survival.sleep",
-        "plan.cancel"
+        "plan.cancel",
+        "door.open",
+        "door.close",
+        "door.unlock"
       ]
     },
     "args": {
