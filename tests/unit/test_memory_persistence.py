@@ -10,6 +10,7 @@ import pytest
 
 from pz_agent_core.memory import (
     CEILINGS,
+    MAX_CONTENT_REVISION_LEN,
     MAX_MEMORY_BYTES,
     MEMORY_SCHEMA_VERSION,
     MIN_SUPPORTED_SCHEMA,
@@ -245,6 +246,8 @@ def test_a_memory_at_every_ceiling_still_fits_under_the_byte_cap(tmp_path: Path)
                 for slot in range(CEILINGS["max_categories_per_container"])
             ],
             inspected=True,
+            content_revision="f" * MAX_CONTENT_REVISION_LEN,
+            item_count=999_999_999,
         )
     for index in range(CEILINGS["max_failed_paths"]):
         memory.note_failed_path(
@@ -394,3 +397,88 @@ def test_the_container_cap_still_holds_after_a_reload(tmp_path: Path) -> None:
     store.save(memory_with_containers(DEFAULT_SAVE, 8, config=config))
 
     assert len(store.load(DEFAULT_SAVE).containers()) == 3
+
+
+# --------------------------------------------------------------------------
+# schema 3: what an enumeration found
+# --------------------------------------------------------------------------
+
+
+def _v2_document(save_id: str = DEFAULT_SAVE) -> dict[str, Any]:
+    """A document in the second layout, as the previous build wrote it."""
+    return {
+        "schema_version": 2,
+        "save_scope": save_scope(save_id),
+        "containers": [
+            {
+                "tail": "world:1200:3400:0:1:0",
+                "kind": "world",
+                "label": "Counter",
+                "square": {"x": 1200, "y": 3400, "z": 0},
+                "last_seen_ms": NOW_MS,
+                "last_inspected_ms": NOW_MS,
+                "categories": ["Food"],
+            }
+        ],
+        "safe_zones": [],
+        "failed_paths": [],
+        "reservations": [],
+        "preferences": [],
+        "tasks": [],
+    }
+
+
+def test_a_schema_two_document_is_migrated_to_the_enumeration_layout() -> None:
+    """No schema-2 writer ever enumerated contents, so the defaults are the truth."""
+    migrated = migrate_document(_v2_document())
+
+    assert migrated["schema_version"] == MEMORY_SCHEMA_VERSION
+    assert migrated["containers"][0]["content_revision"] == ""
+    assert migrated["containers"][0]["item_count"] == -1
+
+
+def test_a_schema_one_document_migrates_the_whole_chain_to_the_current_layout() -> None:
+    (container,) = migrate_document(_v1_document())["containers"]
+
+    assert container["content_revision"] == ""
+    assert container["item_count"] == -1
+    assert container["last_inspected_ms"] == 0
+
+
+def test_a_migrated_v2_document_loads_and_answers_never_enumerated(store: MemoryStore) -> None:
+    store.root.mkdir(parents=True, exist_ok=True)
+    store.path_for(DEFAULT_SAVE).write_text(json.dumps(_v2_document()), encoding="utf-8")
+
+    memory = store.load(DEFAULT_SAVE)
+
+    (record,) = memory.containers()
+    assert record.item_count == -1
+    assert record.content_revision == ""
+    assert memory.container_unchanged(record.tail, "a" * 16) is False
+
+
+def test_the_enumeration_fields_survive_the_round_trip(store: MemoryStore) -> None:
+    memory = SaveMemory(DEFAULT_SAVE)
+    memory.note_container(
+        container_ref=world_container_ref(),
+        kind=ContainerKind.WORLD,
+        name="Counter",
+        now_ms=NOW_MS,
+        inspected=True,
+        content_revision="ab12cd34ef56ab78",
+        item_count=7,
+    )
+    store.save(memory)
+
+    (restored,) = store.load(DEFAULT_SAVE).containers()
+
+    assert restored.content_revision == "ab12cd34ef56ab78"
+    assert restored.item_count == 7
+
+
+def test_a_stored_revision_over_its_bound_is_refused_not_truncated() -> None:
+    document = _populated().to_document(schema_version=MEMORY_SCHEMA_VERSION)
+    document["containers"][0]["content_revision"] = "f" * (MAX_CONTENT_REVISION_LEN + 1)
+
+    with pytest.raises(MemoryValueError, match=r"container\.content_revision"):
+        SaveMemory.from_document(document, save_id=DEFAULT_SAVE)

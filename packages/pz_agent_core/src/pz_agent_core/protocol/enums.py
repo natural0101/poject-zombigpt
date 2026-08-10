@@ -42,6 +42,7 @@ class ActionName(StrEnum):
     DOOR_OPEN = "door.open"
     DOOR_CLOSE = "door.close"
     DOOR_UNLOCK = "door.unlock"
+    INVENTORY_TRANSFER_BATCH = "inventory.transfer_batch"
 
 
 #: Actions that only read state. They are permitted in OBSERVE mode and do not

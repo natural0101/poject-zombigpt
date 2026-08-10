@@ -21,7 +21,7 @@ acting on it is acting on the wrong object.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Final, TypeVar
 
@@ -176,8 +176,18 @@ class SaveMemory:
         now_ms: int,
         categories: Iterable[str] = (),
         inspected: bool = False,
+        content_revision: str = "",
+        item_count: int = -1,
     ) -> KnownContainer:
         """Record that a container was seen, and optionally that it was opened.
+
+        ``content_revision`` and ``item_count`` are only meaningful with
+        ``inspected=True`` — they describe what an enumeration found, and a
+        sighting enumerates nothing. On the sighting path they are carried
+        forward from the previous record exactly as the categories are; on the
+        inspection path they *replace* what was remembered, defaults included,
+        because the new look is the newer fact and repeating a stale digest
+        would answer "unchanged" about contents nobody just checked.
 
         Raises:
             MemoryValueError: when *container_ref* is not a world container.
@@ -192,12 +202,15 @@ class SaveMemory:
             inspected_at_ms=now_ms if inspected else 0,
             categories=categories,
             category_limit=self._config.max_categories_per_container,
+            content_revision=content_revision,
+            item_count=item_count,
         )
         previous = self._containers.get(record.tail)
         if previous is not None and not inspected:
             # A sighting must not erase what a previous inspection learned: the
-            # categories and the inspection time are facts about the contents,
-            # and walking past the shelf did not disprove them.
+            # categories, the inspection time, the content revision and the
+            # item count are facts about the contents, and walking past the
+            # shelf did not disprove them.
             record = KnownContainer(
                 tail=record.tail,
                 kind=record.kind,
@@ -206,6 +219,8 @@ class SaveMemory:
                 last_seen_ms=max(record.last_seen_ms, previous.last_seen_ms),
                 last_inspected_ms=previous.last_inspected_ms,
                 categories=previous.categories,
+                content_revision=previous.content_revision,
+                item_count=previous.item_count,
             )
         self._containers[record.tail] = record
         self._prune(now_ms)
@@ -222,6 +237,35 @@ class SaveMemory:
         except MemoryValueError:
             return None
         return self._containers.get(tail)
+
+    def container_unchanged(self, tail: str, revision: str) -> bool:
+        """True only when *revision* matches a *recorded* enumeration of *tail*.
+
+        Three-state honesty collapsed into the only safe boolean: a container
+        never remembered, or remembered but never enumerated (empty stored
+        revision), or offered an empty *revision*, all answer False — "I do not
+        know" must send the loot planner back to look, never spare it the trip.
+        True is reserved for two non-empty digests agreeing, which is
+        :func:`~pz_agent_core.memory.model.content_revision_of`'s change-detector
+        promise: a changed world almost never keeps its revision.
+        """
+        if not revision:
+            return False
+        record = self._containers.get(tail)
+        if record is None or not record.content_revision:
+            return False
+        return record.content_revision == revision
+
+    def uninspected_tails(self) -> Iterator[str]:
+        """Tails of containers seen but never enumerated, most recently seen first.
+
+        The loot planner's worklist: places the agent has walked past without
+        ever counting what is inside. ``item_count < 0`` is the "never
+        enumerated" marker (:class:`~pz_agent_core.memory.model.KnownContainer`),
+        so a container opened and found empty does not reappear here. Bounded by
+        ``max_containers`` like everything the iterator walks.
+        """
+        return (record.tail for record in self.containers() if record.item_count < 0)
 
     # -- home, safe zones --------------------------------------------------
 

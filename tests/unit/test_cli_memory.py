@@ -27,6 +27,7 @@ from pz_agent_cli.context import EXIT_FAILURE, EXIT_OK, resolve_workspace
 from pz_agent_cli.memory import (
     MEMORY_DIR_NAME,
     MEMORY_RECORD_NAME,
+    NOTE_FLUSH_INTERVAL_MS,
     RESERVED_BY_USER,
     MemoryRecord,
     MemoryRecordError,
@@ -41,10 +42,32 @@ from pz_agent_cli.memory import (
 )
 from pz_agent_core.ipc.layout import IpcLayout
 from pz_agent_core.ipc.snapshot import SnapshotWriter
-from pz_agent_core.memory import MAX_FULL_TYPE_LEN, MemoryStore, SaveMemory, Square
+from pz_agent_core.memory import (
+    MAX_FULL_TYPE_LEN,
+    MemoryStore,
+    SaveMemory,
+    Square,
+    content_revision_of,
+)
 from pz_agent_core.policy.autonomy import NO_MEMORY
-from pz_agent_core.protocol import Position
-from tests.fixtures import make_game, make_observation, make_player
+from pz_agent_core.protocol import (
+    ContainerKind,
+    InventoryView,
+    NearbyObject,
+    NearbyView,
+    Observation,
+    Position,
+)
+from tests.fixtures import (
+    DEFAULT_SESSION,
+    backpack_container_ref,
+    item_ref,
+    make_container,
+    make_game,
+    make_item,
+    make_observation,
+    make_player,
+)
 from tests.fixtures.cli_worlds import CliWorld, make_world
 
 SAVE: Final = "1f3c9a2b7e40d115"
@@ -539,3 +562,231 @@ def test_a_malformed_record_is_no_record_rather_than_half_of_one(
 
 def test_no_record_at_all_is_a_different_answer_from_a_bad_one(tmp_path: Path) -> None:
     assert read_memory_record(tmp_path / MEMORY_RECORD_NAME) is None
+
+
+# ---------------------------------------------------------------------------
+# the feeding seam: sightings and inspections
+# ---------------------------------------------------------------------------
+
+WORLD_TAIL: Final = "world:1210:3405:0:1:0"
+WORLD_REF: Final = f"container:{DEFAULT_SESSION}:{WORLD_TAIL}"
+SECOND_TAIL: Final = "world:1215:3406:0:1:0"
+SECOND_REF: Final = f"container:{DEFAULT_SESSION}:{SECOND_TAIL}"
+
+
+def nearby_container(ref: str = WORLD_REF) -> NearbyObject:
+    return NearbyObject(ref=ref, kind="container", distance=1.5)
+
+
+def world_observation(
+    *,
+    save_id: str = SAVE,
+    objects: list[NearbyObject] | None = None,
+    inventory: InventoryView | None = None,
+) -> Observation:
+    return make_observation(
+        game=make_game(save_id=save_id),
+        nearby=NearbyView(objects=[nearby_container()] if objects is None else objects),
+        inventory=InventoryView() if inventory is None else inventory,
+    )
+
+
+def counter_inventory() -> InventoryView:
+    """A described world counter holding two tins and a hammer."""
+    return InventoryView(
+        containers=[make_container(WORLD_REF, ContainerKind.WORLD, name="Counter")],
+        items=[
+            make_item(item_ref("beans-1", WORLD_TAIL), WORLD_REF),
+            make_item(item_ref("beans-2", WORLD_TAIL), WORLD_REF),
+            make_item(
+                item_ref("hammer-1", WORLD_TAIL),
+                WORLD_REF,
+                full_type="Base.Hammer",
+                display_name="Hammer",
+                category="Tool",
+            ),
+        ],
+    )
+
+
+def test_a_world_container_in_nearby_becomes_a_sighting(tmp_path: Path) -> None:
+    """The seam that finally feeds note_container: seen, where, and nothing more."""
+    memory, store = seam(tmp_path)
+
+    recorded = memory.note_observation(world_observation(), now_ms=NOW_MS)
+
+    assert recorded == 1
+    loaded = memory.loaded
+    assert loaded is not None
+    (record,) = loaded.containers()
+    assert record.tail == WORLD_TAIL
+    assert record.square is not None and (record.square.x, record.square.y) == (1210, 3405)
+    assert record.last_inspected_ms == 0
+    assert record.item_count == -1
+    assert store.path_for(SAVE).is_file(), "the first sighting was never flushed"
+
+
+def test_a_sighting_of_a_described_container_records_its_kind_and_name(tmp_path: Path) -> None:
+    memory, _ = seam(tmp_path)
+    observation = world_observation(inventory=counter_inventory())
+
+    memory.note_observation(observation, now_ms=NOW_MS)
+
+    loaded = memory.loaded
+    assert loaded is not None
+    (record,) = loaded.containers()
+    assert record.kind is ContainerKind.WORLD
+    assert record.label == "Counter"
+
+
+def test_nothing_on_the_player_is_ever_stored(tmp_path: Path) -> None:
+    """Worn and carried references embed runtime ids a reload invalidates."""
+    memory, store = seam(tmp_path)
+    observation = world_observation(
+        objects=[
+            nearby_container(f"container:{DEFAULT_SESSION}:player-main"),
+            nearby_container(backpack_container_ref()),
+            NearbyObject(ref=f"door:{DEFAULT_SESSION}:10:20:0:1", kind="door", distance=1.0),
+        ]
+    )
+
+    recorded = memory.note_observation(observation, now_ms=NOW_MS)
+
+    assert recorded == 0
+    loaded = memory.loaded
+    assert loaded is not None and loaded.containers() == ()
+    assert not store.path_for(SAVE).is_file(), "a memory with nothing to note wrote a file"
+
+
+def test_sightings_are_flushed_on_a_cadence_not_per_observation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The pinned bound: at most one write per NOTE_FLUSH_INTERVAL_MS."""
+    memory, _ = seam(tmp_path)
+    writes: list[int] = []
+    real_save = memory.store.save
+
+    def counting_save(saved: SaveMemory) -> int:
+        written = real_save(saved)
+        writes.append(written)
+        return written
+
+    monkeypatch.setattr(memory.store, "save", counting_save)
+
+    memory.note_observation(world_observation(), now_ms=NOW_MS)
+    memory.note_observation(world_observation(), now_ms=NOW_MS + 1_000)
+    memory.note_observation(world_observation(), now_ms=NOW_MS + 2_000)
+    assert len(writes) == 1, "a write per observation is the disk workload this seam avoids"
+
+    memory.note_observation(world_observation(), now_ms=NOW_MS + NOTE_FLUSH_INTERVAL_MS)
+    assert len(writes) == 2
+
+    memory.note_observation(world_observation(), now_ms=NOW_MS + NOTE_FLUSH_INTERVAL_MS + 1_000)
+    assert len(writes) == 2
+
+
+def test_an_inspection_records_the_revision_the_count_and_the_categories(
+    tmp_path: Path,
+) -> None:
+    memory, _ = seam(tmp_path)
+    observation = world_observation(inventory=counter_inventory())
+    memory.note_observation(observation, now_ms=NOW_MS)
+
+    assert memory.note_inspection(WORLD_REF, observation, now_ms=NOW_MS + 500) is True
+
+    loaded = memory.loaded
+    assert loaded is not None
+    record = loaded.container(WORLD_REF)
+    assert record is not None
+    assert record.item_count == 3
+    assert record.last_inspected_ms == NOW_MS + 500
+    assert record.categories == ("Food", "Tool")
+    expected = content_revision_of([("Base.TinnedBeans", 2), ("Base.Hammer", 1)])
+    assert record.content_revision == expected
+    assert loaded.container_unchanged(WORLD_TAIL, expected) is True
+
+
+def test_an_inspection_of_an_on_person_container_is_refused(tmp_path: Path) -> None:
+    memory, _ = seam(tmp_path)
+    observation = world_observation(inventory=counter_inventory())
+    memory.note_observation(observation, now_ms=NOW_MS)
+
+    refused = memory.note_inspection(
+        f"container:{DEFAULT_SESSION}:player-main", observation, now_ms=NOW_MS
+    )
+
+    assert refused is False
+    loaded = memory.loaded
+    assert loaded is not None
+    assert [record.tail for record in loaded.containers()] == [WORLD_TAIL]
+
+
+def test_an_inspection_the_observation_does_not_describe_is_not_stored(tmp_path: Path) -> None:
+    """ "The crate was not described" is the opposite fact from "the crate is empty"."""
+    memory, _ = seam(tmp_path)
+    observation = world_observation()
+    memory.note_observation(observation, now_ms=NOW_MS)
+
+    assert memory.note_inspection(SECOND_REF, observation, now_ms=NOW_MS) is False
+
+    loaded = memory.loaded
+    assert loaded is not None
+    assert loaded.container(SECOND_REF) is None
+
+
+def test_an_unreadable_memory_is_fed_nothing(tmp_path: Path) -> None:
+    """A file that will not parse must not be overwritten by a passing shelf."""
+    memory, store = seam(tmp_path)
+    path = store.path_for(SAVE)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{not json", encoding="utf-8")
+
+    recorded = memory.note_observation(world_observation(), now_ms=NOW_MS)
+
+    assert recorded == 0
+    assert path.read_text(encoding="utf-8") == "{not json"
+
+
+def test_a_reservation_written_mid_run_survives_the_seams_flush(tmp_path: Path) -> None:
+    """The user's words outrank the agent's sightings, whoever wrote last."""
+    memory, store = seam(tmp_path)
+    memory.note_observation(world_observation(), now_ms=NOW_MS)
+
+    reserved = store.load(SAVE)
+    reserved.reserve(full_type=BEANS, reason=RESERVED_BY_USER, now_ms=NOW_MS)
+    store.save(reserved)
+
+    memory.note_observation(
+        world_observation(objects=[nearby_container(SECOND_REF)]),
+        now_ms=NOW_MS + NOTE_FLUSH_INTERVAL_MS,
+    )
+
+    assert memory.reserves_item(BEANS) is True
+    on_disk = store.load(SAVE)
+    assert on_disk.reserves_item(BEANS) is True
+    assert {record.tail for record in on_disk.containers()} == {WORLD_TAIL, SECOND_TAIL}
+
+
+def test_a_write_landing_between_load_and_flush_is_not_clobbered(tmp_path: Path) -> None:
+    """The narrow race: the file changes after follow() looked and before the flush.
+
+    note_inspection does not re-follow, so an external write in that window is
+    exactly what the flush's own stamp check exists to catch. The inspection is
+    discarded as the smaller loss — re-derivable by looking again — and the
+    reservation the user just made is not.
+    """
+    memory, store = seam(tmp_path)
+    observation = world_observation(inventory=counter_inventory())
+    memory.note_observation(observation, now_ms=NOW_MS)
+
+    reserved = store.load(SAVE)
+    reserved.reserve(full_type=BEANS, reason=RESERVED_BY_USER, now_ms=NOW_MS)
+    store.save(reserved)
+
+    memory.note_inspection(WORLD_REF, observation, now_ms=NOW_MS + NOTE_FLUSH_INTERVAL_MS)
+
+    on_disk = store.load(SAVE)
+    assert on_disk.reserves_item(BEANS) is True, "the seam overwrote the user's reservation"
+    assert memory.reserves_item(BEANS) is True
+    (record,) = on_disk.containers()
+    assert record.content_revision == "", "the discarded inspection leaked to disk anyway"

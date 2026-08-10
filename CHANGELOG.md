@@ -12,7 +12,61 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Added
 
-- **A deterministic navigation executor walks routes without an LLM call per
+- **«Облутай квартиру» is now a typed goal** (`epic/p1-loot-area`, wave 2).
+  `loot_area` (7 goal kinds) takes a scope — `room` (default), `building`, or
+  `radius` 1..30 — plus `take_all` and an optional closed category list, and
+  runs as a deterministic mission with no LLM call anywhere: pin the scope
+  from the activation observation (a build that reports no rooms answers a
+  typed refusal naming `scope=radius`, never a guess), discover world
+  containers in scope, skip the ones the memory proves unchanged since their
+  last inspection — recorded as a skip, not silently —, approach each through
+  the navigation executor (a locked or barricaded door on the way becomes a
+  skip reason naming the door), open, inspect, select by the deterministic
+  loot policy (closed category vocabulary, user reserves outrank even
+  `take_all`, greedy capacity fitting where an exact fit is a fit), and move
+  items with `inventory.transfer_batch`. The mission ends `complete` only on
+  the provable criterion — every candidate inspected or carrying a recorded
+  skip reason — or `encumbered` the moment the main inventory provably cannot
+  take the smallest wanted item. The terminal report survives in a bounded
+  ledger: containers inspected, skipped with reasons, items taken per
+  category, left per reason.
+- **Observation grew rooms, buildings and corpses.** The player and every
+  nearby object now carry tri-state `room`/`building` tokens (outdoors and
+  "no reader on this build" are deliberately the same absence — a scope
+  decision must not read the second as the first; names are normalised once,
+  space to underscore, or dropped whole rather than mangled). Corpses with
+  loot appear as `kind=corpse` container objects — observation-only for now:
+  a dead body is not in the square's object list, so the world-container ref
+  scheme cannot honestly address its inventory; the gap is recorded in
+  `GAME_API_VERIFICATION.md` as a future protocol change, and the loot
+  mission records such containers as skipped rather than pretending.
+- **One command now moves a batch, and stopping honestly is part of the
+  contract** (`epic/p1-loot-area`, wave 1). The dispatcher grew its first
+  structured argument type: a declared, bounded LIST (dense array, 1..8
+  elements, refs or plain strings, element-wise session checks, duplicates
+  refused, a fresh sanitised copy handed to the adapter — and the
+  type-dispatch fall-through that would have silently treated an unknown
+  declared type as a ref is now a load-time refusal). On it rides
+  `inventory.transfer_batch` (26 actions): up to eight items, possibly from
+  different source containers, moved one at a time by the game's own transfer
+  action with capacity re-checked before every enqueue. `succeeded` only when
+  every requested item is observed in the destination; a capacity stop
+  partway is a FAILED `CONTAINER_FULL` whose evidence carries the honest
+  partial record — what landed, what stopped and why, what the batch never
+  attempted. The Python half pre-checks the summed weights and, when only a
+  prefix fits, refuses naming "the first k of n". MCP tool:
+  `pz_action_transfer_batch` (41 tools).
+- **The sidecar finally remembers what it saw in containers.** The
+  long-orphaned `KnownContainer` store is now fed: every world container in
+  an observation lands as a sighting, every enumeration (`container.inspect`,
+  transfer evidence) lands as an inspection carrying `item_count` and a
+  `content_revision` — a 16-hex change detector over the observed contents,
+  documented as a detector, not an inventory. New queries for the loot
+  planner: `container_unchanged(tail, revision)` (three-state honest: an
+  empty revision is never "unchanged") and `uninspected_tails()`. Writes are
+  batched (one flush per 10 s, plus shutdown), and a memory file another
+  process wrote in between is re-read, never clobbered — the user's
+  reservations outrank re-derivable sightings.
   square** (`epic/p1-doors-navigation`, wave 2). New `pz_agent_core.navigation`
   package: a bounded `LocalMap` (4096 cells, oldest-seen evicted first) that
   remembers only what observations proved — visited squares, obstacles, stairs

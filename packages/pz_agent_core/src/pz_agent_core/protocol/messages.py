@@ -609,6 +609,12 @@ class PlayerState:
     moodles: dict[str, int] = field(default_factory=dict)
     wounds: list[Wound] = field(default_factory=list)
     hands: Hands = field(default_factory=Hands)
+    #: Room and building the character stands in, as the build reports them.
+    #: ``None`` means the reading is unavailable — outdoors and "the room
+    #: reader is missing on this build" are deliberately the same answer,
+    #: because a scope decision must not treat a missing reader as "outside".
+    room: str | None = None
+    building: str | None = None
 
     def to_dict(self) -> JsonDict:
         out: JsonDict = {
@@ -622,6 +628,10 @@ class PlayerState:
             out["wounds"] = [w.to_dict() for w in self.wounds]
         if self.hands.primary is not None or self.hands.secondary is not None:
             out["hands"] = self.hands.to_dict()
+        if self.room is not None:
+            out["room"] = self.room
+        if self.building is not None:
+            out["building"] = self.building
         return out
 
     @classmethod
@@ -650,6 +660,16 @@ class PlayerState:
                 for w in _as_sequence(payload.get("wounds", []), field_name="player.wounds")
             ],
             hands=Hands.from_dict(_as_mapping(payload.get("hands", {}), field_name="player.hands")),
+            room=(
+                None
+                if payload.get("room") is None
+                else _as_str(payload["room"], field_name="player.room")
+            ),
+            building=(
+                None
+                if payload.get("building") is None
+                else _as_str(payload["building"], field_name="player.building")
+            ),
         )
 
     def _stat(self, name: str, default: float) -> float:
@@ -886,6 +906,11 @@ class NearbyObject:
     locked: bool | None = None
     barricaded: bool | None = None
     orientation: str | None = None
+    #: Room and building of the object's square, as the build reports them.
+    #: ``None`` covers both "outdoors" and "no reader on this build" — a scope
+    #: decision must not read the second as the first.
+    room: str | None = None
+    building: str | None = None
 
     def to_dict(self) -> JsonDict:
         out: JsonDict = {"ref": self.ref, "kind": self.kind, "distance": self.distance}
@@ -901,6 +926,10 @@ class NearbyObject:
             out["barricaded"] = self.barricaded
         if self.orientation is not None:
             out["orientation"] = self.orientation
+        if self.room is not None:
+            out["room"] = self.room
+        if self.building is not None:
+            out["building"] = self.building
         return out
 
     @classmethod
@@ -927,6 +956,16 @@ class NearbyObject:
                 None
                 if orientation is None
                 else _as_str(orientation, field_name="object.orientation")
+            ),
+            room=(
+                None
+                if payload.get("room") is None
+                else _as_str(payload["room"], field_name="object.room")
+            ),
+            building=(
+                None
+                if payload.get("building") is None
+                else _as_str(payload["building"], field_name="object.building")
             ),
         )
 

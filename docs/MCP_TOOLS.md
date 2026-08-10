@@ -23,7 +23,7 @@ Transport: stdio. The server registers itself as `pz-agent`.
 | `product_version` | `0.1.0` |
 | `protocol_version` | `1.1` |
 | `capability_gated` | `true` |
-| tools | 40 |
+| tools | 41 |
 | resources | 7 |
 
 `--describe` reports the **whole** catalogue. A running server publishes a
@@ -35,7 +35,7 @@ See *Capability gating* below.
 ## Semantics that apply to every tool
 
 **Every input schema is closed.** `additionalProperties` is `false` on all
-40 tools, so an argument this document does not list is rejected rather
+41 tools, so an argument this document does not list is rejected rather
 than ignored.
 
 **The advertised bound is the enforced bound.** `catalog.py` imports its numbers
@@ -54,7 +54,7 @@ the `write` tools and for nothing else:
 | --- | --- | --- | --- |
 | `read` | 11 | not required | Answered from state the sidecar already holds |
 | `query` | 3 | not required | Submits one of the protocol's `READ_ONLY_ACTIONS`; comes back with an action id, but the character neither moves nor touches anything |
-| `write` | 20 | **required** | Changes the world; refused with `NOT_ARMED` on a disarmed session |
+| `write` | 21 | **required** | Changes the world; refused with `NOT_ARMED` on a disarmed session |
 | `control` | 6 | not required | Arm, disarm, cancel, stop and the goal verbs — how a disarmed or panicking session is driven |
 
 `pz_action_open_container` is a `write` tool, whatever its name suggests: it
@@ -69,19 +69,20 @@ document does not soften it. Waiting on a disarmed session is refused.
 
 **`risk` is the base tier, not a worst case.** It is the tier the adapter
 declares. Several adapters assess higher per call — `movement.move_to` becomes
-`P3` when the destination changes floor or leaves the safe radius,
-`inventory.transfer` becomes `P3` when the source is a world container — and
-neither is visible from the tool name, so neither is published.
+`P3` when the destination changes floor or leaves the safe radius, and both
+transfer forms, `inventory.transfer` and `inventory.transfer_batch`, become
+`P3` when a source is a world container — and none of that is visible from the
+tool name, so none of it is published.
 
 **Long-running tools return an action id.** `long_running` is `true` for
-22 tools. The call returns immediately with an `action_id`; you poll it with
+23 tools. The call returns immediately with an `action_id`; you poll it with
 `pz_action_status`, wait on it with `pz_action_await`, or call again with the
 same `idempotency_key`, which replays the call and refreshes it to the action's
 current state. It does not block the transport and it does not report success
 early.
 
 **Idempotency.** Every tool that submits a command takes a required
-`idempotency_key`; 26 tools do. Twenty-four of them accept 1–120 characters with
+`idempotency_key`; 27 tools do. Twenty-five of them accept 1–120 characters with
 no further shape; the two goal verbs, `pz_goal_submit` and `pz_goal_cancel`,
 take 1–64 matching `^[A-Za-z0-9][A-Za-z0-9_.:\-]{0,63}$`, because the goal
 channel carries the key into its own record and a key is not a place to smuggle
@@ -89,7 +90,7 @@ text. Calling twice with the same key does not perform the action twice — the
 original result is replayed with `replayed: true`.
 
 **`timeout_ms`** is that one command's lease: integer, 100–300000 ms, default
-15000. Twenty-three tools take it — every one that submits a single command.
+15000. Twenty-four tools take it — every one that submits a single command.
 `pz_plan_execute` does not, because a plan is bounded by
 `limits.max_real_seconds` instead, and publishing an argument no handler reads
 would be a lie shaped like an option. One tool reuses the name for a different
@@ -100,8 +101,10 @@ number.
 **No free text.** `pz_plan_execute`'s `goal` (1–200 characters) is the only
 field in the whole surface a caller may write in their own words, and it comes
 back quarantined. Every other string argument is a ref matching a fixed pattern,
-an enum member, or a lower-case token matching
-`^[a-z][a-z0-9_.\-]{0,63}$`.
+an enum member, a lower-case token matching
+`^[a-z][a-z0-9_.\-]{0,63}$`, or — in exactly one place, `pz_goal_submit`'s
+`categories` — a comma-joined list of closed upper-case tokens whose pattern
+names every admissible spelling.
 
 ---
 
@@ -125,6 +128,7 @@ an enum member, or a lower-case token matching
 | `pz_action_close_door` | write | P3 | yes | yes | `door_toggle` |
 | `pz_action_unlock_door` | write | P3 | yes | yes | `door_toggle` |
 | `pz_action_transfer` | write | P1 | yes | yes | `inventory_transfer` |
+| `pz_action_transfer_batch` | write | P1 | yes | yes | `inventory_transfer` |
 | `pz_action_ensure_main` | write | P1 | yes | yes | `inventory_transfer` |
 | `pz_action_eat` | write | P2 | yes | yes | `eat_percentage` |
 | `pz_action_drink` | write | P2 | yes | yes | `drink_carried` |
@@ -193,6 +197,17 @@ Current world state, compacted for a model. 'compact' is the player and safety h
 | --- | --- | --- |
 | `detail` | no | one of `compact`, `standard`, `full`; default `"compact"` |
 
+The observation behind every level carries `player.room` and
+`player.building` when the build reports them: bounded tokens naming the room
+the character stands in and the building it belongs to. An absent value is
+deliberately one answer for two facts — standing outdoors and running a build
+with no room reader produce the same absence, because a scope decision ("loot
+this room") must never read a missing reader as "outside". The compacted
+`player` this tool returns does not yet forward the two fields; the loot
+mission reads them from the observation itself, which is why a `loot_area`
+goal with `scope: "room"` or `"building"` needs a build that reports rooms —
+and only a live session proves that this one does.
+
 ### `pz_observe_inventory`
 
 Container tree with stable refs, recursing into nested carried containers. Item display names are untrusted data and are marked as such.
@@ -211,6 +226,18 @@ World objects and zombies within a bounded radius, with their semantics.
 | --- | --- | --- |
 | `radius` | no | `number`; maximum 30.0; exclusive minimum 0; default `10.0` |
 | `types` | no | array, maxItems 8; items `string`; maxLength 64; pattern `^[a-z][a-z0-9_.\-]{0,63}$` |
+
+Dead bodies with loot aboard are reported as objects of kind `corpse` with
+the `container` semantic; a body holding nothing is not listed at all. A
+corpse is observation-only for now — it lives in the engine's dead-body list,
+which the world-container reference scheme cannot address, so no reference it
+could mint would resolve to its loot; the gap is recorded in
+`docs/GAME_API_VERIFICATION.md`. The observation additionally stamps each
+object with the `room` and `building` of the square it stands on, with the
+same tri-state as the player's — a missing field covers both "outdoors" and
+"this build cannot read rooms", never to be narrowed to either; the compacted
+objects this tool returns do not yet forward the two fields, and the loot
+mission reads them from the observation itself.
 
 ### `pz_action_inspect_world`
 
@@ -354,6 +381,30 @@ Move one item into a container. Verified by the item resolving inside the destin
 | `source_container_ref` | no | `string`; maxLength 220; pattern `^container:[A-Za-z0-9:_.\-]{1,200}$` |
 | `idempotency_key` | yes | `string`; minLength 1; maxLength 120 |
 | `timeout_ms` | no | `integer`; minimum 100; maximum 300000; default `15000` |
+
+### `pz_action_transfer_batch`
+
+Move up to eight named items into one container, each by the game's own transfer, with capacity re-checked before every item and the batch stopped at the first that would not fit. Succeeded only when every requested item is observed in the destination afterwards; a stop partway is a CONTAINER_FULL failure whose evidence carries the honest partial record — what landed, what stopped, and why. Each reference moves as one item, exactly as `pz_action_transfer` moves it.
+
+| Argument | Required | Schema |
+| --- | --- | --- |
+| `item_refs` | yes | array; minItems 1; maxItems 8; uniqueItems; items `string`; maxLength 220; pattern `^item:[A-Za-z0-9:_.\-]{1,200}$` |
+| `destination_container_ref` | yes | `string`; maxLength 220; pattern `^container:[A-Za-z0-9:_.\-]{1,200}$` |
+| `idempotency_key` | yes | `string`; minLength 1; maxLength 120 |
+| `timeout_ms` | no | `integer`; minimum 100; maximum 300000; default `15000` |
+
+The items may live in different source containers; the destination is the one
+thing they share. `succeeded` means **all of them**: the evidence
+(`items_in_destination_container`) reports `destination_ref`, `requested`,
+`transferred` — the references observed in the destination — `stopped`, each
+entry an item with its `reason_code` and detail, and `destination_count_delta`.
+A batch the capacity check ends partway is a **failed** terminal with
+`CONTAINER_FULL` carrying that same record: three items in and five stopped is
+never reported as anything but three in and five stopped, and what to do with
+the remainder — free space, pick another container, shorten the list — is the
+planner's decision, made on the record rather than on a rounded-up claim.
+Duplicates are refused by the schema (`uniqueItems`), because a reference named
+twice has no second transfer to perform.
 
 ### `pz_action_ensure_main`
 
@@ -555,11 +606,11 @@ No arguments.
 
 ### `pz_goal_submit`
 
-Ask the typed goal channel for one of the things it carries. The kind set is closed and there is no free-text field at all: an invented kind is refused, never approximated. The channel admits the goal to a bounded backlog and answers with its id and state — 'pending' is the honest word for a goal nothing has started yet, and every goal carries a wall-clock, step and time-to-live budget so that it reaches a terminal state whether or not it is served. Which sandwich satisfies a hunger goal is never decided here.
+Ask the typed goal channel for one of the things it carries. The kind set is closed and there is no free-text field at all: an invented kind is refused, never approximated. The channel admits the goal to a bounded backlog and answers with its id and state — 'pending' is the honest word for a goal nothing has started yet, and every goal carries a wall-clock, step and time-to-live budget so that it reaches a terminal state whether or not it is served. Which sandwich satisfies a hunger goal is never decided here. A 'loot_area' goal finishes on one provable criterion — every reachable container in scope was inspected or has a recorded skip reason — and its terminal answer reports the looted scope (the pinned room, building or sweep), the containers inspected, the containers skipped each with its reason, and the items taken per category and left per reason.
 
 | Argument | Required | Schema |
 | --- | --- | --- |
-| `kind` | yes | one of `learn_recipe`, `navigate_to`, `read_for_boredom`, `satisfy_hunger`, `satisfy_thirst`, `train_skill` |
+| `kind` | yes | one of `learn_recipe`, `loot_area`, `navigate_to`, `read_for_boredom`, `satisfy_hunger`, `satisfy_thirst`, `train_skill` |
 | `skill` | no | one of `carpentry`, `cooking`, `electrical`, `farming`, `first_aid`, `fishing`, `foraging`, `mechanics`, `metalworking`, `tailoring`, `trapping` |
 | `target_level` | no | `integer`; minimum 1; maximum 10 |
 | `satisfy_to` | no | `number`; minimum 0.0; maximum 1.0 |
@@ -567,6 +618,11 @@ Ask the typed goal channel for one of the things it carries. The kind set is clo
 | `target_x` | no | `integer`; minimum 0; maximum 32000 |
 | `target_y` | no | `integer`; minimum 0; maximum 32000 |
 | `target_z` | no | `integer`; minimum -32; maximum 31 |
+| `scope` | no | one of `building`, `radius`, `room` |
+| `radius` | no | `integer`; minimum 1; maximum 30 |
+| `take_all` | no | `boolean` |
+| `categories` | no | `string`; maxLength 128; comma-joined closed tokens, each of `CLOTHING`, `FOOD`, `LITERATURE`, `MATERIALS`, `MEDICAL`, `OTHER`, `TOOLS`, `WATER`, `WEAPONS` at most once |
+| `idempotency_key` | yes | `string`; minLength 1; maxLength 64; pattern `^[A-Za-z0-9][A-Za-z0-9_.:\-]{0,63}$` |
 
 `navigate_to` requires all three `target_*` coordinates and takes nothing
 else: the sidecar's deterministic route executor walks the character to that
@@ -574,7 +630,25 @@ world square — doors, stairs, blocked passages and stuck detection handled
 locally, with no model call per square — and the goal ends on the *observed*
 arrival or with the executor's typed refusal (`DOOR_LOCKED`,
 `DOOR_BARRICADED`, `PATH_NOT_FOUND`, `PATH_STUCK`, `NO_PROGRESS`).
-| `idempotency_key` | yes | `string`; minLength 1; maxLength 64; pattern `^[A-Za-z0-9][A-Za-z0-9_.:\-]{0,63}$` |
+
+`loot_area` takes only the four loot parameters, all optional: the bare goal
+means scope `room`, the useful-only category selection and no `take_all`, and
+those defaults are read by the mission, never filled in by this surface. The
+sidecar's deterministic loot mission serves it with no model call per
+container: it builds the reachable candidate map, opens allowed doors, moves
+via the local pathfinder, inspects each container, selects deterministically,
+moves items with batch transfers and replans on blockage. Scope semantics:
+`room` and `building` are pinned from the observation at activation and need
+a build that reports rooms — where the reader is unavailable they are refused
+with a typed failure naming `radius` as the alternative, because outdoors and
+"no room reader" are deliberately indistinguishable and a guess would loot
+the wrong scope; `radius` (a Chebyshev sweep of `radius` squares around the
+activation square, requiring `scope: "radius"` beside it) always works. Only
+a live session proves a given build reports rooms. The report is honest both
+ways: a container skipped for a locked door, a failed path or a budget that
+ran out appears in the terminal answer with that reason, never silently
+dropped; `take_all` widens the selection to every category but never
+overrides the user's reserved items.
 
 ### `pz_goal_status`
 
@@ -629,7 +703,7 @@ Recent structured log records, redacted and bounded.
 
 ## Capability gating
 
-Seventeen of the 40 tools name a capability. `published_tools()` offers a
+Eighteen of the 41 tools name a capability. `published_tools()` offers a
 tool only when `CapabilityReport.usable()` is true for its capability, which
 means `verified` or `available_unverified`; `experimental`, `unsupported` and
 `disabled_by_policy` are all unusable. `withheld_tools()` returns the withheld
@@ -640,7 +714,7 @@ tool is an answer rather than an error.
 | --- | --- |
 | `move_to_square` | `pz_action_move_to`, `pz_action_move_near`, `pz_action_open_container` |
 | `door_toggle` | `pz_action_open_door`, `pz_action_close_door`, `pz_action_unlock_door` |
-| `inventory_transfer` | `pz_action_transfer`, `pz_action_ensure_main` |
+| `inventory_transfer` | `pz_action_transfer`, `pz_action_transfer_batch`, `pz_action_ensure_main` |
 | `eat_percentage` | `pz_action_eat` |
 | `drink_carried` | `pz_action_drink` |
 | `drink_world_source` | `pz_action_drink_source` |

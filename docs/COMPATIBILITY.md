@@ -155,7 +155,7 @@ on it.
 | Capability | MCP tools withheld when it is unusable |
 | --- | --- |
 | `move_to_square` | `pz_action_move_to`, `pz_action_move_near`, `pz_action_open_container` |
-| `inventory_transfer` | `pz_action_transfer`, `pz_action_ensure_main` |
+| `inventory_transfer` | `pz_action_transfer`, `pz_action_transfer_batch`, `pz_action_ensure_main` |
 | `eat_percentage` | `pz_action_eat` |
 | `drink_carried` | `pz_action_drink` |
 | `drink_world_source` | `pz_action_drink_source` |

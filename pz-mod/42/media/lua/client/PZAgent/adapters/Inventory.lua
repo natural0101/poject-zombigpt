@@ -1,6 +1,7 @@
 --[[
-PZAgent.Adapters.Inventory -- inventory.transfer, inventory.ensure_main and the
-bounded search the other adapters pick their items with.
+PZAgent.Adapters.Inventory -- inventory.transfer, inventory.transfer_batch,
+inventory.ensure_main and the bounded search the other adapters pick their
+items with.
 
 Invariant: an item is moved by ISInventoryTransferAction and by nothing else --
 no container list is edited, no item is added or removed by hand. The
@@ -59,7 +60,7 @@ Inventory.POLL_MS = 250
 --- dispatcher because the engine chooses the order it walks media/lua in, and a
 --- declaration that indexed another client module while this file was loading
 --- would break on a build that reaches adapters/ first.
-local ARG = { STRING = "string", NUMBER = "number", BOOLEAN = "boolean", REF = "ref" }
+local ARG = { STRING = "string", NUMBER = "number", BOOLEAN = "boolean", REF = "ref", LIST = "list" }
 
 --- The reference kinds the declarations below accept, named once because four
 --- of the five arguments that carry a reference are container references.
@@ -615,6 +616,573 @@ Transfer = toolkit().declare({
 
 Inventory.Transfer = Transfer
 toolkit().register(Transfer)
+
+-- ---------------------------------------------------------------------------
+-- transfer_batch
+-- ---------------------------------------------------------------------------
+
+--[[
+inventory.transfer_batch -- several items into one destination, each moved by
+the game's own ISInventoryTransferAction and each observed before the next is
+queued. The game's queue order is not a postcondition, so the adapter never
+queues item i+1 until item i is seen in the destination: capacity is re-checked
+with the single transfer's own checkCapacity before every enqueue, against the
+destination as it stands *then*, not as it stood when the command arrived.
+
+The batch stops at the first item that cannot go: that item is recorded with
+its own reason (CONTAINER_FULL carrying the weights, or whatever refused it),
+every later item is recorded as CANCELLED_BY_REQUEST "the batch stopped before
+this item", and the terminal is a FAILED whose evidence carries the honest
+partial record -- what landed, what stopped, why. Partial work is never
+reported as full success; deciding what to do with a half-moved batch is the
+planner's call, made on a record that does not lie.
+
+Chosen semantics for an item already sitting in the destination: it is
+transferred-without-work. The postcondition -- the item is observed in the
+destination -- already holds, so nothing is queued for it and it counts in
+`transferred`, never in `stopped`. The single transfer refuses this case
+because a one-item command with nothing to do has no change to prove; a batch
+records it and moves on, because refusing the whole list over one satisfied
+item would force the planner to re-derive the remainder itself.
+
+succeeded only when *every* requested item is observed in the destination
+afterwards -- and, for the items that had to move, gone from their origin, the
+same both-halves rule the single transfer enforces.
+]]
+
+--- Items one batch may carry. The same number as the dispatcher's
+--- MAX_LIST_ITEMS ceiling, restated here for the reason ARG is: the engine
+--- chooses the order it walks media/lua in, so this file must not index
+--- another client module while it loads.
+Inventory.MAX_BATCH_ITEMS = 8
+
+--- Queue budget for each item past the first, on top of the single transfer's
+--- TIMEOUT_MS. Linear in the list and nothing else.
+Inventory.BATCH_ITEM_MS = 5000
+
+--- Ceiling the proportional budget may never pass, and the timeout_ms the
+--- runtime enforces on the whole command.
+Inventory.BATCH_TIMEOUT_CAP_MS = 60000
+
+--- The batch's time budget: 20000 ms for the first item plus 5000 ms for each
+--- further one, capped at 60000. With eight items the sum is 55000, so today
+--- the arithmetic cannot reach the cap; it is enforced anyway because
+--- MAX_BATCH_ITEMS may grow and this bound must not drift up silently when it
+--- does. Progress enforces this per-command number itself; the declared
+--- timeout_ms is the cap, which is the tightest single figure the runtime's
+--- static check can hold.
+function Inventory.batchTimeoutMs(requested)
+  local budget = Inventory.TIMEOUT_MS + Inventory.BATCH_ITEM_MS * (requested - 1)
+  if budget > Inventory.BATCH_TIMEOUT_CAP_MS then
+    return Inventory.BATCH_TIMEOUT_CAP_MS
+  end
+  return budget
+end
+
+local BATCH_ARGS = { "item_refs", "destination_container_ref" }
+
+--- Parse and resolve a batch, keeping only static facts on the spec.
+---
+--- Every item reference is checked and -- unless options.resolve == false --
+--- resolved up front, so a list with a stale reference at index 4 is refused
+--- whole before anything is queued for indices 1..3. The spec holds refs,
+--- tails and runtime ids, never engine handles: items move while the batch
+--- runs, and a handle kept from validate would name whatever sits where the
+--- item used to.
+local function batchSpec(args, ctx, options)
+  local Toolkit = toolkit()
+  local reasons = Toolkit.reasons()
+  options = options or {}
+  local checked, checkCode, checkDetail = Toolkit.checkArgs(args, BATCH_ARGS, BATCH_ARGS)
+  if checked == nil then
+    return nil, checkCode, checkDetail
+  end
+  local destinationRef, destCode, destDetail =
+    Toolkit.readRef(args, "destination_container_ref", PZAgent.Refs.KIND.CONTAINER, ctx)
+  if destinationRef == nil then
+    return nil, destCode, destDetail
+  end
+  local destinationParsed, destinationError = PZAgent.Refs.parseContainer(destinationRef)
+  if destinationParsed == nil then
+    return nil, reasons.INVALID_REF, destinationError
+  end
+  local refs = args.item_refs
+  if type(refs) ~= "table" then
+    return nil, reasons.INVALID_ARGUMENT, 'argument "item_refs" must be a list of item references'
+  end
+  -- The dispatcher's LIST check hands adapters a fresh dense array, but this
+  -- function is also called directly, so the same bounded walk runs here:
+  -- count with pairs and refuse past the bound before trusting the table.
+  local count = 0
+  for _ in pairs(refs) do
+    count = count + 1
+    if count > Inventory.MAX_BATCH_ITEMS then
+      return nil, reasons.INVALID_ARGUMENT,
+        string.format("item_refs carries more than %d items", Inventory.MAX_BATCH_ITEMS)
+    end
+  end
+  if count == 0 then
+    return nil, reasons.INVALID_ARGUMENT, "item_refs must carry at least one item reference"
+  end
+  for index = 1, count do
+    if refs[index] == nil then
+      return nil, reasons.INVALID_ARGUMENT, "item_refs must be a dense array"
+    end
+  end
+  local items = {}
+  local seen = {}
+  for index = 1, count do
+    local ref = refs[index]
+    if type(ref) ~= "string" or #ref == 0 then
+      return nil, reasons.INVALID_ARGUMENT, string.format("item_refs[%d] must be a reference string", index)
+    end
+    if PZAgent.Refs.kindOf(ref) ~= PZAgent.Refs.KIND.ITEM then
+      return nil, reasons.INVALID_REF, string.format("item_refs[%d] must be an item reference", index)
+    end
+    if not PZAgent.Refs.belongsToSession(ref, ctx.session_id) then
+      return nil, reasons.INVALID_REF, string.format("item_refs[%d] was minted by another session", index)
+    end
+    -- A duplicate is one object asked to move twice; the second move could
+    -- only succeed by lying about the first. The dispatcher already refuses
+    -- this on the wire, and the direct-caller path must not be looser.
+    if seen[ref] ~= nil then
+      return nil, reasons.INVALID_ARGUMENT,
+        string.format("item_refs[%d] repeats item_refs[%d]", index, seen[ref])
+    end
+    seen[ref] = index
+    local parsed, parseError = PZAgent.Refs.parseItem(ref)
+    if parsed == nil then
+      return nil, reasons.INVALID_REF, string.format("item_refs[%d] (%s): %s", index, ref, tostring(parseError))
+    end
+    local runtimeId = tonumber(parsed.runtime_id)
+    if runtimeId == nil then
+      return nil, reasons.INVALID_REF,
+        string.format("item_refs[%d] (%s) carries no numeric identity", index, ref)
+    end
+    items[index] = {
+      ref = ref,
+      runtime_id = runtimeId,
+      source_tail = parsed.container_tail,
+      source_ref = PZAgent.Refs.buildContainer(ctx.session_id, parsed.container_tail),
+      already_there = parsed.container_tail == destinationParsed.tail,
+    }
+  end
+  local spec = {
+    destination_ref = destinationRef,
+    destination_tail = destinationParsed.tail,
+    items = items,
+    requested = count,
+  }
+  if options.resolve == false then
+    return spec
+  end
+  local destination, containerCode, containerDetail = Toolkit.resolveContainer(ctx, destinationRef)
+  if destination == nil then
+    return nil, containerCode, containerDetail
+  end
+  for index = 1, count do
+    local item, resolveCode, resolveDetail = Toolkit.resolveItem(ctx, items[index].ref)
+    if item == nil then
+      return nil, resolveCode,
+        string.format("item_refs[%d] (%s): %s", index, items[index].ref, tostring(resolveDetail))
+    end
+  end
+  return spec
+end
+
+Inventory.batchSpec = batchSpec
+
+local TransferBatch = nil
+
+--- The destination's item-count change since begin, or nil when it cannot be
+--- read right now. Nil rather than zero: an unreadable container is never read
+--- as an unchanged one.
+local function destinationDelta(ctx, batch)
+  local Toolkit = toolkit()
+  if batch.destination_count_before == nil then
+    return nil
+  end
+  local destination = (Toolkit.resolveContainer(ctx, batch.spec.destination_ref))
+  if destination == nil then
+    return nil
+  end
+  local now = Toolkit.containerItems(destination)
+  if now == nil then
+    return nil
+  end
+  return now.total - batch.destination_count_before
+end
+
+--- The evidence shape both terminals share. Both lists are marked as JSON
+--- arrays because either may legitimately be empty, and an empty Lua table
+--- would otherwise encode as an object.
+local function batchEvidence(spec, transferred, stopped, delta)
+  local evidence = {
+    kind = "items_in_destination_container",
+    destination_ref = spec.destination_ref,
+    requested = spec.requested,
+    transferred = PZAgent.Json.array(transferred),
+    stopped = PZAgent.Json.array(stopped),
+  }
+  if delta ~= nil then
+    evidence.destination_count_delta = delta
+  end
+  return evidence
+end
+
+--- End the batch at `stopIndex`, leaving the honest partial record for the
+--- terminal ack to carry.
+---
+--- One guarded look at the in-flight item first: an interruption can land in
+--- the window between the game moving the item and this adapter observing it,
+--- and a record written blind would call landed work stopped. The record is
+--- allowed to under-claim only when no single read can settle it; here one
+--- can, so it is taken.
+local function stopBatch(ctx, batch, stopIndex, code, detail)
+  local Toolkit = toolkit()
+  local reasons = Toolkit.reasons()
+  local spec = batch.spec
+  local flying = batch.in_flight
+  if flying ~= nil and flying == stopIndex then
+    local destination = (Toolkit.resolveContainer(ctx, spec.destination_ref))
+    if destination ~= nil then
+      local arrived = Toolkit.countIdentity(destination, spec.items[flying].runtime_id)
+      if arrived ~= nil and arrived >= 1 then
+        batch.transferred[#batch.transferred + 1] = spec.items[flying].ref
+        batch.in_flight = nil
+        batch.next_index = flying + 1
+        stopIndex = flying + 1
+      end
+    end
+  end
+  local transferred = {}
+  for index = 1, #batch.transferred do
+    transferred[index] = batch.transferred[index]
+  end
+  local stopped = {}
+  if stopIndex <= spec.requested then
+    stopped[1] = { item_ref = spec.items[stopIndex].ref, reason_code = code, detail = detail }
+    for index = stopIndex + 1, spec.requested do
+      stopped[#stopped + 1] = {
+        item_ref = spec.items[index].ref,
+        reason_code = reasons.CANCELLED_BY_REQUEST,
+        detail = "the batch stopped before this item",
+      }
+    end
+  end
+  batch.partial = batchEvidence(spec, transferred, stopped, destinationDelta(ctx, batch))
+  return nil, code, detail
+end
+
+--- Queue the next item that needs work, or report the batch finished.
+---
+--- Already-in-destination items are recorded as transferred and skipped; the
+--- first item that cannot be queued -- no room, gone from its container, the
+--- action refused -- stops the batch through stopBatch. At most one transfer
+--- is ever in the game's queue at a time, which is what makes the per-item
+--- capacity check mean something: it runs against a destination whose weight
+--- already includes every item this batch has landed.
+local function advance(ctx, batch)
+  local Toolkit = toolkit()
+  local spec = batch.spec
+  while batch.next_index <= spec.requested do
+    local entry = spec.items[batch.next_index]
+    if entry.already_there then
+      batch.transferred[#batch.transferred + 1] = entry.ref
+      batch.next_index = batch.next_index + 1
+    else
+      local destination, destCode, destDetail = Toolkit.resolveContainer(ctx, spec.destination_ref)
+      if destination == nil then
+        return stopBatch(ctx, batch, batch.next_index, destCode, destDetail)
+      end
+      local item, itemCode, itemDetail, source = Toolkit.resolveItem(ctx, entry.ref)
+      if item == nil then
+        return stopBatch(ctx, batch, batch.next_index, itemCode,
+          string.format("item_refs[%d] (%s): %s", batch.next_index, entry.ref, tostring(itemDetail)))
+      end
+      local room, roomCode, roomDetail = checkCapacity({ destination = destination, item = item })
+      if room == nil then
+        return stopBatch(ctx, batch, batch.next_index, roomCode, roomDetail)
+      end
+      local action, actionCode, actionDetail =
+        Toolkit.construct("ISInventoryTransferAction", ctx.player, item, source, destination)
+      if action == nil then
+        return stopBatch(ctx, batch, batch.next_index, actionCode, actionDetail)
+      end
+      local queued, queueCode, queueDetail = Toolkit.enqueue(ctx, action)
+      if queued == nil then
+        return stopBatch(ctx, batch, batch.next_index, queueCode, queueDetail)
+      end
+      batch.in_flight = batch.next_index
+      return true
+    end
+  end
+  return "done"
+end
+
+local function batchValidate(_, args, ctx)
+  local Toolkit = toolkit()
+  local required, requiredCode, requiredDetail = Toolkit.requireSymbols(TransferBatch.requires)
+  if required == nil then
+    return nil, requiredCode, requiredDetail
+  end
+  local spec, code, detail = batchSpec(args, ctx)
+  if spec == nil then
+    return nil, code, detail
+  end
+  -- No capacity pre-check here, unlike the single transfer: capacity is a fact
+  -- about the destination at each enqueue, and a batch whose first item does
+  -- not fit fails the same way as one whose fourth does not -- through the
+  -- per-item check, with the partial record saying exactly where it stopped.
+  Toolkit.state(ctx).batch = { spec = spec, next_index = 1, transferred = {} }
+  return true
+end
+
+--- Walk to whichever endpoint is out in the world, sources first, the way the
+--- single transfer does. One walk per prepare; a batch whose sources sit on
+--- two far squares reaches the second when the game's own transfer action
+--- closes the remaining distance, exactly as it would for a lone transfer.
+local function batchPrepare(_, args, ctx)
+  local Toolkit = toolkit()
+  local code, detail = Toolkit.interruption(ctx)
+  if code ~= nil then
+    return nil, code, detail
+  end
+  local state = Toolkit.state(ctx)
+  local spec = state.batch ~= nil and state.batch.spec or nil
+  if spec == nil then
+    local built, specCode, specDetail = batchSpec(args, ctx, { resolve = false })
+    if built == nil then
+      return nil, specCode, specDetail
+    end
+    spec = built
+  end
+  local points = {}
+  for index = 1, spec.requested do
+    local point = containerPoint(spec.items[index].source_tail)
+    if point ~= nil then
+      points[#points + 1] = point
+    end
+  end
+  local destinationPoint = containerPoint(spec.destination_tail)
+  if destinationPoint ~= nil then
+    points[#points + 1] = destinationPoint
+  end
+  for index = 1, #points do
+    local outcome, reachCode, reachDetail = Toolkit.approach(ctx, points[index])
+    if outcome == nil then
+      return nil, reachCode, reachDetail
+    end
+    if outcome == "walking" then
+      state.walking_to = points[index]
+      return true
+    end
+  end
+  return true
+end
+
+local function batchStart(_, args, ctx)
+  local Toolkit = toolkit()
+  local code, detail = Toolkit.interruption(ctx)
+  if code ~= nil then
+    return nil, code, detail
+  end
+  local state = Toolkit.state(ctx)
+  local batch = state.batch
+  if batch == nil then
+    local spec, specCode, specDetail = batchSpec(args, ctx)
+    if spec == nil then
+      return nil, specCode, specDetail
+    end
+    batch = { spec = spec, next_index = 1, transferred = {} }
+    state.batch = batch
+  end
+  -- The baseline for destination_count_delta is read before anything is
+  -- queued. A destination that cannot be read is a capability gap up front,
+  -- with nothing attempted and so nothing to record partially.
+  local destination, destCode, destDetail = Toolkit.resolveContainer(ctx, batch.spec.destination_ref)
+  if destination == nil then
+    return nil, destCode, destDetail
+  end
+  local before = Toolkit.containerItems(destination)
+  if before == nil then
+    return Toolkit.unavailable("ItemContainer.getItems")
+  end
+  batch.destination_count_before = before.total
+  batch.deadline_ms = (ctx.now_ms or 0) + Inventory.batchTimeoutMs(batch.spec.requested)
+  return advance(ctx, batch)
+end
+
+local function batchProgress(_, _, ctx)
+  local Toolkit = toolkit()
+  local reasons = Toolkit.reasons()
+  local state = Toolkit.state(ctx)
+  local batch = state.batch
+  if batch == nil then
+    return nil, reasons.INTERNAL_ERROR, "the batch was polled before it started"
+  end
+  local code, detail = Toolkit.interruption(ctx)
+  if code ~= nil then
+    return stopBatch(ctx, batch, batch.in_flight or batch.next_index, code, detail)
+  end
+  if batch.deadline_ms ~= nil and (ctx.now_ms or 0) > batch.deadline_ms then
+    return stopBatch(ctx, batch, batch.in_flight or batch.next_index, reasons.ACTION_TIMEOUT,
+      string.format("the batch has run past its %d ms budget", Inventory.batchTimeoutMs(batch.spec.requested)))
+  end
+  local flying = batch.in_flight
+  if flying == nil then
+    return advance(ctx, batch)
+  end
+  local entry = batch.spec.items[flying]
+  local destination, destCode, destDetail = Toolkit.resolveContainer(ctx, batch.spec.destination_ref)
+  if destination == nil then
+    return stopBatch(ctx, batch, flying, destCode, destDetail)
+  end
+  local arrived = Toolkit.countIdentity(destination, entry.runtime_id)
+  if arrived == nil then
+    return stopBatch(ctx, batch, flying, reasons.CAPABILITY_UNAVAILABLE,
+      "ItemContainer.getItems is not available in this build")
+  end
+  if arrived >= 1 then
+    batch.transferred[#batch.transferred + 1] = entry.ref
+    batch.in_flight = nil
+    batch.next_index = flying + 1
+    return advance(ctx, batch)
+  end
+  local queue, queueCode, queueDetail = Toolkit.queueProgress(ctx)
+  if queue == nil then
+    return stopBatch(ctx, batch, flying, queueCode, queueDetail)
+  end
+  if queue == "done" then
+    -- The game finished everything it was given and the item is still not in
+    -- the destination: the transfer was dropped or undone, and waiting longer
+    -- would only turn a clear answer into a timeout.
+    return stopBatch(ctx, batch, flying, reasons.POSTCONDITION_FAILED,
+      string.format("the queue drained but item_refs[%d] is not in the destination", flying))
+  end
+  return true
+end
+
+--- Every requested item observed in the destination -- and, for the items
+--- that had to move, gone from their origin. The before/after snapshots are
+--- not consulted for the reason transferVerify does not consult them: the
+--- postcondition is a fact about containers, some of which are not on the
+--- character.
+local function batchVerify(_, _, _, args, ctx)
+  local Toolkit = toolkit()
+  local reasons = Toolkit.reasons()
+  local batch = Toolkit.state(ctx).batch
+  local spec
+  if batch ~= nil then
+    spec = batch.spec
+  else
+    local built, code, detail = batchSpec(args, ctx, { resolve = false })
+    if built == nil then
+      return nil, code, detail
+    end
+    spec = built
+  end
+  local destination, destCode, destDetail = Toolkit.resolveContainer(ctx, spec.destination_ref)
+  if destination == nil then
+    return nil, destCode, destDetail
+  end
+  local transferred = {}
+  for index = 1, spec.requested do
+    local entry = spec.items[index]
+    local arrived = Toolkit.countIdentity(destination, entry.runtime_id)
+    if arrived == nil then
+      return Toolkit.unavailable("ItemContainer.getItems")
+    end
+    if arrived ~= 1 then
+      return nil, reasons.POSTCONDITION_FAILED,
+        string.format("the destination holds %d of item_refs[%d], not 1", arrived, index)
+    end
+    if not entry.already_there then
+      local source, sourceCode, sourceDetail = Toolkit.resolveContainer(ctx, entry.source_ref)
+      if source == nil then
+        return nil, sourceCode, sourceDetail
+      end
+      local left = Toolkit.countIdentity(source, entry.runtime_id)
+      if left == nil then
+        return Toolkit.unavailable("ItemContainer.getItems")
+      end
+      if left ~= 0 then
+        return nil, reasons.POSTCONDITION_FAILED,
+          string.format("item_refs[%d] is in the destination but %d copies remain in the origin", index, left)
+      end
+    end
+    transferred[index] = entry.ref
+  end
+  local delta = nil
+  if batch ~= nil then
+    delta = destinationDelta(ctx, batch)
+  end
+  return batchEvidence(spec, transferred, {}, delta)
+end
+
+TransferBatch = toolkit().declare({
+  name = "inventory.transfer_batch",
+  capability = toolkit().CAPABILITY.INVENTORY_TRANSFER,
+  requires = REQUIRES,
+  timeout_ms = Inventory.BATCH_TIMEOUT_CAP_MS,
+  poll_interval_ms = Inventory.POLL_MS,
+  args = {
+    item_refs = {
+      type = ARG.LIST,
+      of = ARG.REF,
+      required = true,
+      max_items = Inventory.MAX_BATCH_ITEMS,
+      kinds = ITEM_KIND,
+    },
+    destination_container_ref = { type = ARG.REF, required = true, kinds = CONTAINER_KIND },
+  },
+  validate = batchValidate,
+  prepare = batchPrepare,
+  begin = batchStart,
+  progress = batchProgress,
+  verify = batchVerify,
+})
+
+-- The declared start/poll speak the three-value convention, which has no slot
+-- for evidence on a refusal -- and a batch that stopped partway owes the
+-- terminal ack the partial record. These wrappers translate a refusal that
+-- left one into the outcome-table shape ActionRuntime already accepts, and
+-- give the running poll the fraction the three-value form drops. The
+-- lifecycle steps themselves are untouched, so the direct-caller tests see
+-- the same behaviour the runtime does.
+local declaredBatchStart = TransferBatch.start
+local declaredBatchPoll = TransferBatch.poll
+
+local function carryPartial(ctx, first, second, third)
+  if first == nil then
+    local batch = toolkit().state(ctx).batch
+    if batch ~= nil and batch.partial ~= nil then
+      return { failed = true, reason_code = second, detail = third, evidence = batch.partial }
+    end
+  end
+  return first, second, third
+end
+
+TransferBatch.start = function(ctx, args)
+  return carryPartial(ctx, declaredBatchStart(ctx, args))
+end
+
+TransferBatch.poll = function(ctx, args)
+  local first, second, third = declaredBatchPoll(ctx, args)
+  if first == true then
+    local batch = toolkit().state(ctx).batch
+    if batch ~= nil and batch.spec ~= nil and batch.spec.requested > 0 then
+      -- Items landed over items requested: the only measure of a batch that
+      -- means anything to a progress bar.
+      return true, #batch.transferred / batch.spec.requested
+    end
+    return true
+  end
+  return carryPartial(ctx, first, second, third)
+end
+
+Inventory.TransferBatch = TransferBatch
+toolkit().register(TransferBatch)
 
 -- ---------------------------------------------------------------------------
 -- ensure_main

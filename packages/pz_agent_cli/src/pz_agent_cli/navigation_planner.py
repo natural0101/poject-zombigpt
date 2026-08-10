@@ -1,17 +1,36 @@
-"""``navigate_to``, served deterministically at the planner seam.
+"""``navigate_to`` and ``loot_area``, served deterministically at the planner seam.
 
-The typed goal channel gained a kind no plan provider serves:
+The typed goal channel carries two kinds no plan provider serves:
 :attr:`~pz_agent_core.goals.GoalKind.NAVIGATE_TO` is walked by the route
 executor in :mod:`pz_agent_core.navigation`, one observed square at a time,
-with no model call anywhere on the path. The loop, however, serves every goal
-through one seam — :meth:`~pz_agent_cli.runtime.GoalPlanner.propose_for_goal` —
-so this module puts the executor *behind that seam*: :class:`NavigatingPlanner`
+and :attr:`~pz_agent_core.goals.GoalKind.LOOT_AREA` is driven by the
+deterministic mission in :mod:`pz_agent_cli.loot_mission`, one observed
+container at a time — no model call anywhere on either path. The loop,
+however, serves every goal through one seam —
+:meth:`~pz_agent_cli.runtime.GoalPlanner.propose_for_goal` — so this module
+puts both deterministic servers *behind that seam*: :class:`NavigatingPlanner`
 wraps whatever planner the app assembled (or nothing at all), owns one
-:class:`~pz_agent_core.navigation.LocalMap` per session and one
-:class:`~pz_agent_core.navigation.Journey` per navigation goal, answers
-``navigate_to`` itself, and hands every other kind to the wrapped planner
-untouched. A loop assembled with no LLM planner still navigates, because the
-wrapper is a complete :class:`~pz_agent_cli.runtime.GoalPlanner` on its own.
+:class:`~pz_agent_core.navigation.LocalMap` per session, one
+:class:`~pz_agent_core.navigation.Journey` per navigation goal and one
+:class:`~pz_agent_cli.loot_mission.LootMission` per loot goal, answers both
+kinds itself, and hands every other kind to the wrapped planner untouched. A
+loop assembled with no LLM planner still navigates and still loots, because
+the wrapper is a complete :class:`~pz_agent_cli.runtime.GoalPlanner` on its
+own.
+
+A loot mission's steps take the same two routes a journey's do, with one
+inversion: for a journey the *final leg* travels the goal seam because its
+observed success is the arrival; for a mission **no** ordinary step's success
+is the goal's postcondition, so every open, inspect, batch and approach leg
+travels the action channel, and the mission ends its goal through the queue —
+``succeed`` with the last real channel result's evidence, or ``fail`` with the
+mission's typed reason and one-line report summary. The exception is a
+mission that finished without a single action running: it emits a bounded
+completion probe out the goal seam, whose real observed result the loop
+settles the goal with — the same arrangement a journey uses for a target the
+character already stands on. Missions die with their goals exactly as
+journeys do, and the mission's full report survives the goal in a bounded
+ledger this wrapper keeps (:meth:`NavigatingPlanner.loot_report`).
 
 How a journey's steps reach the engine — and why there are two routes:
 
@@ -66,6 +85,9 @@ from typing import Final, Protocol
 from pz_agent_core.actions.adapters.movement import MOVE_RETRY_POLICY
 from pz_agent_core.actions.engine import ActionRequest
 from pz_agent_core.goals import GoalQueue, GoalRecord, GoalState
+from pz_agent_core.goals.model import LootScope
+from pz_agent_core.loot import LootPolicy
+from pz_agent_core.memory import SaveMemory
 from pz_agent_core.navigation import (
     MAX_JOURNEY_ID_LEN,
     Arrived,
@@ -83,14 +105,28 @@ from pz_agent_core.protocol import (
     ActionName,
     ActionResult,
     ActionStatus,
+    JsonDict,
     Observation,
     ReasonCode,
 )
 
+from .loot_mission import (
+    DEFAULT_LOOT_RADIUS,
+    ContainerUnchanged,
+    IsReserved,
+    LootMission,
+    LootMissionLimits,
+    MissionComplete,
+    MissionProbe,
+    MissionRefused,
+    MissionStep,
+)
 from .runtime import ActionChannel, GoalPlanner, LoopError, Planner
 
 __all__ = [
+    "MAX_KEPT_LOOT_REPORTS",
     "MAX_TRACKED_JOURNEYS",
+    "MAX_TRACKED_MISSIONS",
     "NavigatingPlanner",
     "NavigationHost",
     "unwrap_planner",
@@ -115,6 +151,21 @@ def unwrap_planner(planner: Planner | None) -> Planner | None:
 #: ended between ticks; the cap exists so a pruning bug could only ever waste
 #: this much, never grow without bound.
 MAX_TRACKED_JOURNEYS: Final = 4
+
+#: Loot missions remembered at once, for exactly the journeys' reason.
+MAX_TRACKED_MISSIONS: Final = 4
+
+#: Finished loot reports kept for reading back. A report is the mission's
+#: deliverable and outlives the mission — the goal record can only carry a
+#: one-line summary and the evidence key names — but it does not outlive the
+#: session, and a bounded ring is the difference between "the last few sweeps
+#: are consultable" and a leak shaped like a feature.
+MAX_KEPT_LOOT_REPORTS: Final = 8
+
+#: Wrapper hops :meth:`NavigatingPlanner._loot_ports` will look through for a
+#: ``memory`` attribute — the same walk, with the same slack, that the loop's
+#: own ``_container_memory`` performs on the other side of the seam.
+_MAX_MEMORY_UNWRAPS: Final = 4
 
 
 class NavigationHost(Protocol):
@@ -151,6 +202,20 @@ class _Drive:
         self.probes = 0
 
 
+class _LootDrive:
+    """One loot mission plus the wrapper's bookkeeping around it."""
+
+    __slots__ = ("last_success", "mission", "pending_action_id")
+
+    def __init__(self, mission: LootMission) -> None:
+        self.mission = mission
+        #: The channel submission whose terminal result the mission is owed.
+        self.pending_action_id: str | None = None
+        #: The most recent succeeded engine result a channel step produced —
+        #: the evidence a completed mission hands to ``GoalQueue.succeed``.
+        self.last_success: ActionResult | None = None
+
+
 class NavigatingPlanner:
     """The always-on planner wrapper that walks ``navigate_to`` goals itself.
 
@@ -171,11 +236,20 @@ class NavigatingPlanner:
         inner: Planner | None = None,
         *,
         limits: JourneyLimits | None = None,
+        loot_limits: LootMissionLimits | None = None,
+        loot_memory: object | None = None,
     ) -> None:
         self._inner = inner
         self._limits = limits if limits is not None else JourneyLimits()
+        self._loot_limits = loot_limits if loot_limits is not None else LootMissionLimits()
+        #: An explicit memory for the loot ports, for assemblies and tests
+        #: that hold one; when None the wrapper walks the wrapped planner
+        #: chain for the ``memory`` the shipped assembly hangs there.
+        self._loot_memory = loot_memory
         self._map = LocalMap()
         self._journeys: OrderedDict[str, _Drive] = OrderedDict()
+        self._missions: OrderedDict[str, _LootDrive] = OrderedDict()
+        self._loot_reports: OrderedDict[str, JsonDict] = OrderedDict()
         self._host: NavigationHost | None = None
 
     # -- wiring -------------------------------------------------------------
@@ -198,6 +272,23 @@ class NavigatingPlanner:
     def tracked_journeys(self) -> int:
         return len(self._journeys)
 
+    @property
+    def tracked_missions(self) -> int:
+        return len(self._missions)
+
+    def loot_report(self, goal_id: str) -> JsonDict | None:
+        """The loot report for *goal_id*: live while it runs, kept when it ends.
+
+        A live mission answers its current snapshot; a finished or abandoned
+        one answers the sealed report from the bounded ledger. None for a
+        goal this wrapper never drove a mission for, or one whose report has
+        been evicted by :data:`MAX_KEPT_LOOT_REPORTS` newer ones.
+        """
+        drive = self._missions.get(goal_id)
+        if drive is not None:
+            return drive.mission.report
+        return self._loot_reports.get(goal_id)
+
     # -- the Planner half ----------------------------------------------------
 
     def propose(self, observation: Observation) -> ActionRequest | None:
@@ -211,17 +302,19 @@ class NavigatingPlanner:
     # -- the GoalPlanner half ------------------------------------------------
 
     def propose_for_goal(self, goal: PlannerGoal, observation: Observation) -> ActionRequest | None:
-        """Serve a navigation goal from the executor; delegate everything else."""
-        if goal.kind is not PlannerGoalKind.NAVIGATE_TO:
-            self._map.observe(observation)
-            self._prune()
-            inner = self._inner
-            if isinstance(inner, GoalPlanner):
-                return inner.propose_for_goal(goal, observation)
-            # A goal-shaped ask and no goal-capable planner behind the seam:
-            # nothing serves it this tick, and the channel's budgets bound it.
-            return None
-        return self._navigate(goal.goal_id, observation)
+        """Serve the two deterministic kinds ourselves; delegate everything else."""
+        if goal.kind is PlannerGoalKind.NAVIGATE_TO:
+            return self._navigate(goal.goal_id, observation)
+        if goal.kind is PlannerGoalKind.LOOT_AREA:
+            return self._loot(goal.goal_id, observation)
+        self._map.observe(observation)
+        self._prune()
+        inner = self._inner
+        if isinstance(inner, GoalPlanner):
+            return inner.propose_for_goal(goal, observation)
+        # A goal-shaped ask and no goal-capable planner behind the seam:
+        # nothing serves it this tick, and the channel's budgets bound it.
+        return None
 
     # -- navigation ----------------------------------------------------------
 
@@ -400,6 +493,212 @@ class NavigatingPlanner:
             queue.fail(goal_id, reason, f"navigation refused: {failure}")
         self._journeys.pop(goal_id, None)
 
+    # -- loot ----------------------------------------------------------------
+
+    def _loot(self, goal_id: str, observation: Observation) -> ActionRequest | None:
+        """Drive one loot mission, mirroring :meth:`_navigate` join for join."""
+        host = self._host
+        if host is None or host.goals is None:
+            # Unbound, or a loop that cannot activate goals at all: learn from
+            # the observation and decline — ending goals is the queue's
+            # privilege, and there is no queue.
+            self._map.observe(observation)
+            return None
+        queue = host.goals
+        self._prune()
+        with host.goal_lock:
+            record = queue.record(goal_id)
+        if record is None or record.state is not GoalState.ACTIVE:
+            self._map.observe(observation)
+            self._missions.pop(goal_id, None)
+            return None
+
+        drive = self._missions.get(goal_id)
+        if drive is None:
+            drive = _LootDrive(self._mission_for(goal_id, record))
+            self._missions[goal_id] = drive
+            self._enforce_cap()
+
+        channel = host.actions
+        waiting = self._collect_mission_pending(drive, channel)
+        if waiting:
+            self._map.observe(observation)
+            return None
+        if (
+            channel is not None
+            and drive.pending_action_id is None
+            and channel.pending_count >= channel.max_pending
+        ):
+            # Asking the mission for a step it could not submit would burn a
+            # bound for nothing; learn from the observation and wait.
+            self._map.observe(observation)
+            return None
+
+        value = drive.mission.next_step(observation)
+        if value is None:
+            return None
+        if isinstance(value, MissionStep):
+            self._submit_mission_step(host, goal_id, drive, value.request)
+            return None
+        if isinstance(value, MissionProbe):
+            # The one goal-seam request a mission emits: its observed success
+            # is what the loop settles the goal with, because no channel
+            # result exists for a mission that never needed to act.
+            return value.request
+        if isinstance(value, MissionComplete):
+            self._finish_mission_complete(host, goal_id, drive)
+            return None
+        self._finish_mission_refused(host, goal_id, drive, value)
+        return None
+
+    def _mission_for(self, goal_id: str, record: GoalRecord) -> LootMission:
+        """Build the mission the goal's own validated parameters describe."""
+        params = record.params
+        categories = params.loot_categories()
+        policy = LootPolicy(
+            wanted=categories if categories is not None else frozenset(),
+            take_all=bool(params.take_all),
+        )
+        is_reserved, container_unchanged = self._loot_ports()
+        return LootMission(
+            goal_id,
+            local_map=self._map,
+            scope=params.scope if params.scope is not None else LootScope.ROOM,
+            radius=params.radius if params.radius is not None else DEFAULT_LOOT_RADIUS,
+            policy=policy,
+            is_reserved=is_reserved,
+            container_unchanged=container_unchanged,
+            limits=self._loot_limits,
+            journey_limits=self._limits,
+        )
+
+    def _loot_ports(self) -> tuple[IsReserved, ContainerUnchanged]:
+        """The mission's two memory questions, answered by whatever is wired.
+
+        The reserve question is served by any memory carrying
+        ``reserves_item`` — :class:`~pz_agent_cli.memory.SidecarMemory`, the
+        autonomy fallbacks, or a bare
+        :class:`~pz_agent_core.memory.SaveMemory` — and the unchanged
+        question by a ``container_unchanged`` on the memory itself or on the
+        :class:`~pz_agent_core.memory.SaveMemory` behind its ``loaded``
+        attribute, resolved *per call* because the sidecar memory re-loads
+        when the save changes. With nothing wired the honest constants apply:
+        nothing is reserved, and nothing is provably unchanged, so the
+        mission goes and looks.
+        """
+        memory = self._loot_memory
+        if memory is None:
+            candidate: object | None = self._inner
+            for _ in range(_MAX_MEMORY_UNWRAPS):
+                if candidate is None:
+                    break
+                found = getattr(candidate, "memory", None)
+                if found is not None and callable(getattr(found, "reserves_item", None)):
+                    memory = found
+                    break
+                candidate = getattr(candidate, "inner", None)
+        if memory is None:
+            return (lambda full_type: False), (lambda tail, revision: False)
+
+        def is_reserved(full_type: str, *, source: object = memory) -> bool:
+            answer = getattr(source, "reserves_item", None)
+            return bool(answer(full_type)) if callable(answer) else False
+
+        def container_unchanged(tail: str, revision: str, *, source: object = memory) -> bool:
+            direct = getattr(source, "container_unchanged", None)
+            if callable(direct):
+                return bool(direct(tail, revision))
+            loaded = getattr(source, "loaded", None)
+            if isinstance(loaded, SaveMemory):
+                return loaded.container_unchanged(tail, revision)
+            return False
+
+        return is_reserved, container_unchanged
+
+    def _collect_mission_pending(self, drive: _LootDrive, channel: ActionChannel | None) -> bool:
+        """Fold a finished channel step into the mission. True while one runs."""
+        action_id = drive.pending_action_id
+        if action_id is None or channel is None:
+            return False
+        record = channel.status(action_id)
+        if record is None:
+            # Evicted, or a restarted channel: whatever happened to the step
+            # was never observed, so the mission learns nothing and replans.
+            drive.pending_action_id = None
+            return False
+        if not record.terminal:
+            return True
+        drive.pending_action_id = None
+        result = record.result
+        if result is not None:
+            drive.mission.note_result(result)
+            if result.status is ActionStatus.SUCCEEDED:
+                drive.last_success = result
+        return False
+
+    def _submit_mission_step(
+        self, host: NavigationHost, goal_id: str, drive: _LootDrive, request: ActionRequest
+    ) -> None:
+        channel = host.actions
+        if channel is None:
+            # Same reasoning as the journey path: a wrapper with no conveyor
+            # for intermediate work cannot loot honestly.
+            drive.mission.mark_abandoned()
+            self._finish_mission_refused(
+                host,
+                goal_id,
+                drive,
+                MissionRefused(
+                    reason_code=ReasonCode.CAPABILITY_UNAVAILABLE,
+                    detail="the loop holds no action channel for the mission's steps",
+                ),
+            )
+            return
+        try:
+            admitted = channel.submit(request)
+        except LoopError:
+            # Admission refused: the queue filled between the capacity check
+            # and now, or a restart made the key ambiguous. The step is
+            # dropped and the mission decides again from the next
+            # observation; its own bounds cap how often this can repeat.
+            return
+        drive.pending_action_id = admitted.action_id
+
+    def _finish_mission_complete(
+        self, host: NavigationHost, goal_id: str, drive: _LootDrive
+    ) -> None:
+        """End a completed mission's goal on evidence something observed."""
+        queue = host.goals
+        assert queue is not None  # _loot returned before this without one
+        last = drive.last_success
+        if last is None:
+            # Unreachable by construction — the mission answers Complete only
+            # after a succeeded result — but a lie would be worse than a wait:
+            # leave the goal to its budgets rather than fabricate evidence.
+            return
+        with host.goal_lock:
+            queue.succeed(goal_id, last)
+        self._seal_report(goal_id, drive)
+
+    def _finish_mission_refused(
+        self, host: NavigationHost, goal_id: str, drive: _LootDrive, refused: MissionRefused
+    ) -> None:
+        """End the goal with the mission's typed reason and summary line."""
+        queue = host.goals
+        if queue is None:
+            return
+        with host.goal_lock:
+            queue.fail(goal_id, refused.reason_code, refused.detail)
+        self._seal_report(goal_id, drive)
+
+    def _seal_report(self, goal_id: str, drive: _LootDrive) -> None:
+        """Move the mission's report into the bounded ledger and drop the drive."""
+        self._loot_reports[goal_id] = drive.mission.report
+        self._loot_reports.move_to_end(goal_id)
+        while len(self._loot_reports) > MAX_KEPT_LOOT_REPORTS:
+            self._loot_reports.popitem(last=False)
+        self._missions.pop(goal_id, None)
+
     def _target_of(self, record: GoalRecord) -> NavigationTarget | None:
         params = record.params
         if params.target_x is None or params.target_y is None or params.target_z is None:
@@ -407,11 +706,18 @@ class NavigatingPlanner:
         return NavigationTarget(x=params.target_x, y=params.target_y, z=params.target_z)
 
     def _prune(self) -> None:
-        """Drop every journey whose goal is no longer the active one."""
+        """Drop every journey and mission whose goal is no longer the active one.
+
+        A pruned mission's report is sealed into the ledger first — the goal
+        died under it (a cancel, a disarm, an expiry), and the partial report
+        is exactly what the user who stopped it is owed.
+        """
         host = self._host
         if host is None or host.goals is None:
             if self._journeys:
                 self._journeys.clear()
+            for goal_id in list(self._missions):
+                self._abandon_mission(goal_id)
             return
         queue = host.goals
         with host.goal_lock:
@@ -420,13 +726,35 @@ class NavigatingPlanner:
                 for goal_id in self._journeys
                 if (record := queue.record(goal_id)) is None or record.state is not GoalState.ACTIVE
             ]
+            dead_missions = [
+                goal_id
+                for goal_id in self._missions
+                if (record := queue.record(goal_id)) is None or record.state is not GoalState.ACTIVE
+            ]
         for goal_id in dead:
             del self._journeys[goal_id]
+        for goal_id in dead_missions:
+            self._abandon_mission(goal_id)
         self._enforce_cap()
+
+    def _abandon_mission(self, goal_id: str) -> None:
+        drive = self._missions.get(goal_id)
+        if drive is None:
+            return
+        drive.mission.mark_abandoned()
+        self._seal_report(goal_id, drive)
 
     def _enforce_cap(self) -> None:
         while len(self._journeys) > MAX_TRACKED_JOURNEYS:
             self._journeys.popitem(last=False)
+        while len(self._missions) > MAX_TRACKED_MISSIONS:
+            goal_id, drive = self._missions.popitem(last=False)
+            # Evicted, not finished: the report is still owed to the ledger.
+            drive.mission.mark_abandoned()
+            self._loot_reports[goal_id] = drive.mission.report
+            self._loot_reports.move_to_end(goal_id)
+            while len(self._loot_reports) > MAX_KEPT_LOOT_REPORTS:
+                self._loot_reports.popitem(last=False)
 
 
 def _reason_of(error: object) -> tuple[ReasonCode, str]:

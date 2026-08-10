@@ -93,11 +93,13 @@ class GoalKind(StrEnum):
     so the set of goals is a reviewed list rather than a free string that a
     provider could stretch into an instruction.
 
-    ``NAVIGATE_TO`` is in the vocabulary and deliberately not in any provider's
-    repertoire: routes are walked by the deterministic executor in
-    :mod:`pz_agent_core.navigation`, one observed square at a time, and a
-    provider asked for it answers with a typed refusal naming that executor —
-    never with a plan that approximates walking with something else.
+    ``NAVIGATE_TO`` and ``LOOT_AREA`` are in the vocabulary and deliberately
+    not in any provider's repertoire: routes are walked by the deterministic
+    executor in :mod:`pz_agent_core.navigation`, one observed square at a
+    time, and loot sweeps are driven by the CLI's deterministic loot mission,
+    one observed container at a time. A provider asked for either answers with
+    a typed refusal naming the deterministic server — never with a plan that
+    approximates the work with something else.
     """
 
     SATISFY_HUNGER = "satisfy_hunger"
@@ -106,6 +108,7 @@ class GoalKind(StrEnum):
     TRAIN_SKILL = "train_skill"
     LEARN_RECIPE = "learn_recipe"
     NAVIGATE_TO = "navigate_to"
+    LOOT_AREA = "loot_area"
 
 
 @dataclass(frozen=True, slots=True)
@@ -249,6 +252,17 @@ class NullProvider:
                 ReasonCode.CAPABILITY_UNAVAILABLE,
                 "navigate_to is walked by the deterministic route executor, not planned "
                 "by a provider; a sidecar without the navigating planner wired cannot "
+                "serve it.",
+            )
+        if request.goal.kind is GoalKind.LOOT_AREA:
+            # Same refusal shape for the same reason: a loot sweep is a
+            # deterministic mission over navigation, inspection, selection and
+            # batch transfer, and a provider that answered it with a plan
+            # would be approximating all four with a guess.
+            return PlanProposal.refusal(
+                ReasonCode.CAPABILITY_UNAVAILABLE,
+                "loot_area is driven by the deterministic loot mission, not planned by "
+                "a provider; a sidecar without the navigating planner wired cannot "
                 "serve it.",
             )
         if request.observation.inventory is None:

@@ -28,6 +28,7 @@ change proves this happened?*
 ``container.open_nearby``      the container is reported, accessible and in reach
 ``inventory.search``           every reference returned resolves on the character
 ``inventory.transfer``         the item is in the destination and nowhere else
+``inventory.transfer_batch``   every named item is in the destination, each once
 ``inventory.ensure_main``      the item is in player-main
 ``consume.eat``                hunger fell, or the portions did
 ``consume.drink``              thirst fell, or the volume did
@@ -59,7 +60,13 @@ from .consume import DrinkAdapter, DrinkSourceAdapter, EatAdapter, ensure_main_p
 from .container import ContainerInspectAdapter, ContainerOpenNearbyAdapter
 from .doors import DoorCloseAdapter, DoorOpenAdapter, DoorUnlockAdapter
 from .equipment import EquipAdapter, UnequipAdapter
-from .inventory import EnsureMainAdapter, SearchAdapter, TransferAdapter, unequip_prerequisite
+from .inventory import (
+    BatchTransferAdapter,
+    EnsureMainAdapter,
+    SearchAdapter,
+    TransferAdapter,
+    unequip_prerequisite,
+)
 from .literature import ReadAdapter
 from .medical import BandageAdapter
 from .movement import MOVE_RETRY_POLICY, MoveNearAdapter, MoveToAdapter
@@ -70,6 +77,7 @@ from .world import WorldInspectAdapter
 __all__ = [
     "MOVE_RETRY_POLICY",
     "BandageAdapter",
+    "BatchTransferAdapter",
     "ContainerChain",
     "ContainerInspectAdapter",
     "ContainerOpenNearbyAdapter",
@@ -118,6 +126,7 @@ def register_game_adapters(registry: AdapterRegistry) -> AdapterRegistry:
     registry.register(ContainerOpenNearbyAdapter())
     registry.register(SearchAdapter())
     registry.register(TransferAdapter())
+    registry.register(BatchTransferAdapter())
     registry.register(EnsureMainAdapter())
     registry.register(EatAdapter())
     registry.register(DrinkAdapter())

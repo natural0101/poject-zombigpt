@@ -643,3 +643,161 @@ def test_a_malformed_collection_is_refused_rather_than_partly_read() -> None:
 
     with pytest.raises(MemoryValueError, match="containers must be an array"):
         SaveMemory.from_document(document, save_id=DEFAULT_SAVE)
+
+
+# --------------------------------------------------------------------------
+# what an enumeration recorded, and what a sighting must not erase
+# --------------------------------------------------------------------------
+
+
+def _inspect(memory: SaveMemory, *, revision: str, count: int, now_ms: int = NOW_MS) -> None:
+    memory.note_container(
+        container_ref=world_container_ref(),
+        kind=ContainerKind.WORLD,
+        name="Counter",
+        now_ms=now_ms,
+        inspected=True,
+        content_revision=revision,
+        item_count=count,
+    )
+
+
+def test_an_inspection_records_the_revision_and_the_item_count() -> None:
+    memory = _memory()
+
+    _inspect(memory, revision="a" * 16, count=3)
+
+    (record,) = memory.containers()
+    assert record.content_revision == "a" * 16
+    assert record.item_count == 3
+
+
+def test_a_sighting_carries_the_recorded_enumeration_forward() -> None:
+    """Walking past the shelf did not disprove what opening it found."""
+    memory = _memory()
+    _inspect(memory, revision="a" * 16, count=3)
+
+    memory.note_container(
+        container_ref=world_container_ref(),
+        kind=ContainerKind.WORLD,
+        name="Counter",
+        now_ms=NOW_MS + 5_000,
+    )
+
+    (record,) = memory.containers()
+    assert record.content_revision == "a" * 16
+    assert record.item_count == 3
+    assert record.last_seen_ms == NOW_MS + 5_000
+
+
+def test_a_new_inspection_replaces_the_previous_enumeration() -> None:
+    memory = _memory()
+    _inspect(memory, revision="a" * 16, count=3)
+
+    _inspect(memory, revision="b" * 16, count=1, now_ms=NOW_MS + 5_000)
+
+    (record,) = memory.containers()
+    assert record.content_revision == "b" * 16
+    assert record.item_count == 1
+
+
+def test_an_inspection_that_enumerated_nothing_erases_the_stale_digest() -> None:
+    """The new look is the newer fact even when it learned less than the old one."""
+    memory = _memory()
+    _inspect(memory, revision="a" * 16, count=3)
+
+    memory.note_container(
+        container_ref=world_container_ref(),
+        kind=ContainerKind.WORLD,
+        name="Counter",
+        now_ms=NOW_MS + 5_000,
+        inspected=True,
+    )
+
+    (record,) = memory.containers()
+    assert record.content_revision == ""
+    assert record.item_count == -1
+
+
+# --------------------------------------------------------------------------
+# the two queries the loot planner asks
+# --------------------------------------------------------------------------
+
+
+def test_container_unchanged_only_on_two_non_empty_digests_agreeing() -> None:
+    memory = _memory()
+    _inspect(memory, revision="a" * 16, count=3)
+    tail = container_tail(world_container_ref())
+
+    assert memory.container_unchanged(tail, "a" * 16) is True
+    assert memory.container_unchanged(tail, "b" * 16) is False
+
+
+def test_an_unremembered_container_is_never_unchanged() -> None:
+    assert _memory().container_unchanged("world:1:2:0:1:0", "a" * 16) is False
+
+
+def test_a_container_seen_but_never_enumerated_is_never_unchanged() -> None:
+    """An empty stored revision is "I do not know", and must send the planner back."""
+    memory = _memory()
+    memory.note_container(
+        container_ref=world_container_ref(),
+        kind=ContainerKind.WORLD,
+        name="Counter",
+        now_ms=NOW_MS,
+    )
+
+    assert memory.container_unchanged(container_tail(world_container_ref()), "a" * 16) is False
+
+
+def test_an_empty_probe_revision_is_never_unchanged_either() -> None:
+    """Two ignorances agreeing is not knowledge."""
+    memory = _memory()
+    memory.note_container(
+        container_ref=world_container_ref(),
+        kind=ContainerKind.WORLD,
+        name="Counter",
+        now_ms=NOW_MS,
+    )
+
+    assert memory.container_unchanged(container_tail(world_container_ref()), "") is False
+
+
+def test_uninspected_tails_lists_what_was_seen_but_never_counted() -> None:
+    memory = _memory()
+    memory.note_container(
+        container_ref=world_container_ref(x=1201),
+        kind=ContainerKind.WORLD,
+        name="Shelf",
+        now_ms=NOW_MS + 1,
+    )
+    _inspect(memory, revision="a" * 16, count=0, now_ms=NOW_MS + 2)
+
+    assert list(memory.uninspected_tails()) == ["world:1201:3400:0:1:0"]
+
+
+def test_a_container_opened_and_found_empty_is_not_uninspected() -> None:
+    """Count zero is an answer; -1 is the absence of one."""
+    memory = _memory()
+    _inspect(memory, revision="a" * 16, count=0)
+
+    assert list(memory.uninspected_tails()) == []
+
+
+def test_uninspected_tails_walks_most_recently_seen_first() -> None:
+    memory = _memory()
+    for index, x in enumerate((1201, 1202, 1203)):
+        memory.note_container(
+            container_ref=world_container_ref(x=x),
+            kind=ContainerKind.WORLD,
+            name="Shelf",
+            now_ms=NOW_MS + index,
+        )
+
+    tails = list(memory.uninspected_tails())
+
+    assert tails == [
+        "world:1203:3400:0:1:0",
+        "world:1202:3400:0:1:0",
+        "world:1201:3400:0:1:0",
+    ]

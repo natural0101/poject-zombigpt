@@ -53,6 +53,7 @@ Protocol.ACTION_NAMES = {
   "door.open",
   "door.close",
   "door.unlock",
+  "inventory.transfer_batch",
 }
 
 local function toSet(list)

@@ -30,9 +30,10 @@ Three properties of the set are decided here rather than in the handlers:
 ``risk`` is the *base* tier of the action a tool submits — the one its adapter
 declares — and never a worst case invented here. Several adapters assess a
 higher tier per call: ``movement.move_to`` is ``P3`` when the destination
-changes floor or leaves the safe radius, and ``inventory.transfer`` is ``P3``
-when the source is a world container. Neither is visible from the tool name, so
-neither can be published; what the descriptor states is the floor a caller needs
+changes floor or leaves the safe radius, and both transfer forms —
+``inventory.transfer`` and ``inventory.transfer_batch`` — are ``P3`` when a
+source is a world container. None of that is visible from the tool name, so
+none of it can be published; what the descriptor states is the floor a caller needs
 before the permission engine has seen the arguments. Publishing the escalated
 tier instead would tell a caller holding a ``P2`` grant that a step across the
 room is out of reach, and the engine would then allow it.
@@ -120,10 +121,13 @@ from pz_agent_core.capabilities.probes import (
 )
 from pz_agent_core.goals import (
     MAX_IDEMPOTENCY_KEY_LEN,
+    MAX_LOOT_CATEGORIES_CHARS,
     NUMERIC_RANGES,
     GoalKind,
+    LootScope,
     TrainableSkill,
 )
+from pz_agent_core.loot import LootCategory
 from pz_agent_core.protocol import READ_ONLY_ACTIONS, ActionName, JsonDict, RefKind, RiskClass
 from pz_agent_core.protocol.messages import MAX_LEASE_MS, MIN_LEASE_MS
 
@@ -137,6 +141,7 @@ __all__ = [
     "DEFAULT_TAIL_RECORDS",
     "EXAMPLE_SESSION_ID",
     "MAX_ACTION_WAIT_MS",
+    "MAX_BATCH_ITEMS",
     "MAX_GOAL_CHARS",
     "MAX_IDEMPOTENCY_KEY_CHARS",
     "MAX_MEMORY_RESULTS",
@@ -182,6 +187,15 @@ MIN_ACTION_WAIT_MS: Final = 100
 MAX_ACTION_WAIT_MS: Final = 60_000
 DEFAULT_ACTION_WAIT_MS: Final = 5_000
 
+#: Items one ``inventory.transfer_batch`` may name: the batch contract's own
+#: ceiling, the same eight the adapter reads ``item_refs`` against. Small on
+#: purpose — every item is verified individually in the destination, so a wider
+#: batch is a longer list of claims one command id has to answer for.
+#: Restated from the contract rather than imported, and the seam check in
+#: ``tests/contract/test_mcp_action_coverage.py`` is what keeps the two sides
+#: of the wire agreeing about it.
+MAX_BATCH_ITEMS: Final = 8
+
 #: The floor ``movement.move_near`` applies to an approach radius. Restated
 #: rather than imported because the adapter inlines it in its own reader instead
 #: of naming it; a radius this schema waved through would be one the adapter
@@ -195,6 +209,12 @@ MIN_APPROACH_RADIUS: Final = 0.1
 EXAMPLE_SESSION_ID: Final = "00000000-0000-4000-8000-000000000001"
 
 _EXAMPLE_ITEM: Final = f"item:{EXAMPLE_SESSION_ID}:worn:Back:99001:4210:0"
+
+#: A second carried item, distinct in its runtime id. The batch example must
+#: show a list that is really a list, and two copies of one reference would be
+#: exactly the duplicate its schema refuses.
+_EXAMPLE_ITEM_2: Final = f"item:{EXAMPLE_SESSION_ID}:worn:Back:99001:4211:0"
+
 _EXAMPLE_MAIN: Final = f"container:{EXAMPLE_SESSION_ID}:player-main"
 _EXAMPLE_CRATE: Final = f"container:{EXAMPLE_SESSION_ID}:world:1200:3400:0:0:0"
 _EXAMPLE_SQUARE: Final = f"square:{EXAMPLE_SESSION_ID}:1200:3400:0"
@@ -332,6 +352,25 @@ def _mutating(
 #: pattern rather than as a constant; ``tests/unit/test_mcp_catalog_goals.py``
 #: holds the two together by feeding one's rejects to the other.
 _GOAL_KEY_PATTERN: Final = rf"^[A-Za-z0-9][A-Za-z0-9_.:\-]{{0,{MAX_IDEMPOTENCY_KEY_LEN - 1}}}$"
+
+#: One loot category token, spelled the one way the vocabulary publishes it.
+#: Derived from :class:`~pz_agent_core.loot.LootCategory` rather than typed
+#: out, so a tenth category appears here the moment the enum gains it.
+_LOOT_CATEGORY_TOKEN: Final = "|".join(sorted(category.value for category in LootCategory))
+
+#: The ``categories`` argument of a ``loot_area`` goal: a comma-joined list of
+#: closed tokens, at most one per category. The channel's own reader
+#: (:func:`~pz_agent_core.goals.parse_loot_categories`) additionally folds case,
+#: strips spaces and refuses a repeated token; the first two make the channel
+#: *wider* than this pattern, which is the safe direction of disagreement — a
+#: spelling the schema refuses is refused before the call is made, never waved
+#: through to fail after it. The repeat rule runs in the opposite direction and
+#: a pattern cannot state it, so a repeated token passes here and is refused by
+#: the channel with ``INVALID_ARGUMENT``, exactly as a parameter the kind
+#: forbids is.
+_LOOT_CATEGORIES_PATTERN: Final = (
+    rf"^(?:{_LOOT_CATEGORY_TOKEN})(?:,(?:{_LOOT_CATEGORY_TOKEN})){{0,{len(LootCategory) - 1}}}$"
+)
 
 _GOAL_KEY: Final[JsonDict] = {
     "type": "string",
@@ -994,6 +1033,48 @@ TOOLS: Final[tuple[ToolSpec, ...]] = (
         },
     ),
     ToolSpec(
+        name="pz_action_transfer_batch",
+        kind=ToolKind.WRITE,
+        risk=RiskClass.P1,
+        summary=(
+            "Move up to eight named items into one container, each by the "
+            "game's own transfer, with capacity re-checked before every item "
+            "and the batch stopped at the first that would not fit. Succeeded "
+            "only when every requested item is observed in the destination "
+            "afterwards; a stop partway is a CONTAINER_FULL failure whose "
+            "evidence carries the honest partial record — what landed, what "
+            "stopped, and why. Each reference moves as one item, exactly as "
+            "pz_action_transfer moves it."
+        ),
+        required_capability=INVENTORY_TRANSFER,
+        action=ActionName.INVENTORY_TRANSFER_BATCH,
+        long_running=True,
+        input_schema=_mutating(
+            {
+                "item_refs": {
+                    "type": "array",
+                    "description": (
+                        "The items to move, each named once; they may live in "
+                        "different source containers."
+                    ),
+                    "minItems": 1,
+                    "maxItems": MAX_BATCH_ITEMS,
+                    "uniqueItems": True,
+                    "items": _ref_schema(RefKind.ITEM, "One item to move."),
+                },
+                "destination_container_ref": _ref_schema(
+                    RefKind.CONTAINER, "Where every one of them must end up."
+                ),
+            },
+            required=("item_refs", "destination_container_ref"),
+        ),
+        example={
+            "item_refs": [_EXAMPLE_ITEM, _EXAMPLE_ITEM_2],
+            "destination_container_ref": _EXAMPLE_MAIN,
+            "idempotency_key": "goal-1:step-1:attempt-1",
+        },
+    ),
+    ToolSpec(
         name="pz_action_ensure_main",
         kind=ToolKind.WRITE,
         risk=RiskClass.P1,
@@ -1522,7 +1603,13 @@ TOOLS: Final[tuple[ToolSpec, ...]] = (
             "'pending' is the honest word for a goal nothing has started yet, "
             "and every goal carries a wall-clock, step and time-to-live budget "
             "so that it reaches a terminal state whether or not it is served. "
-            "Which sandwich satisfies a hunger goal is never decided here."
+            "Which sandwich satisfies a hunger goal is never decided here. A "
+            "'loot_area' goal finishes on one provable criterion — every "
+            "reachable container in scope was inspected or has a recorded "
+            "skip reason — and its terminal answer reports the looted scope "
+            "(the pinned room, building or sweep), the containers inspected, "
+            "the containers skipped each with its reason, and the items "
+            "taken per category and left per reason."
         ),
         input_schema=_goal_channel(
             {
@@ -1579,6 +1666,54 @@ TOOLS: Final[tuple[ToolSpec, ...]] = (
                     "description": "Floor of the target square; 0 is ground level.",
                     "minimum": NUMERIC_RANGES["target_z"].minimum,
                     "maximum": NUMERIC_RANGES["target_z"].maximum,
+                },
+                # The four below belong to 'loot_area' and to nothing else.
+                # All optional, and again with no defaults: the bare goal
+                # means scope room, the useful-only selection and no
+                # take_all, and it is the mission that reads the absence as
+                # those defaults — a default written here would attach a
+                # parameter to every kind that forbids it.
+                "scope": {
+                    "type": "string",
+                    "description": (
+                        "What 'the area' means to a 'loot_area' goal: the room "
+                        "or building the character stands in when the goal "
+                        "activates, or a bounded sweep around the activation "
+                        "square. Absent means room. 'room' and 'building' need "
+                        "a build that reports rooms and are refused with a "
+                        "typed failure naming 'radius' otherwise; 'radius' "
+                        "always works."
+                    ),
+                    "enum": sorted(scope.value for scope in LootScope),
+                },
+                "radius": {
+                    "type": "integer",
+                    "description": (
+                        "Chebyshev sweep of a 'loot_area' goal, in squares "
+                        "around the activation square. Meaningful only with "
+                        "scope 'radius' and refused beside any other scope."
+                    ),
+                    "minimum": NUMERIC_RANGES["radius"].minimum,
+                    "maximum": NUMERIC_RANGES["radius"].maximum,
+                },
+                "take_all": {
+                    "type": "boolean",
+                    "description": (
+                        "Widen a 'loot_area' goal to every category, including "
+                        "the unknowns the useful-only default leaves on the "
+                        "shelf. Never overrides the user's reserved items."
+                    ),
+                },
+                "categories": {
+                    "type": "string",
+                    "description": (
+                        "Restrict a 'loot_area' goal to these loot categories: "
+                        "a comma-joined list of closed tokens, each at most "
+                        "once. Not free text — every token is a member of the "
+                        "loot vocabulary or the goal is refused."
+                    ),
+                    "pattern": _LOOT_CATEGORIES_PATTERN,
+                    "maxLength": MAX_LOOT_CATEGORIES_CHARS,
                 },
             },
             required=("kind",),

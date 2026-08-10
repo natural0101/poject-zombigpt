@@ -111,8 +111,10 @@ from pz_agent_core.goals import (
     GoalRefusal,
     GoalRequest,
     GoalState,
+    LootScope,
     TrainableSkill,
     parse_kind,
+    parse_scope,
     parse_skill,
 )
 from pz_agent_core.protocol import JsonDict, ReasonCode
@@ -236,6 +238,19 @@ def _optional_float(payload: Mapping[str, Any], field: str, *, where: str) -> fl
     return require_float(payload, field, where=where)
 
 
+def _optional_bool(payload: Mapping[str, Any], field: str, *, where: str) -> bool | None:
+    """Read an optional boolean, reusing the strict reader for the type check.
+
+    Absent and explicitly null are the same answer — "the caller did not
+    choose" — which for ``take_all`` is a different statement from ``False``
+    ("the caller chose the useful-only default in as many words"), so neither
+    may collapse into the other.
+    """
+    if payload.get(field) is None:
+        return None
+    return require_bool(payload, field, where=where)
+
+
 def _require_kind(payload: Mapping[str, Any], *, where: str) -> GoalKind:
     """Read ``kind`` through the channel's own door, and never quote it back.
 
@@ -280,6 +295,31 @@ def _optional_skill(payload: Mapping[str, Any], *, where: str) -> TrainableSkill
             f"{where}: skill is not one of the {len(TrainableSkill)} skills this build trains"
         )
     return skill
+
+
+def _optional_scope(payload: Mapping[str, Any], *, where: str) -> LootScope | None:
+    """Read ``scope`` through :func:`~pz_agent_core.goals.parse_scope`, or not at all.
+
+    Same reasoning as :func:`_optional_skill`, and the same silence about the
+    value: the scope decides how far the character may wander unattended, it is
+    proposed by the caller, and an unknown token is refused without being
+    echoed — never approximated to a scope the caller did not name.
+
+    Raises:
+        CodecError: ``scope`` is present and is not a string, or is not a
+            scope this build loots by.
+    """
+    raw = payload.get("scope")
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        raise CodecError(f"{where}: scope must be a string or null")
+    scope = parse_scope(raw)
+    if scope is None:
+        raise CodecError(
+            f"{where}: scope is not one of the {len(LootScope)} loot scopes this build carries"
+        )
+    return scope
 
 
 def _decode_evidence_keys(payload: Mapping[str, Any], *, where: str) -> tuple[str, ...]:
@@ -333,6 +373,17 @@ def encode_goal_params(params: GoalParams) -> JsonDict:
         out["target_y"] = params.target_y
     if params.target_z is not None:
         out["target_z"] = params.target_z
+    if params.scope is not None:
+        out["scope"] = params.scope.value
+    if params.radius is not None:
+        out["radius"] = params.radius
+    # ``is not None``, not truthiness, for the same reason as ``satisfy_to``
+    # above: ``take_all=False`` is the caller choosing the useful-only default
+    # in as many words, and dropping it would erase the choice.
+    if params.take_all is not None:
+        out["take_all"] = params.take_all
+    if params.categories is not None:
+        out["categories"] = params.categories
     return out
 
 
@@ -355,6 +406,10 @@ def decode_goal_params(payload: Mapping[str, Any]) -> GoalParams:
     target_x = optional_int(payload, "target_x", where=_PARAMS)
     target_y = optional_int(payload, "target_y", where=_PARAMS)
     target_z = optional_int(payload, "target_z", where=_PARAMS)
+    scope = _optional_scope(payload, where=_PARAMS)
+    radius = optional_int(payload, "radius", where=_PARAMS)
+    take_all = _optional_bool(payload, "take_all", where=_PARAMS)
+    categories = optional_str(payload, "categories", where=_PARAMS)
     try:
         return GoalParams(
             skill=skill,
@@ -364,12 +419,19 @@ def decode_goal_params(payload: Mapping[str, Any]) -> GoalParams:
             target_x=target_x,
             target_y=target_y,
             target_z=target_z,
+            scope=scope,
+            radius=radius,
+            take_all=take_all,
+            categories=categories,
         )
     except ValueError:
-        # The constructor's message quotes the number it rejected. That number
-        # came from the caller, so the chain is dropped rather than repeated.
+        # The constructor's message quotes the number it rejected, and for
+        # `categories` its input is the caller's own string. Both came from the
+        # caller, so the chain is dropped rather than repeated.
         raise CodecError(
-            f"{_PARAMS}: a numeric parameter lies outside the range the channel declares for it"
+            f"{_PARAMS}: a numeric parameter lies outside the range the channel declares "
+            f"for it, or categories is not a comma-joined list of distinct loot "
+            f"category tokens within the channel's length bound"
         ) from None
 
 

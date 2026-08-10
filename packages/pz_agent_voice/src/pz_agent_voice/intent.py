@@ -311,17 +311,34 @@ SKILL_WORDS: Final[dict[TrainableSkill, frozenset[str]]] = {
 #: a guess wearing numbers: one misheard digit walks the character hundreds of
 #: squares from where the speaker stood watching, silently, which is precisely
 #: the kind of invention this module refuses everywhere else. The kind travels
-#: through ``pz_goal_submit``, where the caller types the square. The grammar
-#: checks below still hold: a *new* kind must land either in
+#: through ``pz_goal_submit``, where the caller types the square.
+#:
+#: ``loot_area`` sits here for a narrower reason, and the honest one: the bare
+#: goal is a legitimate spoken sentence («облутай квартиру» is the product's
+#: founding phrase, and it needs no parameter at all), but every parameter the
+#: kind *optionally* takes — the scope token, the radius, ``take_all``, the
+#: category list — is unspeakable in this grammar, whose parameter machinery
+#: speaks numbers-with-unit-words and skills and nothing else. The partition
+#: check below refuses a speakable kind that takes unspeakable parameters even
+#: optionally, on purpose: a kind speech can start but never qualify is a
+#: grammar that answers «облутай только еду» by looting everything. Giving the
+#: sentence a vocabulary therefore means first giving the grammar closed-token
+#: parameters, which is the voice epic's change, not the loot epic's; until
+#: then the kind travels through ``pz_goal_submit`` like navigation does.
+#: The grammar checks below still hold: a *new* kind must land either in
 #: :data:`KIND_WORDS` or here — a kind in neither refuses the import, and a
 #: kind in both refuses it too.
-UNSPEAKABLE_KINDS: Final[frozenset[GoalKind]] = frozenset({GoalKind.NAVIGATE_TO})
+UNSPEAKABLE_KINDS: Final[frozenset[GoalKind]] = frozenset(
+    {GoalKind.NAVIGATE_TO, GoalKind.LOOT_AREA}
+)
 
 #: The parameters only those kinds carry, excluded from the unit-word table
 #: for the same reason the kinds are excluded from the phrasing table. Held by
 #: :func:`_check_channel_tables` against :data:`~pz_agent_core.goals.GOAL_SPECS`
 #: so no speakable kind can ever require a parameter speech cannot supply.
-UNSPEAKABLE_PARAMS: Final[frozenset[str]] = frozenset({"target_x", "target_y", "target_z"})
+UNSPEAKABLE_PARAMS: Final[frozenset[str]] = frozenset(
+    {"target_x", "target_y", "target_z", "scope", "radius", "take_all", "categories"}
+)
 
 #: The unit word that gives a bare number its parameter. Keyed by the parameter
 #: name so :func:`check_grammar` can hold this table against
@@ -487,8 +504,14 @@ def _check_channel_tables() -> None:
                 raise RuntimeError(f"{word!r} is claimed by both {first} and {owner}")
     if set(UNIT_WORDS) & UNSPEAKABLE_PARAMS:
         raise RuntimeError("a parameter declared unspeakable has a unit word anyway")
-    if set(UNIT_WORDS) | UNSPEAKABLE_PARAMS != set(NUMERIC_RANGES):
-        raise RuntimeError("UNIT_WORDS and NUMERIC_RANGES describe different parameters")
+    if set(UNIT_WORDS) - set(NUMERIC_RANGES):
+        raise RuntimeError("a unit word names a parameter with no declared numeric range")
+    # Not an equality any more: UNSPEAKABLE_PARAMS also carries the loot
+    # goal's closed-token parameters, which have no numeric range to appear
+    # in. What must stay true is that every *numeric* parameter is reachable
+    # by exactly one route — a unit word or the unspeakable list.
+    if set(NUMERIC_RANGES) - (set(UNIT_WORDS) | UNSPEAKABLE_PARAMS):
+        raise RuntimeError("a numeric parameter has no unit word and is not declared unspeakable")
     if set(UNIT_WORDS) | {"skill"} | UNSPEAKABLE_PARAMS != set(PARAM_NAMES):
         raise RuntimeError("a goal parameter has no unit word and cannot be spoken")
     for kind, spec in GOAL_SPECS.items():

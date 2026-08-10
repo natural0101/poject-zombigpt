@@ -44,12 +44,19 @@ CommandDispatcher.ARG = {
   BOOLEAN = "boolean",
   REF = "ref",
   ENUM = "enum",
+  LIST = "list",
 }
 
 --- Arguments one command may carry. Every adapter in this project declares
 --- fewer than a handful; the bound is here so a hostile payload cannot make the
 --- validation loop long.
 CommandDispatcher.MAX_ARGS = 8
+
+--- Elements one declared list may carry. A list counts as one argument against
+--- MAX_ARGS, so without its own bound a single list would be the unbounded
+--- collection the args cap exists to prevent. A declaration asks for its own
+--- smaller max_items; this is the ceiling no declaration may raise.
+CommandDispatcher.MAX_LIST_ITEMS = 8
 
 --- Bound on a declared string argument. Long enough for a mode name or an item
 --- type, far too short for a script.
@@ -101,6 +108,30 @@ local function checkArgSpec(action, name, spec)
   if kind == CommandDispatcher.ARG.REF then
     if not PZAgent.Compat.hasEntries(spec.kinds) then
       return nil, string.format("%s: ref argument %q declares no accepted ref kinds", action, name)
+    end
+  end
+  if kind == CommandDispatcher.ARG.LIST then
+    -- Elements are limited to refs and plain strings on purpose: every element
+    -- kind a list may carry is a value the checker below hands to game code N
+    -- times per command, so each new kind is new attack surface on the game
+    -- thread. Numbers, booleans, enums and above all nested lists stay refused
+    -- until an adapter actually needs one, and earns it a checker of its own.
+    local of = spec.of
+    if of ~= CommandDispatcher.ARG.REF and of ~= CommandDispatcher.ARG.STRING then
+      return nil, string.format(
+        "%s: list argument %q must declare elements of ref or string, not %s",
+        action, name, tostring(of))
+    end
+    local maxItems = spec.max_items
+    if type(maxItems) ~= "number" or maxItems ~= math.floor(maxItems)
+      or maxItems < 1 or maxItems > CommandDispatcher.MAX_LIST_ITEMS then
+      return nil, string.format(
+        "%s: list argument %q must declare max_items in 1..%d",
+        action, name, CommandDispatcher.MAX_LIST_ITEMS)
+    end
+    if of == CommandDispatcher.ARG.REF and not PZAgent.Compat.hasEntries(spec.kinds) then
+      return nil, string.format(
+        "%s: ref-list argument %q declares no accepted ref kinds", action, name)
     end
   end
   return true
@@ -245,6 +276,67 @@ local function checkRef(spec, value, sessionId)
   return value
 end
 
+--- Validate one list argument: a dense array whose every element passes the
+--- same checker that element kind gets when it stands alone -- checkRef with
+--- the session, checkString with the declaration's byte bound.
+---
+--- Returns a fresh sanitised array, never the caller's table: the payload
+--- still holds a reference to what it sent, and an adapter must not share
+--- state with it. Or nil, detail, reasonCode -- the element checker's code is
+--- propagated, so a bad ref element is INVALID_REF exactly as a bad lone ref.
+local function checkList(spec, value, sessionId)
+  if type(value) ~= "table" then
+    return nil, "must be a list"
+  end
+  -- Dense-array walk, bounded before the table is trusted: count entries with
+  -- pairs and refuse the moment the count passes the declared bound, so a
+  -- hostile table cannot make this loop long. Then demand keys exactly 1..n.
+  -- PZAgent.Json decodes a JSON array into precisely that shape, so a sparse
+  -- or keyed table never came off the wire -- it is refused, not repaired.
+  local count = 0
+  for _ in pairs(value) do
+    count = count + 1
+    if count > spec.max_items then
+      return nil, string.format("carries more than %d items", spec.max_items)
+    end
+  end
+  if count == 0 then
+    return nil, "must carry at least one item"
+  end
+  for index = 1, count do
+    if value[index] == nil then
+      return nil, "must be a dense array"
+    end
+  end
+  local sanitised = {}
+  local seen = {}
+  for index = 1, count do
+    local element = value[index]
+    local checked, detail, reasonCode
+    if spec.of == CommandDispatcher.ARG.STRING then
+      checked, detail = checkString(spec, element)
+    elseif spec.of == CommandDispatcher.ARG.REF then
+      checked, detail, reasonCode = checkRef(spec, element, sessionId)
+    else
+      -- Unreachable through register(), which refuses any other element kind
+      -- at load; kept explicit so a hand-built declaration fails here instead
+      -- of quietly becoming whichever check an else happened to name.
+      return nil, string.format("item %d has an element kind this dispatcher does not know", index)
+    end
+    if checked == nil then
+      return nil, string.format("item %d %s", index, tostring(detail)), reasonCode
+    end
+    -- A duplicate element is one object asked to move twice: the second copy
+    -- could only succeed by lying about the first, so the whole list is wrong.
+    if seen[checked] ~= nil then
+      return nil, string.format("item %d repeats item %d", index, seen[checked])
+    end
+    seen[checked] = index
+    sanitised[index] = checked
+  end
+  return sanitised
+end
+
 --- Validate `args` against `adapter`'s declaration.
 ---
 --- Returns the sanitised table, or nil plus a reason code and detail. The
@@ -273,9 +365,11 @@ function CommandDispatcher.checkArgs(adapter, args, sessionId)
     if value == PZAgent.Json.null then
       return nil, reasons.INVALID_ARGUMENT, string.format("argument %q is null", name)
     end
-    if type(value) == "table" then
-      -- Every declared kind is a scalar, so a table is either a structure no
-      -- adapter asked for or a nesting depth nobody bounded.
+    if type(value) == "table" and declaration[name].type ~= CommandDispatcher.ARG.LIST then
+      -- Every declared kind except LIST is a scalar, so a table is either a
+      -- structure no adapter asked for or a nesting depth nobody bounded. A
+      -- table under a LIST declaration passes here and faces checkList below,
+      -- which bounds its length before trusting it.
       return nil, reasons.INVALID_ARGUMENT,
         string.format("argument %q must be a scalar", name)
     end
@@ -309,8 +403,18 @@ function CommandDispatcher.checkArgs(adapter, args, sessionId)
         else
           detail = "is not one of the accepted values"
         end
-      else
+      elseif spec.type == CommandDispatcher.ARG.LIST then
+        checked, detail, reasonCode = checkList(spec, value, sessionId)
+      elseif spec.type == CommandDispatcher.ARG.REF then
         checked, detail, reasonCode = checkRef(spec, value, sessionId)
+      else
+        -- Unreachable through register(), which refuses an unknown declared
+        -- type at load. Kept because checkArgs takes any adapter table, and
+        -- this branch used to be a bare else falling into checkRef -- the
+        -- shape under which a typo'd declaration silently became a ref check
+        -- instead of a refusal.
+        return nil, reasons.INVALID_ARGUMENT,
+          string.format("argument %q declares a type this dispatcher does not know", name)
       end
       if checked == nil then
         return nil, reasonCode or reasons.INVALID_ARGUMENT,

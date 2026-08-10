@@ -286,6 +286,59 @@ class GoalPlanner(Planner, Protocol):
         ...
 
 
+@runtime_checkable
+class ContainerMemory(Protocol):
+    """The optional feed from what the loop observes into the save's memory.
+
+    :class:`~pz_agent_cli.memory.SidecarMemory` is the one implementation, and
+    it lives behind the planner (``planner.memory``) rather than on this loop,
+    because ``build_loop`` hands it to the planner and nothing else holds it.
+    This protocol is the loop's structural view of it: the planner and wrapper
+    classes import this module, so this module cannot import them back and
+    name the concrete types — the same one-way rule the :class:`Planner`
+    protocol already applies one level up.
+
+    ``runtime_checkable`` so :meth:`SidecarLoop._container_memory` can tell the
+    feedable memory apart from the fallbacks (``NoMemory``,
+    ``UnreadableMemory``) that answer the autonomy questions but store nothing.
+
+    All three methods are bounded and never raise: a memory that cannot record
+    or flush reports through its own record, and remembering shelves is never a
+    reason to end the tick that was only walking past them.
+    """
+
+    def note_observation(self, observation: Observation, *, now_ms: int) -> int:
+        """Record a sighting for each world container the observation shows."""
+        ...
+
+    def note_inspection(self, container_ref: str, observation: Observation, *, now_ms: int) -> bool:
+        """Record that this container's contents were just enumerated."""
+        ...
+
+    def flush_notes(self, *, now_ms: int) -> bool:
+        """Write pending notes now; the shutdown path."""
+        ...
+
+
+#: Evidence kinds that prove a container's contents were just observed, and the
+#: key inside the evidence's ``observed`` block that names that container.
+#: ``container.inspect`` describes contents outright; the two transfer kinds
+#: prove items were observed landing in the destination, after which the
+#: destination's enumeration in the same observation is current. The batch kind
+#: names its container ``destination_ref`` by the transfer_batch contract; the
+#: other two share the single-container spelling.
+_CONTENT_EVIDENCE_REFS: Final[Mapping[str, str]] = {
+    "container_contents_described": "container_ref",
+    "item_in_destination_container": "container_ref",
+    "items_in_destination_container": "destination_ref",
+}
+
+#: Wrapper hops :meth:`SidecarLoop._container_memory` will look through. The
+#: shipped assembly is exactly one wrapper deep (NavigatingPlanner around
+#: AutonomyPlanner); the slack is for a second wrapper, not for a chain.
+_MAX_PLANNER_UNWRAPS: Final = 4
+
+
 @dataclass(frozen=True, slots=True)
 class LoopLimits:
     """Every bound the loop runs under. All of them are enforced, not advisory."""
@@ -1777,6 +1830,13 @@ class SidecarLoop:
 
     def shutdown(self, *, reason: str = "stop requested") -> ShutdownOutcome:
         """Disarm, close in-flight work honestly, and release the lock."""
+        # Container notes younger than the memory's flush cadence would die
+        # with the process; this is the "and on close" half of that cadence.
+        # First, because nothing below depends on it and everything below tears
+        # down state it does not need.
+        memory = self._container_memory()
+        if memory is not None:
+            memory.flush_notes(now_ms=self.clock())
         lost: tuple[ActionResult, ...] = ()
         attached = self._attached
         was_armed = self._armed
@@ -2335,6 +2395,17 @@ class SidecarLoop:
 
         self._trace_observation()
 
+        # The container-memory seam, sighting half: whatever world containers
+        # this tick's observation shows are offered to the save's memory. Before
+        # the guard and unconditionally — remembering where a shelf stands is
+        # passive, and it must keep happening while the loop is disarmed, which
+        # is most of every session. The memory batches its own disk writes.
+        memory = self._container_memory()
+        if memory is not None and ingested:
+            latest = self._store.latest()
+            if latest is not None:
+                memory.note_observation(latest, now_ms=now)
+
         events = self._run_guard(attached, now, panic=panic, game_alive=liveness.alive)
         lost = self._apply_events(attached, events, now, panic=panic, game_alive=liveness.alive)
         self._trace_results(lost)
@@ -2362,6 +2433,14 @@ class SidecarLoop:
             attached, now, events=events, panic=panic, game_alive=liveness.alive
         )
         self._trace_results(results)
+
+        # The container-memory seam, inspection half: a terminal result whose
+        # evidence proves a container's contents were observed teaches the
+        # memory what an enumeration found. After the results settle, so the
+        # observation consulted is the one the engine's own verify read or a
+        # newer one. Bounded by the results themselves — at most two per tick.
+        if memory is not None and results:
+            self._feed_inspections(memory, results, now)
 
         self._publish_heartbeat()
         self._refresh_pid_record()
@@ -2407,6 +2486,57 @@ class SidecarLoop:
                 "state directory is not accepting writes, and until it does "
                 "'pz-agent status' will read this still-running sidecar as stopped"
             )
+
+    def _container_memory(self) -> ContainerMemory | None:
+        """The feedable save memory behind this loop's planner, if there is one.
+
+        Walked structurally — ``planner``, then each wrapper's ``inner`` — and
+        matched against :class:`ContainerMemory`, because the concrete planner
+        and wrapper classes import this module and cannot be imported back.
+        The walk is the same one ``unwrap_planner`` performs on the assembly
+        side, bounded here by :data:`_MAX_PLANNER_UNWRAPS`. None is the
+        ordinary answer for a loop assembled without a planner, or with a
+        planner whose memory is one of the storeless fallbacks.
+        """
+        candidate: object | None = self.planner
+        for _ in range(_MAX_PLANNER_UNWRAPS):
+            if candidate is None:
+                return None
+            memory = getattr(candidate, "memory", None)
+            if isinstance(memory, ContainerMemory):
+                return memory
+            candidate = getattr(candidate, "inner", None)
+        return None
+
+    def _feed_inspections(
+        self, memory: ContainerMemory, results: Sequence[ActionResult], now_ms: int
+    ) -> None:
+        """Offer each result's content evidence to the save memory.
+
+        Terminal status is deliberately not checked: a batch transfer that
+        stopped at a full destination ends FAILED while its evidence still
+        records what was observed landing there, and observed content is worth
+        remembering whichever way the action ended. What *is* required is the
+        evidence shape the engine attaches (``kind`` beside ``observed``) with
+        a kind in :data:`_CONTENT_EVIDENCE_REFS`; anything else — a refusal's
+        flat evidence, another adapter's kind — is simply not content.
+        """
+        latest = self._store.latest()
+        if latest is None:
+            return
+        for result in results:
+            kind = result.evidence.get("kind")
+            if not isinstance(kind, str):
+                continue
+            ref_key = _CONTENT_EVIDENCE_REFS.get(kind)
+            if ref_key is None:
+                continue
+            observed = result.evidence.get("observed")
+            if not isinstance(observed, Mapping):
+                continue
+            container_ref = observed.get(ref_key)
+            if isinstance(container_ref, str) and container_ref:
+                memory.note_inspection(container_ref, latest, now_ms=now_ms)
 
     def _run_guard(
         self, attached: _Attached, now_ms: int, *, panic: bool, game_alive: bool

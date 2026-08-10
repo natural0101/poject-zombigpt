@@ -44,9 +44,22 @@ KIND_VALUES = frozenset(
     {"satisfy_hunger", "satisfy_thirst", "read_for_boredom", "train_skill", "learn_recipe"}
 )
 
-#: Kinds the grammar refuses on purpose: an exact world square cannot be
-#: dictated safely, so ``navigate_to`` travels only through ``pz_goal_submit``.
-UNSPEAKABLE_KIND_VALUES = frozenset({"navigate_to"})
+#: Kinds the grammar refuses on purpose, each for its own stated reason: an
+#: exact world square cannot be dictated safely, so ``navigate_to`` travels
+#: only through ``pz_goal_submit``; ``loot_area`` is a legitimate spoken
+#: sentence with no required parameter — a real SPEAKABLE candidate — but its
+#: *optional* parameters (a scope token, a radius, ``take_all``, a category
+#: list) are all unspeakable in the current grammar, whose parameter machinery
+#: speaks numbers-with-units and skills only, and the grammar's own two-way
+#: partition check refuses a speakable kind that takes unspeakable parameters
+#: even optionally. The honest placement until the grammar grows closed-token
+#: parameters is therefore unspeakable, and the dedicated test below pins both
+#: halves of that reasoning so the decision is revisited rather than inherited.
+UNSPEAKABLE_KIND_VALUES = frozenset({"navigate_to", "loot_area"})
+
+#: The loot goal's parameters, restated as an independent literal for the
+#: partition assertions below.
+LOOT_PARAM_VALUES = frozenset({"scope", "radius", "take_all", "categories"})
 
 #: Several attested phrasings per intent (T005). Keyed by the kind's wire value
 #: so an entry naming a kind that no longer exists fails at :func:`parse_kind`
@@ -146,8 +159,41 @@ def test_navigation_is_deliberately_unspeakable() -> None:
     of navigation words must resolve to no goal at all rather than to a guess.
     """
     assert {kind.value for kind in intent.UNSPEAKABLE_KINDS} == UNSPEAKABLE_KIND_VALUES
-    assert frozenset({"target_x", "target_y", "target_z"}) == intent.UNSPEAKABLE_PARAMS
+    assert (
+        frozenset({"target_x", "target_y", "target_z"}) | LOOT_PARAM_VALUES
+        == intent.UNSPEAKABLE_PARAMS
+    )
     for transcript in ("агент, иди туда", "навигация 1200 3400", "иди на точку"):
+        resolution = resolve(transcript)
+        assert resolution.kind is None
+
+
+def test_loot_area_is_unspeakable_until_the_grammar_can_qualify_it() -> None:
+    """The loot decision, pinned so it is revisited rather than inherited.
+
+    Both halves of the honesty argument are asserted. The kind *is* a
+    speakable candidate — «облутай квартиру» needs no parameter, and the goal
+    channel admits it bare, which the first assertion proves. What keeps it
+    out of the grammar today is the second half: every optional parameter it
+    takes is unspeakable here, and the grammar's partition check ("a speakable
+    kind must not take unspeakable parameters, even optionally") would refuse
+    the import — a spoken «облутай только еду» that looted everything is the
+    invention that check exists to prevent. When the grammar grows closed-token
+    parameters, this test is the one to delete alongside the exclusion.
+    """
+    loot = parse_kind("loot_area")
+    assert loot is not None
+    # Half one: no required parameters — the bare goal is admissible.
+    assert GoalRequest(kind=loot, idempotency_key="k").params.present() == frozenset()
+    # Half two: every one of its optional parameters is unspeakable, so a
+    # speakable loot_area would violate the partition the grammar enforces.
+    spec = core_goals.GOAL_SPECS[loot]
+    assert spec.required == frozenset()
+    assert spec.optional == LOOT_PARAM_VALUES
+    assert spec.optional <= intent.UNSPEAKABLE_PARAMS
+    assert loot in intent.UNSPEAKABLE_KINDS
+    # And a lootish transcript resolves to no goal at all, never to a guess.
+    for transcript in ("агент, облутай квартиру", "залутай все вокруг", "обыщи дом"):
         resolution = resolve(transcript)
         assert resolution.kind is None
 
@@ -1210,7 +1256,7 @@ def test_import_check_rejects_a_unit_with_no_range(
 ) -> None:
     widened = {**intent.UNIT_WORDS, "inches": frozenset({"дюймов"})}
     monkeypatch.setattr(intent, "UNIT_WORDS", widened)
-    with pytest.raises(RuntimeError, match="different parameters"):
+    with pytest.raises(RuntimeError, match="no declared numeric range"):
         intent._check_channel_tables()
 
 
@@ -1298,7 +1344,7 @@ def test_the_table_check_runs_at_import_and_not_only_when_it_is_called(
         name: bounds for name, bounds in core_goals.NUMERIC_RANGES.items() if name != "pages"
     }
     monkeypatch.setattr(core_goals, "NUMERIC_RANGES", thinned)
-    with pytest.raises(RuntimeError, match="different parameters"):
+    with pytest.raises(RuntimeError, match="no declared numeric range"):
         _executed_afresh()
 
 

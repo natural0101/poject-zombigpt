@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import argparse
 import re
+from collections import Counter
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -59,9 +60,16 @@ from pz_agent_core.memory import (
     Reservation,
     SaveMemory,
     Square,
+    content_revision_of,
 )
 from pz_agent_core.policy.autonomy import NO_MEMORY, AutonomyMemory, HomeSquare
-from pz_agent_core.protocol import JsonDict, Observation
+from pz_agent_core.protocol import (
+    ContainerKind,
+    ContainerRef,
+    JsonDict,
+    Observation,
+    RefError,
+)
 
 from .autonomy import UNKNOWN_SAVE_ID, observed_snapshot
 from .context import EXIT_FAILURE, EXIT_OK, CliContext, Workspace, resolve_workspace
@@ -69,8 +77,10 @@ from .output import Printer
 from .supervisor import _read_json, _write_json
 
 __all__ = [
+    "MAX_SIGHTINGS_PER_OBSERVATION",
     "MEMORY_DIR_NAME",
     "MEMORY_RECORD_NAME",
+    "NOTE_FLUSH_INTERVAL_MS",
     "REMEMBER_SUBCOMMANDS",
     "RESERVED_BY_USER",
     "AttachedSave",
@@ -106,6 +116,19 @@ MEMORY_RECORD_NAME: Final = "sidecar.memory.json"
 RESERVED_BY_USER: Final = "set aside by the user with 'pz-agent remember reserve'"
 
 REMEMBER_SUBCOMMANDS: Final[tuple[str, ...]] = ("home", "reserve", "release", "list", "forget")
+
+#: World containers one observation may turn into sightings. The mod bounds the
+#: nearby tier itself, but this seam runs four times a second for hours and must
+#: stay bounded by its own numbers, not by trust in the sender's.
+MAX_SIGHTINGS_PER_OBSERVATION: Final = 64
+
+#: Wall time between writes of the container notes. The loop hands this seam an
+#: observation per tick; writing the memory file at that rate would turn a
+#: passive memory into a disk workload, so notes are marked dirty and flushed at
+#: most once per this interval (plus once at shutdown, via :meth:`flush_notes`).
+#: Ten seconds loses at most ten seconds of *sightings* to a crash — facts the
+#: next observation of the same shelf re-derives for free.
+NOTE_FLUSH_INTERVAL_MS: Final = 10_000
 
 #: An item type as the game spells it: a module and a type, one dot between
 #: them, letters, digits and underscores only. The module is not pinned to
@@ -355,6 +378,9 @@ class SidecarMemory:
         repr=False,
     )
     _notes: tuple[str, ...] = field(default=(), init=False, repr=False)
+    #: Whether the loaded memory holds container notes the file does not.
+    _dirty: bool = field(default=False, init=False, repr=False)
+    _last_flush_ms: int = field(default=0, init=False, repr=False)
 
     # -- the SaveScopedMemory port -----------------------------------------
 
@@ -380,6 +406,175 @@ class SidecarMemory:
 
     def reserves_item(self, full_type: str, /) -> bool:
         return self.in_force.reserves_item(full_type)
+
+    # -- the feeding seam ---------------------------------------------------
+    #
+    # Until this seam existed, nothing in production ever called
+    # SaveMemory.note_container: the store could answer "which containers do I
+    # know?" and nobody had ever told it one. The loop feeds it here — the
+    # structural port is :class:`~pz_agent_cli.runtime.ContainerMemory`, defined
+    # on the runtime side because this module imports (via .autonomy) the
+    # runtime and the dependency cannot point back.
+
+    def note_observation(self, observation: Observation, *, now_ms: int) -> int:
+        """Record a sighting for every world container this observation shows.
+
+        The nearby tier is the source: a :class:`NearbyObject` whose reference
+        parses as a *world* container reference is a container standing at a
+        square, which is exactly what a :class:`KnownContainer` remembers. A
+        sighting only — contents are not claimed, and
+        :meth:`~pz_agent_core.memory.store.SaveMemory.note_container` keeps
+        whatever an earlier inspection learned. On-person containers are
+        skipped, not stored: their references embed runtime ids a reload
+        invalidates, and the store refuses them by design.
+
+        Nothing is written to disk per observation; notes are marked dirty and
+        flushed on the :data:`NOTE_FLUSH_INTERVAL_MS` cadence. Returns how many
+        sightings were recorded.
+        """
+        self.follow(observation.game.save_id)
+        loaded = self._loaded
+        if loaded is None:
+            # No save named, or this save's memory is unreadable. Feeding an
+            # unreadable memory is impossible and feeding no memory records
+            # nothing; both resolve through follow(), not here.
+            return 0
+        inventory = observation.inventory
+        # An observation without a nearby tier shows no world containers; that
+        # is an ordinary partial observation, not a reason to skip the flush.
+        visible = () if observation.nearby is None else observation.nearby.objects
+        recorded = 0
+        for nearby in visible[:MAX_SIGHTINGS_PER_OBSERVATION]:
+            try:
+                parsed = ContainerRef.parse(nearby.ref)
+            except RefError:
+                # The nearby tier lists doors, windows and corpses beside the
+                # containers; a reference of another kind is ordinary, not an
+                # error, and is simply not a container to remember.
+                continue
+            if not parsed.is_world:
+                continue
+            described = None if inventory is None else inventory.container(nearby.ref)
+            try:
+                loaded.note_container(
+                    container_ref=nearby.ref,
+                    kind=ContainerKind.WORLD if described is None else described.kind,
+                    name="" if described is None else described.name,
+                    now_ms=now_ms,
+                    inspected=False,
+                )
+            except MemoryValueError:
+                # A tail past the store's bound, or a reference the store reads
+                # as on-person after all. One unstorable container must not stop
+                # the rest of the tick's sightings; the store's refusal is the
+                # bound working, not a condition to escalate.
+                continue
+            recorded += 1
+        if recorded:
+            self._dirty = True
+        self._maybe_flush(now_ms)
+        return recorded
+
+    def note_inspection(self, container_ref: str, observation: Observation, *, now_ms: int) -> bool:
+        """Record that *container_ref*'s contents were just enumerated.
+
+        Fed from a terminal action result whose evidence proves the contents
+        were observed (``container.inspect``'s listing, or a transfer observed
+        landing in the destination). The enumeration itself is read from
+        *observation*'s inventory tier — the same list the adapter's own verify
+        read — and becomes the :func:`content_revision_of` digest plus the item
+        count, so the loot planner can later ask "has this shelf changed?".
+
+        Returns False, recording nothing, when there is no loaded memory, the
+        reference is not a world container, or the observation does not
+        describe it — an inspection nobody observed is not a fact to store.
+        """
+        loaded = self._loaded
+        if loaded is None:
+            return False
+        try:
+            parsed = ContainerRef.parse(container_ref)
+        except RefError:
+            return False
+        if not parsed.is_world:
+            # A worn bag or the main inventory is enumerable but not
+            # rememberable: the store refuses on-person containers by design.
+            return False
+        inventory = observation.inventory
+        if inventory is None:
+            return False
+        container = inventory.container(container_ref)
+        if container is None:
+            return False
+        held = inventory.items_in(container_ref)
+        counted = Counter(item.full_type for item in held)
+        try:
+            loaded.note_container(
+                container_ref=container_ref,
+                kind=container.kind,
+                name=container.name,
+                now_ms=now_ms,
+                categories={item.category for item in held if item.category},
+                inspected=True,
+                content_revision=content_revision_of(counted.items()),
+                item_count=len(held),
+            )
+        except MemoryValueError:
+            # Same reasoning as the sighting path: the store's bound refused
+            # this one record, and that refusal is the smaller loss.
+            return False
+        self._dirty = True
+        self._maybe_flush(now_ms)
+        return True
+
+    def flush_notes(self, *, now_ms: int) -> bool:
+        """Write pending container notes now, cadence notwithstanding.
+
+        The shutdown path: dirty notes younger than the flush interval would
+        otherwise die with the process. Returns whether a write happened.
+        """
+        return self._flush(now_ms)
+
+    def _maybe_flush(self, now_ms: int) -> bool:
+        """Flush dirty notes, at most once per :data:`NOTE_FLUSH_INTERVAL_MS`."""
+        if not self._dirty:
+            return False
+        if self._last_flush_ms and now_ms - self._last_flush_ms < NOTE_FLUSH_INTERVAL_MS:
+            return False
+        return self._flush(now_ms)
+
+    def _flush(self, now_ms: int) -> bool:
+        """Persist the loaded memory, unless another process got there first."""
+        loaded = self._loaded
+        if not self._dirty or loaded is None:
+            return False
+        path = self.store.path_for(self._save_id)
+        if self._stamp != _file_stamp(path):
+            # Another process wrote this file since it was loaded — ``pz-agent
+            # remember`` is the one that does, and what it writes is the user's
+            # own words. Those outrank this seam's sightings, so the file is
+            # re-read rather than overwritten; the unsaved notes are discarded
+            # (``_adopt`` clears the dirty flag) as the smaller loss, every one
+            # being re-derivable from the next observation that shows the same
+            # container.
+            self._adopt(self._save_id)
+            return False
+        try:
+            self.store.save(loaded)
+        except MemoryStoreError as exc:
+            # The session outranks its own bookkeeping (the E12-M03-T004
+            # reading): a memory file that cannot be written must not end the
+            # loop that was only remembering shelves. The failure is noted where
+            # ``status`` reads notes, and the stamp below throttles the retry to
+            # the ordinary cadence instead of once per tick.
+            self._last_flush_ms = now_ms
+            note = self.redact(f"the container notes could not be written ({exc})")
+            self._notes = (*self._notes, note)[-MAX_NOTES:]
+            return False
+        self._stamp = _file_stamp(path)
+        self._dirty = False
+        self._last_flush_ms = now_ms
+        return True
 
     # -- what it is answering with -----------------------------------------
 
@@ -424,6 +619,9 @@ class SidecarMemory:
     def _adopt(self, save_id: str) -> None:
         """Load *save_id*'s memory, replacing whatever was answering before."""
         self._save_id = save_id
+        # Whatever container notes were pending described the memory being
+        # replaced; the file about to be read is the newer truth about them.
+        self._dirty = False
         path = self.store.path_for(save_id)
         self._stamp = _file_stamp(path)
         try:
@@ -462,6 +660,10 @@ class SidecarMemory:
         self._loaded = None
         self._fallback = NO_MEMORY
         self._stamp = None
+        # Unflushed sightings go with the memory they described. Re-derivable
+        # by looking again, which is the only honest option once the save they
+        # belonged to is no longer the one being reported.
+        self._dirty = False
         self._detail = detail
         self.publish()
 

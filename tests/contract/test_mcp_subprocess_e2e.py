@@ -485,6 +485,7 @@ _EVERY_TOOL: Final[tuple[str, ...]] = (
     "pz_action_move_near",
     "pz_action_open_container",
     "pz_action_transfer",
+    "pz_action_transfer_batch",
     "pz_action_ensure_main",
     "pz_action_eat",
     "pz_action_drink",
