@@ -1,0 +1,227 @@
+# Movement: what the shipped route executor and movement adapters enforce.
+# Every rule here restates behaviour pinned by this repository's tests; the
+# schema is schemas/gameplay-knowledge.schema.json and the loader is
+# pz_agent_core.knowledge.loader.
+schema_version: "1.0"
+domain: movement
+rules:
+  - id: movement_single_leg_cap
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_core/src/pz_agent_core/actions/adapters/movement.py::MAX_MOVE_DISTANCE_SQUARES"
+    status: verified_script
+    claim: "A single movement.move_to command is capped at 30 squares; longer journeys are split into legs by the deterministic route executor, never sent as one walk."
+    observed_inputs:
+      - player.position
+    preconditions:
+      - "The target square is within 30 squares of the character"
+    decision: "MoveToAdapter.validate refuses a longer single move with TARGET_OUT_OF_RANGE; Journey plans legs of at most JourneyLimits.leg_distance squares, itself capped at the same 30."
+    actions:
+      - movement.move_to
+    postconditions:
+      - "The observed position is within the arrival radius on the target floor"
+    on_failure: "The executor replans the remaining route from the newest observation; the mod refuses longer single moves outright."
+    risk_class: P2
+    goal_kinds:
+      - navigate_to
+      - return_home
+      - explore_area
+    proven_by:
+      - tests/unit/test_adapters_movement.py
+      - tests/unit/test_navigation_executor.py
+    numbers:
+      - name: max_move_distance_squares
+        value: 30
+        unit: squares
+        status: verified_script
+      - name: default_move_distance_squares
+        value: 20
+        unit: squares
+        status: verified_script
+
+  - id: movement_arrival_is_observed
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_core/src/pz_agent_core/navigation/executor.py::Journey.next_step"
+    status: verified_script
+    claim: "Arrival is decided only by an observation placing the character within the target radius on the target floor; a succeeded move ack is a statement about the queue, not the position."
+    observed_inputs:
+      - player.position
+    preconditions: []
+    decision: "Journey returns Arrived only after reading a fresh observation inside the radius; MoveToAdapter.verify compares the observed position, never the ack."
+    actions:
+      - movement.move_to
+      - movement.move_near
+    postconditions:
+      - "A following observation reports the character inside the requested radius and floor"
+    on_failure: "Without the observed postcondition the engine reports timeout or the mod's own failure code honestly; the journey starts another leg or refuses."
+    risk_class: P2
+    goal_kinds:
+      - navigate_to
+    proven_by:
+      - tests/unit/test_navigation_executor.py
+      - tests/unit/test_adapters_movement.py
+    numbers:
+      - name: default_arrival_radius
+        value: 0.75
+        unit: world_units
+        status: verified_script
+      - name: max_arrival_radius
+        value: 3.0
+        unit: world_units
+        status: verified_script
+
+  - id: movement_doors_opened_in_walk
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_core/src/pz_agent_core/navigation/executor.py::Journey"
+    status: verified_script
+    claim: "movement.move_to carries allow_doors (default true) and the mod opens unlocked doors met mid-walk, so a route through a known closed door is still one move; the executor's own door.open is reserved for the retry path after a door-shaped failure."
+    observed_inputs:
+      - nearby.objects[].kind
+    preconditions:
+      - "The door on the route is not observed locked or barricaded"
+    decision: "The route search charges DOOR_STEP_COST 2.0 for stepping through a door not yet observed open, so short detours around it win; the walk itself opens it when no detour is worth it."
+    actions:
+      - movement.move_to
+      - door.open
+    postconditions:
+      - "The walk completes through the doorway, or the failed leg names the door for the retry"
+    on_failure: "A walk that failed with a door-shaped code replans with an explicit door.open on the remembered leg before routing around."
+    risk_class: P3
+    goal_kinds:
+      - navigate_to
+      - loot_area
+    nearby_kinds:
+      - door
+    proven_by:
+      - tests/unit/test_navigation_executor.py
+      - tests/unit/test_adapters_movement.py
+    numbers:
+      - name: door_step_cost
+        value: 2.0
+        unit: route_cost
+        status: verified_script
+
+  - id: movement_stuck_is_typed
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_core/src/pz_agent_core/navigation/executor.py::MAX_CONSECUTIVE_FAILURES"
+    status: verified_script
+    claim: "A journey refuses as stuck, with reason code PATH_STUCK, after 3 completed legs without the Chebyshev distance to the target decreasing, or 3 consecutive failed legs; each single move retries at most once."
+    observed_inputs:
+      - player.position
+    preconditions: []
+    decision: "Journey counts legs without net progress and consecutive failures against MAX_CONSECUTIVE_FAILURES; MOVE_RETRY_POLICY grants one in-leg retry with interrupt allowed."
+    actions:
+      - movement.move_to
+    postconditions: []
+    on_failure: "The refusal carries PATH_STUCK plus the last obstacle square and door where known; the caller replans or surrenders the goal, it does not loop."
+    risk_class: P2
+    goal_kinds:
+      - navigate_to
+    proven_by:
+      - tests/unit/test_navigation_executor.py
+    numbers:
+      - name: max_consecutive_failures
+        value: 3
+        unit: legs
+        status: verified_script
+      - name: move_max_retries
+        value: 1
+        unit: retries
+        status: verified_script
+
+  - id: movement_threat_tolls
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_core/src/pz_agent_core/navigation/executor.py::THREAT_STEP_COST"
+    status: verified_script
+    claim: "Routes detour around remembered zombies: squares within Chebyshev radius 2 of a live sighting cost 8.0 extra, the square of a chasing sighting costs 64.0 — deliberately finite, so a cornered character still gets the least-bad way out instead of a fabricated NO_ROUTE."
+    observed_inputs:
+      - nearby.zombies[].distance
+      - nearby.zombies[].chasing
+    preconditions:
+      - "JourneyLimits.avoid_threats is on, which is the default"
+    decision: "The A* step cost adds THREAT_STEP_COST inside THREAT_AVOID_RADIUS of a live sighting and CHASING_STEP_COST on a chasing sighting's own square; sightings decay, so the tolls are preferences, never walls."
+    actions:
+      - movement.move_to
+    postconditions: []
+    on_failure: "When every way out crosses a chaser the cheapest contaminated route is still returned rather than refusing NO_ROUTE."
+    risk_class: P2
+    goal_kinds:
+      - navigate_to
+      - avoid_threat
+    nearby_kinds:
+      - zombie
+    proven_by:
+      - tests/unit/test_navigation_executor.py
+    numbers:
+      - name: threat_avoid_radius
+        value: 2
+        unit: squares
+        status: verified_script
+      - name: threat_step_cost
+        value: 8.0
+        unit: route_cost
+        status: verified_script
+      - name: chasing_step_cost
+        value: 64.0
+        unit: route_cost
+        status: verified_script
+
+  - id: movement_journey_budgets
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_core/src/pz_agent_core/navigation/executor.py::JourneyLimits"
+    status: verified_script
+    claim: "Every journey is bounded: at most 64 move legs, 8 replans and 16384 expanded A* nodes; an exhausted budget is a typed refusal about this executor, never dressed as PATH_NOT_FOUND, which would claim a proof about the world."
+    observed_inputs: []
+    preconditions: []
+    decision: "Journey tracks legs, replans and search expansions against JourneyLimits and refuses with LEG_BUDGET_EXHAUSTED, REPLAN_BUDGET_EXHAUSTED or SEARCH_BUDGET_EXHAUSTED, which map to no protocol reason code by design."
+    actions:
+      - movement.move_to
+    postconditions: []
+    on_failure: "A journey this contested needs the planner, not another lap; the refusal ends it."
+    risk_class: P2
+    goal_kinds:
+      - navigate_to
+      - explore_area
+    proven_by:
+      - tests/unit/test_navigation_executor.py
+    numbers:
+      - name: max_legs
+        value: 64
+        unit: legs
+        status: verified_script
+      - name: max_replans
+        value: 8
+        unit: replans
+        status: verified_script
+      - name: max_expanded_nodes
+        value: 16384
+        unit: nodes
+        status: verified_script
+
+  - id: movement_absolute_refusals
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_core/src/pz_agent_core/actions/adapters/movement.py::MoveToAdapter"
+    status: verified_script
+    claim: "Three movement refusals are absolute policy, not tunables: a square the mod has not reported loaded is never a target, a drop from height is never taken automatically, and a floor change without observed stairs is refused rather than attempted."
+    observed_inputs:
+      - nearby.objects[].kind
+      - player.position
+    preconditions: []
+    decision: "MoveToAdapter.validate reads the observer's square semantics (loaded, blocked, drop, stairs) and refuses with TARGET_NOT_LOADED or PRECONDITION_FAILED before anything is queued."
+    actions:
+      - movement.move_to
+    postconditions: []
+    on_failure: "The refusal is final for that target; the planner picks a different route or target, the adapter never guesses."
+    risk_class: P2
+    goal_kinds:
+      - navigate_to
+    nearby_kinds:
+      - square
+    proven_by:
+      - tests/unit/test_adapters_movement.py

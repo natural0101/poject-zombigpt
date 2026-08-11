@@ -115,6 +115,11 @@ read_timeout_ms = 60000
 max_response_bytes = 1000000
 max_attempts = 3
 
+# Directory holding knowledge/gameplay — the corpus behind the prompt's bounded
+# knowledge block. Unset, the corpus shipped next to a source checkout is used
+# when there is one, and an installed build honestly sends no block at all.
+# knowledge_root = "D:/path/to/checkout"
+
 [planner.teamon]
 # Read only when provider = "teamon". base_url is required then.
 # base_url = "https://your-teamon-endpoint.example"
@@ -124,6 +129,8 @@ connect_timeout_ms = 5000
 read_timeout_ms = 60000
 max_response_bytes = 1000000
 max_attempts = 3
+# Same knob as the OpenAI-compatible provider's; the two share the prompt.
+# knowledge_root = "D:/path/to/checkout"
 
 [voice]
 # "teamon" or "none". The TeamON adapter is wired and reachable through

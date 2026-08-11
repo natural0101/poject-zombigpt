@@ -1,0 +1,252 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/pz-agent/gameplay-knowledge.schema.json",
+  "title": "Project Zomboid Agent Gameplay Knowledge Document",
+  "description": "One knowledge/gameplay/*.yaml document: a set of gameplay rules the planner and the missions may consult. Every rule states where it came from and how far it has been verified; a rule without a source or with an unverifiable claim dressed as verified is refused by the loader, not corrected. The vocabulary is closed on purpose: free text lives only in the fields named for it, and every enum here is mirrored by the loader in pz_agent_core.knowledge.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "domain",
+    "rules"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "domain": {
+      "description": "The knowledge area this document covers. Closed list; a new domain is a reviewed change to this schema and the loader together.",
+      "enum": [
+        "movement",
+        "doors_windows",
+        "containers_loot",
+        "inventory_equipment",
+        "food_water",
+        "medical",
+        "rest_sleep",
+        "threat_combat",
+        "clothing_protection",
+        "literature_skills",
+        "crafting",
+        "building",
+        "utilities_survival",
+        "memory_places"
+      ]
+    },
+    "rules": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "build",
+          "source",
+          "status",
+          "claim",
+          "observed_inputs",
+          "preconditions",
+          "decision",
+          "actions",
+          "postconditions",
+          "on_failure",
+          "risk_class",
+          "proven_by"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "Stable rule identifier: domain-prefixed token, unique across the whole corpus.",
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{2,63}$"
+          },
+          "build": {
+            "description": "The game build the claim is about, e.g. \"42.20\". A rule inherited from Build 41 lore must say 41 and can never be verified_live against 42.",
+            "type": "string",
+            "pattern": "^[0-9]{2}(\\.[0-9]{1,3}){0,2}$"
+          },
+          "source": {
+            "description": "Where the claim comes from, most authoritative applicable tier. code = this repository's shipped policy/adapter (name the path in source_detail); live_probe = a capability probe or live-session finding; official = The Indie Stone's published material; wiki = PZwiki, secondary by policy and never sufficient for verified status on its own.",
+            "enum": [
+              "code",
+              "live_probe",
+              "official",
+              "wiki"
+            ]
+          },
+          "source_detail": {
+            "description": "The exact place: a repo path with anchor, a live-run date, a URL. Required in spirit for every tier; the loader refuses code-sourced rules without a repo path here.",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "status": {
+            "description": "verified_live = a real session observed the postcondition; verified_script = the rule restates behaviour this repository's tested code enforces (source must be code); unverified = a claim nothing has proven yet. The loader refuses verified_live without a live evidence pointer in proven_by, and verified_script whose source is not code.",
+            "enum": [
+              "verified_live",
+              "verified_script",
+              "unverified"
+            ]
+          },
+          "claim": {
+            "description": "The rule, one bounded human sentence.",
+            "type": "string",
+            "minLength": 10,
+            "maxLength": 300
+          },
+          "observed_inputs": {
+            "description": "Observation fields the decision reads, as dotted paths into the observation document (e.g. player.stats.hunger, nearby.objects[].locked). Closed alphabet, bounded.",
+            "type": "array",
+            "minItems": 0,
+            "maxItems": 12,
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z_][a-z0-9_]*(\\[\\])?(\\.[a-z_][a-z0-9_]*(\\[\\])?){0,5}$"
+            }
+          },
+          "preconditions": {
+            "type": "array",
+            "minItems": 0,
+            "maxItems": 8,
+            "items": {
+              "type": "string",
+              "minLength": 5,
+              "maxLength": 200
+            }
+          },
+          "decision": {
+            "description": "The deterministic decision the rule encodes, as bounded prose naming the code that makes it when source is code.",
+            "type": "string",
+            "minLength": 10,
+            "maxLength": 400
+          },
+          "actions": {
+            "description": "Protocol action names the rule drives, exactly as ActionName spells them; empty for observation-only rules.",
+            "type": "array",
+            "minItems": 0,
+            "maxItems": 8,
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z_]+\\.[a-z_]+$"
+            }
+          },
+          "postconditions": {
+            "type": "array",
+            "minItems": 0,
+            "maxItems": 8,
+            "items": {
+              "type": "string",
+              "minLength": 5,
+              "maxLength": 200
+            }
+          },
+          "on_failure": {
+            "description": "What replanning does when the postcondition does not hold, bounded prose; name reason codes where the code speaks them.",
+            "type": "string",
+            "minLength": 5,
+            "maxLength": 300
+          },
+          "risk_class": {
+            "description": "The protocol risk tier the driven actions carry; P0 for observation-only rules.",
+            "enum": [
+              "P0",
+              "P1",
+              "P2",
+              "P3",
+              "P4"
+            ]
+          },
+          "goal_kinds": {
+            "description": "Goal kinds this rule serves, for bounded retrieval. Values must be GoalKind members; empty means the rule is general.",
+            "type": "array",
+            "minItems": 0,
+            "maxItems": 6,
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z_]{3,32}$"
+            }
+          },
+          "needs": {
+            "description": "Need channels this rule speaks to, for retrieval when a need is active.",
+            "type": "array",
+            "minItems": 0,
+            "maxItems": 6,
+            "items": {
+              "enum": [
+                "hunger",
+                "thirst",
+                "fatigue",
+                "endurance",
+                "bleeding",
+                "pain",
+                "sickness",
+                "temperature",
+                "panic",
+                "encumbrance",
+                "boredom",
+                "wetness"
+              ]
+            }
+          },
+          "nearby_kinds": {
+            "description": "Nearby-object kinds whose presence makes this rule relevant, for retrieval (door, corpse, container type tokens, zombie).",
+            "type": "array",
+            "minItems": 0,
+            "maxItems": 8,
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_.\\-]{0,31}$"
+            }
+          },
+          "proven_by": {
+            "description": "What proves the rule at its declared status: repo test paths for verified_script; a live scenario id (S01..S20) or evidence-bundle pointer for verified_live; empty only for unverified.",
+            "type": "array",
+            "minItems": 0,
+            "maxItems": 6,
+            "items": {
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 200
+            }
+          },
+          "numbers": {
+            "description": "Named numeric facts the rule relies on, each carrying its own honesty: a number with status unverified is a hypothesis the planner may not treat as ground truth.",
+            "type": "array",
+            "minItems": 0,
+            "maxItems": 8,
+            "items": {
+              "type": "object",
+              "required": [
+                "name",
+                "value",
+                "status"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_]{1,47}$"
+                },
+                "value": {
+                  "type": "number"
+                },
+                "unit": {
+                  "type": "string",
+                  "maxLength": 32
+                },
+                "status": {
+                  "enum": [
+                    "verified_live",
+                    "verified_script",
+                    "unverified"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -28,7 +28,9 @@ change is confined to :func:`request_payload`, :func:`_reply_proposal` and
 ``POST {base_url}/v1/plan``
     Body: ``{"contract": "pz-agent-plan/1.0", "assistant": <str, optional>,
     "plan_schema_version": "1.0", "request": {…}}`` where ``request`` is the
-    planner payload — goal, redacted observation, step budget, recent failures.
+    planner payload — goal, redacted observation, step budget, recent failures,
+    and, when a knowledge corpus is configured, the same bounded ``knowledge``
+    block the OpenAI-compatible provider sends (one prompt assembly, shared).
     Reply, 200: either ``{"plan": {…plan document…}}`` or
     ``{"refusal": {"reason_code": <ReasonCode>, "detail": <str>}}``. Any other
     status is a refusal carrying the status and the server's message.
@@ -54,6 +56,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, ClassVar, Final
 
 from ...observation.compact import redact_text
@@ -61,7 +64,7 @@ from ...protocol import JsonDict, ReasonCode
 from ...version import PRODUCT_VERSION
 from ..plan import PLAN_SCHEMA_VERSION, Plan, PlanRejected
 from ..provider import PlanProposal, PlanRequest
-from .openai_compatible import planner_payload
+from .openai_compatible import PromptKnowledge, corpus_refusal, planner_payload
 from .transport import (
     DEFAULT_TRANSPORT_CONFIG,
     CredentialUnavailable,
@@ -114,6 +117,10 @@ class TeamONConfig:
     assistant: str = ""
     api_key_env: str = DEFAULT_TEAMON_KEY_ENV
     transport: TransportConfig = DEFAULT_TRANSPORT_CONFIG
+    #: Directory holding ``knowledge/gameplay``. Same knob, same meaning and
+    #: same default as the OpenAI-compatible provider's: the two share the
+    #: planner payload, so they share the knowledge block wired into it.
+    knowledge_root: Path | None = None
 
     def __post_init__(self) -> None:
         parse_endpoint(self.base_url)
@@ -162,6 +169,7 @@ class TeamONProvider:
         self._config = config
         self._transport = transport or StdlibHttpTransport(config.transport)
         self._environ = environ
+        self._knowledge = PromptKnowledge(config.knowledge_root)
 
     @property
     def config(self) -> TeamONConfig:
@@ -181,10 +189,15 @@ class TeamONProvider:
             key = self.api_key()
         except CredentialUnavailable as exc:
             return PlanProposal.refusal(ReasonCode.CAPABILITY_UNAVAILABLE, str(exc))
+        knowledge, corpus_fault = self._knowledge.block(request)
+        if corpus_fault is not None:
+            return corpus_refusal(corpus_fault)
         http_request = HttpRequest(
             url=self._config.url(PLAN_PATH),
             method="POST",
-            body=json.dumps(request_payload(self._config, request), sort_keys=True).encode("utf-8"),
+            body=json.dumps(
+                request_payload(self._config, request, knowledge=knowledge), sort_keys=True
+            ).encode("utf-8"),
             headers=self._headers(key),
         )
         try:
@@ -226,19 +239,23 @@ class TeamONProvider:
         }
 
 
-def request_payload(config: TeamONConfig, request: PlanRequest) -> JsonDict:
+def request_payload(
+    config: TeamONConfig, request: PlanRequest, *, knowledge: str | None = None
+) -> JsonDict:
     """The body of a ``POST /v1/plan``.
 
     ``request`` is the same document the OpenAI-compatible provider puts in its
     user message. That is deliberate rather than incidental: it is the one
     redaction path — save id digested, no paths, game text quarantined — and a
     second one built here would be a second thing to audit and a second place
-    for a field to leak.
+    for a field to leak. The knowledge block rides inside it for the same
+    reason: one prompt assembly, one bounded retrieval, shared by both
+    HTTP providers.
     """
     payload: JsonDict = {
         "contract": CONTRACT_ID,
         "plan_schema_version": PLAN_SCHEMA_VERSION,
-        "request": planner_payload(request),
+        "request": planner_payload(request, knowledge=knowledge),
     }
     if config.assistant:
         payload["assistant"] = config.assistant

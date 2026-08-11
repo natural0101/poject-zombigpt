@@ -1,0 +1,117 @@
+# Places the save remembers: home, safe zones, reservations, and the two rules
+# every memory record obeys.
+schema_version: "1.0"
+domain: memory_places
+rules:
+  - id: memory_home_point
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_core/src/pz_agent_core/memory/store.py::SaveMemory.set_home"
+    status: verified_script
+    claim: "Each save remembers at most one home point, a square set explicitly and stamped with when it was set; return_home is one deterministic journey to that square, and a save with no home set has nowhere to return to — the goal refuses rather than guessing."
+    observed_inputs:
+      - player.position
+    preconditions:
+      - "Memory holds a home square for the current save"
+    decision: "SaveMemory keeps home on save scope; the return-home server reads it and drives a single Journey at the remembered square."
+    actions:
+      - movement.move_to
+    postconditions:
+      - "The observed position is within the arrival radius of the remembered home square"
+    on_failure: "No home in memory is a typed refusal naming the missing fact; nothing invents a home."
+    risk_class: P2
+    goal_kinds:
+      - return_home
+    proven_by:
+      - tests/unit/test_memory_store.py
+      - tests/unit/test_return_home.py
+
+  - id: memory_safe_zones
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_core/src/pz_agent_core/memory/model.py::SafeZone"
+    status: verified_script
+    claim: "A safe zone is a keyed centre square with a Chebyshev radius on one floor: containment requires the same z and distance within the radius, and the retreat mission falls back to the nearest remembered safe zone before open ground."
+    observed_inputs:
+      - player.position
+    preconditions: []
+    decision: "SafeZone.contains checks floor equality and Chebyshev distance; the avoid mission prefers the nearest zone within its retreat range, ties broken on the centre square."
+    actions:
+      - movement.move_to
+    postconditions: []
+    on_failure: "With no remembered zone in range the retreat targets open ground away from the observed threats instead."
+    risk_class: P2
+    goal_kinds:
+      - avoid_threat
+      - return_home
+    proven_by:
+      - tests/unit/test_memory_model.py
+      - tests/unit/test_avoid_mission.py
+
+  - id: memory_no_session_refs
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_core/src/pz_agent_core/memory/model.py::container_tail"
+    status: verified_script
+    claim: "Memory stores derived facts, never observations: a container is remembered by the place-half of its reference and a reservation by item type, because a reference minted last session is not stale, it is wrong — a store that persisted one would hand it back looking valid."
+    observed_inputs: []
+    preconditions: []
+    decision: "container_tail strips the session half before anything is stored; Reservation is keyed by full_type so it still matches after a reload."
+    actions: []
+    postconditions: []
+    on_failure: "A record that cannot be reduced to a session-free fact is refused by the model's own validation, not stored approximately."
+    risk_class: P0
+    proven_by:
+      - tests/unit/test_memory_model.py
+      - tests/unit/test_memory_store.py
+
+  - id: memory_reservations_honoured
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_core/src/pz_agent_core/memory/model.py::Reservation"
+    status: verified_script
+    claim: "A reservation names an item type the user set aside, with a reason and a timestamp; the loot selection asks the reserve list per item type and leaves reserved items behind, and the consumption policies refuse user-reserved items at any need level."
+    observed_inputs: []
+    preconditions: []
+    decision: "loot.policy.select consults is_reserved per full_type when respect_reserves is on, which is the default; the food and drink filters refuse reserved and favourite items unconditionally."
+    actions:
+      - inventory.transfer_batch
+      - consume.eat
+      - consume.drink
+    postconditions: []
+    on_failure: "A reserved item is a recorded leave or a named rejection, never a silent skip."
+    risk_class: P1
+    goal_kinds:
+      - loot_area
+      - satisfy_hunger
+      - satisfy_thirst
+    proven_by:
+      - tests/unit/test_memory_model.py
+      - tests/unit/test_loot_policy.py
+      - tests/unit/test_policy_selection.py
+
+  - id: memory_strings_quarantined
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_core/src/pz_agent_core/memory/model.py::MAX_LABEL_LEN"
+    status: verified_script
+    claim: "Every string memory stores is bounded and quarantined: container names and task details come from the game, which is untrusted data, so they are truncated — labels to 64 characters, details to 120 — and stripped of control characters and path shapes on the way in."
+    observed_inputs: []
+    preconditions: []
+    decision: "The model runs every inbound string through the same redaction the MCP boundary uses, so a memory file cannot become a prompt-injection channel by being read back."
+    actions: []
+    postconditions: []
+    on_failure: "Observed strings are truncated and redacted on the way in; a record hand-built past the bounds raises the typed MemoryValueError instead of being stored."
+    risk_class: P0
+    proven_by:
+      - tests/unit/test_memory_model.py
+      - tests/unit/test_diagnostics_redaction.py
+    numbers:
+      - name: max_label_len
+        value: 64
+        unit: chars
+        status: verified_script
+      - name: max_detail_len
+        value: 120
+        unit: chars
+        status: verified_script

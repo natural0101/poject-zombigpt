@@ -32,6 +32,19 @@ user name and no raw chat text, and every game-authored string is quarantined
 under ``untrusted_text`` with the rule that says what that means. The one other
 free string a request can carry — the skill a ``train_skill`` goal names — goes
 through :func:`~pz_agent_core.observation.compact.redact_text` first.
+
+**The knowledge block is retrieved, never poured.** When a corpus root is
+configured (``knowledge_root``), the user message additionally carries one
+bounded text block built by :func:`knowledge_block`:
+:func:`~pz_agent_core.knowledge.retrieval.select_rules` picks at most
+:data:`~pz_agent_core.knowledge.retrieval.MAX_RETRIEVED_RULES` rules relevant
+to the goal being planned, the needs the policy thresholds report active, and
+the kinds of object in view, and the rendering marks every unverified rule and
+number ``UNVERIFIED`` so the model can see which numbers are hypotheses. No
+corpus configured means no block and a byte-identical prompt to what this
+provider sent before the corpus existed. A corpus that is configured and
+refuses to load refuses the tick — planning without the rules the user asked
+for would be a quiet degradation of exactly the input they configured.
 """
 
 from __future__ import annotations
@@ -39,8 +52,12 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from types import MappingProxyType
-from typing import Any, ClassVar, Final
+from typing import TYPE_CHECKING, Any, ClassVar, Final
+
+if TYPE_CHECKING:
+    from ...knowledge import KnowledgeCorpus
 
 from ...capabilities.probes import (
     DRINK_CARRIED,
@@ -50,6 +67,7 @@ from ...capabilities.probes import (
     READ_LITERATURE,
 )
 from ...observation.compact import CONTENT_RULE, compact_for_planner, redact_text
+from ...policy.autonomy import derive_needs
 from ...policy.config import CAPABILITY_DRINK_PERCENTAGE
 from ...protocol import ActionName, CapabilityState, JsonDict, ReasonCode
 from ...version import PRODUCT_VERSION
@@ -89,6 +107,9 @@ __all__ = [
     "PROVIDER_OPENAI_COMPATIBLE",
     "OpenAICompatibleConfig",
     "OpenAICompatibleProvider",
+    "PromptKnowledge",
+    "corpus_refusal",
+    "knowledge_block",
     "plan_from_text",
     "plan_instructions",
     "planner_capability_states",
@@ -178,6 +199,11 @@ class OpenAICompatibleConfig:
     api_key_env: str = DEFAULT_OPENAI_KEY_ENV
     max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS
     transport: TransportConfig = DEFAULT_TRANSPORT_CONFIG
+    #: Directory holding ``knowledge/gameplay`` — the corpus the prompt's
+    #: knowledge block is retrieved from. None means no block, which is the
+    #: default here so a config built in code changes nothing it did not ask
+    #: for; the CLI defaults it to the repo-shipped corpus when one ships.
+    knowledge_root: Path | None = None
 
     def __post_init__(self) -> None:
         # Validating the URL and the variable name here means a bad one is a
@@ -217,6 +243,7 @@ class OpenAICompatibleProvider:
         self._config = config
         self._transport = transport or StdlibHttpTransport(config.transport)
         self._environ = environ
+        self._knowledge = PromptKnowledge(config.knowledge_root)
 
     @property
     def config(self) -> OpenAICompatibleConfig:
@@ -237,8 +264,11 @@ class OpenAICompatibleProvider:
             key = self.api_key()
         except CredentialUnavailable as exc:
             return PlanProposal.refusal(ReasonCode.CAPABILITY_UNAVAILABLE, str(exc))
+        knowledge, corpus_fault = self._knowledge.block(request)
+        if corpus_fault is not None:
+            return corpus_refusal(corpus_fault)
         try:
-            response = self._transport.send(self._http_request(key, request))
+            response = self._transport.send(self._http_request(key, request, knowledge=knowledge))
         except TransportError as exc:
             return PlanProposal.refusal(ReasonCode.CAPABILITY_UNAVAILABLE, str(exc))
         if not response.ok:
@@ -253,7 +283,9 @@ class OpenAICompatibleProvider:
 
     # -- the request -------------------------------------------------------
 
-    def _http_request(self, key: str, request: PlanRequest) -> HttpRequest:
+    def _http_request(
+        self, key: str, request: PlanRequest, *, knowledge: str | None = None
+    ) -> HttpRequest:
         body = {
             "model": self._config.model,
             "temperature": PLANNER_TEMPERATURE,
@@ -266,7 +298,9 @@ class OpenAICompatibleProvider:
                 {"role": "system", "content": plan_instructions()},
                 {
                     "role": "user",
-                    "content": json.dumps(planner_payload(request), sort_keys=True),
+                    "content": json.dumps(
+                        planner_payload(request, knowledge=knowledge), sort_keys=True
+                    ),
                 },
             ],
         }
@@ -298,8 +332,12 @@ def planner_capability_states(request: PlanRequest) -> dict[str, CapabilityState
     return {name: request.capabilities.state(name) for name in PLANNER_CAPABILITIES}
 
 
-def planner_payload(request: PlanRequest) -> JsonDict:
-    """The user message: the goal, the redacted world, and the budget."""
+def planner_payload(request: PlanRequest, *, knowledge: str | None = None) -> JsonDict:
+    """The user message: the goal, the redacted world, the budget — and, when a
+    corpus is configured, the bounded knowledge block :func:`knowledge_block`
+    built. ``None`` (the default) leaves the payload byte-identical to what it
+    was before the knowledge base existed, which is what keeps a corpus-less
+    configuration's prompt unchanged."""
     goal = request.goal
     payload: JsonDict = {
         "goal": {
@@ -321,7 +359,118 @@ def planner_payload(request: PlanRequest) -> JsonDict:
         # Game-authored in every path that reaches here: a skill name comes from
         # the observation or from a user sentence, never from this codebase.
         payload["goal"]["skill"] = redact_text(goal.skill)
+    if knowledge:
+        # Repo-authored, loader-validated and bounded by render_for_prompt;
+        # it is the one prompt input that is not game text and not redacted.
+        payload["knowledge"] = knowledge
     return payload
+
+
+# --------------------------------------------------------------------------
+# the knowledge block
+# --------------------------------------------------------------------------
+
+
+def knowledge_block(corpus: KnowledgeCorpus, request: PlanRequest) -> str:
+    """The bounded retrieval for one request, rendered for the user message.
+
+    The three retrieval inputs are read off the request and nothing else:
+    the goal kind directly; the active needs by running
+    :func:`~pz_agent_core.policy.autonomy.derive_needs` over the observation
+    with the request's own policy thresholds — the same derivation the
+    autonomy gate uses, so "hunger is active" means the same thing in the
+    prompt as in the arbiter; the nearby kinds from the observation's
+    ``nearby.objects``. Empty when nothing in the corpus is relevant.
+    """
+    # Deferred: the knowledge package imports goals.model, which imports this
+    # package's provider module; at module-import time that is a cycle, at
+    # call time every module involved is fully initialised.
+    from ...goals.model import GoalKind as CorpusGoalKind  # noqa: PLC0415
+    from ...knowledge.retrieval import render_for_prompt, select_rules  # noqa: PLC0415
+
+    try:
+        goal_kind: CorpusGoalKind | None = CorpusGoalKind(request.goal.kind.value)
+    except ValueError:
+        # The goal channel pins its kind set identical to the planner's, so
+        # this branch is future drift. Losing the block is the smaller loss
+        # than raising inside a provider whose contract says it never does.
+        goal_kind = None
+    active_needs = frozenset(
+        need.key for need in derive_needs(request.observation, policy=request.policy)
+    )
+    nearby = request.observation.nearby
+    nearby_kinds = (
+        frozenset(obj.kind for obj in nearby.objects) if nearby is not None else frozenset()
+    )
+    return render_for_prompt(
+        select_rules(
+            corpus,
+            goal_kind=goal_kind,
+            active_needs=active_needs,
+            nearby_kinds=nearby_kinds,
+        )
+    )
+
+
+class PromptKnowledge:
+    """The corpus behind one provider's knowledge block, loaded once, lazily.
+
+    Lazy so that constructing a provider stays cheap and free of disk I/O —
+    ``resolve_provider`` builds one at start-up just to check the credential —
+    and cached both ways so a session pays the load exactly once whether it
+    succeeded or refused. A load refusal is remembered and reported on every
+    tick rather than retried: the corpus is repo data, not a flaky endpoint,
+    and a message per tick beats a reload per tick.
+    """
+
+    def __init__(self, root: Path | None) -> None:
+        self._root = root
+        self._loaded = False
+        self._corpus: KnowledgeCorpus | None = None
+        self._fault: str | None = None
+
+    def block(self, request: PlanRequest) -> tuple[str | None, str | None]:
+        """``(rendered block or None, load fault or None)`` — never both.
+
+        No root, an empty corpus and an empty selection all answer
+        ``(None, None)``: there is nothing to say and nothing wrong. A fault
+        is the loader's own message, built from field names and bounded
+        tokens, never from the document's free text.
+        """
+        self._load()
+        if self._fault is not None:
+            return None, self._fault
+        if self._corpus is None:
+            return None, None
+        return knowledge_block(self._corpus, request) or None, None
+
+    def _load(self) -> None:
+        if self._loaded:
+            return
+        self._loaded = True
+        if self._root is None:
+            return
+        # Deferred for the same import cycle knowledge_block documents.
+        from ...knowledge import CorpusError, load_corpus  # noqa: PLC0415
+
+        try:
+            corpus = load_corpus(self._root)
+        except CorpusError as exc:
+            self._fault = str(exc)
+            return
+        # An empty corpus (the root exists, no documents) has nothing to
+        # retrieve and is not a fault: the honest block is no block.
+        self._corpus = corpus if corpus.documents else None
+
+
+def corpus_refusal(fault: str) -> PlanProposal:
+    """The typed refusal both HTTP providers answer when their corpus will not load."""
+    return PlanProposal.refusal(
+        ReasonCode.CAPABILITY_UNAVAILABLE,
+        "the configured knowledge corpus refused to load; planning stops rather "
+        "than quietly running without the rules you configured.",
+        reasons=(fault,),
+    )
 
 
 def plan_instructions() -> str:

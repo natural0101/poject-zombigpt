@@ -1,0 +1,266 @@
+# Food and drink: the deterministic selection policies' safety gates, with the
+# repo-enforced refusals separated honestly from the game mechanics the code
+# merely assumes. The refusal is verified_script; the sickness lore is not.
+schema_version: "1.0"
+domain: food_water
+rules:
+  - id: food_selection_is_code
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_core/src/pz_agent_core/policy/food.py::select_food"
+    status: verified_script
+    claim: "Which item the character eats is decided by deterministic policy code and never by a language model: the model may say satisfy_hunger, select_food says what, how much, and — on a refusal — exactly what was wrong with every candidate it looked at."
+    observed_inputs:
+      - player.stats.hunger
+      - player.stats.thirst
+    preconditions: []
+    decision: "Hard filters reject outright and are never traded off against a score; scoring ranks what is left and returns its factors, so the pick is explainable and reproducible."
+    actions:
+      - consume.eat
+    postconditions: []
+    on_failure: "A refusal carries NO_SAFE_FOOD plus one bounded rejection per candidate and the untruncated total."
+    risk_class: P2
+    goal_kinds:
+      - satisfy_hunger
+    needs:
+      - hunger
+    proven_by:
+      - tests/unit/test_policy_food.py
+
+  - id: food_rotten_refused
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_core/src/pz_agent_core/policy/food.py::_filter_rotten"
+    status: verified_script
+    claim: "Food labelled rotten, or past 60 percent rot progress even when unlabelled, is refused outright by the food policy; no freshness score can trade a rotten item back into the candidate set."
+    observed_inputs:
+      - player.stats.hunger
+    preconditions: []
+    decision: "The rotten filter fires on the freshness label or on rot_progress above PolicyConfig.max_rot_progress; allow_rotten defaults off and is an explicit user override."
+    actions:
+      - consume.eat
+    postconditions: []
+    on_failure: "The item is rejected with reason ROTTEN and the next candidate is considered; nothing edible means NO_SAFE_FOOD."
+    risk_class: P2
+    goal_kinds:
+      - satisfy_hunger
+    needs:
+      - hunger
+    proven_by:
+      - tests/unit/test_policy_food.py
+      - tests/unit/test_policy_config.py
+    numbers:
+      - name: max_rot_progress
+        value: 0.60
+        unit: fraction
+        status: verified_script
+
+  - id: food_rotten_sickens_lore
+    build: "41"
+    source: wiki
+    source_detail: "https://pzwiki.net/wiki/Food — spoilage section, read for Build 41 lore"
+    status: unverified
+    claim: "Eating rotten food gives the character food sickness in the game — this is the mechanic the rotten refusal exists for, but nothing in this repository has observed the sickness itself, so it stays a wiki claim, not a fact."
+    observed_inputs: []
+    preconditions: []
+    decision: "No code decides on this claim; it is background for why the verified refusal in food_rotten_refused is worth its cost."
+    actions: []
+    postconditions: []
+    on_failure: "Not applicable: an unverified claim drives no action."
+    risk_class: P0
+    needs:
+      - sickness
+    proven_by: []
+
+  - id: food_burnt_poison_tainted_refused
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_core/src/pz_agent_core/policy/food.py::_filter_poisonous"
+    status: verified_script
+    claim: "Poisonous, tainted and burnt food is refused outright — burnt includes anything past 25 percent burn progress — and the filters run in a fixed order so a refusal names the most fundamental problem with the item, not whichever check ran first."
+    observed_inputs: []
+    preconditions: []
+    decision: "The filter chain runs edible, destroyed, poisonous, tainted, rotten, raw, requires-cooking, burnt, frozen, tool, reserves, reach, portions, relief in that order and reports the first hit; poison is read from the flag or a positive poison power."
+    actions:
+      - consume.eat
+    postconditions: []
+    on_failure: "Each rejected item carries its reason; the choice falls to the best survivor or the selection refuses NO_SAFE_FOOD."
+    risk_class: P2
+    goal_kinds:
+      - satisfy_hunger
+    needs:
+      - hunger
+    proven_by:
+      - tests/unit/test_policy_food.py
+    numbers:
+      - name: max_burn_progress
+        value: 0.25
+        unit: fraction
+        status: verified_script
+
+  - id: food_raw_frozen_uncooked_refused
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_core/src/pz_agent_core/policy/food.py::_filter_raw"
+    status: verified_script
+    claim: "Raw food the game flags unsafe, food that requires cooking and is uncooked, and frozen food are all refused by default: the policy does not model cooking or thawing, so selecting such an item would queue a plan it cannot honour."
+    observed_inputs: []
+    preconditions: []
+    decision: "allow_raw, allow_required_cooking and allow_frozen all default off in PolicyConfig; each is a deliberate user override, never a score trade-off."
+    actions:
+      - consume.eat
+    postconditions: []
+    on_failure: "The rejection names the flag that fired; cooking is a separate skill outside this policy."
+    risk_class: P2
+    goal_kinds:
+      - satisfy_hunger
+    needs:
+      - hunger
+    proven_by:
+      - tests/unit/test_policy_food.py
+      - tests/unit/test_policy_config.py
+
+  - id: food_reserves_outrank_hunger
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_core/src/pz_agent_core/policy/selection.py::is_user_reserved"
+    status: verified_script
+    claim: "Items tagged reserved, keep or do_not_use — and in-game favourites — are never consumed automatically at any hunger; strategic-reserve items open up only when hunger reaches the critical 0.70, so ordinary hunger never eats the emergency stock."
+    observed_inputs:
+      - player.stats.hunger
+    preconditions: []
+    decision: "is_user_reserved is an unconditional filter; the strategic-reserve filter passes only when PolicyConfig.is_hunger_critical, at hunger of at least critical_hunger."
+    actions:
+      - consume.eat
+    postconditions: []
+    on_failure: "Reserved items are rejected with USER_RESERVED or STRATEGIC_RESERVE naming the threshold; the user's word outranks the need."
+    risk_class: P2
+    goal_kinds:
+      - satisfy_hunger
+    needs:
+      - hunger
+    proven_by:
+      - tests/unit/test_policy_food.py
+      - tests/unit/test_policy_selection.py
+    numbers:
+      - name: critical_hunger
+        value: 0.70
+        unit: fraction
+        status: verified_script
+
+  - id: food_portion_logic
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_core/src/pz_agent_core/policy/food.py::_choose_fraction"
+    status: verified_script
+    claim: "A meal aims to bring hunger down to the satisfied 0.15: the portion covers the deficit, quantised up to 0.25 steps with a 0.25 minimum, and when the eat-percentage capability is unprobed or unavailable the choice falls back to a whole unit and says so in its rationale."
+    observed_inputs:
+      - player.stats.hunger
+    preconditions: []
+    decision: "The fraction is ceil(deficit/relief) against eat_fraction_step, floored at min_eat_fraction; portions round up because under-eating costs a second action, which is worse than a little surplus."
+    actions:
+      - consume.eat
+    postconditions:
+      - "The chosen fraction is reproducible for the same inventory and stats"
+    on_failure: "Without the capability the whole item is eaten and the rationale names the probe state; the mod refuses a fraction it cannot honour."
+    risk_class: P2
+    goal_kinds:
+      - satisfy_hunger
+    needs:
+      - hunger
+    proven_by:
+      - tests/unit/test_policy_food.py
+    numbers:
+      - name: satisfied_hunger
+        value: 0.15
+        unit: fraction
+        status: verified_script
+      - name: hunger_trigger
+        value: 0.35
+        unit: fraction
+        status: verified_script
+      - name: eat_fraction_step
+        value: 0.25
+        unit: fraction
+        status: verified_script
+      - name: min_eat_fraction
+        value: 0.25
+        unit: fraction
+        status: verified_script
+
+  - id: drink_tainted_alcohol_refused
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_core/src/pz_agent_core/policy/drink.py::_filter_tainted"
+    status: verified_script
+    claim: "Tainted water is never drunk without explicit permission, and alcohol is refused as a thirst answer by default; poisonous, rotten-content, frozen and effectively-empty containers are refused on the same hard-filter terms as food."
+    observed_inputs:
+      - player.stats.thirst
+    preconditions: []
+    decision: "allow_tainted_water and allow_alcohol_for_thirst default off; a container at or below min_remaining_units of 0.05 counts as empty and is rejected rather than raised to the lips."
+    actions:
+      - consume.drink
+    postconditions: []
+    on_failure: "Each rejection names its reason; nothing safe means NO_SAFE_DRINK with the bounded rejection list."
+    risk_class: P2
+    goal_kinds:
+      - satisfy_thirst
+    needs:
+      - thirst
+    proven_by:
+      - tests/unit/test_policy_drink.py
+    numbers:
+      - name: min_remaining_units
+        value: 0.05
+        unit: fluid_units
+        status: verified_script
+
+  - id: drink_tainted_sickens_lore
+    build: "41"
+    source: wiki
+    source_detail: "https://pzwiki.net/wiki/Water — tainted water section, read for Build 41 lore"
+    status: unverified
+    claim: "Drinking tainted water risks making the character sick unless it is boiled first — the mechanic behind the tainted refusal; this repository has never observed the sickness, so the claim stays wiki-sourced and unverified."
+    observed_inputs: []
+    preconditions: []
+    decision: "No code decides on this claim; it is background for the verified refusal in drink_tainted_alcohol_refused."
+    actions: []
+    postconditions: []
+    on_failure: "Not applicable: an unverified claim drives no action."
+    risk_class: P0
+    needs:
+      - sickness
+      - thirst
+    proven_by: []
+
+  - id: drink_last_container_reserve
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_core/src/pz_agent_core/policy/drink.py::_last_container_rejection"
+    status: verified_script
+    claim: "The last usable drink container is protected while thirst is below the critical 0.70: without the drink-percentage capability the policy refuses to empty it, and with the capability the portion is capped at half the container, so the reserve survives an ordinary thirst."
+    observed_inputs:
+      - player.stats.thirst
+    preconditions:
+      - "Exactly one usable container remains in reach"
+    decision: "LAST_CONTAINER_RESERVE fires only when partial drinking is unavailable and thirst is not critical; _choose_fraction otherwise caps the portion at max_last_container_fraction."
+    actions:
+      - consume.drink
+    postconditions: []
+    on_failure: "Critical thirst opens the container fully; below it the refusal or the cap stands and the rationale names the capability probe."
+    risk_class: P2
+    goal_kinds:
+      - satisfy_thirst
+    needs:
+      - thirst
+    proven_by:
+      - tests/unit/test_policy_drink.py
+    numbers:
+      - name: critical_thirst
+        value: 0.70
+        unit: fraction
+        status: verified_script
+      - name: max_last_container_fraction
+        value: 0.5
+        unit: fraction
+        status: verified_script
