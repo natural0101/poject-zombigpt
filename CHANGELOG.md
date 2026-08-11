@@ -12,12 +12,16 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
-- **Thirteen defects of one family: evidence read without checking whose it was,
-  or when it was written** (`stabilize/arm-session-confirmation`). A static audit
-  along the P0 causal chain — mod visibility, session identity, heartbeat
+- **Twenty-three defects of one family: evidence read without checking whose it
+  was, or when it was written** (`stabilize/arm-session-confirmation`). A static
+  audit along the P0 causal chain — mod visibility, session identity, heartbeat
   freshness, the two-phase arm, terminality, pointer and sequence recovery, one
-  action, goals made of several — starting from one found in `pz-agent play` and
-  generalising its shape. Every fix below was watched red first.
+  action, goals made of several — starting from one found in `pz-agent play`,
+  generalising its shape across the sidecar, and then running the same three
+  families against the mod, which is where every one of the 2026-08-08 live
+  findings had lived. Thirteen on the sidecar, ten on the mod. Every fix was
+  watched red first; a hypothesis that could not be turned red was reported as a
+  hypothesis and left alone.
 
   *Claims resting on evidence that did not prove them.* `play` confirmed its arm
   from any fresh heartbeat reporting armed in the requested mode, without
@@ -58,6 +62,38 @@ drift out of sync with `pz_agent_core.version`.
   ends `CAPABILITY_UNAVAILABLE` on the next tick, identically across all six
   goal kinds. A journal recreated at an earlier serial now reports the loss
   instead of silently renumbering.
+
+  *And the same three families on the mod side.* A running command had two
+  bounds and both read one clock — the lease and the adapter timeout — while
+  `now()` returns a constant on a build without `getTimestampMs`, which is one
+  more Kahlua gap of the kind that live run hit; against a frozen clock neither
+  can fire, so the adapter was polled without end and the sidecar waited on an
+  ack nobody would write. A raise anywhere in admission killed the whole tick
+  and left that command with **no ack at all, ever** — the reader has already
+  tracked it, so every redelivery classifies as a duplicate, and duplicates are
+  deliberately never acked. The trigger that made that reachable: registration
+  validated an argument's type and enum values but not its numeric bounds, which
+  are used only in a comparison against the arriving value, so a non-number
+  raised at dispatch in a file whose contract is that malformed declarations are
+  caught at load.
+
+  The replay cache had no session dimension while outliving any one session, so
+  a restarted sidecar reusing an idempotency key met its predecessor's stored
+  result: `succeeded` replayed on evidence about objects whose runtime ids no
+  longer denote the same things, **addressed to a session nobody is listening
+  on** — so the live command went unanswered too. A session the mod had already
+  closed could be reopened by re-presenting its own document. And the mod's
+  armed state survived a session swap entirely: `Safety.disarm` was reached by
+  an explicit disarm and by a panic stop and by nothing on a session change, so
+  a second sidecar inherited authority it never asked for and could not see it
+  held — it believes it is in OBSERVE while the mod accepts mutating commands.
+
+  On the observation side: an unread body and an unhurt one produced the
+  identical document (`wounds` is omitted when empty, and `treat_wounds`
+  completes on exactly `bleeding_observed == 0`); the nearby scan reported a
+  complete scan of an empty world when it could not read the world at all;
+  `survival.rest` promoted a rest to succeeded with no departure reading; and
+  `medical.bandage` verified on a dressing the wound was already wearing.
 
   Recorded and deliberately **not** fixed, a third door onto the same silence:
   the mission-cap eviction path marks a drive abandoned and banks its report
