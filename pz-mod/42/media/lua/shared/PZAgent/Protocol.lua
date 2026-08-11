@@ -58,6 +58,8 @@ Protocol.ACTION_NAMES = {
   "combat.shove",
   "combat.engage",
   "combat.retreat",
+  "crafting.inspect",
+  "crafting.craft",
 }
 
 local function toSet(list)
@@ -71,8 +73,13 @@ end
 Protocol.ACTIONS = toSet(Protocol.ACTION_NAMES)
 
 --- Actions that only read state: allowed in OBSERVE and without arming.
-Protocol.READ_ONLY_ACTIONS =
-  toSet({ "world.inspect", "container.inspect", "inventory.search", "action.wait" })
+Protocol.READ_ONLY_ACTIONS = toSet({
+  "world.inspect",
+  "container.inspect",
+  "inventory.search",
+  "action.wait",
+  "crafting.inspect",
+})
 
 --- Actions that bypass the arming check entirely -- stopping must always work.
 Protocol.ALWAYS_ALLOWED_ACTIONS = toSet({ "safety.stop", "session.disarm", "plan.cancel" })
@@ -193,6 +200,8 @@ Protocol.REASON = {
   NO_SUITABLE_LITERATURE = "NO_SUITABLE_LITERATURE",
   CONTAINER_FULL = "CONTAINER_FULL",
   RESOURCE_RESERVED = "RESOURCE_RESERVED",
+  RECIPE_UNKNOWN = "RECIPE_UNKNOWN",
+  RECIPE_MATERIALS_MISSING = "RECIPE_MATERIALS_MISSING",
 
   INTERNAL_ERROR = "INTERNAL_ERROR",
 }

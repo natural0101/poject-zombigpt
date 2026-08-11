@@ -47,6 +47,8 @@ class ActionName(StrEnum):
     COMBAT_SHOVE = "combat.shove"
     COMBAT_ENGAGE = "combat.engage"
     COMBAT_RETREAT = "combat.retreat"
+    CRAFTING_INSPECT = "crafting.inspect"
+    CRAFTING_CRAFT = "crafting.craft"
 
 
 #: Actions that only read state. They are permitted in OBSERVE mode and do not
@@ -61,6 +63,11 @@ READ_ONLY_ACTIONS: frozenset[ActionName] = frozenset(
         ActionName.CONTAINER_INSPECT,
         ActionName.INVENTORY_SEARCH,
         ActionName.ACTION_WAIT,
+        # ``crafting.inspect`` belongs here for the reason the others do and
+        # ``container.open_nearby`` does not: it reads the recipe tables and the
+        # materials already on the character, and the character does not move or
+        # touch anything to answer it.
+        ActionName.CRAFTING_INSPECT,
     }
 )
 
