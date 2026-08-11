@@ -1,0 +1,204 @@
+# Threat assessment and the retreat mission. Combat itself is the P4 epic's
+# half and is stated below as exactly what it is: not implemented.
+schema_version: "1.0"
+domain: threat_combat
+rules:
+  - id: threat_chasing_outranks_close
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_core/src/pz_agent_core/safety/threat.py::assess_threat"
+    status: verified_script
+    claim: "A distant zombie that is chasing outranks a closer one that has not noticed the player: the chasing ladder sits a full rung above the merely-visible one at every band, so a chaser anywhere inside the alert radius is at least medium while an unaware zombie only reaches medium at contact range."
+    observed_inputs:
+      - nearby.zombies[].chasing
+      - nearby.zombies[].visible
+      - nearby.zombies[].distance
+    preconditions: []
+    decision: "assess_threat evaluates each zombie against chasing, visibility and distance, then takes the maximum; the ladders differ by one rung per band by construction."
+    actions: []
+    postconditions: []
+    on_failure: "Not applicable: assessment is observation-only and drives no action of its own."
+    risk_class: P0
+    goal_kinds:
+      - avoid_threat
+    needs:
+      - panic
+    nearby_kinds:
+      - zombie
+    proven_by:
+      - tests/unit/test_safety_threat.py
+
+  - id: threat_distance_bands
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_core/src/pz_agent_core/safety/threat.py::ThreatConfig"
+    status: verified_script
+    claim: "The threat bands are 2.0 tiles for contact, 6.0 for reaction range — a chasing zombie this close arrives before a long action finishes — and 15.0 for awareness; beyond that a zombie is a fact, not a situation. They are starting points for tests, tunable in ThreatConfig, not proven game balance."
+    observed_inputs:
+      - nearby.zombies[].distance
+    preconditions: []
+    decision: "ThreatConfig validates the distances as positive and strictly increasing; every branch reads the config rather than a literal."
+    actions: []
+    postconditions: []
+    on_failure: "Not applicable: assessment is observation-only."
+    risk_class: P0
+    goal_kinds:
+      - avoid_threat
+    nearby_kinds:
+      - zombie
+    proven_by:
+      - tests/unit/test_safety_threat.py
+    numbers:
+      - name: critical_distance
+        value: 2.0
+        unit: tiles
+        status: verified_script
+      - name: close_distance
+        value: 6.0
+        unit: tiles
+        status: verified_script
+      - name: alert_distance
+        value: 15.0
+        unit: tiles
+        status: verified_script
+
+  - id: threat_pack_and_floor_rules
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_core/src/pz_agent_core/safety/threat.py::assess_threat"
+    status: verified_script
+    claim: "A pack is worse than the sum of its members: 3 chasing zombies escalate the level one rung and 6 escalate it two, 8 in the alert radius escalate a crowd even when unaware; a zombie on another floor is capped at medium, and a bleeding character never assesses below low."
+    observed_inputs:
+      - nearby.zombies[].chasing
+      - nearby.zombies[].distance
+    preconditions: []
+    decision: "Counts escalate on the ladder saturating at critical; bleeding raises the floor and bleeding while chased escalates once more, because the clock is already running."
+    actions: []
+    postconditions: []
+    on_failure: "Not applicable: assessment is observation-only."
+    risk_class: P0
+    needs:
+      - bleeding
+      - panic
+    nearby_kinds:
+      - zombie
+    proven_by:
+      - tests/unit/test_safety_threat.py
+    numbers:
+      - name: chasing_horde
+        value: 3
+        unit: zombies
+        status: verified_script
+      - name: chasing_swarm
+        value: 6
+        unit: zombies
+        status: verified_script
+      - name: crowd_count
+        value: 8
+        unit: zombies
+        status: verified_script
+
+  - id: reflex_bands
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_core/src/pz_agent_core/safety/reflex.py::ReflexConfig"
+    status: verified_script
+    claim: "The reflex guard's rungs never decrease: danger at medium interrupts a vulnerable activity — eating, drinking, reading — danger at high starts nothing new, and danger at critical interrupts whatever is running, because at that point the only correct plan is the threat."
+    observed_inputs:
+      - safety.danger_level
+    preconditions: []
+    decision: "ReflexConfig pins interrupt_at, block_at and flee_at with a validator refusing a decreasing ladder; the guard is a pure function of two observations and the out-of-band signals, so it works with the planner absent."
+    actions: []
+    postconditions: []
+    on_failure: "A fired event means start no new task; what more it authorises is stated on the event's own booleans, never inferred."
+    risk_class: P0
+    needs:
+      - panic
+    nearby_kinds:
+      - zombie
+    proven_by:
+      - tests/unit/test_safety_reflex.py
+
+  - id: reflex_stall_detection
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_core/src/pz_agent_core/safety/reflex.py::ReflexConfig"
+    status: verified_script
+    claim: "A command that has not progressed for 15 seconds is stuck — the bound sits well above the longest single timed action so a slow eat is not a stall — and stall events rank at user-command priority, pre-empting background work without outranking a real emergency."
+    observed_inputs: []
+    preconditions: []
+    decision: "stall_ms is compared against each in-flight command's last progress; PATH_STUCK and NO_PROGRESS map to Priority.USER_COMMAND in the reflex ladder."
+    actions: []
+    postconditions: []
+    on_failure: "The stuck command is terminated through the event's command ids; the mod-owned queue is the only queue the guard touches."
+    risk_class: P0
+    proven_by:
+      - tests/unit/test_safety_reflex.py
+    numbers:
+      - name: stall_ms
+        value: 15000
+        unit: ms
+        status: verified_script
+
+  - id: avoid_retreat_criteria
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_cli/src/pz_agent_cli/avoid_mission.py::SAFE_DISTANCE"
+    status: verified_script
+    claim: "A retreat succeeds only on the observed postcondition: the nearest zombie at 12.0 tiles or beyond — or none observed — or the character standing in a remembered safe zone with nothing chasing; arriving at the chosen square proves nothing by itself, because the zombies may have followed."
+    observed_inputs:
+      - nearby.zombies[].distance
+      - nearby.zombies[].chasing
+      - player.position
+    preconditions: []
+    decision: "The target is the nearest remembered user safe zone within 30 squares, else the square on the 15-square ring maximising the minimum distance to the observed threats; the threat picture is re-read from every fresh observation, never pinned at activation."
+    actions:
+      - movement.move_to
+    postconditions:
+      - "The newest observation reports the nearest zombie at or beyond the safe distance, or a safe zone reached with nothing chasing"
+    on_failure: "Cornered, unroutable or out of legs with zombies still observed ends as THREAT_INTERRUPTED naming the nearest observed threat distance."
+    risk_class: P2
+    goal_kinds:
+      - avoid_threat
+    needs:
+      - panic
+    nearby_kinds:
+      - zombie
+    proven_by:
+      - tests/unit/test_avoid_mission.py
+    numbers:
+      - name: safe_distance
+        value: 12.0
+        unit: tiles
+        status: verified_script
+      - name: max_retreat_distance
+        value: 30
+        unit: squares
+        status: verified_script
+      - name: retreat_ring_radius
+        value: 15
+        unit: squares
+        status: verified_script
+      - name: max_retreat_legs
+        value: 8
+        unit: legs
+        status: verified_script
+
+  - id: combat_not_implemented
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_core/src/pz_agent_core/protocol/enums.py::ActionName"
+    status: unverified
+    claim: "Combat is not implemented: the protocol's action set carries no attack, weapon-swing or push action, so the kill half of the threat directive has no code to restate — retreat via avoid_threat is the implemented half, and combat remains future work under the P4 epic."
+    observed_inputs: []
+    preconditions: []
+    decision: "No code decides combat; this rule exists so retrieval for threat goals states the gap instead of leaving a planner to infer an ability that does not exist."
+    actions: []
+    postconditions: []
+    on_failure: "Not applicable: there is no combat action to fail."
+    risk_class: P4
+    goal_kinds:
+      - avoid_threat
+    nearby_kinds:
+      - zombie
+    proven_by: []

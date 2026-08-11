@@ -1,0 +1,115 @@
+# Rest and sleep: the danger gate, the P4 rating, and what each action is
+# verified against.
+schema_version: "1.0"
+domain: rest_sleep
+rules:
+  - id: sleep_refused_any_danger
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_core/src/pz_agent_core/actions/adapters/survival.py::SleepAdapter.validate"
+    status: verified_script
+    claim: "survival.sleep is refused outright while the safety snapshot reports any danger level above none — a stricter bar than the block threshold every other action gets, because a danger level the guard can see is a danger the character would sleep through."
+    observed_inputs:
+      - safety.danger_level
+    preconditions:
+      - "The observed danger level is exactly none"
+    decision: "SleepAdapter.validate compares safety.danger_level against DangerLevel.NONE and refuses with the level named in the evidence; there is no override knob."
+    actions:
+      - survival.sleep
+    postconditions: []
+    on_failure: "The refusal is PRECONDITION_FAILED with the danger level; the caller deals with the threat first or does not sleep."
+    risk_class: P4
+    goal_kinds:
+      - sleep_until_rested
+    needs:
+      - fatigue
+    proven_by:
+      - tests/unit/test_adapters_survival.py
+      - tests/unit/test_care_mission.py
+
+  - id: sleep_never_autonomous
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_core/src/pz_agent_core/actions/adapters/survival.py::SleepAdapter"
+    status: verified_script
+    claim: "Sleep is the one action in the adapter package rated P4: once the character is asleep the mod cannot wake them — no queue entry to cancel, no timed action to interrupt — so it is never taken on the agent's own initiative and needs explicit per-call consent."
+    observed_inputs:
+      - safety.danger_level
+    preconditions: []
+    decision: "The adapter declares RiskClass.P4, which the permission layer maps to never-automatic; the reflex guard is consulted before the command is sent at all."
+    actions:
+      - survival.sleep
+    postconditions: []
+    on_failure: "Without the consent tier the command is refused by policy before the mod ever sees it."
+    risk_class: P4
+    goal_kinds:
+      - sleep_until_rested
+    proven_by:
+      - tests/unit/test_adapters_survival.py
+      - tests/unit/test_policy_permissions.py
+
+  - id: rest_verified_against_endurance
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_core/src/pz_agent_core/actions/adapters/survival.py::RestAdapter"
+    status: verified_script
+    claim: "survival.rest is verified against the endurance stat it exists to move — the default target is 0.9 of full, ready to run again without waiting out the long tail — and never inferred from an idle queue, because resting is largely the absence of a queued action."
+    observed_inputs:
+      - player.stats.endurance
+    preconditions: []
+    decision: "RestAdapter.verify reads the reported endurance and blesses only an observed rise to the target; a target outside 0.05 through 1.0 is refused at validation."
+    actions:
+      - survival.rest
+    postconditions:
+      - "Observed endurance reaches the requested target"
+    on_failure: "An unreached target within the bounded wait is an honest timeout, not a success; the mission may rest again or surrender."
+    risk_class: P2
+    goal_kinds:
+      - rest_until
+    needs:
+      - endurance
+    proven_by:
+      - tests/unit/test_adapters_survival.py
+      - tests/unit/test_care_mission.py
+    numbers:
+      - name: default_rest_target
+        value: 0.9
+        unit: fraction
+        status: verified_script
+      - name: max_rest_wait_ms
+        value: 900000
+        unit: ms
+        status: verified_script
+
+  - id: sleep_verified_by_clock_and_fatigue
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_core/src/pz_agent_core/actions/adapters/survival.py::SleepAdapter.verify"
+    status: verified_script
+    claim: "A slept night is proven by a pair of postconditions: fatigue fell and the game clock advanced, measured on the mod's world clock — fatigue alone would also fall during a quiet afternoon, and real seconds pass while the game is paused."
+    observed_inputs:
+      - player.stats.fatigue
+    preconditions: []
+    decision: "SleepAdapter.verify requires both the fatigue drop and the elapsed game seconds for the requested hours, default 8 within 1 through 16."
+    actions:
+      - survival.sleep
+    postconditions:
+      - "Observed fatigue fell after the sleep"
+      - "The mod's world clock advanced by the slept hours"
+    on_failure: "Either half missing fails verification; the engine reports timeout or the mod's own code, never an assumed night."
+    risk_class: P4
+    goal_kinds:
+      - sleep_until_rested
+    needs:
+      - fatigue
+    proven_by:
+      - tests/unit/test_adapters_survival.py
+    numbers:
+      - name: default_sleep_hours
+        value: 8
+        unit: game_hours
+        status: verified_script
+      - name: max_sleep_hours
+        value: 16
+        unit: game_hours
+        status: verified_script

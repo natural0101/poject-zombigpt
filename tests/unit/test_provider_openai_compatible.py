@@ -22,11 +22,13 @@ import pytest
 from pz_agent_cli.config import (
     CODE_MISSING_VALUE,
     CODE_NOT_ALLOWED,
+    CODE_NOT_FOUND,
     CODE_UNKNOWN_KEY,
     ConfigValidation,
     load_config,
 )
 from pz_agent_core.capabilities.probes import PROBES_BY_NAME
+from pz_agent_core.knowledge import DEFAULT_RENDER_CHARS, default_corpus_root
 from pz_agent_core.planner.plan import PLANNABLE_ACTIONS, MoveToArgs, StepFailure, step_signature
 from pz_agent_core.planner.provider import Goal, GoalKind, PlanProvider, PlanRequest
 from pz_agent_core.planner.providers.openai_compatible import (
@@ -39,6 +41,12 @@ from pz_agent_core.planner.providers.openai_compatible import (
     OpenAICompatibleConfig,
     OpenAICompatibleProvider,
     plan_instructions,
+)
+from pz_agent_core.planner.providers.teamon import (
+    DEFAULT_TEAMON_KEY_ENV,
+    TeamONConfig,
+    TeamONProvider,
+    request_payload,
 )
 from pz_agent_core.planner.providers.transport import (
     ConnectFailed,
@@ -546,3 +554,182 @@ def test_the_request_is_built_from_a_plan_request_alone() -> None:
     second.propose(request)
 
     assert first_transport.requests[0].body == second_transport.requests[0].body
+
+
+# ---------------------------------------------------------------------------
+# the knowledge block
+# ---------------------------------------------------------------------------
+
+# The repository root: this checkout ships knowledge/gameplay, which is what
+# makes an end-to-end "configured corpus" test possible without fixtures.
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_the_prompt_carries_the_knowledge_block_when_a_corpus_is_configured() -> None:
+    transport = FakeTransport(completion(json.dumps(plan_payload())))
+    knowing = OpenAICompatibleProvider(
+        config(knowledge_root=REPO_ROOT), transport=transport, environ=ENVIRON
+    )
+
+    knowing.propose(plan_request())
+
+    user = json.loads(transport.sent_body()["messages"][1]["content"])
+    block = user["knowledge"]
+    assert block.startswith("Gameplay knowledge")
+    # The default goal is satisfy_hunger, so the food rules are what surfaces.
+    assert "food_" in block
+
+
+def test_the_knowledge_block_is_bounded() -> None:
+    transport = FakeTransport(completion(json.dumps(plan_payload())))
+    knowing = OpenAICompatibleProvider(
+        config(knowledge_root=REPO_ROOT), transport=transport, environ=ENVIRON
+    )
+
+    knowing.propose(plan_request())
+
+    user = json.loads(transport.sent_body()["messages"][1]["content"])
+    assert len(user["knowledge"]) <= DEFAULT_RENDER_CHARS
+
+
+def test_the_prompt_carries_no_knowledge_block_when_no_corpus_is_configured() -> None:
+    planner, transport = provider(completion(json.dumps(plan_payload())))
+
+    planner.propose(plan_request())
+
+    user = json.loads(transport.sent_body()["messages"][1]["content"])
+    assert "knowledge" not in user
+
+
+def test_a_root_without_a_corpus_is_an_honest_absence_not_a_crash(tmp_path: Path) -> None:
+    """load_corpus reads an empty tree as an empty corpus; the prompt stays bare."""
+    transport = FakeTransport(completion(json.dumps(plan_payload())))
+    knowing = OpenAICompatibleProvider(
+        config(knowledge_root=tmp_path), transport=transport, environ=ENVIRON
+    )
+
+    proposal = knowing.propose(plan_request())
+
+    assert not proposal.refused
+    user = json.loads(transport.sent_body()["messages"][1]["content"])
+    assert "knowledge" not in user
+
+
+def test_a_corpus_that_refuses_to_load_refuses_the_tick_before_sending(
+    tmp_path: Path,
+) -> None:
+    """A configured corpus is an input; planning quietly without it would be a
+    degradation of exactly what the user asked for."""
+    gameplay = tmp_path / "knowledge" / "gameplay"
+    gameplay.mkdir(parents=True)
+    # Structurally invalid: a document must carry at least one rule.
+    (gameplay / "empty.yaml").write_text(
+        'schema_version: "1.0"\ndomain: food_water\nrules: []\n', encoding="utf-8"
+    )
+    transport = FakeTransport(completion(json.dumps(plan_payload())))
+    knowing = OpenAICompatibleProvider(
+        config(knowledge_root=tmp_path), transport=transport, environ=ENVIRON
+    )
+
+    proposal = knowing.propose(plan_request())
+
+    assert proposal.refused
+    assert proposal.reason_code is ReasonCode.CAPABILITY_UNAVAILABLE
+    assert "knowledge corpus" in proposal.detail
+    assert proposal.reasons  # the loader's own typed message rides along
+    assert transport.calls == 0
+
+
+def test_the_active_needs_reach_retrieval_through_the_policy_thresholds() -> None:
+    """A hungry observation surfaces need-tagged rules a sated one does not."""
+    sated_transport = FakeTransport(completion(json.dumps(plan_payload())))
+    hungry_transport = FakeTransport(completion(json.dumps(plan_payload())))
+    sated = OpenAICompatibleProvider(
+        config(knowledge_root=REPO_ROOT), transport=sated_transport, environ=ENVIRON
+    )
+    hungry = OpenAICompatibleProvider(
+        config(knowledge_root=REPO_ROOT), transport=hungry_transport, environ=ENVIRON
+    )
+    # read_for_boredom keeps the goal away from the food rules, so any food
+    # rule in the block got there through the hunger need alone.
+    reading = Goal(goal_id=GOAL_ID, kind=GoalKind.READ_FOR_BOREDOM)
+
+    sated.propose(plan_request(goal=reading))
+    hungry.propose(
+        plan_request(
+            planner_observation(player=hungry_player(0.9), inventory=stocked_inventory()),
+            goal=reading,
+        )
+    )
+
+    sated_user = json.loads(sated_transport.sent_body()["messages"][1]["content"])
+    hungry_user = json.loads(hungry_transport.sent_body()["messages"][1]["content"])
+    assert "food_burnt_poison_tainted_refused" not in sated_user.get("knowledge", "")
+    assert "food_burnt_poison_tainted_refused" in hungry_user["knowledge"]
+
+
+def test_the_teamon_provider_shares_the_knowledge_block() -> None:
+    """One prompt assembly: the block rides inside the shared request payload."""
+    transport = FakeTransport(json_response({"plan": plan_payload()}))
+    planner = TeamONProvider(
+        TeamONConfig(base_url="http://127.0.0.1:9090", knowledge_root=REPO_ROOT),
+        transport=transport,
+        environ={DEFAULT_TEAMON_KEY_ENV: "test-key"},
+    )
+
+    planner.propose(plan_request())
+
+    body = json.loads(transport.requests[0].body.decode("utf-8"))
+    assert body["request"]["knowledge"].startswith("Gameplay knowledge")
+
+
+def test_the_teamon_request_payload_carries_the_block_verbatim() -> None:
+    payload = request_payload(
+        TeamONConfig(base_url="http://127.0.0.1:9090"),
+        plan_request(),
+        knowledge="THE BLOCK",
+    )
+
+    assert payload["request"]["knowledge"] == "THE BLOCK"
+
+
+# ---------------------------------------------------------------------------
+# the knowledge_root configuration key
+# ---------------------------------------------------------------------------
+
+
+def test_knowledge_root_defaults_to_the_shipped_corpus(tmp_path: Path) -> None:
+    validation = validated(SELECTED, tmp_path)
+
+    assert validation.config is not None
+    selected = validation.config.planner_provider
+    assert isinstance(selected, OpenAICompatibleConfig)
+    # This test runs from a source checkout, so the default is the repo root;
+    # an installed build without the tree gets an honest None instead.
+    assert selected.knowledge_root == default_corpus_root()
+    assert selected.knowledge_root is not None
+
+
+def test_an_explicit_knowledge_root_is_used(tmp_path: Path) -> None:
+    (tmp_path / "corpus" / "knowledge" / "gameplay").mkdir(parents=True)
+    document = SELECTED + f'knowledge_root = "{(tmp_path / "corpus").as_posix()}"\n'
+
+    validation = validated(document, tmp_path)
+
+    assert validation.ok, [problem.render() for problem in validation.errors]
+    assert validation.config is not None
+    selected = validation.config.planner_provider
+    assert isinstance(selected, OpenAICompatibleConfig)
+    assert selected.knowledge_root == tmp_path / "corpus"
+
+
+def test_a_knowledge_root_without_a_corpus_is_refused(tmp_path: Path) -> None:
+    document = SELECTED + f'knowledge_root = "{(tmp_path / "nowhere").as_posix()}"\n'
+
+    validation = validated(document, tmp_path)
+
+    assert not validation.ok
+    problem = validation.errors[0]
+    assert problem.path == "planner.openai_compatible.knowledge_root"
+    assert problem.code == CODE_NOT_FOUND
+    assert "knowledge/gameplay" in problem.detail

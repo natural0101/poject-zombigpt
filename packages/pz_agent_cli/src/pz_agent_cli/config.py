@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any, Final
 
 from pz_agent_core.capabilities import PROBES_BY_NAME
+from pz_agent_core.knowledge import GAMEPLAY_SUBDIR, default_corpus_root
 from pz_agent_core.planner.providers import (
     DEFAULT_CONNECT_TIMEOUT_S,
     DEFAULT_MAX_ATTEMPTS,
@@ -250,12 +251,20 @@ SCHEMA: Final[Mapping[str, Mapping[str, FieldSpec]]] = {
         "max_output_tokens": FieldSpec(
             _INT, DEFAULT_MAX_OUTPUT_TOKENS, minimum=1, maximum=MAX_OUTPUT_TOKENS
         ),
+        # The directory holding knowledge/gameplay, for the prompt's bounded
+        # knowledge block. Unset means the corpus shipped next to this source
+        # tree when there is one, and honestly none when there is not — an
+        # installed build without the tree sends the same prompt it always did.
+        "knowledge_root": FieldSpec(_STR, None, nullable=True),
         **_transport_keys(),
     },
     f"planner.{PROVIDER_TEAMON}": {
         "base_url": FieldSpec(_STR, None, nullable=True),
         "assistant": FieldSpec(_STR, None, nullable=True),
         "api_key_env": FieldSpec(_STR, DEFAULT_TEAMON_KEY_ENV),
+        # Same knob as the OpenAI-compatible provider's: the two share the
+        # planner payload, so they share the knowledge block wired into it.
+        "knowledge_root": FieldSpec(_STR, None, nullable=True),
         **_transport_keys(),
     },
     "voice": {
@@ -759,6 +768,9 @@ def _provider_problems(values: Mapping[str, Mapping[str, Any]]) -> list[ConfigPr
     ]
     if missing:
         return missing
+    problems = _knowledge_problems(table, section)
+    if problems:
+        return problems
     try:
         build_provider_config(provider, section)
     except ValueError as exc:
@@ -771,6 +783,56 @@ def _provider_problems(values: Mapping[str, Mapping[str, Any]]) -> list[ConfigPr
             )
         ]
     return []
+
+
+def _knowledge_problems(table: str, section: Mapping[str, Any]) -> list[ConfigProblem]:
+    """An explicitly set ``knowledge_root`` must actually hold a corpus.
+
+    Only the explicit value is checked: the unset default resolves to the
+    shipped corpus or to honest None, and neither of those is a mistake the
+    user made. A named root without ``knowledge/gameplay`` under it would load
+    as a silently empty knowledge base — the user believing rules are wired
+    in while the prompt carries none — which is the same class of lie as an
+    ignored unknown key, so it is an error rather than a shrug.
+    """
+    raw = section.get("knowledge_root")
+    if raw is None or not str(raw).strip():
+        return []
+    corpus_dir = "/".join(GAMEPLAY_SUBDIR)
+    try:
+        found = Path(str(raw)).joinpath(*GAMEPLAY_SUBDIR).is_dir()
+    except (OSError, ValueError):
+        # Discarding the OS's own complaint (an embedded NUL, an over-long
+        # name): "no corpus at this path" is the answer either way, and the
+        # remediation below says more than the errno would.
+        found = False
+    if found:
+        return []
+    return [
+        ConfigProblem(
+            path=f"{table}.knowledge_root",
+            code=CODE_NOT_FOUND,
+            detail=f"no {corpus_dir} directory under this path",
+            remediation=(
+                f"point it at a directory containing {corpus_dir}, or remove the key "
+                "to use the corpus shipped with the source tree when there is one"
+            ),
+        )
+    ]
+
+
+def _knowledge_root(section: Mapping[str, Any]) -> Path | None:
+    """The corpus root the provider should read.
+
+    The explicit value wins; an unset one falls back to
+    :func:`~pz_agent_core.knowledge.retrieval.default_corpus_root`, which is
+    the repo-shipped ``knowledge/gameplay`` in a source checkout and an honest
+    None in an installed build, where no corpus ships and no block is sent.
+    """
+    raw = section.get("knowledge_root")
+    if raw is None or not str(raw).strip():
+        return default_corpus_root()
+    return Path(str(raw))
 
 
 def build_provider_config(
@@ -795,6 +857,7 @@ def build_provider_config(
             api_key_env=str(section["api_key_env"]),
             max_output_tokens=int(section["max_output_tokens"]),
             transport=transport,
+            knowledge_root=_knowledge_root(section),
         )
     if provider == PROVIDER_TEAMON:
         return TeamONConfig(
@@ -802,6 +865,7 @@ def build_provider_config(
             assistant=str(section["assistant"] or ""),
             api_key_env=str(section["api_key_env"]),
             transport=transport,
+            knowledge_root=_knowledge_root(section),
         )
     return None
 

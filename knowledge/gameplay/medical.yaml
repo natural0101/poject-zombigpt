@@ -1,0 +1,110 @@
+# Medical: deterministic triage and the bleeding-observed verification, as the
+# policy and the bandage adapter enforce them.
+schema_version: "1.0"
+domain: medical
+rules:
+  - id: medical_triage_order
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_core/src/pz_agent_core/policy/medical.py::select_treatment"
+    status: verified_script
+    claim: "Triage is a fixed total order: bleeding outranks not bleeding whatever the severities, deeper outranks shallow among bleeding wounds, and the body part's name breaks the last tie — so a retry after an interruption picks the same wound instead of oscillating."
+    observed_inputs:
+      - player.position
+    preconditions:
+      - "At least one wound is bleeding"
+    decision: "Wounds sort on (not bleeding, negative severity, part name); only the head of that order is treated per selection, and the rationale lists the wounds waiting their turn."
+    actions:
+      - medical.bandage
+    postconditions: []
+    on_failure: "Nothing bleeding is a PRECONDITION_FAILED refusal, because a dressing's effect on a non-bleeding wound is not observable."
+    risk_class: P2
+    goal_kinds:
+      - treat_wounds
+    needs:
+      - bleeding
+      - pain
+    proven_by:
+      - tests/unit/test_policy_medical.py
+
+  - id: medical_dirty_dressing_refused
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_core/src/pz_agent_core/policy/medical.py::select_treatment"
+    status: verified_script
+    claim: "A dirty dressing is refused outright while any clean one is in reach, and is usable only when nothing clean survived the other filters — the rule is applied against the whole candidate set, not item by item."
+    observed_inputs: []
+    preconditions: []
+    decision: "Candidates rank sterile before tagged-unknown before dirty; when any non-dirty candidate remains, every dirty one is converted to a rejection naming the infection trade."
+    actions:
+      - medical.bandage
+    postconditions: []
+    on_failure: "With only dirty dressings left the best dirty one is chosen and the rationale says nothing sterile is in reach."
+    risk_class: P2
+    goal_kinds:
+      - treat_wounds
+    needs:
+      - bleeding
+    proven_by:
+      - tests/unit/test_policy_medical.py
+
+  - id: medical_dirty_infects_lore
+    build: "41"
+    source: wiki
+    source_detail: "https://pzwiki.net/wiki/First_aid — dressing cleanliness, read for Build 41 lore"
+    status: unverified
+    claim: "A dirty dressing raises the wound's infection chance in the game — the mechanic the dirty-dressing refusal is priced against; this repository has never observed a wound infection, so the claim stays wiki-sourced and unverified."
+    observed_inputs: []
+    preconditions: []
+    decision: "No code decides on this claim; it is background for medical_dirty_dressing_refused."
+    actions: []
+    postconditions: []
+    on_failure: "Not applicable: an unverified claim drives no action."
+    risk_class: P0
+    needs:
+      - sickness
+    proven_by: []
+
+  - id: medical_sterile_ranking
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_core/src/pz_agent_core/policy/medical.py::STERILE_DRESSING_TYPES"
+    status: verified_script
+    claim: "The dressings the policy will choose on its own form a closed ordered list — bandage, ripped sheets, denim strips, leather strips — and a mod-added item tagged as a bandage ranks between clean and dirty, never above a named sterile dressing."
+    observed_inputs: []
+    preconditions: []
+    decision: "Dressing.classify assigns rank sterile, tagged or dirty; the order key is rank, then position in the closed list, then the item reference, so no two candidates ever compare equal."
+    actions:
+      - medical.bandage
+    postconditions: []
+    on_failure: "An item that is not on either list and carries no bandage tag is not a dressing at all and is never selected."
+    risk_class: P2
+    goal_kinds:
+      - treat_wounds
+    proven_by:
+      - tests/unit/test_policy_medical.py
+
+  - id: medical_bleeding_verified_observed
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_core/src/pz_agent_core/actions/adapters/medical.py::BandageAdapter"
+    status: verified_script
+    claim: "medical.bandage succeeds only when a following observation shows the treated part's bleeding stopped: the bleeding flag clearing is the evidence, a vanished dressing is context, and another part clearing does not answer for the one that was dressed."
+    observed_inputs:
+      - player.position
+    preconditions:
+      - "The named part is observed bleeding before the action"
+    decision: "verify compares the wound's bleeding flag across the before and after observations for the exact body part named; a part never observed bleeding is refused because success could not be shown."
+    actions:
+      - medical.bandage
+    postconditions:
+      - "The treated part is no longer reported bleeding"
+    on_failure: "A mod ack without the observed change fails verification; the engine reports it honestly and the wound stays on the triage list."
+    risk_class: P2
+    goal_kinds:
+      - treat_wounds
+    needs:
+      - bleeding
+    proven_by:
+      - tests/unit/test_adapters_medical.py
+      - tests/unit/test_care_mission.py

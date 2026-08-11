@@ -1,0 +1,194 @@
+# Containers and looting: the deterministic loot mission, its batch bound and
+# its container memory, as the shipped code enforces them.
+schema_version: "1.0"
+domain: containers_loot
+rules:
+  - id: loot_batch_cap_eight
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_core/src/pz_agent_core/loot/policy.py::MAX_ITEMS_PER_CONTAINER"
+    status: verified_script
+    claim: "One loot selection is one inventory.transfer_batch of at most 8 items — the transfer batch width — and a container holding more is re-selected after the batch lands, against its remaining contents, up to 4 batches per container."
+    observed_inputs:
+      - player.position
+    preconditions:
+      - "The container was opened and its contents enumerated"
+    decision: "loot.policy.select returns at most max_items_per_container picks; the mission issues one transfer_batch per selection and re-selects until the container yields nothing or the batch budget is spent."
+    actions:
+      - inventory.transfer_batch
+      - container.inspect
+    postconditions:
+      - "The batch is verified landing whole before anything is counted taken"
+    on_failure: "A partial or failed batch counts nothing; the stop reason is recorded and the mission moves on."
+    risk_class: P3
+    goal_kinds:
+      - loot_area
+    nearby_kinds:
+      - container
+    proven_by:
+      - tests/unit/test_loot_policy.py
+      - tests/unit/test_loot_mission.py
+      - tests/unit/test_adapters_inventory.py
+    numbers:
+      - name: max_items_per_container
+        value: 8
+        unit: items
+        status: verified_script
+      - name: max_batch_items
+        value: 8
+        unit: items
+        status: verified_script
+      - name: max_batches_per_container
+        value: 4
+        unit: batches
+        status: verified_script
+
+  - id: loot_capacity_stop_honesty
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_cli/src/pz_agent_cli/loot_mission.py::LootMission"
+    status: verified_script
+    claim: "Taken means observed taken: items_taken counts only selections whose batch the engine verified landing whole; a partial CONTAINER_FULL stop records what stopped it and counts nothing, because the adapter's own verify refused to bless the partial state."
+    observed_inputs:
+      - player.position
+    preconditions: []
+    decision: "The mission reads the engine's terminal result per batch; only a verified whole landing increments the tally, and capacity known up front is spent greedily in category priority order."
+    actions:
+      - inventory.transfer_batch
+    postconditions:
+      - "Every counted item is one a verified batch moved"
+    on_failure: "CONTAINER_FULL ends the container with the stop recorded; an encumbered character ends the mission as encumbered, never as complete."
+    risk_class: P3
+    goal_kinds:
+      - loot_area
+    needs:
+      - encumbrance
+    proven_by:
+      - tests/unit/test_loot_mission.py
+
+  - id: loot_container_memory_revision
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_core/src/pz_agent_core/memory/model.py::content_revision_of"
+    status: verified_script
+    claim: "A visited container is remembered by the place-half of its reference and a digest of its enumerated contents; when the current observation's digest matches the remembered one the mission records an unchanged skip instead of walking back — and an unremembered or changed shelf is always visited."
+    observed_inputs:
+      - nearby.objects[].kind
+    preconditions:
+      - "Memory holds a revision for the container's tail"
+    decision: "SaveMemory.container_unchanged compares content_revision_of the current enumeration against the stored revision; memory stores derived facts keyed by world tail, never session-scoped references."
+    actions:
+      - container.inspect
+    postconditions:
+      - "Skipped containers carry a recorded skip reason in the mission report"
+    on_failure: "A digest mismatch or a missing record sends the mission to look; skips are first-class report entries, never silent drops."
+    risk_class: P0
+    goal_kinds:
+      - loot_area
+    nearby_kinds:
+      - container
+    proven_by:
+      - tests/unit/test_memory_model.py
+      - tests/unit/test_memory_store.py
+      - tests/unit/test_loot_mission.py
+
+  - id: loot_default_wanted_categories
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_core/src/pz_agent_core/loot/policy.py::DEFAULT_WANTED"
+    status: verified_script
+    claim: "The default loot policy takes what feeds, waters, heals, arms, fixes or teaches — food, water, medical, tools, weapons, materials, literature — and deliberately not clothing or unnameable items; take_all widens to every category but never overrides the user's reserves."
+    observed_inputs: []
+    preconditions: []
+    decision: "LootPolicy.effective_wanted resolves an empty wanted set to DEFAULT_WANTED; respect_reserves defaults on and take_all does not override it, because the user's word outranks the flag."
+    actions:
+      - inventory.transfer_batch
+    postconditions: []
+    on_failure: "Unwanted or reserved items are recorded as leaves with a single reason each; nothing is dropped silently."
+    risk_class: P3
+    goal_kinds:
+      - loot_area
+    proven_by:
+      - tests/unit/test_loot_policy.py
+
+  - id: loot_open_is_timed_action
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_core/src/pz_agent_core/protocol/enums.py::READ_ONLY_ACTIONS"
+    status: verified_script
+    claim: "container.open_nearby is deliberately not a read-only action: its name reads like a query, but opening a container is a timed action the character performs in the world, so an unarmed session may inspect but never open."
+    observed_inputs: []
+    preconditions:
+      - "The session is armed in a mutating mode"
+    decision: "READ_ONLY_ACTIONS carries world.inspect, container.inspect, inventory.search and action.wait only; container.open_nearby needs an armed session like every other mutating command."
+    actions:
+      - container.open_nearby
+      - container.inspect
+    postconditions: []
+    on_failure: "An unarmed open is refused NOT_ARMED before it reaches the mod."
+    risk_class: P3
+    goal_kinds:
+      - loot_area
+    nearby_kinds:
+      - container
+    proven_by:
+      - tests/contract/test_mcp_action_coverage.py
+
+  - id: loot_corpse_observation_gap
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_cli/src/pz_agent_cli/loot_mission.py::LootMission"
+    status: verified_script
+    claim: "Corpses are observation-only for the loot mission: discovery parses only world container references, so a corpse in nearby.objects is an ordinary neighbour, never a loot candidate — looting corpses is an honest gap, not a silent skip of something claimed supported."
+    observed_inputs:
+      - nearby.objects[].kind
+    preconditions: []
+    decision: "LootMission discovery attempts ContainerRef.parse on each nearby object and passes over everything that is not a world container, corpses included."
+    actions:
+      - container.inspect
+    postconditions: []
+    on_failure: "There is no failure: a corpse simply never enters the candidate map."
+    risk_class: P0
+    goal_kinds:
+      - loot_area
+    nearby_kinds:
+      - corpse
+    proven_by:
+      - tests/unit/test_loot_mission.py
+
+  - id: loot_completion_criterion
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_cli/src/pz_agent_cli/loot_mission.py::MAX_CANDIDATES_PER_MISSION"
+    status: verified_script
+    claim: "A loot mission finishes on a provable criterion — every reachable container in scope was inspected or carries a recorded skip reason — and is bounded to 24 candidates per mission with a default radius scope of 10 squares."
+    observed_inputs:
+      - nearby.objects[].kind
+      - player.position
+    preconditions:
+      - "The scope was pinned from an observation at activation, never guessed"
+    decision: "Scope room or building with the character's room unreadable is a typed PRECONDITION_FAILED naming scope radius as the alternative; candidates, failures, batches and completion probes each have a constant bound."
+    actions:
+      - container.open_nearby
+      - container.inspect
+      - inventory.transfer_batch
+      - movement.move_to
+    postconditions:
+      - "The final report lists every candidate as inspected or skipped with a reason"
+    on_failure: "No-progress and consecutive-failure bounds end the mission with a typed refusal and a one-line report summary."
+    risk_class: P3
+    goal_kinds:
+      - loot_area
+    nearby_kinds:
+      - container
+    proven_by:
+      - tests/unit/test_loot_mission.py
+    numbers:
+      - name: max_candidates_per_mission
+        value: 24
+        unit: containers
+        status: verified_script
+      - name: default_loot_radius
+        value: 10
+        unit: squares
+        status: verified_script

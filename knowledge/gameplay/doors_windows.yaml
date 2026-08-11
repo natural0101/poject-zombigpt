@@ -1,0 +1,116 @@
+# Doors and windows: tri-state honesty and the two sealed-door reason codes.
+schema_version: "1.0"
+domain: doors_windows
+rules:
+  - id: doors_tristate_honesty
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_core/src/pz_agent_core/actions/adapters/doors.py::DoorOpenAdapter"
+    status: verified_script
+    claim: "A door's open, locked and barricaded fields are tri-state: null means the build exposed no reader for that fact and is never conflated with an observed false — every door gate fires only on an observed true or false, and an absent field passes the command to the mod, which owns the last word."
+    observed_inputs:
+      - nearby.objects[].kind
+    preconditions:
+      - "The observation describes the object as a door"
+    decision: "Every gate in the doors adapters checks 'is True' or 'is False' against the observed field, never truthiness; an unreadable lock authorises nothing on this side."
+    actions:
+      - door.open
+      - door.close
+      - door.unlock
+    postconditions: []
+    on_failure: "When the field is unreadable the mod resolves the engine object itself and answers with its own observed result or refusal."
+    risk_class: P3
+    nearby_kinds:
+      - door
+    proven_by:
+      - tests/unit/test_adapters_doors.py
+
+  - id: doors_locked_vs_barricaded
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_core/src/pz_agent_core/protocol/reason_codes.py::ReasonCode"
+    status: verified_script
+    claim: "DOOR_LOCKED and DOOR_BARRICADED are distinct reason codes because they demand different replanning: a locked door needs a key the executor does not hunt, a barricaded one needs the planks off or a detour; the route executor refuses with the matching code when no route avoids the sealed door."
+    observed_inputs:
+      - nearby.objects[].kind
+    preconditions: []
+    decision: "The navigation executor treats doors known locked or barricaded as walls, and its second search pass walks through sealed doors only to name the one blocking the only route, never to plan through it."
+    actions:
+      - door.open
+      - movement.move_to
+    postconditions: []
+    on_failure: "DOOR_LOCKED or DOOR_BARRICADED ends the journey with the door named; the planner replans a key hunt or a detour, the executor does neither."
+    risk_class: P3
+    goal_kinds:
+      - navigate_to
+      - loot_area
+    nearby_kinds:
+      - door
+    proven_by:
+      - tests/unit/test_navigation_executor.py
+      - tests/unit/test_adapters_doors.py
+
+  - id: doors_already_in_state
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_core/src/pz_agent_core/actions/adapters/doors.py::DoorOpenAdapter"
+    status: verified_script
+    claim: "A door already in the asked-for state is not pre-refused: the mod answers it as an unchanged success with identical before and after readings, for all three door actions alike, so a planner never special-cases which action treats already-done as failure — none does."
+    observed_inputs:
+      - nearby.objects[].kind
+    preconditions: []
+    decision: "Validation passes an observed-open door through door.open and an observed-unlocked one through door.unlock; the unchanged success comes back from the mod with the same semantics for open, close and unlock."
+    actions:
+      - door.open
+      - door.close
+      - door.unlock
+    postconditions:
+      - "The following observation describes the door in the asked-for state"
+    on_failure: "Nothing needed doing and that was observed; there is no failure branch to replan."
+    risk_class: P3
+    nearby_kinds:
+      - door
+    proven_by:
+      - tests/unit/test_adapters_doors.py
+
+  - id: doors_postcondition_observed
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_core/src/pz_agent_core/actions/adapters/doors.py::DoorOpenAdapter.verify"
+    status: verified_script
+    claim: "A door action's postcondition is the following observation describing the door in the asked-for state; a door that left the observation radius proves nothing — out of view is not open — so verification declines and the engine reports the timeout or the mod's code honestly."
+    observed_inputs:
+      - nearby.objects[].kind
+    preconditions: []
+    decision: "verify re-reads the door from the after observation and blesses only an observed state change; the mod proves its half by re-reading the IsoDoor after the toggle."
+    actions:
+      - door.open
+      - door.close
+    postconditions:
+      - "The door is observed in the asked-for state after the action"
+    on_failure: "ACTION_TIMEOUT or the mod's own failure code surfaces unchanged; the caller re-observes or replans."
+    risk_class: P3
+    nearby_kinds:
+      - door
+    proven_by:
+      - tests/unit/test_adapters_doors.py
+
+  - id: windows_never_auto
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_core/src/pz_agent_core/actions/adapters/movement.py::SEMANTIC_CLOSED_WINDOW"
+    status: verified_script
+    claim: "A closed window is never traversed automatically: the movement adapters refuse a target whose route semantics report a closed window, as an absolute behavioural restriction rather than a tunable, and no window-opening action exists in the protocol's action set."
+    observed_inputs:
+      - nearby.objects[].kind
+    preconditions: []
+    decision: "MoveToAdapter reads the observer's closed_window semantic and refuses the move; ActionName carries door actions but no window action, so no plan can name one."
+    actions:
+      - movement.move_to
+    postconditions: []
+    on_failure: "The refusal is final; a route through a window is a decision the user makes at the keyboard, not the agent."
+    risk_class: P2
+    nearby_kinds:
+      - window
+    proven_by:
+      - tests/unit/test_adapters_movement.py

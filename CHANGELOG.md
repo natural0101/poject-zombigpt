@@ -12,6 +12,27 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Added
 
+- **The agent's knowledge is now a file format with an honesty gate**
+  (`epic/p3-survival-knowledge`, wave 1). `knowledge/gameplay/*.yaml` — 50
+  rules across 8 domains, validated by `schemas/gameplay-knowledge.schema.json`
+  and a loader that refuses claims dressed above their evidence:
+  `verified_script` requires a code source whose repo path exists and test
+  paths that exist (a deleted test demotes the rule loudly at load, not
+  silently), `verified_live` requires a live evidence pointer, and PZwiki can
+  never carry a verified status. The first corpus is distilled from the
+  shipped code — 46 rules citing exact symbols and pinning tests, plus the
+  honest split the directive demanded: "the code refuses rotten food" is
+  verified_script, "rotten food sickens the character" is a separate
+  wiki-sourced hypothesis. Bounded retrieval feeds the planner prompt only
+  the rules relevant to the current goal, active needs and nearby objects
+  (cap 12, ~4KB, UNVERIFIED markers on every hypothesis and every unverified
+  number — the model must see which figures are guesses); a configured
+  corpus that fails to load refuses the tick rather than planning without
+  it. Three docs are *generated* from the corpus — `BEHAVIOR_REFERENCE.md`,
+  `BUILD42_MECHANICS_SOURCES.md` (the provenance ledger), and the Russian
+  `GAMEPLAY_AGENT_GUIDE_RU.md` — with a byte-drift gate in `check.sh`
+  (`generate_knowledge_docs.py --check`), so code and prose cannot part ways
+  quietly.
 - **A need can interrupt the current goal — and give it back**
   (`epic/p2-goal-controller`, wave 3). The queue learned suspension without a
   new state: `suspend()` parks the ACTIVE goal at the front of the backlog
