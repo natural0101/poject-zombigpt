@@ -12,14 +12,15 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
-- **Twenty-three defects of one family: evidence read without checking whose it
+- **Twenty-eight defects of one family: evidence read without checking whose it
   was, or when it was written** (`stabilize/arm-session-confirmation`). A static
   audit along the P0 causal chain — mod visibility, session identity, heartbeat
   freshness, the two-phase arm, terminality, pointer and sequence recovery, one
   action, goals made of several — starting from one found in `pz-agent play`,
   generalising its shape across the sidecar, and then running the same three
   families against the mod, which is where every one of the 2026-08-08 live
-  findings had lived. Thirteen on the sidecar, ten on the mod. Every fix was
+  findings had lived, and finally against the tri-state rule itself. Thirteen on
+  the sidecar, fifteen on the mod. Every fix was
   watched red first; a hypothesis that could not be turned red was reported as a
   hypothesis and left alone.
 
@@ -94,6 +95,41 @@ drift out of sync with `pz_agent_core.version`.
   complete scan of an empty world when it could not read the world at all;
   `survival.rest` promoted a rest to succeeded with no departure reading; and
   `medical.bandage` verified on a dressing the wound was already wearing.
+
+  *An absent reader is not a false answer — five more places.* The sharpest is
+  safety-critical: the zombie scan returned an empty list on three failure paths
+  (`getCell` missing, raising, or answering nil; `getZombieList` missing), all
+  indistinguishable from an empty street, so the danger floor counted zero and
+  answered `DANGER.NONE`. Three deterministic consumers act on that with no model
+  in the loop — the mod's gate, the sidecar's threat abort, and the reflex guard,
+  whose only "nobody could tell" channel is a table the mod always supplies. On
+  any build where `getZombieList` is absent or renamed, an armed AUTONOMOUS agent
+  was cleared to work, reason `POSTCONDITION_MET`, on a scan that never happened
+  — the README's threat-interruption guarantee, on a count nobody took. The
+  schema requires `danger_level` and has no absent form, so the floor now answers
+  HIGH when the zombies could not be read (the lowest rung reaching both block
+  thresholds: it starts nothing and interrupts a vulnerable long action without
+  claiming an emergency nobody saw), with a `zombies_unknown` counter beside it
+  so the HIGH cannot be mistaken for a measurement.
+
+  Four more, one layer down, all from the same shared snapshot helper publishing
+  an inventory nobody could walk as an empty one: `inventory.search` answered
+  "you carry no bandage" about a character nobody read; `consume.eat`/`drink`
+  read an item's absence from an unreadable inventory as it having been eaten;
+  `equipment.unequip` read a double absence across a worn set and a hand that had
+  stopped answering as a garment taken off; and `snapshotBody` flattened
+  `bleeding` to false while `medical.bandage`'s whole postcondition is
+  `bleeding == false` — the exact ack that file's own header says it exists to
+  prevent. Each ends in the same place: the mod mints `verified` from any
+  succeeded ack carrying evidence, so a verify concluding from a flattened
+  absence promotes the capability in the very document the sidecar gates its
+  write tools on.
+
+  Two flattenings were examined and deliberately left: `player.alive` is false
+  for both a corpse and a build without `isDead`, but every consumer refuses or
+  stops on it and none acts, so the cost is a wrong sentence rather than a wrong
+  action; `player.moodles` flattens an absent reader into "no moodles", whose
+  only consumers propose *less*. Editing for either would have fixed nothing.
 
   Recorded and deliberately **not** fixed, a third door onto the same silence:
   the mission-cap eviction path marks a drive abandoned and banks its report

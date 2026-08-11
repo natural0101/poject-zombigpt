@@ -269,6 +269,21 @@ session the evidence belongs to.
   publishes under the live session. If it does not clear, the mod is not
   publishing: see `PZD006`.
 
+## "THREAT_INTERRUPTED" with no zombie in sight
+
+The agent refuses mutating work and names a threat you cannot see. Before
+assuming it is wrong, check whether it can see either: on a build where the
+zombie list cannot be read at all, the mod publishes no count and the danger
+floor answers HIGH rather than "clear". `pz-agent status` shows the reading, and
+the observation carries an `observe.zombies_unknown` marker beside it.
+
+That is the honest answer, not a bug. An empty list from a scan that never ran
+is indistinguishable from an empty street, and the deterministic guard acts on
+that level with no model in the loop — reporting calm there would mean the agent
+works blind next to whatever is actually in the room. If the marker is present,
+the fix is the build's own API, not the agent: report it with the build number,
+because a renamed or absent `getZombieList` is a compatibility finding.
+
 ## "The goal stopped without saying anything"
 
 It should not, and if you see it the report is worth filing. Every goal ends by
