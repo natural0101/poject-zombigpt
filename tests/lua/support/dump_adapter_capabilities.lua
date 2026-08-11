@@ -40,6 +40,7 @@ Support.loadModules("", {
   "Sleep",
   "Combat",
   "Crafting",
+  "Building",
 })
 
 local document = {}

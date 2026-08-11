@@ -52,6 +52,8 @@ IMPLEMENTED = {
     ActionName.COMBAT_RETREAT,
     ActionName.CRAFTING_INSPECT,
     ActionName.CRAFTING_CRAFT,
+    ActionName.BUILDING_INSPECT,
+    ActionName.BUILDING_BUILD,
 }
 
 #: The four assisted-combat actions: the protocol's top tier, every one, and
@@ -138,10 +140,13 @@ def test_every_combat_action_is_p4_behind_the_combat_assist_capability() -> None
         assert adapter.risk is RiskClass.P4, action
         assert adapter.required_capability == "combat_assist", action
         assert adapter.required_capability != "autonomous_attack", action
-    # And nothing outside sleep and combat sits at P4: the tier is a short,
-    # reviewed list, not a habit.
+    # And nothing outside sleep, combat and the build sits at P4: the tier is a
+    # short, reviewed list, not a habit. ``building.build`` is the third entry
+    # and the only one declared P4 *flat*, with no lower tier to escalate from
+    # — sleep and the combat four are P4 because of what they risk, and a
+    # placement is P4 because nothing in this project can take it back.
     p4 = {a for a in registry.names() if registry.get(a).risk is RiskClass.P4}
-    assert p4 == COMBAT_ACTIONS | {ActionName.SURVIVAL_SLEEP}
+    assert p4 == COMBAT_ACTIONS | {ActionName.SURVIVAL_SLEEP, ActionName.BUILDING_BUILD}
 
 
 def test_every_adapter_bounds_its_own_polling() -> None:

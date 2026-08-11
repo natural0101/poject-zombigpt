@@ -23,17 +23,19 @@ cancel, so a panic stop cannot reach them.
 The action gate was never open — the mod enforces by required symbols and the
 sidecar enforces by the ledger — so this cost no command. What it cost was the
 mod's capability document, which named six capabilities where the system knows
-twelve, so five of them were simply absent from the report a person consults
+sixteen, so five of them were simply absent from the report a person consults
 when something is refused. And it cost five comments telling the next reader a
 falsehood about the code beside them.
 
-Three actions declare no capability on either side, and that is correct:
-``world.inspect``, ``container.inspect`` and ``inventory.search`` only read, and
-everything they read is reached through Java accessors that never appear in the
-game's Lua. A probe over those names would report ``unsupported`` on a perfectly
-healthy install, so they gate on the observation tier they need instead. This
-file asserts that exemption is exactly three, by name, so a fourth cannot join
-it quietly.
+Five actions declare no capability on either side, and that is correct:
+``world.inspect``, ``container.inspect``, ``inventory.search``,
+``crafting.inspect`` and ``building.inspect`` only read, and everything they
+read is reached through Java accessors that never appear in the game's Lua. A
+probe over those names would report ``unsupported`` on a perfectly healthy
+install, so they gate on the observation tier they need instead. This file
+asserts that exemption is exactly those five, by name, so a sixth cannot join
+it quietly — the list grew twice in one day, and both times the justification
+had to be written into :data:`NO_PROBE_BY_DESIGN` beside the entry.
 """
 
 from __future__ import annotations
@@ -72,6 +74,12 @@ NO_PROBE_BY_DESIGN: Final = frozenset(
         ActionName.CONTAINER_INSPECT,
         ActionName.INVENTORY_SEARCH,
         ActionName.CRAFTING_INSPECT,
+        # ``building.inspect`` is the fifth, and it earns the same footing: it
+        # lists blueprints and reads one square, constructs nothing and queues
+        # nothing. Its sibling ``building.build`` is the opposite extreme —
+        # behind the ``building`` probe, withheld on every install — so the two
+        # halves of this wave sit at opposite ends of this file's argument.
+        ActionName.BUILDING_INSPECT,
     }
 )
 
@@ -145,7 +153,7 @@ def test_every_capability_either_side_names_is_a_probe_that_exists(
     assert named <= declared, f"named but not declared by any probe: {sorted(named - declared)}"
 
 
-def test_an_action_without_a_capability_is_one_of_the_three_that_should_have_none(
+def test_an_action_without_a_capability_is_one_of_the_few_that_should_have_none(
     lua_capabilities: dict[str, str | None], python_capabilities: dict[str, str | None]
 ) -> None:
     """The exemption is a closed list, not a habit.

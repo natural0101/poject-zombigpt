@@ -12,6 +12,61 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Added
 
+- **The character can build, and the check that matters is the one that refuses**
+  (`epic/p5-crafting-building`, wave 2). Two actions: `building.inspect`,
+  read-only and published on every install because it is what a user consults
+  *before* granting the authority, and `building.build`, **P4 flat** — no
+  escalation ladder, because there is no tier above it and no case where placing
+  a permanent object is less than the top one. P4 has no autonomous path in any
+  mode, so no arbiter, planner or initiative table can ever raise a wall; a test
+  pins all three routes shut. There is **no demolition action**, deliberately:
+  removing what somebody put there is a different authority and this build does
+  not have it, which is exactly why the placement is refused so carefully.
+  Refusals are typed and land before anything is queued — `SQUARE_OCCUPIED`
+  naming what stands in the way (the agent never clears a square),
+  `RECIPE_MATERIALS_MISSING` naming each shortfall, and **`WOULD_TRAP_PLAYER`**,
+  the reason this wave exists: a bounded flood fill over the observed window,
+  with the proposed structure treated as impassable, refuses any placement that
+  removes the last route from the character's square to open ground. The bound
+  is stated rather than hidden — the check cannot prove the character is not
+  already enclosed by something beyond the window; it proves this placement does
+  not remove the last exit it can see — and an unreadable map is a **refusal**,
+  not a pass, because that is the case where a trapping wall is most likely.
+  `build_structure` (16th kind) runs at most one attempt: a failed craft can be
+  re-run because its materials are still countable, a failed build may or may
+  not have placed something, so a second command would be a second irreversible
+  attempt on the agent's own initiative. It reports `ENDED_UNCONFIRMED` instead.
+- **The mod now describes the ground.** A bounded 7×7 window of squares is
+  published in the vocabulary the sidecar already read (`loaded`/`blocked`/
+  `drop`, plus a new `occupied`), which nothing had ever emitted. Every semantic
+  is a positive reading: a fact no reader would answer produces no token at all,
+  so "we could not tell" can never pass for "there is a way out".
+- **A live route for both new capabilities.** `S21_CRAFT` and `S22_BUILD` join
+  the playbook (22 scenarios), and S22 makes the `WOULD_TRAP_PLAYER` refusal an
+  explicit operator step: ask for the wall that would seal the character in and
+  confirm the refusal *before* asking for one that would not.
+
+### Fixed
+
+- **`craft_item` was unreachable through `pz_goal_submit` from the wave that
+  shipped it.** The MCP router never read `product` or `count` out of the
+  validated arguments, so every craft goal submitted through the tool was
+  refused as missing the product the caller had supplied. Both are read and
+  echoed now, pinned by tests on the typed request the channel receives.
+
+### Documented
+
+- **An `experimental` capability cannot be promoted by a live run** — and this
+  had never been written down. `CapabilityReport.usable()` is false for
+  `experimental`, the action engine refuses an unusable capability before
+  sending anything, and `safety.disabled_capabilities` only subtracts; so the
+  very run that would confirm `building`, `crafting`, `combat_assist`,
+  `survival_sleep` or `drink_world_source` cannot be issued. The playbook,
+  `COMPATIBILITY.md`, `LIMITATIONS.md` and `GAME_API_VERIFICATION.md` now say
+  so, and the two new scenarios are shaped around it: reading halves run
+  anywhere, write halves record `BLOCKED` with the reason rather than an
+  invented PASS.
+
 - **The character can make things** (`epic/p5-crafting-building`, wave 1 —
   crafting only; placing structures is a later wave and nothing here claims
   it). Two protocol actions: `crafting.inspect`, read-only on both sides

@@ -14,7 +14,7 @@ running game — see [`PROGRESS.md`](PROGRESS.md).
 **1. Live game validation has never run.** Not once. No probe in
 `pz_agent_core.capabilities` has ever been confirmed against a running Project
 Zomboid; every row in `docs/GAME_API_VERIFICATION.md` is `requires_live` with an
-empty "Actual" column, 159 symbol rows in total; all twenty scenarios in
+empty "Actual" column, 168 symbol rows in total; all twenty-two scenarios in
 `pz_agent_cli.livetest` are `NOT_RUN`; the sixteen files under
 `tests/game-smoke/` have never been executed against a game. That includes
 `ISTakeWaterAction`, whose argument order the document flags as unconfirmed and
@@ -101,10 +101,21 @@ vehicle's storage can be named as a container, and `survival.sleep` takes an
 **Anything requiring an unverified capability.** `_capability_gate` refuses, and
 on the agent's own initiative even `available_unverified` is not enough.
 
-**Build anything.** No action places a wall, a floor, a stair or a barricade,
-and no goal kind asks for one. The crafting rung this build ships makes *items*
-from materials on the character and nothing else; placing structures is not
-started, not stubbed and not published.
+**Build on the agent's own initiative — or take anything down at all.** This
+build *can* place a structure: `building.build`, one blueprint on one observed
+square, one command. Two limitations come with it and neither is a formality.
+It is `P4` and the tier never moves, and `_p4_gate` has no autonomous path at
+all, so a wall is raised on your own initiative with an explicit grant per call
+and never on the agent's — no arbiter, no initiative table and no plan provider
+can mint a `build_structure` goal. And **nothing in this project removes a
+structure**: there is no demolition action in the protocol, in the adapters or
+in the mod, because taking down what somebody put there is a different authority
+this build does not have. A placement is the one thing the agent does that
+neither it nor a later observation can walk back, which is why the building
+policy refuses an occupied square, a placement that would take away the last way
+out the observation can see, and a map it could not read — all before anything
+is queued. `pz_action_build` is also withheld on every install this project can
+ship to; see *Not published, and why* below.
 
 **Craft on the agent's own initiative.** `crafting.craft` is `P3` because it
 destroys what it spends, and `P4` whenever the recipe may need a surface or
@@ -271,13 +282,35 @@ Only a live run — the recipe's product observed in the inventory afterwards �
 promotes the capability. `pz_action_inspect_recipe` is deliberately *not*
 withheld with it, because reading a recipe spends nothing.
 
-**`world.inspect`, `container.inspect`, `inventory.search` and
-`crafting.inspect` carry no capability evidence at all.** They gate on the
+**`pz_action_build` is absent from `list_tools` on every install this project
+can ship to, and `pz_action_inspect_buildable` is not.** That split is the whole
+shape of the building rung on a clean install: the reading is published, the
+placement is not. `building` is `experimental` for the crafting capability's two
+reasons — Build 42 rewrote construction, so every blueprint accessor the mod
+names is an unconfirmed guess probed through a closed candidate list — plus one
+that has no counterpart anywhere else here: a placement that goes wrong has put
+an object into the world and nothing in this project takes it out again. Only a
+live run, with the structure observed standing on the square, promotes it. The
+reading is not withheld with it because it is what a user consults *before*
+granting the P4, and taking it away would make that decision less informed
+rather than safer.
+
+**An experimental capability cannot be promoted from a running session.** It is
+not usable, the action engine refuses an unusable capability before it sends
+anything, and `safety.disabled_capabilities` only ever subtracts — so the live
+run that would confirm `survival_sleep`, `drink_world_source`, `combat_assist`,
+`crafting` or `building` cannot itself be issued on a stock install. Promotion
+is a deliberate change to this project, not an operator step, and
+`docs/LIVE_TEST_PLAYBOOK.md` says so where it bites: S21 and S22 reach their
+reading halves on any install and their write halves on none.
+
+**`world.inspect`, `container.inspect`, `inventory.search`, `crafting.inspect`
+and `building.inspect` carry no capability evidence at all.** They gate on the
 observation tier they read rather than on a probe, because everything they read
 is reached through Java accessors that never appear in the game's Lua — a probe
 over those names would report `unsupported` on a perfectly healthy install. So
-"the scan says nothing about these four" is by design, and it does mean they are
-the four actions whose availability rests on no runtime evidence.
+"the scan says nothing about these five" is by design, and it does mean they are
+the five actions whose availability rests on no runtime evidence.
 
 **`allow_windows` is not published.** The movement adapter refuses it with
 `POLICY_DENIED`, so offering it would advertise something policy forbids.
@@ -295,12 +328,13 @@ runs the mod's own observation builder and puts its bytes through the schema and
 the dataclasses.
 
 It does **not** prove that `ISInventoryTransferAction`, `ISEatFoodAction`,
-`ISReadABook` or `ISCraftRecipeAction` behave as expected in Build 42.20. Only a
-live session does that. The crafting readers are the sharpest case: a mocked
-`getKnownRecipes` answers because the mock was written to answer, and whether
-Build 42 spells it that way at all is exactly the open question.
+`ISReadABook`, `ISCraftRecipeAction` or `ISBuildAction` behave as expected in
+Build 42.20. Only a live session does that. The crafting and building readers
+are the sharpest case: a mocked `getKnownRecipes` answers because the mock was
+written to answer, and whether Build 42 spells it that way at all — or spells a
+blueprint lookup `getBuildRecipe` — is exactly the open question.
 
-Two catalogues track those runs — `pz_agent_cli.livetest` (20 scenarios, which
+Two catalogues track those runs — `pz_agent_cli.livetest` (22 scenarios, which
 the release gate enforces) and `tests/game-smoke/` (15 plus an endurance run,
 judged by a reviewer) — and their numbering collides, so a scenario id is
 ambiguous unless the catalogue is named with it. See `docs/RELEASE.md`.

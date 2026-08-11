@@ -104,6 +104,17 @@ COMBAT_ASSIST: Final = "combat_assist"
 # a probe that could report ``unsupported`` on a healthy install.
 CRAFTING: Final = "crafting"
 
+# One capability for the building rung, and only ``building.build`` rides it.
+# ``building.inspect`` reads the building readout and the square descriptions
+# the observer already produces, so it gates on those tiers like the other four
+# reads — and ``adapters/Building.lua`` declares ``capability = nil`` for the
+# same action, which is an agreement the two halves of the wire owe each other.
+# What that means on a clean install, said plainly: the reading is published and
+# the placement is not. This probe resolves ``experimental``, an experimental
+# capability is not usable, and the action that puts something permanent in the
+# world stays withheld until a live run promotes it.
+BUILDING: Final = "building"
+
 
 @dataclass(frozen=True, slots=True)
 class RuntimeConfirmation:
@@ -401,6 +412,45 @@ PROBES: Final[tuple[ProbeDefinition, ...]] = (
         static_state=CapabilityState.EXPERIMENTAL,
         static_reason=REASON_EXPERIMENTAL_API,
         description="craft one known recipe once, from materials the character is observed to hold",
+    ),
+    ProbeDefinition(
+        capability=BUILDING,
+        # The walk/queue set, on the door, combat and crafting precedent and
+        # for exactly their reason: what a placement is actually built from —
+        # the buildable definitions, the "does this character know it" test and
+        # the entry point that puts an object on a square — lives behind Java
+        # accessors and build-specific tables no Lua scan can resolve, so
+        # naming them here would report ``unsupported`` on a perfectly healthy
+        # install. The walk is real and scannable, because a structure is
+        # raised from a square the character has to be standing next to, and
+        # the queue is what every branch of the action puts its timed action
+        # on. The mod re-probes the real entry point per command and refuses
+        # naming the symbol when a build lacks one.
+        required_symbols=(
+            "ISWalkToTimedAction",
+            "ISWalkToTimedAction.new",
+            "ISTimedActionQueue.add",
+        ),
+        confirmation=RuntimeConfirmation(
+            # The build confirms the capability; the inspect could not, since
+            # it answers from the observation and proves nothing about whether
+            # a structure can be *raised*. The two keys are the ones
+            # ``BuildingBuildAdapter.verify`` puts in its evidence, and the
+            # two the mod's own ack carries flat beside them — the blueprint
+            # that was raised and the square it was observed on.
+            action=ActionName.BUILDING_BUILD,
+            evidence_keys=("blueprint", "square"),
+            description="the structure was observed standing on the square after the build",
+        ),
+        # Experimental until a live build confirms it, and this is the one
+        # capability where that word is doing its full work. A craft that goes
+        # wrong has spent the materials by the time anyone finds out; a build
+        # that goes wrong has put an object in the world that nothing in this
+        # project can take out again. Both tools stay withheld on every install
+        # until a real run promotes this.
+        static_state=CapabilityState.EXPERIMENTAL,
+        static_reason=REASON_EXPERIMENTAL_API,
+        description="place one permanent structure on one observed, unoccupied square",
     ),
     ProbeDefinition(
         capability=AUTONOMOUS_ATTACK,

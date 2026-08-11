@@ -148,6 +148,22 @@ _FLUID_FIELDS: Final = ("kind", "amount", "capacity", "tainted", "potable", "use
 #: all, which is what a goal needs; it never gets the table to pick from.
 _CRAFTING_FIELDS: Final = ("recipe_count", "known_recipe_count")
 
+#: The building readout, reduced the same way and for a stronger version of the
+#: same reason. A planner may know that the character carries something a
+#: structure can be built from; it never gets the list to pick from, because
+#: which structure stands on which square is
+#: :mod:`pz_agent_core.policy.building`'s deterministic answer and it is the
+#: answer that decides whether a wall would seal the character into a room
+#: nothing in this project can let them back out of. Two counts are enough for
+#: a goal; the third field is the honest zero — ``blocking_structure_count``
+#: lets the planner see that what is buildable here is all wall and no doorway
+#: without ever naming one.
+_BUILDING_FIELDS: Final = (
+    "structure_count",
+    "known_structure_count",
+    "blocking_structure_count",
+)
+
 #: In-game free text carried per item, quarantined rather than dropped.
 _ITEM_TEXT_FIELDS: Final = ("title", "author")
 
@@ -389,12 +405,14 @@ def _compact_item(item: ItemView) -> JsonDict:
     the wire beyond the known keys, which is precisely where an engine handle or
     an unreviewed string would show up.
 
-    The crafting readout is the one thing read *out* of it, and only through the
-    same whitelist the typed domains go through: ``ItemView`` has no ``crafting``
-    field to type it into yet, so the block rides ``extra`` on the wire, and
-    :data:`_CRAFTING_FIELDS` names the two scalars that reach the planner. The
-    nested recipe list is dropped by :func:`_scalar` like any other non-scalar,
-    which is the intended outcome rather than a side effect.
+    The crafting and building readouts are the two things read *out* of it, and
+    only through the same whitelist the typed domains go through: ``ItemView``
+    has no ``crafting`` or ``building`` field to type them into yet, so both
+    blocks ride ``extra`` on the wire, and :data:`_CRAFTING_FIELDS` and
+    :data:`_BUILDING_FIELDS` name the handful of scalars that reach the planner.
+    The nested recipe and structure lists are dropped by :func:`_scalar` like
+    any other non-scalar, which is the intended outcome rather than a side
+    effect.
     """
     literature = item.literature or {}
     text: dict[str, str | None] = {"display_name": item.display_name}
@@ -414,11 +432,13 @@ def _compact_item(item: ItemView) -> JsonDict:
         UNTRUSTED_TEXT_KEY: _untrusted(text),
     }
     crafting = item.extra.get("crafting")
+    building = item.extra.get("building")
     for key, payload, fields in (
         ("food", item.food, _FOOD_FIELDS),
         ("literature", item.literature, _LITERATURE_FIELDS),
         ("fluid", item.fluid, _FLUID_FIELDS),
         ("crafting", crafting if isinstance(crafting, Mapping) else None, _CRAFTING_FIELDS),
+        ("building", building if isinstance(building, Mapping) else None, _BUILDING_FIELDS),
     ):
         domain = _domain(payload, fields)
         if domain is not None:

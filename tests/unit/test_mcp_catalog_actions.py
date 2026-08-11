@@ -32,6 +32,10 @@ import pytest
 
 from pz_agent_core.actions import AdapterRegistry, PreconditionFailed, register_builtins
 from pz_agent_core.actions.adapters import register_game_adapters
+from pz_agent_core.actions.adapters.building import (
+    MAX_BLUEPRINT_NAME_LEN,
+    MAX_LISTED_STRUCTURES,
+)
 from pz_agent_core.actions.adapters.container import (
     DEFAULT_OPEN_RADIUS,
     MAX_LISTED_ITEMS,
@@ -57,7 +61,12 @@ from pz_agent_core.actions.adapters.survival import (
     MIN_WAIT_MS,
 )
 from pz_agent_core.actions.adapters.world import MAX_INSPECT_RADIUS
-from pz_agent_core.capabilities.probes import COMBAT_ASSIST, CRAFTING, SURVIVAL_SLEEP
+from pz_agent_core.capabilities.probes import (
+    BUILDING,
+    COMBAT_ASSIST,
+    CRAFTING,
+    SURVIVAL_SLEEP,
+)
 from pz_agent_core.protocol import READ_ONLY_ACTIONS, ActionName, ReasonCode, RiskClass
 from pz_agent_mcp.catalog import (
     EXAMPLE_SESSION_ID,
@@ -77,7 +86,7 @@ from tests.fixtures.mcp_doubles import make_report
 #: The tools this file was written for: everything that submits an action.
 ACTION_TOOLS: Final[tuple[ToolSpec, ...]] = tuple(spec for spec in TOOLS if spec.action is not None)
 
-#: The four that only look. Written out rather than derived from the catalogue,
+#: The five that only look. Written out rather than derived from the catalogue,
 #: because deriving them from the field under test would make the check agree
 #: with itself.
 QUERY_TOOLS: Final[frozenset[str]] = frozenset(
@@ -90,6 +99,14 @@ QUERY_TOOLS: Final[frozenset[str]] = frozenset(
         # nothing and moves nobody, and what it needs is an observation
         # tier rather than a probe a healthy install would fail.
         "pz_action_inspect_recipe",
+        # The fifth, added by the building rung on the same argument and with
+        # the sharpest reason to be free: it is the reading a user consults
+        # *before* granting the P4 that puts something permanent on a square,
+        # so withholding it would make that decision less informed rather than
+        # more. The mod agrees — `adapters/Building.lua` declares
+        # `capability = nil` for `building.inspect` — and the two halves of the
+        # wire have to name the same capability.
+        "pz_action_inspect_buildable",
     }
 )
 
@@ -246,6 +263,18 @@ OVER_THE_LINE: Final[tuple[tuple[str, dict[str, Any]], ...]] = (
     ("pz_action_craft", {"recipe": "Make Spear"}),
     ("pz_action_craft", {"count": MAX_CRAFT_COUNT + 1}),
     ("pz_action_craft", {"count": 0}),
+    # The building pair. A blueprint name is an identifier like a recipe's, and
+    # a value carrying a space dies here rather than travelling to the mod —
+    # which would refuse it anyway, since `Building.blueprintToken` folds a
+    # space into an underscore before it will accept one at all. The reading's
+    # listing bound is the mod's own `Building.MAX_LISTED`. There is no count
+    # on the build to overshoot, and that absence is the point: one command
+    # raises one structure once, and a number here is what a loop would read.
+    ("pz_action_inspect_buildable", {"limit": MAX_LISTED_STRUCTURES + 1}),
+    ("pz_action_inspect_buildable", {"square": "container:not-a-square"}),
+    ("pz_action_build", {"blueprint": "Wooden Wall"}),
+    ("pz_action_build", {"blueprint": "x" * (MAX_BLUEPRINT_NAME_LEN + 1)}),
+    ("pz_action_build", {"square": "object:not-a-square"}),
 )
 
 
@@ -422,8 +451,12 @@ def test_sleep_is_withheld_on_a_build_where_its_capability_is_only_experimental(
 
 #: The whole P4 tier, written out. Sleep was the only member until the assisted
 #: combat wave; the four combat tools joined it because an attack is the top of
-#: the protocol's risk ladder however it is gated. A fifth name appearing here
-#: has to be a deliberate edit, argued in review, never an inheritance.
+#: the protocol's risk ladder however it is gated. The build joined them one
+#: wave later, and it is the only member whose tier never moves: sleep and the
+#: combat four are P4 by their adapters' declaration too, but the build has no
+#: `risk_for` at all — there is no argument that makes putting a permanent
+#: object in the world cheaper. A seventh name appearing here has to be a
+#: deliberate edit, argued in review, never an inheritance.
 P4_TOOLS: Final[frozenset[str]] = frozenset(
     {
         "pz_action_sleep",
@@ -431,11 +464,12 @@ P4_TOOLS: Final[frozenset[str]] = frozenset(
         "pz_action_shove",
         "pz_action_engage",
         "pz_action_retreat",
+        "pz_action_build",
     }
 )
 
 
-def test_the_p4_tier_is_sleep_plus_the_four_combat_tools() -> None:
+def test_the_p4_tier_is_sleep_the_four_combat_tools_and_the_build() -> None:
     p4 = {spec.name for spec in TOOLS if spec.risk is RiskClass.P4}
     summary = TOOLS_BY_NAME["pz_action_sleep"].summary.lower()
 
@@ -530,6 +564,79 @@ def test_the_craft_publishes_its_adapters_base_tier_and_says_where_p4_comes_from
     assert "no station and no container to name" in summary
     arguments = set(spec.input_schema["properties"]) - ENVELOPE
     assert arguments == {"recipe", "count"}
+
+
+def test_the_build_tool_is_withheld_until_a_live_build_confirms_the_capability() -> None:
+    """``building`` resolves to experimental on a clean scan, like ``crafting``.
+
+    The same probe argument, with the consequence one rung worse. A craft that
+    goes wrong has spent the materials by the time anyone finds out; a build
+    that goes wrong has put an object in the world that nothing in this project
+    can take out again. The reading half is deliberately not withheld with it —
+    it is what a user reads before granting the placement — so on a clean
+    install this rung offers exactly one of its two tools, and this test says
+    which.
+    """
+    report = make_report(experimental=[BUILDING])
+
+    published = {spec.name for spec in published_tools(report)}
+    assert "pz_action_build" not in published
+    assert withheld_tools(report)["pz_action_build"] == "EXPERIMENTAL_API"
+    assert "pz_action_inspect_buildable" in published
+    assert "pz_action_inspect_buildable" not in withheld_tools(report)
+
+
+def test_the_build_publishes_a_flat_p4_and_says_what_it_cannot_undo() -> None:
+    """P4 always, and no argument that makes it anything else.
+
+    The crafting tool's own test pins the *opposite* property — a base tier
+    with a documented per-call escalation — so this one is written to be read
+    beside it. What a caller must not be able to infer here is a cheaper case:
+    there is none, the adapter declares the tier as a constant with no
+    ``risk_for``, and the summary has to carry the two facts that follow from
+    that. It is never taken on the agent's own initiative (P4 has no
+    autonomous path in this codebase at all), and nothing in this build takes a
+    structure back down. The argument set is the third pin: a ``count`` here is
+    exactly what a loop in the mod would read.
+    """
+    spec = TOOLS_BY_NAME["pz_action_build"]
+    summary = spec.summary.lower()
+
+    assert spec.kind is ToolKind.WRITE
+    assert spec.requires_armed is True
+    assert spec.risk is RiskClass.P4
+    assert spec.required_capability == BUILDING
+    assert "p4 always" in summary
+    assert "no demolition action in this build" in summary
+    assert "would_trap_player" in summary
+    assert "square_occupied" in summary
+    # The bounded-window honesty, in the summary rather than only in the policy
+    # module: the check reads what the observation shows and says so.
+    assert "bounded window" in summary
+    arguments = set(spec.input_schema["properties"]) - ENVELOPE
+    assert arguments == {"blueprint", "square"}
+
+
+def test_the_buildable_reading_answers_the_refusals_before_the_grant() -> None:
+    """The reading exists to make the P4 decision an informed one.
+
+    A caller who cannot see SQUARE_OCCUPIED and WOULD_TRAP_PLAYER coming finds
+    out by having a placement refused — which is safe but wasteful — or, worse,
+    grants a placement believing it was the safe one. So the reading names both
+    refusals and names the square as a required argument: a catalogue with no
+    ground under it cannot answer either.
+    """
+    spec = TOOLS_BY_NAME["pz_action_inspect_buildable"]
+    summary = spec.summary.lower()
+
+    assert spec.kind is ToolKind.QUERY
+    assert spec.requires_armed is False
+    assert spec.risk is RiskClass.P0
+    assert spec.required_capability is None
+    assert "nothing is placed and nothing moves" in summary
+    assert "square_occupied" in summary
+    assert "would_trap_player" in summary
+    assert "square" in spec.input_schema["required"]
 
 
 def test_the_engage_summary_states_the_bounded_window_contract() -> None:

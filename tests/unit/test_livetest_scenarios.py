@@ -48,6 +48,12 @@ EXPECTED_IDS = (
     "S18_PANIC",
     "S19_AUTONOMOUS_30_MIN",
     "S20_AUTONOMOUS_2_HOURS",
+    # The two irreversible rungs, appended rather than slotted in beside the
+    # actions they exercise: a scenario id names a directory in the evidence
+    # tree, so renumbering the twenty would orphan every artefact already
+    # filed under an old name.
+    "S21_CRAFT",
+    "S22_BUILD",
 )
 
 #: Checks that compare against a declared value, and therefore need one.
@@ -55,9 +61,9 @@ _NEEDS_EXPECTED = {Check.EQUALS, Check.AT_LEAST, Check.AT_MOST}
 
 
 class TestCatalogue:
-    def test_exactly_the_twenty_declared_ids_in_run_order(self) -> None:
+    def test_exactly_the_declared_ids_in_run_order(self) -> None:
         assert SCENARIO_IDS == EXPECTED_IDS
-        assert len(SCENARIOS) == 20
+        assert len(SCENARIOS) == 22
 
     def test_every_scenario_is_completely_specified(self) -> None:
         for scenario in SCENARIOS:
@@ -116,8 +122,8 @@ class TestCatalogue:
         document = catalogue()
         round_tripped = json.loads(json.dumps(document))
 
-        assert round_tripped["scenario_count"] == 20
-        assert len(round_tripped["scenarios"]) == 20
+        assert round_tripped["scenario_count"] == 22
+        assert len(round_tripped["scenarios"]) == 22
         assert round_tripped["checks"] == [check.value for check in Check]
         first = round_tripped["scenarios"][0]
         assert first["id"] == "S01_INSTALL"

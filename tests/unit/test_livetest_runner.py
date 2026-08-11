@@ -222,7 +222,7 @@ class TestNotRunNeverBecomesPassWithoutEvidence:
 
     def test_every_scenario_starts_at_not_run(self, store: StateStore) -> None:
         assert summarise(store.read_all(SCENARIO_IDS)) == {
-            "NOT_RUN": 20,
+            "NOT_RUN": len(SCENARIO_IDS),
             "PASS": 0,
             "FAIL": 0,
             "BLOCKED": 0,
@@ -377,7 +377,7 @@ class TestFinalizeRefuses:
                 clock=FakeClock(),
             )
 
-        assert len(caught.value.not_passed) == 20
+        assert len(caught.value.not_passed) == len(SCENARIO_IDS)
         assert all("NOT_RUN" in entry for entry in caught.value.not_passed)
 
     def test_it_names_every_missing_artefact_not_only_the_first(
@@ -961,7 +961,7 @@ def cli(world: CliWorld, root: Path, *argv: str) -> int:
 
 
 class TestCommands:
-    def test_status_lists_all_twenty_as_not_run(self, prepared: tuple[CliWorld, Path]) -> None:
+    def test_status_lists_every_scenario_as_not_run(self, prepared: tuple[CliWorld, Path]) -> None:
         world, root = prepared
 
         exit_code = cli(world, root, "status")
@@ -969,7 +969,7 @@ class TestCommands:
         assert exit_code == EXIT_FAILURE
         for scenario_id in SCENARIO_IDS:
             assert scenario_id in world.stdout
-        assert "NOT_RUN 20" in world.stdout
+        assert f"NOT_RUN {len(SCENARIO_IDS)}" in world.stdout
 
     def test_status_json_reports_the_counts(self, prepared: tuple[CliWorld, Path]) -> None:
         world, root = prepared
@@ -977,8 +977,8 @@ class TestCommands:
         cli(world, root, "--json", "status")
 
         document = json.loads(world.stdout)
-        assert document["counts"]["NOT_RUN"] == 20
-        assert len(document["scenarios"]) == 20
+        assert document["counts"]["NOT_RUN"] == len(SCENARIO_IDS)
+        assert len(document["scenarios"]) == len(SCENARIO_IDS)
 
     def test_a_run_without_observations_records_blocked_and_fails(
         self, prepared: tuple[CliWorld, Path]
@@ -1109,7 +1109,7 @@ class TestCommands:
 
         assert exit_code == EXIT_FAILURE
         assert "refusing to build the evidence manifest" in world.stdout
-        assert world.stdout.count("not passed:") == 20
+        assert world.stdout.count("not passed:") == len(SCENARIO_IDS)
 
     def test_finalize_json_lists_the_three_kinds_of_problem(
         self, prepared: tuple[CliWorld, Path], tmp_path: Path
@@ -1120,7 +1120,7 @@ class TestCommands:
 
         document = json.loads(world.stdout)
         assert document["written"] is False
-        assert len(document["not_passed"]) == 20
+        assert len(document["not_passed"]) == len(SCENARIO_IDS)
         assert document["missing"]
         assert document["tampered"] == []
 
@@ -1225,8 +1225,13 @@ def test_the_run_order_the_batch_files_walk_is_the_declared_order() -> None:
     ordered: Sequence[str] = SCENARIO_IDS
 
     assert ordered[0] == "S01_INSTALL"
-    assert ordered[-1] == "S20_AUTONOMOUS_2_HOURS"
-    assert len(set(ordered)) == 20
+    # The endurance pair used to close the list. The two irreversible rungs
+    # (crafting, building) were appended after them rather than slotted in
+    # beside the actions they exercise, because a scenario id names a
+    # directory in the evidence tree and renumbering would orphan artefacts.
+    assert ordered[-1] == "S22_BUILD"
+    assert "S20_AUTONOMOUS_2_HOURS" in ordered
+    assert len(set(ordered)) == len(ordered)
 
 
 # ---------------------------------------------------------------------------

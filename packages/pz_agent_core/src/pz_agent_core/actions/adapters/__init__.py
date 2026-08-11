@@ -6,13 +6,14 @@ all. Most of what is here needs one, so most adapters in this package name a
 that capability is usable — an adapter that tried anyway would fail halfway
 through, with the world already half-changed and nothing to roll back to.
 
-The exceptions are the four read-only actions and the cancel. What a look, a
-container listing, a search and a recipe reading need is not a Lua class but the
-observation tier they read; :mod:`pz_agent_core.capabilities.probes` resolves Lua
-symbols, and a probe over Java accessors it can never see would report
-``unsupported`` on a healthy install. They gate on the tier instead, which is a
-fact this side can check. ``plan.cancel`` names none for a different reason: a
-stop that a missing scan could refuse is not a stop.
+The exceptions are the five read-only actions and the cancel. What a look, a
+container listing, a search, a recipe reading and a square reading need is not a
+Lua class but the observation tier they read;
+:mod:`pz_agent_core.capabilities.probes` resolves Lua symbols, and a probe over
+Java accessors it can never see would report ``unsupported`` on a healthy
+install. They gate on the tier instead, which is a fact this side can check.
+``plan.cancel`` names none for a different reason: a stop that a missing scan
+could refuse is not a stop.
 
 Each adapter answers exactly one question that cannot be faked: *what observable
 change proves this happened?*
@@ -46,6 +47,8 @@ change proves this happened?*
 ``combat.retreat``             the nearest observed zombie's distance grew
 ``crafting.inspect``           the readout answers for the recipe that was named
 ``crafting.craft``             one more of the recipe's product is in the inventory
+``building.inspect``           the readout and the window answer for that square
+``building.build``             the structure is observed standing on the square
 =============================  =========================================
 
 None of them selects anything. The item, the square, the book, the wound and the
@@ -57,6 +60,7 @@ from __future__ import annotations
 
 from ...protocol import ActionName
 from ..adapter import AdapterRegistry
+from .building import BuildingBuildAdapter, BuildingInspectAdapter
 from .combat import (
     CombatEngageAdapter,
     CombatEquipBestAdapter,
@@ -91,6 +95,8 @@ __all__ = [
     "MOVE_RETRY_POLICY",
     "BandageAdapter",
     "BatchTransferAdapter",
+    "BuildingBuildAdapter",
+    "BuildingInspectAdapter",
     "CombatEngageAdapter",
     "CombatEquipBestAdapter",
     "CombatRetreatAdapter",
@@ -174,6 +180,17 @@ def register_game_adapters(registry: AdapterRegistry) -> AdapterRegistry:
     # therefore never visible from the action name.
     registry.register(CraftingInspectAdapter())
     registry.register(CraftingCraftAdapter())
+    # The building rung. The reading is P0 and gates on the observation tiers
+    # it reads, like the other four reads and like the mod's own declaration;
+    # only the placement rides the ``building`` capability, which starts
+    # experimental and is withheld until a live run promotes it. The build's
+    # tier is P4 and it is flat: there is no ``risk_for`` to escalate through
+    # because there is nothing above P4 and no version of placing a permanent
+    # object that is worth less than the top of the ladder. Nothing in this
+    # wave takes a structure back down, either, which is why the policy behind
+    # these two refuses far more readily than the crafting policy does.
+    registry.register(BuildingInspectAdapter())
+    registry.register(BuildingBuildAdapter())
     # The one deference in the file, and the only registration here that is
     # conditional. ``register_builtins`` publishes an API-free cancel, and a
     # session that has both must keep that one: stopping has to work before

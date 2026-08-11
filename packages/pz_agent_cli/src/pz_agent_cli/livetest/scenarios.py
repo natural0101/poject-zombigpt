@@ -1,4 +1,4 @@
-"""The twenty live scenarios, as data.
+"""The twenty-two live scenarios, as data.
 
 ``docs/LIVE_TEST_PLAYBOOK.md`` is generated from this module, so every field an
 operator needs on a Windows machine with the game open lives here rather than in
@@ -1157,6 +1157,266 @@ SCENARIOS: Final[tuple[LiveScenario, ...]] = (
         measures_latency=True,
         screenshots_required=True,
     ),
+    # The two irreversible rungs, and the two scenarios that were missing
+    # while their code shipped. Both are appended rather than slotted in
+    # beside the actions they exercise: a scenario id names a directory in the
+    # evidence tree, so renumbering the twenty would orphan every artefact
+    # already filed under the old names.
+    #
+    # Both also share one honest obstacle, stated here once and repeated in
+    # each scenario's own required_state because an operator reads one
+    # scenario at a time. `crafting` and `building` both resolve to
+    # `experimental` on a clean scan, an experimental capability is not
+    # usable, and the action engine refuses an unusable capability before it
+    # sends anything — so on a stock install the write half of each rung
+    # cannot be exercised at all, and there is no operator switch that changes
+    # that (`safety.disabled_capabilities` only ever subtracts). Recording
+    # that refusal is the finding; the observations file's `blocked_reason` is
+    # where it goes, and BLOCKED is the honest verdict. A pass invented for a
+    # command nobody could send would be worth less than no run at all.
+    LiveScenario(
+        id="S21_CRAFT",
+        title="Read a recipe, then craft once and observe the product",
+        goal=(
+            "Prove the crafting readers answer on a real Build 42.20 install — they are "
+            "jointly the least certain rows in docs/GAME_API_VERIFICATION.md — and that a "
+            "craft is judged by the product observed afterwards, never by the command "
+            "being accepted."
+        ),
+        world_preparation=(
+            "Take a backup: this is the first scenario whose work cannot be undone.",
+            "Carry the materials for one simple recipe the character already knows, and "
+            "nothing else the same recipe could consume.",
+            "Open the in-game crafting panel and write down what that recipe lists as its "
+            "ingredients and its product; that is what the reading is checked against.",
+        ),
+        required_state=(
+            "Session armed in ASSISTED.",
+            "Read pz://capabilities first and record what 'crafting' says. On a stock "
+            "install it is 'experimental', pz_action_craft is withheld, and the craft "
+            "half of this scenario cannot be sent — record that as blocked_reason and "
+            "stop rather than reporting a pass.",
+            "No zombies in view: a craft interrupted by the reflex guard proves nothing "
+            "about the readers.",
+        ),
+        command="pz-agent live-test run --scenario S21_CRAFT --observations <file>",
+        operator_steps=(
+            "Read one recipe with pz_action_inspect_recipe and compare its ingredient "
+            "list and product against the in-game panel, line by line. A reading that "
+            "answers nothing is the failure this step exists to catch.",
+            "If 'crafting' is usable on this install, run that recipe exactly once and "
+            "watch the inventory: the product should appear and an ingredient should "
+            "fall.",
+            "If it is withheld, record the refusal verbatim in blocked_reason — naming "
+            "the capability and its reason — and do not run anything else.",
+        ),
+        expected_result=(
+            "The recipe reading matches the game's own panel, and the craft — where it "
+            "could be sent at all — ends with the product observed in the inventory and "
+            "an ingredient observed to have fallen. A withheld capability is a BLOCKED "
+            "attempt with the reason recorded, which is a finding about this build and "
+            "not a failure of the code."
+        ),
+        postconditions=(
+            Postcondition(
+                key="recipe_readout_present",
+                statement="the observation carried a crafting readout for the recipe",
+                check=Check.IS_TRUE,
+                field="crafting.readout_present",
+                why=(
+                    "Every crafting reader in the mod is a guess at a Build 42 spelling. "
+                    "An observation carrying no readout at all means none of them "
+                    "answered, which is the first thing this run exists to establish."
+                ),
+            ),
+            Postcondition(
+                key="ingredients_match_panel",
+                statement="the reported ingredients match the in-game crafting panel",
+                check=Check.IS_TRUE,
+                field="crafting.ingredients_match_panel",
+                why=(
+                    "A reader that answers with the wrong list is worse than one that "
+                    "answers nothing: the policy would call a recipe affordable on "
+                    "requirements nobody actually has."
+                ),
+            ),
+            Postcondition(
+                key="capability_state_recorded",
+                statement="pz://capabilities' state for 'crafting' is recorded",
+                check=Check.OBSERVED,
+                field="crafting.capability_state",
+            ),
+            Postcondition(
+                key="product_count_rose",
+                statement="the inventory holds more of the product after than before",
+                check=Check.INCREASED,
+                field="inventory.product_count",
+                why=(
+                    "The only postcondition a craft has. An ack saying the craft "
+                    "finished is a statement about the queue."
+                ),
+            ),
+            Postcondition(
+                key="ingredient_count_fell",
+                statement="an ingredient the recipe consumes is observed to have fallen",
+                check=Check.DECREASED,
+                field="inventory.ingredient_count",
+                why=(
+                    "A product that appeared while nothing was spent did not come out "
+                    "of this recipe, and the mod requires this half too."
+                ),
+            ),
+            Postcondition(
+                key="reason_code",
+                statement="the action result carries POSTCONDITION_MET",
+                check=Check.EQUALS,
+                field="action_result.reason_code",
+                expected="POSTCONDITION_MET",
+            ),
+        ),
+        time_budget_s=600,
+        logs=(*_BASE_LOGS, _EVENTS, _QUEUE),
+        suspect_module=(
+            "policy/crafting.py, actions/adapters/crafting.py, "
+            "PZAgent/adapters/Crafting.lua, Observe.lua (the crafting readout)"
+        ),
+        screenshots_required=True,
+    ),
+    LiveScenario(
+        id="S22_BUILD",
+        title="A wall that would seal the character in is refused; a wall that would not is raised",
+        goal=(
+            "Prove the refusal before the placement. WOULD_TRAP_PLAYER is computed from a "
+            "bounded observed window, and nothing in this build takes a structure back "
+            "down — so the run that matters is the one where the agent is asked for a "
+            "wall it must refuse, and the placement is only worth attempting afterwards."
+        ),
+        world_preparation=(
+            "Take a fresh backup. This is the only scenario whose work stays in the "
+            "world: nothing in this project removes a structure once it stands.",
+            "Stand in a small room, alcove or corridor end with exactly ONE way out, and "
+            "note the coordinates of that one square — that is the trap square.",
+            "Note a second square on open ground with at least two ways out from where "
+            "the character stands; that is the safe square.",
+            "Carry the materials for one simple structure the character knows how to "
+            "build, and open the in-game build menu to write down what it costs.",
+        ),
+        required_state=(
+            "Session armed in ASSISTED.",
+            "Read pz://capabilities first and record what 'building' says. On a stock "
+            "install it is 'experimental', pz_action_build is withheld, and no placement "
+            "can be sent — record that as blocked_reason. The refusal steps below still "
+            "run: pz_action_inspect_buildable is published on every install and reports "
+            "the verdict the build would reach.",
+            "No zombies in view, and the character standing inside the enclosure being "
+            "tested — the check starts from the square the character is on.",
+        ),
+        command="pz-agent live-test run --scenario S22_BUILD --observations <file>",
+        operator_steps=(
+            "Read the TRAP square with pz_action_inspect_buildable and confirm the "
+            "reading refuses the solid blueprint with would_trap_player. Do this FIRST, "
+            "before anything is placed anywhere.",
+            "If 'building' is usable on this install, ask for that wall on the trap "
+            "square as well, and confirm the command is refused with WOULD_TRAP_PLAYER "
+            "and that nothing was queued — walk the character out and back in to check "
+            "the square is still empty.",
+            "Read a square that already holds something — a wall, a crate, a tree — and "
+            "confirm it refuses with square_occupied and names what it found.",
+            "Only then read the SAFE square, confirm it reports the blueprint buildable, "
+            "and — if the capability allows it — raise the structure there once.",
+            "Look at the square in game: the structure must be standing on it. Then stop; "
+            "there is no second placement in this scenario and no way to undo the first.",
+        ),
+        expected_result=(
+            "The trap square is refused with WOULD_TRAP_PLAYER and nothing is queued for "
+            "it; an occupied square is refused with SQUARE_OCCUPIED naming the blocker; "
+            "the safe square reads buildable and, where the capability allows a "
+            "placement at all, the structure is observed standing on it afterwards. A "
+            "withheld capability makes the placement half BLOCKED with the reason "
+            "recorded — the two refusals are still observed and still reported."
+        ),
+        postconditions=(
+            Postcondition(
+                key="trap_refusal_fired",
+                statement="the trap square is refused with would_trap_player",
+                check=Check.EQUALS,
+                field="building.trap_square_refusal",
+                expected="would_trap_player",
+                why=(
+                    "The heart of this rung. A wall the agent raises cannot be taken "
+                    "down by the agent, so a wall that seals the character in is a "
+                    "mistake with no undo — and the check has to fire from the live "
+                    "map, not only from a fixture."
+                ),
+            ),
+            Postcondition(
+                key="nothing_queued_for_the_trap_square",
+                statement="the trap square is still empty after the refusal",
+                check=Check.IS_TRUE,
+                field="building.trap_square_still_empty",
+                why=(
+                    "A refusal that still queued the work would be the worst outcome "
+                    "this scenario can produce: the answer says no and the wall goes up."
+                ),
+            ),
+            Postcondition(
+                key="occupied_refusal_fired",
+                statement="an occupied square is refused with square_occupied",
+                check=Check.EQUALS,
+                field="building.occupied_square_refusal",
+                expected="square_occupied",
+                why="The agent never clears a square to make room for its own placement.",
+            ),
+            Postcondition(
+                key="safe_square_reads_buildable",
+                statement="the safe square reports the blueprint as buildable",
+                check=Check.IS_TRUE,
+                field="building.safe_square_buildable",
+                why=(
+                    "Without this the two refusals prove only that the reading refuses "
+                    "everything, which would be a check that cannot tell a wall from a "
+                    "doorway."
+                ),
+            ),
+            Postcondition(
+                key="capability_state_recorded",
+                statement="pz://capabilities' state for 'building' is recorded",
+                check=Check.OBSERVED,
+                field="building.capability_state",
+            ),
+            Postcondition(
+                key="structure_observed_on_the_square",
+                statement="the structure is observed standing on the safe square afterwards",
+                check=Check.IS_TRUE,
+                field="building.structure_observed_after",
+                why=(
+                    "The only postcondition a build has. A queued build is not a wall, "
+                    "and an ack that says the action finished is a statement about the "
+                    "queue."
+                ),
+            ),
+            Postcondition(
+                key="square_objects_grew",
+                statement="the safe square carries more objects after than before",
+                check=Check.INCREASED,
+                field="building.safe_square_objects",
+            ),
+            Postcondition(
+                key="reason_code",
+                statement="the action result carries POSTCONDITION_MET",
+                check=Check.EQUALS,
+                field="action_result.reason_code",
+                expected="POSTCONDITION_MET",
+            ),
+        ),
+        time_budget_s=900,
+        logs=(*_BASE_LOGS, _EVENTS, _QUEUE),
+        suspect_module=(
+            "policy/building.py (enclosure_after), actions/adapters/building.py, "
+            "PZAgent/adapters/Building.lua"
+        ),
+        screenshots_required=True,
+    ),
 )
 
 #: Run order. The scenarios build on each other — S02 assumes S01's mod is
@@ -1167,7 +1427,7 @@ _BY_ID: Final[Mapping[str, LiveScenario]] = {scenario.id: scenario for scenario 
 
 
 class UnknownScenarioError(LookupError):
-    """A scenario id that is not one of the twenty."""
+    """A scenario id that is not one of the twenty-two."""
 
 
 def by_id(scenario_id: str) -> LiveScenario:
@@ -1181,7 +1441,7 @@ def by_id(scenario_id: str) -> LiveScenario:
     scenario = _BY_ID.get(scenario_id)
     if scenario is None:
         raise UnknownScenarioError(
-            f"unknown scenario {scenario_id!r}; the twenty are: {', '.join(SCENARIO_IDS)}"
+            f"unknown scenario {scenario_id!r}; the twenty-two are: {', '.join(SCENARIO_IDS)}"
         )
     return scenario
 
@@ -1189,7 +1449,7 @@ def by_id(scenario_id: str) -> LiveScenario:
 def resolve(tokens: Any) -> tuple[LiveScenario, ...]:
     """Resolve a sequence of ids to scenarios, in run order.
 
-    Passing ``None`` selects all twenty. Ids are matched exactly: the operator
+    Passing ``None`` selects all twenty-two. Ids are matched exactly: the operator
     copies them from ``status`` output, and a fuzzy match that quietly ran a
     neighbouring scenario would put the wrong evidence in the wrong directory.
     """

@@ -713,7 +713,238 @@ do
     player = Observe.playerFields(furnishedPlayer()),
     nearby = Observe.nearbyFields(furnishedPlayer(), position),
   })
-  equal(#document.nearby.objects, Model.MAX_OBJECTS, "and the document is still filled to its cap")
+  -- The two populations in `nearby.objects` are capped separately, and this is
+  -- the scene that proves it: a warehouse floor full of shelves must not be
+  -- what costs the build policy its map of the squares, and the map must not
+  -- be what costs the planner its shelves.
+  local emitted = document.nearby.objects
+  local shelves, described = 0, 0
+  for index = 1, #emitted do
+    if emitted[index].kind == Model.SQUARE_KIND then
+      described = described + 1
+    else
+      shelves = shelves + 1
+    end
+  end
+  equal(shelves, Model.MAX_OBJECTS, "the document is still filled to its object cap")
+  equal(described, Observe.MAX_DESCRIBED_SQUARES, "and the square window rides beside it, whole")
+  removeCell()
+end
+
+-- ---------------------------------------------------------------------------
+-- squares
+--
+-- The description the movement adapter has been reading since it was written
+-- and the build policy now walks. Building is the one thing this agent does
+-- that it has no action to undo, so the sidecar refuses a placement that would
+-- seal the character in -- and every one of those refusals is computed from
+-- what these groups publish. The question each of them asks is the usual one in
+-- this file, with more riding on the answer: when the engine does not say, does
+-- the reader leave the fact out, or does it make one up?
+-- ---------------------------------------------------------------------------
+
+--- A grid square exposing exactly the readers a case names, so deleting one is
+--- how "this build cannot tell" is expressed.
+local function gridSquare(fields)
+  fields = fields or {}
+  local square = {
+    getObjects = function()
+      return Support.list(fields.objects or {})
+    end,
+  }
+  if fields.solid ~= nil then
+    square.isSolid = function()
+      return fields.solid
+    end
+  end
+  if fields.solid_trans ~= nil then
+    square.isSolidTrans = function()
+      return fields.solid_trans
+    end
+  end
+  if fields.free ~= nil then
+    square.isFree = function(_, forZombie)
+      -- The engine's own signature, and the flag the reader must pass: a double
+      -- that ignored it would hide a caller that forgot it.
+      if forZombie ~= false then
+        return nil
+      end
+      return fields.free
+    end
+  end
+  if fields.floor ~= nil then
+    square.getFloor = function()
+      -- `false` stands for the reader that exists and answers nothing, which is
+      -- a square with no floor -- a fall, not an unread square.
+      if fields.floor == false then
+        return nil
+      end
+      return { getName = function()
+        return "floor"
+      end }
+    end
+  end
+  return square
+end
+
+Harness.group("a square answers three questions, and absent is an answer of its own")
+do
+  equal(Observe.squarePassable(gridSquare({ solid = false })), true, "a square that is not solid can be crossed")
+  equal(Observe.squarePassable(gridSquare({ solid = true })), false, "and one that is solid cannot")
+  equal(
+    Observe.squarePassable(gridSquare({ solid = false, solid_trans = true })),
+    false,
+    "either solidity reader answering true is enough to call it blocked"
+  )
+  isNil(
+    Observe.squarePassable(gridSquare({})),
+    "a build with neither reader claims nothing -- absent must never read as a way out"
+  )
+
+  equal(Observe.squareFree(gridSquare({ free = true })), true, "a clear square reads free")
+  equal(Observe.squareFree(gridSquare({ free = false })), false, "and an occupied one does not")
+  isNil(Observe.squareFree(gridSquare({})), "with no isFree reader the field stays absent, never true")
+  isNil(
+    Observe.squareFree(gridSquare({ free = "yes" })),
+    "and a reader that answers something other than a boolean has not answered"
+  )
+
+  equal(Observe.squareFloor(gridSquare({ floor = true })), true, "a square with a floor says so")
+  equal(
+    Observe.squareFloor(gridSquare({ floor = false })),
+    false,
+    "and a reader that answers no floor is a fall, which is a reading of its own"
+  )
+  isNil(Observe.squareFloor(gridSquare({})), "while a build with no floor reader has said nothing about the floor")
+end
+
+Harness.group("the square window is bounded, nearest first, and an unread square says so")
+do
+  local position = { x = 100, y = 200, z = 0 }
+  local radius = Observe.DESCRIBE_RADIUS
+  local function fill(hole)
+    local squares = {}
+    for dx = -radius, radius do
+      for dy = -radius, radius do
+        local key = string.format("%d,%d,%d", position.x + dx, position.y + dy, position.z)
+        if key ~= hole then
+          squares[key] = gridSquare({ solid = false, free = dx ~= 0 or dy ~= 0, floor = true })
+        end
+      end
+    end
+    return squares
+  end
+
+  local removeCell = Support.installCell(fill(nil), {})
+  local reading = Observe.describeSquares(position)
+  equal(#reading.squares, Observe.MAX_DESCRIBED_SQUARES, "the whole window is described")
+  equal(
+    Observe.MAX_DESCRIBED_SQUARES,
+    (2 * radius + 1) ^ 2,
+    "the cap is exactly the window, so it bites only if one grows without the other"
+  )
+  equal(reading.truncated, false, "nothing was cut short")
+  equal(reading.dropped, 0, "and nothing went undescribed")
+  equal(reading.squares[1].distance, 0, "the square the character stands on is read first")
+  equal(reading.squares[1].loaded, true, "and it answered")
+  equal(reading.squares[1].free, false, "the character is standing on it, so it is not free to build on")
+  equal(reading.squares[1].passable, true, "though it is still ground a character can cross")
+  equal(reading.squares[#reading.squares].distance, radius, "and the farthest ring is read last")
+
+  local hole = string.format("%d,%d,%d", position.x + 1, position.y, position.z)
+  Support.installCell(fill(hole), {})
+  local partial = Observe.describeSquares(position)
+  equal(#partial.squares, Observe.MAX_DESCRIBED_SQUARES, "a square the cell will not hand over is still described")
+  local unread = nil
+  for index = 1, #partial.squares do
+    local entry = partial.squares[index]
+    if entry.x == position.x + 1 and entry.y == position.y then
+      unread = entry
+    end
+  end
+  equal(unread.loaded, false, "as one that was looked at and did not answer")
+  isNil(unread.passable, "claiming no passability")
+  isNil(unread.free, "and nothing about being free to build on")
+
+  local window = Observe.MAX_DESCRIBED_SQUARES
+  Observe.MAX_DESCRIBED_SQUARES = 9
+  Support.installCell(fill(nil), {})
+  local capped = Observe.describeSquares(position)
+  equal(#capped.squares, 9, "past the entry cap the reading stops")
+  equal(capped.truncated, true, "and says so")
+  equal(capped.dropped, (2 * radius + 1) ^ 2 - 9, "counting every square it did not publish")
+  equal(capped.squares[1].distance, 0, "keeping the near squares, which are the ones a build is reached from")
+  Observe.MAX_DESCRIBED_SQUARES = window
+
+  removeCell()
+  local blind = Observe.describeSquares(position)
+  equal(#blind.squares, 0, "with no cell there is no square reading at all")
+  equal(blind.truncated, false, "and no claim that one was cut short")
+end
+
+Harness.group("the square descriptions reach the document beside the objects, never instead of them")
+do
+  local position = { x = 100, y = 200, z = 0 }
+  local squares = {}
+  for dx = -Observe.DESCRIBE_RADIUS, Observe.DESCRIBE_RADIUS do
+    for dy = -Observe.DESCRIBE_RADIUS, Observe.DESCRIBE_RADIUS do
+      local wall = dx == 2 and dy == 0
+      squares[string.format("%d,%d,%d", position.x + dx, position.y + dy, position.z)] =
+        gridSquare({ solid = wall, free = not wall, floor = not (dx == -2 and dy == 0) })
+    end
+  end
+  -- One real object, on a square the description also covers: the two
+  -- populations describe the same tile from two directions and must not be
+  -- confused for one another.
+  squares[string.format("%d,%d,%d", position.x + 1, position.y, position.z)] =
+    Support.square({ Support.worldObject({ name = "Fridge", container_type = "fridge" }) })
+  local removeCell = Support.installCell(squares, {})
+
+  local document = Model.build({
+    session_id = SESSION,
+    seq = 12,
+    timestamp_ms = NOW,
+    game = { build = "42.20" },
+    player = Observe.playerFields(furnishedPlayer()),
+    nearby = Observe.nearbyFields(furnishedPlayer(), position),
+  })
+
+  local byRef = {}
+  local describedCount, objectCount = 0, 0
+  for index = 1, #document.nearby.objects do
+    local entry = document.nearby.objects[index]
+    if entry.kind == Model.SQUARE_KIND then
+      describedCount = describedCount + 1
+      byRef[entry.ref] = entry
+    else
+      objectCount = objectCount + 1
+    end
+  end
+  equal(describedCount, Observe.MAX_DESCRIBED_SQUARES, "every square in the window reaches the document")
+  equal(objectCount, 1, "and the fridge is still an object, not a square")
+
+  local wall = byRef["square:" .. SESSION .. ":102:200:0"]
+  same(wall.semantics, { "blocked", "loaded", "occupied" }, "a solid square is blocked, and it is not free either")
+  same(wall.position, { x = 102, y = 200, z = 0 }, "with the coordinates a build command names back")
+
+  local open = byRef["square:" .. SESSION .. ":100:201:0"]
+  same(open.semantics, { "loaded" }, "an empty square carries the one token it could positively claim")
+
+  local fall = byRef["square:" .. SESSION .. ":98:200:0"]
+  same(fall.semantics, { "drop", "loaded" }, "a square whose floor reader answered nothing is a fall")
+
+  -- The square the fridge stands on exposes none of the square readers, which
+  -- is the case that matters most: it is still described, it says it was
+  -- loaded, and it claims nothing else.
+  local unread = byRef["square:" .. SESSION .. ":101:200:0"]
+  ok(unread ~= nil, "a square whose readers are missing is still described")
+  same(unread.semantics, { "loaded" }, "with no claim about crossing it or building on it")
+  equal(
+    document.player.stats[Model.LIMIT_PREFIX .. "passable_unknown"],
+    true,
+    "and the document declares that a square went unread rather than passing for open"
+  )
+  equal(document.player.stats[Model.LIMIT_PREFIX .. "occupied_unknown"], true, "for both readings")
   removeCell()
 end
 

@@ -16,6 +16,7 @@ from pz_agent_core.actions import (
 from pz_agent_core.actions.adapters import register_game_adapters
 from pz_agent_core.actions.adapters.movement import MAX_ARRIVAL_RADIUS, MAX_MOVE_DISTANCE_SQUARES
 from pz_agent_core.capabilities.probes import (
+    BUILDING,
     COMBAT_ASSIST,
     CRAFTING,
     DOOR_TOGGLE,
@@ -85,6 +86,7 @@ DOCUMENTED_TOOLS = {
     # it spends nothing, needs no arming and names no capability, which is
     # the whole reason a client is expected to call it first.
     "pz_action_inspect_recipe",
+    "pz_action_inspect_buildable",
     "pz_action_move_to",
     "pz_action_move_near",
     "pz_action_open_container",
@@ -112,6 +114,12 @@ DOCUMENTED_TOOLS = {
     # which starts experimental, so this one is withheld on every install
     # until a live craft promotes it.
     "pz_action_craft",
+    # The building rung, in the catalogue's own order: the reading sits with
+    # the other looks above, and the placement sits here. It is P4 flat on the
+    # NEW building capability, which also starts experimental — so on a clean
+    # install the reading is offered and the placement is withheld, which is
+    # the split this wave is about.
+    "pz_action_build",
     "pz_action_rest",
     "pz_action_sleep",
     "pz_action_wait",
@@ -152,6 +160,7 @@ ALL_CAPABILITIES = (
     SURVIVAL_SLEEP,
     COMBAT_ASSIST,
     CRAFTING,
+    BUILDING,
 )
 
 
@@ -362,6 +371,14 @@ FULL_ACTION_PAYLOADS: dict[str, dict[str, Any]] = {
     # is RECIPE_UNKNOWN — the policy's own — never an unsupported argument.
     "pz_action_inspect_recipe": {"recipe": "MakeSpear"},
     "pz_action_craft": {"recipe": "MakeSpear", "count": 1},
+    # The two building tools take the square they are about — the reading with
+    # its listing bound, the build with the blueprint to raise. There is no
+    # third argument on the build to fill in: no count, no orientation, and the
+    # seam test drives it against the real adapter, where the empty-world
+    # refusal is the policy's own RECIPE_UNKNOWN rather than an argument it
+    # does not know.
+    "pz_action_inspect_buildable": {"square": SQUARE, "limit": 8},
+    "pz_action_build": {"blueprint": "WoodenWall", "square": SQUARE},
     "pz_action_rest": {
         "target_endurance": 0.95,
         "seat_ref": SQUARE,

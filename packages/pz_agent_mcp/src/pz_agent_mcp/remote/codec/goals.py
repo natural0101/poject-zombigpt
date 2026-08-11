@@ -483,6 +483,14 @@ def encode_goal_params(params: GoalParams) -> JsonDict:
         out["product"] = params.product
     if params.count is not None:
         out["count"] = params.count
+    # The build parameter. ``structure`` is *required* by its kind alongside the
+    # three coordinates above, so an encoder that dropped it would send a
+    # request naming a square and nothing to put on it — a body the decoder can
+    # only refuse. It rides here rather than beside ``product`` because it is
+    # the same shape read for a different rung, and there is deliberately no
+    # count to carry with it: one command raises one structure once.
+    if params.structure is not None:
+        out["structure"] = params.structure
     return out
 
 
@@ -519,6 +527,12 @@ def decode_goal_params(payload: Mapping[str, Any]) -> GoalParams:
     # ValueError below and becomes a CodecError that does not quote it.
     product = optional_str(payload, "product", where=_PARAMS)
     count = optional_int(payload, "count", where=_PARAMS)
+    # Read exactly as ``product`` is, and for its reason: the alphabet and the
+    # bound are stated once, in the constructor, and a shape check restated here
+    # would be the copy that drifts. Nothing repairs the value — a blueprint
+    # outside the shape reaches the ValueError below and becomes a CodecError
+    # that does not quote it.
+    structure = optional_str(payload, "structure", where=_PARAMS)
     try:
         return GoalParams(
             skill=skill,
@@ -536,6 +550,7 @@ def decode_goal_params(payload: Mapping[str, Any]) -> GoalParams:
             hours=hours,
             product=product,
             count=count,
+            structure=structure,
         )
     except ValueError:
         # The constructor's message quotes the number it rejected, and for
@@ -544,12 +559,13 @@ def decode_goal_params(payload: Mapping[str, Any]) -> GoalParams:
         # the same rule taken at its strictest: the channel refuses it without
         # quoting it precisely because that field is where a model-authored
         # sentence would arrive, so nothing about the value survives here
-        # either.
+        # either — and `structure` is that field one rung up, where the
+        # sentence would name something permanent.
         raise CodecError(
             f"{_PARAMS}: a numeric parameter lies outside the range the channel declares "
             f"for it, categories is not a comma-joined list of distinct loot "
-            f"category tokens within the channel's length bound, or product is not a "
-            f"bounded item-type identifier"
+            f"category tokens within the channel's length bound, or product or "
+            f"structure is not a bounded game identifier"
         ) from None
 
 

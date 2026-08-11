@@ -55,6 +55,22 @@ Observe.MAX_BODIES_PER_SQUARE = 8
 --- it nearest-square-first is what makes the bound safe -- see nearbyObjects.
 Observe.MAX_OBJECTS_SCANNED = 256
 
+--- Squares described one by one, out from the character in each direction, and
+--- the ceiling on how many of those descriptions travel.
+---
+--- Deliberately smaller than Observe.RADIUS. This reading publishes one entry
+--- per SQUARE rather than per object, so the object radius would put
+--- (2*6+1)^2 = 169 of them beside the objects in the same array. Three squares
+--- out is a seven-by-seven block, which is every square a build can be reached
+--- from plus the room to show a way out of it -- and it is the whole of what
+--- the sidecar's trap check can see, which is why that check only ever claims
+--- that a placement does not remove the last exit *inside this window*.
+---
+--- The cap is exactly the window, so reaching it means the window was widened
+--- without widening the cap rather than a square going unread by accident.
+Observe.DESCRIBE_RADIUS = 3
+Observe.MAX_DESCRIBED_SQUARES = 49
+
 --- Worn slots inspected. Build 42 gives a fully dressed character rather more
 --- than a dozen body locations, so this sits above what a player can wear
 --- rather than in the middle of it -- a backpack dropped for being the
@@ -1563,10 +1579,159 @@ function Observe.nearbyZombies(player, playerPosition)
   return result
 end
 
+-- ---------------------------------------------------------------------------
+-- squares
+--
+-- One description per square, in the vocabulary the rest of the system already
+-- speaks: `kind = "square"` entries in nearby.objects, carrying the semantics
+-- `pz_agent_core.actions.adapters.movement` has been reading since it was
+-- written. Nothing published them until now, so `movement.move_to`'s square
+-- check has been finding no square to check; the build policy is what finally
+-- needs the reading, and it needs the same one rather than a second view of
+-- the same tiles.
+--
+-- Why a build needs it at all: a structure this agent raises is one it has no
+-- action to remove, so the sidecar refuses a placement that would leave the
+-- character's own square with no remaining path to open ground -- and that
+-- check is a walk over exactly what this section publishes.
+--
+-- Every symbol here is UNVERIFIED against Build 42:
+--
+--   IsoGridSquare.isSolid / isSolidTrans   is the square itself a wall
+--   IsoGridSquare.isFree(false)            is anything standing on it
+--   IsoGridSquare.getFloor                 is there a floor, or is it a fall
+--
+-- so each is probed, each call is guarded, and a reader that does not answer
+-- costs the fact rather than producing a boolean. ObserveModel is where an
+-- unread fact becomes an absent semantic and a declared limit rather than a
+-- token nobody measured. docs/GAME_API_VERIFICATION.md is where these belong
+-- as rows.
+-- ---------------------------------------------------------------------------
+
+--- Can a character cross this square? true, false, or nil when nothing said.
+---
+--- Read off the square's own solidity rather than off what happens to be
+--- standing on it: this is the terrain question an escape route walks, and a
+--- square someone is standing on this second is not a square a wall has sealed.
+--- The third state is load-bearing, and ObserveModel spends it: a `false` here
+--- becomes the `blocked` semantic, while a nil becomes no semantic at all plus
+--- a declared limit, because "there is a wall" and "nobody could tell" are
+--- opposite facts and only one of them was observed.
+function Observe.squarePassable(square)
+  local solid = readBoolean(square, { "isSolid" })
+  local solidTrans = readBoolean(square, { "isSolidTrans" })
+  if solid == nil and solidTrans == nil then
+    return nil
+  end
+  return solid ~= true and solidTrans ~= true
+end
+
+--- Is the square clear of anything already standing on it? Tri-state.
+---
+--- `isFree` takes the engine's own "is this for a zombie" flag, so it is called
+--- with the flag rather than probed through readBoolean. A false here is what
+--- becomes SQUARE_OCCUPIED at command time; absent stays absent, because
+--- "nobody could tell" is not "go ahead".
+function Observe.squareFree(square)
+  local free = invoke(square, "isFree", false)
+  if type(free) ~= "boolean" then
+    return nil
+  end
+  return free
+end
+
+--- Does the square have a floor? true, false, or nil when there is no reader.
+---
+--- The distinction the tri-state buys is the whole point: a reader that exists
+--- and answered nothing is a square with no floor -- a fall, which movement
+--- already refuses to walk onto and which an escape route must not run
+--- through -- while a build with no reader at all has said nothing about the
+--- floor, and a `drop` semantic invented there would refuse ground that is
+--- perfectly solid.
+function Observe.squareFloor(square)
+  if member(square, "getFloor") == nil then
+    return nil
+  end
+  return invoke(square, "getFloor") ~= nil
+end
+
+--- One description per square in the bounded window.
+---
+--- What travels is what only a square can answer. What STANDS on a square is
+--- not restated here: the object entries the same scan publishes carry that,
+--- keyed by the same coordinates, and one fact in two places is two facts that
+--- can disagree.
+---
+--- The single inference the sidecar draws from this is stated here rather than
+--- published as a second reading nobody measured: a structure raised on a
+--- square makes that square impassable. So "would this placement block the
+--- square" is answered by the placement itself, and what this reading supplies
+--- is the map around it.
+---
+--- A square the cell would not hand over is published all the same, marked as
+--- not loaded, rather than left out. Left out it would be a square nobody
+--- described, and a square nobody described sits at the edge of the window --
+--- which is exactly where the trap check stops and calls it a way out. Said
+--- plainly: we looked, and it could not be read.
+---
+--- Bounded twice: the window is DESCRIBE_RADIUS squares out and at most
+--- MAX_DESCRIBED_SQUARES entries leave here. It rings outward from the
+--- character, so what a spent budget costs is the farthest squares, which is
+--- the end the model's nearest-first sort cuts off anyway.
+function Observe.describeSquares(playerPosition)
+  local result = { squares = {}, truncated = false, dropped = 0 }
+  if type(getCell) ~= "function" then
+    return result
+  end
+  local ok, cell = pcall(getCell)
+  if not ok or cell == nil then
+    return result
+  end
+  local originX = math.floor(playerPosition.x)
+  local originY = math.floor(playerPosition.y)
+  local count = 0
+  for ring = 0, Observe.DESCRIBE_RADIUS do
+    for dx = -ring, ring do
+      for dy = -ring, ring do
+        if dx == -ring or dx == ring or dy == -ring or dy == ring then
+          if count >= Observe.MAX_DESCRIBED_SQUARES then
+            result.truncated = true
+            result.dropped = result.dropped + 1
+          else
+            local x, y = originX + dx, originY + dy
+            local position = { x = x, y = y, z = playerPosition.z }
+            local square = invoke(cell, "getGridSquare", x, y, playerPosition.z)
+            local fields = {
+              x = x,
+              y = y,
+              z = playerPosition.z,
+              distance = PZAgent.Refs.chebyshevDistance(playerPosition, position),
+              loaded = square ~= nil,
+            }
+            if square ~= nil then
+              -- Written out rather than folded into the constructor: each of
+              -- these is tri-state, and the `a and b or c` idiom turns a read
+              -- `false` into a nil, which is the one substitution this whole
+              -- section exists to prevent.
+              fields.passable = Observe.squarePassable(square)
+              fields.free = Observe.squareFree(square)
+              fields.floor = Observe.squareFloor(square)
+            end
+            count = count + 1
+            result.squares[count] = fields
+          end
+        end
+      end
+    end
+  end
+  return result
+end
+
 --- The nearby block's plain values.
 function Observe.nearbyFields(player, playerPosition)
   local objects = Observe.nearbyObjects(playerPosition)
   local zombies = Observe.nearbyZombies(player, playerPosition)
+  local squares = Observe.describeSquares(playerPosition)
   return {
     objects = objects.objects,
     objects_truncated = objects.truncated,
@@ -1574,6 +1739,9 @@ function Observe.nearbyFields(player, playerPosition)
     zombies = zombies.zombies,
     zombies_truncated = zombies.truncated,
     zombies_dropped = zombies.dropped,
+    squares = squares.squares,
+    squares_truncated = squares.truncated,
+    squares_dropped = squares.dropped,
   }
 end
 

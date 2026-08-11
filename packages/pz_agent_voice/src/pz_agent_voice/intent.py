@@ -463,6 +463,30 @@ SKILL_WORDS: Final[dict[TrainableSkill, frozenset[str]]] = {
 #: later observation can return. So the kind travels only through
 #: ``pz_goal_submit``, where the caller *types* the product, and the grammar
 #: says nothing rather than guessing. Pinned by its own test.
+#:
+#: ``build_structure`` is the craft's argument again, and it does not need to
+#: borrow any of it: this kind fails the mechanical check twice over before the
+#: judgement is even reached. Its ``structure`` is a blueprint identifier, as
+#: unspellable by a recogniser as a product is, and its square is three
+#: coordinates — already the tokens ``navigate_to`` is unspeakable for. So the
+#: partition would refuse it whatever anyone thought.
+#:
+#: What is worth writing down is why nobody should try to close that gap later.
+#: The craft's case ends "a misheard craft destroys materials no later
+#: observation can return". Here the sentence is stronger and should be read as
+#: stronger: a misheard *product* wastes planks, and a misheard *square* puts a
+#: permanent wall somewhere nobody asked for — in a doorway, across the only
+#: stair, around the character — and **this project ships nothing that takes one
+#: down**. There is no demolition action, by design: removing what somebody put
+#: there is a different authority and this build does not have it. So the
+#: mistake has no undo at all, not even an expensive one, and the input that
+#: could make it is a stream of words a room's noise can bend. The coordinates
+#: make it worse rather than better: a digit misheard in «постройся на 1200
+#: 3400» is not a wrong word, it is a different square, and the sentence still
+#: parses. Every action this kind issues is P4 besides, which has no autonomous
+#: path in this codebase — so the kind travels only through ``pz_goal_submit``,
+#: where the caller types the blueprint and types the square and can read both
+#: back before granting the placement. Pinned by its own test.
 UNSPEAKABLE_KINDS: Final[frozenset[GoalKind]] = frozenset(
     {
         GoalKind.NAVIGATE_TO,
@@ -472,6 +496,7 @@ UNSPEAKABLE_KINDS: Final[frozenset[GoalKind]] = frozenset(
         GoalKind.SLEEP_UNTIL_RESTED,
         GoalKind.ENGAGE_SINGLE_ZOMBIE,
         GoalKind.CRAFT_ITEM,
+        GoalKind.BUILD_STRUCTURE,
     }
 )
 
@@ -507,6 +532,14 @@ UNSPEAKABLE_PARAMS: Final[frozenset[str]] = frozenset(
         # parameter here would authorise runs that destroy materials, and the
         # kind that carries it is unspeakable anyway.
         "count",
+        # build_structure's required blueprint: a game identifier like the
+        # product above, and unspeakable for that reason plus the one that
+        # cannot be engineered away — a misheard product wastes materials, a
+        # misheard blueprint (or the coordinates beside it, which are already
+        # unspeakable as navigate_to's) raises something permanent that nothing
+        # in this build can take back down. The full argument is on
+        # UNSPEAKABLE_KINDS above.
+        "structure",
     }
 )
 

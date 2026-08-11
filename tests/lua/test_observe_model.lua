@@ -605,6 +605,115 @@ do
   isNil(Model.place(""), "nor is an empty one")
 end
 
+Harness.group("a square is described in the vocabulary the rest of the system reads")
+do
+  local document = built({
+    nearby = {
+      objects = { { kind = "door", x = 101, y = 200, z = 0, distance = 1 } },
+      squares = {
+        { x = 100, y = 200, z = 0, distance = 0, loaded = true, passable = true, free = false, floor = true },
+        { x = 101, y = 200, z = 0, distance = 1, loaded = true, passable = false, free = false, floor = true },
+        { x = 102, y = 200, z = 0, distance = 2, loaded = true },
+        { x = 103, y = 200, z = 0, distance = 3, loaded = false },
+        { x = 104, y = 200, z = 0, distance = 4, loaded = true, passable = true, free = true, floor = false },
+        -- No coordinates at all: there is no square reference to name it by, so
+        -- it cannot travel. A square the sidecar cannot name is one it could
+        -- not walk to or build on either.
+        { distance = 5, loaded = true, passable = true },
+      },
+    },
+  })
+
+  local entries = {}
+  for index = 1, #document.nearby.objects do
+    local entry = document.nearby.objects[index]
+    if entry.kind == Model.SQUARE_KIND then
+      entries[entry.ref] = entry
+    end
+  end
+  equal(#document.nearby.objects, 6, "five squares and the door, in one array")
+  equal(document.player.stats[Model.LIMIT_PREFIX .. "squares_omitted"], 1, "the nameless square is dropped and counted")
+
+  local here = entries["square:" .. SESSION .. ":100:200:0"]
+  same(here.semantics, { "loaded", "occupied" }, "a crossable square somebody is standing on carries no `blocked`")
+  same(here.position, { x = 100, y = 200, z = 0 }, "and the position the object entries carry too")
+
+  local wall = entries["square:" .. SESSION .. ":101:200:0"]
+  same(wall.semantics, { "blocked", "loaded", "occupied" }, "a square read as solid is blocked")
+
+  local unread = entries["square:" .. SESSION .. ":102:200:0"]
+  same(unread.semantics, { "loaded" }, "a square whose readers said nothing claims nothing")
+  equal(
+    document.player.stats[Model.LIMIT_PREFIX .. "passable_unknown"],
+    true,
+    "the gap is declared instead -- absent must never read as a way out"
+  )
+  equal(document.player.stats[Model.LIMIT_PREFIX .. "occupied_unknown"], true, "for both readings")
+
+  local absent = entries["square:" .. SESSION .. ":103:200:0"]
+  same(absent.semantics, {}, "a square that would not answer at all is described without `loaded`")
+
+  local fall = entries["square:" .. SESSION .. ":104:200:0"]
+  same(fall.semantics, { "drop", "loaded" }, "and a floor reader that answered nothing is a fall")
+
+  -- The order the whole array promises survives the merge: nearest first, so a
+  -- reader that stops early stops on the far squares.
+  equal(document.nearby.objects[1].ref, "square:" .. SESSION .. ":100:200:0", "the nearest entry comes first")
+  equal(document.nearby.objects[#document.nearby.objects].distance, 4, "and the farthest last")
+
+  local quiet = built({
+    nearby = { squares = { { x = 1, y = 1, z = 0, distance = 1, loaded = true, passable = true, free = true } } },
+  })
+  isNil(
+    quiet.player.stats[Model.LIMIT_PREFIX .. "passable_unknown"],
+    "a build that answered every reading declares no gap"
+  )
+  isNil(quiet.player.stats[Model.LIMIT_PREFIX .. "occupied_unknown"], "for either of them")
+
+  -- The two populations are capped separately, and this is the assertion that
+  -- pins it: a floor full of described squares must not be what pushes a door
+  -- out of the document, nor the other way about.
+  local crowded = { objects = {}, squares = {} }
+  for index = 1, Model.MAX_OBJECTS + 3 do
+    crowded.objects[index] = { kind = "door", x = index, y = 0, z = 0, distance = index }
+  end
+  for index = 1, Model.MAX_SQUARE_ENTRIES + 5 do
+    crowded.squares[index] = { x = index, y = 1, z = 0, distance = index, loaded = true, passable = true, free = true }
+  end
+  local full = built({ nearby = crowded })
+  local objectCount, squareCount = 0, 0
+  for index = 1, #full.nearby.objects do
+    if full.nearby.objects[index].kind == Model.SQUARE_KIND then
+      squareCount = squareCount + 1
+    else
+      objectCount = objectCount + 1
+    end
+  end
+  equal(objectCount, Model.MAX_OBJECTS, "the object cap holds exactly")
+  equal(squareCount, Model.MAX_SQUARE_ENTRIES, "and the square cap holds beside it")
+  equal(full.player.stats[Model.LIMIT_PREFIX .. "squares_truncated"], true, "the square cut is reported")
+  equal(full.player.stats[Model.LIMIT_PREFIX .. "squares_omitted"], 5, "with the count nobody could infer")
+
+  -- The reader's own count of squares it never described, which no cap here can
+  -- see: a square that arrived as nothing must still be declared, or the edge
+  -- of the window moves inward and a trap check calls the gap a way out.
+  local short = built({
+    nearby = {
+      squares = { { x = 1, y = 1, z = 0, distance = 1, loaded = true } },
+      squares_truncated = true,
+      squares_dropped = 6,
+    },
+  })
+  equal(short.player.stats[Model.LIMIT_PREFIX .. "squares_truncated"], true, "the reader's truncation travels")
+  equal(short.player.stats[Model.LIMIT_PREFIX .. "squares_omitted"], 6, "and so does its count")
+
+  local none = built({ nearby = { objects = {}, zombies = {} } })
+  isNil(
+    none.player.stats[Model.LIMIT_PREFIX .. "squares_truncated"],
+    "a scan with no square reading at all claims no truncation"
+  )
+end
+
 Harness.group("an object carries its square's room, and a corpse stays observation-only")
 do
   local document = built({

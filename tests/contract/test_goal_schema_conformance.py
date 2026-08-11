@@ -93,6 +93,11 @@ NOT_YET_ON_THE_WIRE: Final[frozenset[str]] = frozenset(
         # could spend a character's materials on a product nobody at the
         # keyboard named is a protocol change nobody should make by accident.
         "craft_item",
+        # The building kind, on stronger terms than any of them: it is P4 with
+        # no autonomous path, and a remote link that could raise a permanent
+        # wall on a square nobody at the keyboard named is the last thing this
+        # protocol should learn by accident.
+        "build_structure",
     }
 )
 
@@ -269,6 +274,12 @@ class TestTheClosedSetsAgree:
             "avoid_threat": {},
             "engage_single_zombie": {},
             "craft_item": {"product": "Base.SpearCrude", "count": 1},
+            "build_structure": {
+                "structure": "carpentry_wall",
+                "target_x": 1200,
+                "target_y": 3400,
+                "target_z": 0,
+            },
         }
         assert set(local_params) == set(NOT_YET_ON_THE_WIRE)
         for kind, params in sorted(local_params.items()):

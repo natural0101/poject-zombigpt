@@ -51,6 +51,18 @@ crafting readout never says whether a recipe needs a surface therefore lands
 every craft at ``P4``, because "the reader did not say" is never read as "no
 surface needed".
 
+``pz_action_build`` is the opposite case and is worth stating for that reason:
+its ``P4`` is *flat*. There is no ladder under it and no argument that makes
+placing a permanent object cheaper, so
+:class:`~pz_agent_core.actions.adapters.building.BuildingBuildAdapter` declares
+the tier as a constant and grows no ``risk_for`` at all. What that buys is
+written in :mod:`pz_agent_core.policy.permissions`:
+:data:`~pz_agent_core.policy.permissions.MODE_LIMITS` names no ``P4`` ceiling in
+any mode and ``_p4_gate`` demands the user's own initiative plus an explicit
+per-call grant, so the agent may never raise a wall on its own initiative, in
+any mode. Nothing in this build takes one back down either — there is no
+demolition action here, and this surface must not be read as offering one.
+
 Every tool also carries one ``example``, validated against its own schema at
 import. An example that a tool's schema rejects is caught here rather than by
 the first client that pastes it.
@@ -83,6 +95,10 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Final
 
+from pz_agent_core.actions.adapters.building import (
+    MAX_BLUEPRINT_NAME_LEN,
+    MAX_LISTED_STRUCTURES,
+)
 from pz_agent_core.actions.adapters.consume import MIN_CONSUME_FRACTION
 from pz_agent_core.actions.adapters.container import (
     DEFAULT_OPEN_RADIUS,
@@ -120,6 +136,7 @@ from pz_agent_core.actions.builtin import MAX_WAIT_GAME_SECONDS
 from pz_agent_core.actions.engine import DEFAULT_LEASE_MS
 from pz_agent_core.capabilities.model import CapabilityReport
 from pz_agent_core.capabilities.probes import (
+    BUILDING,
     COMBAT_ASSIST,
     CRAFTING,
     DOOR_TOGGLE,
@@ -139,6 +156,7 @@ from pz_agent_core.goals import (
     MAX_IDEMPOTENCY_KEY_LEN,
     MAX_LOOT_CATEGORIES_CHARS,
     MAX_PRODUCT_TYPE_CHARS,
+    MAX_STRUCTURE_NAME_CHARS,
     NUMERIC_RANGES,
     GoalKind,
     LootScope,
@@ -281,6 +299,16 @@ _SLOT_PATTERN: Final = rf"^[A-Za-z0-9._\-]{{1,{MAX_SLOT_NAME_LEN}}}$"
 #: made.
 _RECIPE_PATTERN: Final = rf"^[A-Za-z0-9._\-]{{1,{MAX_RECIPE_NAME_LEN}}}$"
 
+#: A blueprint name as the game files it — ``WoodenWall``. The same alphabet and
+#: the same argument as the recipe above, restated rather than shared because
+#: the two bounds are two constants in two adapters and folding them into one
+#: name here would hide the day one of them moves. The mod folds a space into an
+#: underscore before it will accept a blueprint at all
+#: (``Building.blueprintToken``), so a name with a space is a token nothing can
+#: issue rather than a blueprint that was not found, and this pattern refuses it
+#: before the call is made.
+_BLUEPRINT_PATTERN: Final = rf"^[A-Za-z0-9._\-]{{1,{MAX_BLUEPRINT_NAME_LEN}}}$"
+
 #: An item type a ``craft_item`` goal names as its product — ``Base.SpearCrude``.
 #: The shape is :data:`~pz_agent_core.goals.MAX_PRODUCT_TYPE_CHARS`'s own,
 #: restated here because the channel compiles it privately;
@@ -288,6 +316,15 @@ _RECIPE_PATTERN: Final = rf"^[A-Za-z0-9._\-]{{1,{MAX_RECIPE_NAME_LEN}}}$"
 #: one's rejects to the other. A leading separator is refused: a product is an
 #: identifier, and ``.Spear`` names nothing.
 _PRODUCT_PATTERN: Final = rf"^[A-Za-z0-9][A-Za-z0-9._\-]{{0,{MAX_PRODUCT_TYPE_CHARS - 1}}}$"
+
+#: A blueprint a ``build_structure`` goal names as what to raise —
+#: ``WoodenWall``. The channel spells this shape with the *same* compiled
+#: pattern it uses for a product (:data:`~pz_agent_core.goals.MAX_STRUCTURE_NAME_CHARS`
+#: is :data:`~pz_agent_core.goals.MAX_PRODUCT_TYPE_CHARS`), and it is restated
+#: here from its own constant rather than aliased to ``_PRODUCT_PATTERN``, so
+#: the day the channel gives a blueprint its own width this schema follows it
+#: instead of quietly publishing the product's.
+_STRUCTURE_PATTERN: Final = rf"^[A-Za-z0-9][A-Za-z0-9._\-]{{0,{MAX_STRUCTURE_NAME_CHARS - 1}}}$"
 
 #: The hands an unequip may name: :data:`~pz_agent_core.actions.adapters.equipment.HANDS`
 #: without ``both``, because a hand is emptied one at a time and "take off both"
@@ -676,7 +713,7 @@ TOOLS: Final[tuple[ToolSpec, ...]] = (
         },
     ),
     # --- looking, through the character -----------------------------------
-    # These four submit a command and change nothing. They are the protocol's
+    # These five submit a command and change nothing. They are the protocol's
     # READ_ONLY_ACTIONS, so they run in OBSERVE and on a disarmed session, and
     # none of them names a capability: what each needs is an observation tier
     # the mod either produced or did not, and every probe resolves a *Lua*
@@ -685,7 +722,11 @@ TOOLS: Final[tuple[ToolSpec, ...]] = (
     # them with the crafting rung, and it belongs here rather than beside
     # pz_action_craft: it is the call a client makes *before* deciding whether
     # to spend anything, and the one whose finding can be shown to a user
-    # without an armed session or a capability behind it.
+    # without an armed session or a capability behind it. The square reading
+    # joined them with the building rung on exactly that argument, one wave
+    # later and one rung more sharply: it is the call a user makes before
+    # granting the P4 that puts something permanent in the world, so withholding
+    # it would make that decision less informed rather than more.
     ToolSpec(
         name="pz_action_inspect_world",
         kind=ToolKind.QUERY,
@@ -835,6 +876,45 @@ TOOLS: Final[tuple[ToolSpec, ...]] = (
             required=("recipe",),
         ),
         example={"recipe": "MakeSpear", "idempotency_key": "goal-1:look:attempt-1"},
+    ),
+    ToolSpec(
+        name="pz_action_inspect_buildable",
+        kind=ToolKind.QUERY,
+        risk=RiskClass.P0,
+        summary=(
+            "Read one square as the build command would read it: what the "
+            "character knows how to raise, whether the materials for each are "
+            "carried, whether that square is free, and — the answer this "
+            "reading exists for — whether a solid structure there would leave "
+            "the character a way out. Nothing is placed and nothing moves. "
+            "Every blueprint comes back with the verdict a build on this square "
+            "would reach, so a SQUARE_OCCUPIED or a WOULD_TRAP_PLAYER is "
+            "something you see here rather than one P4 grant later. This is the "
+            "published half of the building rung: on a clean install this tool "
+            "is offered and pz_action_build is not."
+        ),
+        action=ActionName.BUILDING_INSPECT,
+        long_running=True,
+        input_schema=_mutating(
+            {
+                "square": _ref_schema(
+                    RefKind.SQUARE,
+                    "The square to read. Required: a catalogue with no ground "
+                    "under it cannot answer either refusal that matters.",
+                ),
+                "limit": {
+                    "type": "integer",
+                    "description": (
+                        "Most blueprints to report on; the reading says when it was cut off."
+                    ),
+                    "minimum": 1,
+                    "maximum": MAX_LISTED_STRUCTURES,
+                    "default": MAX_LISTED_STRUCTURES,
+                },
+            },
+            required=("square",),
+        ),
+        example={"square": _EXAMPLE_SQUARE, "idempotency_key": "goal-1:look:attempt-1"},
     ),
     # --- actions ----------------------------------------------------------
     ToolSpec(
@@ -1563,6 +1643,78 @@ TOOLS: Final[tuple[ToolSpec, ...]] = (
         ),
         example={"recipe": "MakeSpear", "idempotency_key": "goal-1:step-2:attempt-1"},
     ),
+    # --- building ----------------------------------------------------------
+    # The other half of this rung is the reading above, with the other looks.
+    # This is the first published action that puts an object into the world and
+    # leaves it there: a craft spends two planks and the world is where it was,
+    # a wall is a new fact on a square, and nothing in this build takes one back
+    # down — removing what somebody put there is a different authority and this
+    # project does not have it. So the tier is P4 and it is flat, the command
+    # carries no count to fan out, and the `building` capability resolves to
+    # 'experimental' on a clean scan, which withholds this tool on every install
+    # until a live build's evidence promotes it.
+    ToolSpec(
+        name="pz_action_build",
+        kind=ToolKind.WRITE,
+        risk=RiskClass.P4,
+        summary=(
+            "Raise ONE structure ONCE on ONE named square, from materials the "
+            "character is observed to carry. P4 always — never escalated into, "
+            "never anything less — because this is the first action whose work "
+            "stays in the world and nothing here can undo it: there is no "
+            "demolition action in this build. P4 has no autonomous path in this "
+            "codebase at all, so a wall is raised on your initiative and an "
+            "explicit grant per call, never on the agent's. The deterministic "
+            "building policy is re-asked against a fresh observation and every "
+            "refusal happens before a command exists to send: SQUARE_OCCUPIED "
+            "when something already stands there (the agent never clears a "
+            "square), RECIPE_UNKNOWN when no observed blueprint answers to the "
+            "name, RECIPE_MATERIALS_MISSING or RESOURCE_RESERVED for the "
+            "materials, and WOULD_TRAP_PLAYER when the placement would take "
+            "away the last way out of the square the character stands on that "
+            "this observation can see. That last check reads a bounded window, "
+            "so it cannot prove the character is not already shut in by "
+            "something outside it; what it does prove is that this placement "
+            "does not remove an exit the observation found — and an unreadable "
+            "map refuses rather than waves through. Verified only by the "
+            "structure being observed standing on the square afterwards; a "
+            "queued build is not a wall."
+        ),
+        required_capability=BUILDING,
+        action=ActionName.BUILDING_BUILD,
+        long_running=True,
+        input_schema=_mutating(
+            {
+                "blueprint": {
+                    "type": "string",
+                    "description": (
+                        "What to raise, as the build files it. Read it with "
+                        "pz_action_inspect_buildable first: the reading lists "
+                        "the blueprints this character knows and the verdict "
+                        "each would get on this square."
+                    ),
+                    "pattern": _BLUEPRINT_PATTERN,
+                    "maxLength": MAX_BLUEPRINT_NAME_LEN,
+                },
+                "square": _ref_schema(
+                    RefKind.SQUARE,
+                    "Where it goes. A reference, so a placement can only ever "
+                    "target ground this session has actually observed — and "
+                    "required, because the one square a command could pick for "
+                    "itself is the one the character is standing on.",
+                ),
+            },
+            required=("blueprint", "square"),
+        ),
+        # No count, no orientation, no "and then the next one": one command
+        # raises one structure, and every extra degree of freedom here is
+        # another thing a P4 approval would have to cover.
+        example={
+            "blueprint": "WoodenWall",
+            "square": _EXAMPLE_SQUARE,
+            "idempotency_key": "goal-1:step-2:attempt-1",
+        },
+    ),
     ToolSpec(
         name="pz_action_rest",
         kind=ToolKind.WRITE,
@@ -1918,7 +2070,20 @@ TOOLS: Final[tuple[ToolSpec, ...]] = (
             "observed in the inventory, never the craft being queued. Like the "
             "combat kind it is reachable only by explicit submission: no "
             "provider plans it, and nothing on the agent's own initiative "
-            "decides which of the character's possessions to destroy."
+            "decides which of the character's possessions to destroy. A "
+            "'build_structure' goal is that kind's sibling one rung stricter: "
+            "it names the 'structure' to raise and the square to raise it on "
+            "('target_x', 'target_y', 'target_z'), all four required, and it "
+            "has no count — one command raises one structure once, and nothing "
+            "in this build takes one down again. Every action it issues is P4, "
+            "which has no autonomous path in this codebase at all, so the goal "
+            "advances only while you grant each placement. The deterministic "
+            "building policy refuses before anything is queued: SQUARE_OCCUPIED "
+            "for a square something already stands on, WOULD_TRAP_PLAYER for a "
+            "placement that would take away the last way out the observation "
+            "can see, RECIPE_MATERIALS_MISSING or RESOURCE_RESERVED for the "
+            "materials — and, like the craft, it will not go and fetch what is "
+            "missing. Success is the structure observed standing on the square."
         ),
         input_schema=_goal_channel(
             {
@@ -1955,18 +2120,28 @@ TOOLS: Final[tuple[ToolSpec, ...]] = (
                     "minimum": NUMERIC_RANGES["pages"].minimum,
                     "maximum": NUMERIC_RANGES["pages"].maximum,
                 },
-                # The three below belong to 'navigate_to' and to nothing else:
-                # the world square the deterministic route executor walks to.
-                # Whole squares, exactly as movement.move_to takes them.
+                # The three below belong to 'navigate_to' and to 'build_structure'
+                # and to nothing else: the world square the deterministic route
+                # executor walks to, or the one a structure is raised on. Whole
+                # squares, exactly as movement.move_to takes them. Shared rather
+                # than duplicated per kind, because they mean the same thing —
+                # one square on the world grid — and two spellings of it would
+                # be two ranges to keep in step.
                 "target_x": {
                     "type": "integer",
-                    "description": "World square X a 'navigate_to' goal walks to.",
+                    "description": (
+                        "World square X a 'navigate_to' goal walks to, or a "
+                        "'build_structure' goal builds on."
+                    ),
                     "minimum": NUMERIC_RANGES["target_x"].minimum,
                     "maximum": NUMERIC_RANGES["target_x"].maximum,
                 },
                 "target_y": {
                     "type": "integer",
-                    "description": "World square Y a 'navigate_to' goal walks to.",
+                    "description": (
+                        "World square Y a 'navigate_to' goal walks to, or a "
+                        "'build_structure' goal builds on."
+                    ),
                     "minimum": NUMERIC_RANGES["target_y"].minimum,
                     "maximum": NUMERIC_RANGES["target_y"].maximum,
                 },
@@ -2084,6 +2259,27 @@ TOOLS: Final[tuple[ToolSpec, ...]] = (
                     ),
                     "minimum": NUMERIC_RANGES["count"].minimum,
                     "maximum": NUMERIC_RANGES["count"].maximum,
+                },
+                # 'build_structure' names this one beside the three coordinates
+                # above, and that is the whole of its parameter set: there is no
+                # count, because one command raises one structure once and a
+                # number here is the first thing a loop would read. The value is
+                # a game identifier on the 'product' terms — bounded, alphabet
+                # -restricted, never interpreted, compared only against the
+                # blueprint names the observation itself reported.
+                "structure": {
+                    "type": "string",
+                    "description": (
+                        "The blueprint a 'build_structure' goal raises, as the "
+                        "build spells it (WoodenWall). Required beside "
+                        "target_x/target_y/target_z: a structure with no square "
+                        "and a square with no structure are each half a "
+                        "question, and the half this channel could fill in for "
+                        "itself — the square the character stands on — is the "
+                        "one it must never fill in."
+                    ),
+                    "pattern": _STRUCTURE_PATTERN,
+                    "maxLength": MAX_STRUCTURE_NAME_CHARS,
                 },
             },
             required=("kind",),

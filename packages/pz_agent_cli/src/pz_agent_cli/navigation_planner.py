@@ -1,7 +1,7 @@
 """The deterministic goal kinds, served at the planner seam.
 
-The typed goal channel carries ten kinds the goal seam never hands a plan
-provider. Four of them no provider serves at all:
+The typed goal channel carries thirteen kinds the goal seam never hands a
+plan provider. Four of them no provider serves at all:
 :attr:`~pz_agent_core.goals.GoalKind.NAVIGATE_TO` is walked by the route
 executor in :mod:`pz_agent_core.navigation`, one observed square at a time;
 :attr:`~pz_agent_core.goals.GoalKind.RETURN_HOME` is that same walk with its
@@ -37,18 +37,28 @@ by the arbiter or the initiative path. The crafting wave adds the twelfth:
 deterministic craft mission in :mod:`pz_agent_cli.craft_mission`, one
 policy-decided run per bounded command, with the product counted in the
 inventory afterwards and a shortfall reported rather than gone looting for.
+The building wave adds the thirteenth and stops there:
+:attr:`~pz_agent_core.goals.GoalKind.BUILD_STRUCTURE` is driven by the
+deterministic build mission in :mod:`pz_agent_cli.build_mission`, one
+policy-decided placement per goal and exactly one command, with the structure
+observed standing on the square afterwards or the goal failed honestly. It is
+the only kind here whose action is P4 in every mode — there is no autonomous
+path to it anywhere in this codebase — and the wrapper's part of that promise
+is the same as for combat: the goal is served only when a person submitted it,
+and neither the arbiter nor the initiative table can mint one.
 The loop serves every goal through one seam —
 :meth:`~pz_agent_cli.runtime.GoalPlanner.propose_for_goal` — so this module
-puts all twelve deterministic servers *behind that seam*:
+puts all thirteen deterministic servers *behind that seam*:
 :class:`NavigatingPlanner` wraps whatever planner the app assembled (or
 nothing at all), owns one :class:`~pz_agent_core.navigation.LocalMap` per
 session, one :class:`~pz_agent_core.navigation.Journey` per navigation or
 homeward goal and one mission per loot, explore, consume, care, avoid,
-combat or craft goal, answers all twelve kinds itself, and hands every other
-kind to the wrapped planner untouched. A loop assembled with no LLM planner
-still navigates, loots, explores, comes home, eats, drinks, dresses wounds,
-rests, sleeps, retreats, fights and crafts on order, because the wrapper is
-a complete :class:`~pz_agent_cli.runtime.GoalPlanner` on its own.
+combat, craft or build goal, answers all thirteen kinds itself, and hands
+every other kind to the wrapped planner untouched. A loop assembled with no
+LLM planner still navigates, loots, explores, comes home, eats, drinks,
+dresses wounds, rests, sleeps, retreats, fights, crafts and — when a person
+has asked for it and granted the P4 — builds, because the wrapper is a
+complete :class:`~pz_agent_cli.runtime.GoalPlanner` on its own.
 
 The needs arbiter (:mod:`pz_agent_cli.arbiter`) lives behind this same seam:
 every observation the wrapper is handed passes through it first, and in
@@ -172,6 +182,10 @@ from .avoid_mission import (
     AvoidMissionLimits,
     RememberedSafeZone,
 )
+from .build_mission import (
+    BuildMissionLimits,
+    BuildStructureMission,
+)
 from .care_mission import (
     CareMissionLimits,
     RestMission,
@@ -216,6 +230,7 @@ from .runtime import ActionChannel, GoalPlanner, LoopError, Planner
 __all__ = [
     "HOME_ARRIVAL_RADIUS",
     "MAX_KEPT_AVOID_REPORTS",
+    "MAX_KEPT_BUILD_REPORTS",
     "MAX_KEPT_CARE_REPORTS",
     "MAX_KEPT_COMBAT_REPORTS",
     "MAX_KEPT_CONSUME_REPORTS",
@@ -223,6 +238,7 @@ __all__ = [
     "MAX_KEPT_EXPLORE_REPORTS",
     "MAX_KEPT_LOOT_REPORTS",
     "MAX_TRACKED_AVOIDS",
+    "MAX_TRACKED_BUILDS",
     "MAX_TRACKED_CARES",
     "MAX_TRACKED_COMBATS",
     "MAX_TRACKED_CONSUMES",
@@ -232,6 +248,7 @@ __all__ = [
     "MAX_TRACKED_MISSIONS",
     "MAX_TRACKED_RETURNS",
     "NO_HOME_DETAIL",
+    "NO_PLACEMENT_DETAIL",
     "NO_REST_TARGET_DETAIL",
     "NavigatingPlanner",
     "NavigationHost",
@@ -287,6 +304,9 @@ MAX_TRACKED_COMBATS: Final = 4
 #: Craft missions remembered at once, same shape, same reason.
 MAX_TRACKED_CRAFTS: Final = 4
 
+#: Build missions remembered at once, same shape, same reason.
+MAX_TRACKED_BUILDS: Final = 4
+
 #: Finished loot reports kept for reading back. A report is the mission's
 #: deliverable and outlives the mission — the goal record can only carry a
 #: one-line summary and the evidence key names — but it does not outlive the
@@ -324,6 +344,14 @@ MAX_KEPT_COMBAT_REPORTS: Final = 8
 #: are not coming back. It must survive the goal that spent them.
 MAX_KEPT_CRAFT_REPORTS: Final = 8
 
+#: Finished build reports kept for reading back, in their own ring and with the
+#: strongest claim of all to one. A craft report is the only account of what a
+#: mission spent; a build report is the only account of what a mission *left
+#: standing in the world*, together with what the trapping check could and could
+#: not see when it allowed it. Nothing in this build can take that structure
+#: down, so the ledger of how it got there must outlive the goal that raised it.
+MAX_KEPT_BUILD_REPORTS: Final = 8
+
 #: How close counts as "home". Tighter than a waypoint's radius — the user
 #: stood on this exact square when they said "remember home" — but not a
 #: pinpoint, because the square itself may be occupied by the furniture they
@@ -346,6 +374,16 @@ NO_REST_TARGET_DETAIL: Final = "the rest_until goal carries no target endurance"
 #: is constructible without it, and a craft with nothing named has no
 #: postcondition to observe, so it must refuse, never pick something to spend.
 NO_PRODUCT_DETAIL: Final = "the craft_item goal carries no product to make"
+
+#: The refusal for a ``build_structure`` record missing its structure or any of
+#: its three coordinates. Unreachable through the channel — the kind's spec
+#: requires all four — but a record is constructible without them, and the one
+#: thing this side must never do is fill either half in for itself: a structure
+#: with no square would have to be placed somewhere, and the only somewhere a
+#: wrapper could pick is the square the character is standing on.
+NO_PLACEMENT_DETAIL: Final = (
+    "the build_structure goal carries no structure and square to build it on"
+)
 
 #: Wrapper hops :meth:`NavigatingPlanner._loot_ports` will look through for a
 #: ``memory`` attribute — the same walk, with the same slack, that the loop's
@@ -526,9 +564,27 @@ class _CraftDrive:
         self.last_success: ActionResult | None = None
 
 
+class _BuildDrive:
+    """One build mission plus the wrapper's bookkeeping around it.
+
+    Field for field the loot drive's shape, so the shared pending-collection
+    helper can serve all eight mission drives without a protocol.
+    """
+
+    __slots__ = ("last_success", "mission", "pending_action_id")
+
+    def __init__(self, mission: BuildStructureMission) -> None:
+        self.mission = mission
+        #: The channel submission whose terminal result the mission is owed.
+        self.pending_action_id: str | None = None
+        #: The most recent succeeded engine result a channel step produced —
+        #: the evidence a completed mission hands to ``GoalQueue.succeed``.
+        self.last_success: ActionResult | None = None
+
+
 #: Every drive a mission registry holds. A union rather than a protocol, for
 #: :data:`_CareMission`'s reason: the wrapper types against the concrete
-#: missions each module ships. The two helpers that serve all seven registries
+#: missions each module ships. The two helpers that serve all eight registries
 #: — collecting a finished channel step, and shedding the oldest drive past a
 #: cap — take this rather than repeating the list at each of them.
 _MissionDrive = (
@@ -539,6 +595,7 @@ _MissionDrive = (
     | _AvoidDrive
     | _CombatDrive
     | _CraftDrive
+    | _BuildDrive
 )
 
 #: Bound to one concrete drive at each call site, so a registry keeps its own
@@ -575,6 +632,7 @@ class NavigatingPlanner:
         avoid_limits: AvoidMissionLimits | None = None,
         combat_limits: CombatMissionLimits | None = None,
         craft_limits: CraftMissionLimits | None = None,
+        build_limits: BuildMissionLimits | None = None,
         loot_memory: object | None = None,
     ) -> None:
         self._inner = inner
@@ -590,6 +648,7 @@ class NavigatingPlanner:
         self._avoid_limits = avoid_limits if avoid_limits is not None else AvoidMissionLimits()
         self._combat_limits = combat_limits if combat_limits is not None else CombatMissionLimits()
         self._craft_limits = craft_limits if craft_limits is not None else CraftMissionLimits()
+        self._build_limits = build_limits if build_limits is not None else BuildMissionLimits()
         #: An explicit memory for the loot ports and the home point, for
         #: assemblies and tests that hold one; when None the wrapper walks
         #: the wrapped planner chain for the ``memory`` the shipped assembly
@@ -605,6 +664,7 @@ class NavigatingPlanner:
         self._avoids: OrderedDict[str, _AvoidDrive] = OrderedDict()
         self._combats: OrderedDict[str, _CombatDrive] = OrderedDict()
         self._crafts: OrderedDict[str, _CraftDrive] = OrderedDict()
+        self._builds: OrderedDict[str, _BuildDrive] = OrderedDict()
         self._loot_reports: OrderedDict[str, JsonDict] = OrderedDict()
         self._explore_reports: OrderedDict[str, JsonDict] = OrderedDict()
         self._consume_reports: OrderedDict[str, JsonDict] = OrderedDict()
@@ -612,6 +672,7 @@ class NavigatingPlanner:
         self._avoid_reports: OrderedDict[str, JsonDict] = OrderedDict()
         self._combat_reports: OrderedDict[str, JsonDict] = OrderedDict()
         self._craft_reports: OrderedDict[str, JsonDict] = OrderedDict()
+        self._build_reports: OrderedDict[str, JsonDict] = OrderedDict()
         #: The needs arbiter: interrupt, satisfy, resume (see
         #: :mod:`pz_agent_cli.arbiter`). It reads the critical thresholds
         #: through the same per-call policy walk the consume and care
@@ -671,6 +732,10 @@ class NavigatingPlanner:
     @property
     def tracked_crafts(self) -> int:
         return len(self._crafts)
+
+    @property
+    def tracked_builds(self) -> int:
+        return len(self._builds)
 
     def loot_report(self, goal_id: str) -> JsonDict | None:
         """The loot report for *goal_id*: live while it runs, kept when it ends.
@@ -743,6 +808,22 @@ class NavigatingPlanner:
         if drive is not None:
             return drive.mission.report
         return self._craft_reports.get(goal_id)
+
+    def build_report(self, goal_id: str) -> JsonDict | None:
+        """The build report for *goal_id*, on the loot report's exact terms.
+
+        The account of a placement — the square, the policy's refusal token if
+        there was one, what was found standing there, the trapping check's
+        answer *with the claim it is entitled to make*, and whether the
+        structure was ever observed standing — live while the mission runs,
+        sealed when the goal ends however it ends. The one report here whose
+        subject cannot be removed from the world by anything this build ships,
+        which is why it is sealed on every path out, eviction included.
+        """
+        drive = self._builds.get(goal_id)
+        if drive is not None:
+            return drive.mission.report
+        return self._build_reports.get(goal_id)
 
     @property
     def arbiter_log(self) -> tuple[JsonDict, ...]:
@@ -868,6 +949,22 @@ class NavigatingPlanner:
                     "attempts": attempts if isinstance(attempts, int) else 0,
                 },
             )
+        build = self._builds.get(goal_id)
+        if build is not None:
+            report = build.mission.report
+            attempts = report["attempts"]
+            return GoalProgress(
+                phase=build.mission.phase,
+                counters={
+                    # Same re-narrowing as the branches above, and the same
+                    # division of labour: the square, the refusal token and the
+                    # enclosure claim stay in the report, because counters carry
+                    # counts. ``placed`` is the observed postcondition as 0 or 1
+                    # — the one number a watcher of this kind actually wants.
+                    "attempts": attempts if isinstance(attempts, int) else 0,
+                    "placed": 1 if build.mission.placed else 0,
+                },
+            )
         return None
 
     # -- the Planner half ----------------------------------------------------
@@ -919,6 +1016,8 @@ class NavigatingPlanner:
             return self._combat(goal.goal_id, observation)
         if goal.kind is PlannerGoalKind.CRAFT_ITEM:
             return self._craft(goal.goal_id, observation)
+        if goal.kind is PlannerGoalKind.BUILD_STRUCTURE:
+            return self._build(goal.goal_id, observation)
         self._map.observe(observation)
         self._prune()
         inner = self._inner
@@ -2477,6 +2576,179 @@ class NavigatingPlanner:
             self._craft_reports.popitem(last=False)
         self._crafts.pop(goal_id, None)
 
+    # -- build ---------------------------------------------------------------
+
+    def _build(self, goal_id: str, observation: Observation) -> ActionRequest | None:
+        """Drive one build mission, mirroring :meth:`_craft` join for join.
+
+        The one ``building.build`` travels the loop's action channel like every
+        other mission step, and here that routing carries more weight than
+        anywhere else in this file: the action is P4 in every mode, so the
+        channel is where the permission gate demands the user's own initiative
+        and their explicit per-call grant. A wrapper that dispatched it any
+        other way would be a wrapper that raised a wall without either.
+        """
+        host = self._host
+        if host is None or host.goals is None:
+            # Unbound, or a loop that cannot activate goals at all: learn from
+            # the observation and decline — ending goals is the queue's
+            # privilege, and there is no queue.
+            self._map.observe(observation)
+            return None
+        queue = host.goals
+        self._prune()
+        with host.goal_lock:
+            record = queue.record(goal_id)
+        if record is None or record.state is not GoalState.ACTIVE:
+            self._map.observe(observation)
+            if not _drive_lives(record):
+                self._builds.pop(goal_id, None)
+            return None
+
+        drive = self._builds.get(goal_id)
+        if drive is None:
+            mission = self._build_mission_for(goal_id, record)
+            if mission is None:
+                # Unreachable through the channel — the build_structure spec
+                # requires the structure and all three coordinates — but a
+                # record is constructible without them, and neither half may be
+                # filled in here: a placement this side chose is a placement
+                # nobody asked for.
+                with host.goal_lock:
+                    queue.fail(goal_id, ReasonCode.INVALID_ARGUMENT, NO_PLACEMENT_DETAIL)
+                self._map.observe(observation)
+                return None
+            drive = _BuildDrive(mission)
+            self._builds[goal_id] = drive
+            self._enforce_cap()
+
+        channel = host.actions
+        waiting = self._collect_mission_pending(drive, channel)
+        if waiting:
+            self._map.observe(observation)
+            return None
+        if (
+            channel is not None
+            and drive.pending_action_id is None
+            and channel.pending_count >= channel.max_pending
+        ):
+            # Asking the mission for a step it could not submit would burn a
+            # bound for nothing; learn from the observation and wait.
+            self._map.observe(observation)
+            return None
+
+        value = drive.mission.next_step(observation)
+        if value is None:
+            return None
+        if isinstance(value, MissionStep):
+            self._submit_build_step(host, goal_id, drive, value.request)
+            return None
+        if isinstance(value, MissionProbe):
+            # The one goal-seam request a mission emits: its observed success
+            # is what the loop settles the goal with, because no channel
+            # result exists for a mission that never needed to act.
+            return value.request
+        if isinstance(value, MissionComplete):
+            self._finish_build_complete(host, goal_id, drive)
+            return None
+        self._finish_build_refused(host, goal_id, drive, value)
+        return None
+
+    def _build_mission_for(self, goal_id: str, record: GoalRecord) -> BuildStructureMission | None:
+        """Build the mission the goal's own validated parameters describe.
+
+        The structure is the record's own shape-checked identifier and the
+        square its own three range-checked coordinates, so the constructor's
+        guards cannot fire on a channel-admitted goal. The policy comes off the
+        wrapped chain, as the craft mission reads its own: the user's reserves
+        are part of that configuration, and a build that broke a reserve because
+        the wrapper handed the mission a default config would be the loot
+        policy's one unbreakable rule broken by a wiring accident. ``None`` is
+        the gap a hand-built record can open, and it is answered by refusing
+        rather than by choosing either missing half.
+        """
+        params = record.params
+        if (
+            params.structure is None
+            or params.target_x is None
+            or params.target_y is None
+            or params.target_z is None
+        ):
+            return None
+        policy, _ = self._policy_ports()
+        return BuildStructureMission(
+            goal_id,
+            structure=params.structure,
+            square=(params.target_x, params.target_y, params.target_z),
+            policy=policy,
+            limits=self._build_limits,
+        )
+
+    def _submit_build_step(
+        self, host: NavigationHost, goal_id: str, drive: _BuildDrive, request: ActionRequest
+    ) -> None:
+        channel = host.actions
+        if channel is None:
+            # Same reasoning as the craft path, one rung along: a wrapper with
+            # no conveyor for intermediate work cannot build honestly, and the
+            # dispatch route for a P4 command is the last thing in this file to
+            # improvise a second of.
+            drive.mission.mark_abandoned()
+            self._finish_build_refused(
+                host,
+                goal_id,
+                drive,
+                MissionRefused(
+                    reason_code=ReasonCode.CAPABILITY_UNAVAILABLE,
+                    detail="the loop holds no action channel for the mission's steps",
+                ),
+            )
+            return
+        try:
+            admitted = channel.submit(request)
+        except LoopError:
+            # Admission refused: the queue filled between the capacity check
+            # and now, or a restart made the key ambiguous. The step is
+            # dropped and the mission decides again from the next
+            # observation; its own bounds cap how often this can repeat.
+            return
+        drive.pending_action_id = admitted.action_id
+
+    def _finish_build_complete(
+        self, host: NavigationHost, goal_id: str, drive: _BuildDrive
+    ) -> None:
+        """End a completed mission's goal on evidence something observed."""
+        queue = host.goals
+        assert queue is not None  # _build returned before this without one
+        last = drive.last_success
+        if last is None:
+            # Unreachable by construction — the mission answers Complete only
+            # after a succeeded result — but a lie would be worse than a wait:
+            # leave the goal to its budgets rather than fabricate evidence.
+            return
+        with host.goal_lock:
+            queue.succeed(goal_id, last)
+        self._seal_build_report(goal_id, drive)
+
+    def _finish_build_refused(
+        self, host: NavigationHost, goal_id: str, drive: _BuildDrive, refused: MissionRefused
+    ) -> None:
+        """End the goal with the mission's typed reason and summary line."""
+        queue = host.goals
+        if queue is None:
+            return
+        with host.goal_lock:
+            queue.fail(goal_id, refused.reason_code, refused.detail)
+        self._seal_build_report(goal_id, drive)
+
+    def _seal_build_report(self, goal_id: str, drive: _BuildDrive) -> None:
+        """Move the mission's report into the bounded ledger and drop the drive."""
+        self._build_reports[goal_id] = drive.mission.report
+        self._build_reports.move_to_end(goal_id)
+        while len(self._build_reports) > MAX_KEPT_BUILD_REPORTS:
+            self._build_reports.popitem(last=False)
+        self._builds.pop(goal_id, None)
+
     def _target_of(self, record: GoalRecord) -> NavigationTarget | None:
         params = record.params
         if params.target_x is None or params.target_y is None or params.target_z is None:
@@ -2519,6 +2791,8 @@ class NavigatingPlanner:
                 self._abandon_combat(goal_id)
             for goal_id in list(self._crafts):
                 self._abandon_craft(goal_id)
+            for goal_id in list(self._builds):
+                self._abandon_build(goal_id)
             return
         queue = host.goals
         with host.goal_lock:
@@ -2549,6 +2823,9 @@ class NavigatingPlanner:
             dead_crafts = [
                 goal_id for goal_id in self._crafts if not _drive_lives(queue.record(goal_id))
             ]
+            dead_builds = [
+                goal_id for goal_id in self._builds if not _drive_lives(queue.record(goal_id))
+            ]
         for goal_id in dead:
             del self._journeys[goal_id]
         for goal_id in dead_returns:
@@ -2567,6 +2844,8 @@ class NavigatingPlanner:
             self._abandon_combat(goal_id)
         for goal_id in dead_crafts:
             self._abandon_craft(goal_id)
+        for goal_id in dead_builds:
+            self._abandon_build(goal_id)
         self._enforce_cap()
 
     def _abandon_mission(self, goal_id: str) -> None:
@@ -2618,6 +2897,13 @@ class NavigatingPlanner:
         drive.mission.mark_abandoned()
         self._seal_craft_report(goal_id, drive)
 
+    def _abandon_build(self, goal_id: str) -> None:
+        drive = self._builds.get(goal_id)
+        if drive is None:
+            return
+        drive.mission.mark_abandoned()
+        self._seal_build_report(goal_id, drive)
+
     def _enforce_cap(self) -> None:
         """Shed the oldest drives past each registry's cap.
 
@@ -2625,7 +2911,7 @@ class NavigatingPlanner:
         its walked legs, and a wrapper that lost track of it has nothing to
         report. Every mission registry goes through :meth:`_shed_mission`
         instead, because an evicted mission still owes its report to the
-        ledger; the seven calls used to be seven copies of that loop, which is
+        ledger; the eight calls used to be eight copies of that loop, which is
         one place per registry for the seal to be forgotten.
         """
         while len(self._journeys) > MAX_TRACKED_JOURNEYS:
@@ -2653,6 +2939,9 @@ class NavigatingPlanner:
         self._shed_mission(
             self._crafts, self._craft_reports, MAX_TRACKED_CRAFTS, MAX_KEPT_CRAFT_REPORTS
         )
+        self._shed_mission(
+            self._builds, self._build_reports, MAX_TRACKED_BUILDS, MAX_KEPT_BUILD_REPORTS
+        )
 
     def _shed_mission(
         self,
@@ -2665,8 +2954,9 @@ class NavigatingPlanner:
 
         Evicted is not finished, so each one is marked abandoned and its
         partial report sealed into *reports* before the drive goes — for a
-        craft that report is the only surviving account of what was spent, and
-        for the rest it is what the user who started the work is owed. Each
+        craft that report is the only surviving account of what was spent, for
+        a build the only account of what is now standing in the world, and for
+        the rest it is what the user who started the work is owed. Each
         registry keeps its own two bounds rather than sharing one pair: a burst
         of one kind of goal must not evict the report of another that a user is
         about to ask for.

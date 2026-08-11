@@ -264,6 +264,7 @@ class ToolRouter:
             "pz_action_inspect_container": self._submit,
             "pz_action_search_inventory": self._submit,
             "pz_action_inspect_recipe": self._submit,
+            "pz_action_inspect_buildable": self._submit,
             "pz_action_move_to": self._submit,
             "pz_action_move_near": self._submit,
             "pz_action_open_container": self._submit,
@@ -285,6 +286,7 @@ class ToolRouter:
             "pz_action_engage": self._submit,
             "pz_action_retreat": self._submit,
             "pz_action_craft": self._submit,
+            "pz_action_build": self._submit,
             "pz_action_rest": self._submit,
             "pz_action_sleep": self._submit,
             "pz_action_wait": self._submit,
@@ -1154,6 +1156,18 @@ class ToolRouter:
                     categories=args.get("categories"),
                     target_endurance=args.get("target_endurance"),
                     hours=args.get("hours"),
+                    # The two irreversible kinds' parameters. Both are required
+                    # by their kind, so a reader that dropped one turned every
+                    # submission of that kind into "product is required" —
+                    # which is what `craft_item` did from the wave that
+                    # published it until this one: the schema advertised the
+                    # parameter, this constructor never read it, and the
+                    # channel refused the goal for missing what the caller had
+                    # sent. `structure` is read here in the same breath so the
+                    # building kind never spends a wave that way.
+                    product=args.get("product"),
+                    count=args.get("count"),
+                    structure=args.get("structure"),
                 ),
             )
         except ValueError as rejected:
@@ -1258,6 +1272,18 @@ class ToolRouter:
             param_payload["target_endurance"] = params.target_endurance
         if params.hours is not None:
             param_payload["hours"] = params.hours
+        # The echo of the two irreversible kinds. Both strings are checked
+        # identifiers — GoalParams refused anything outside the item-type
+        # alphabet at construction — which is what makes echoing them safe;
+        # they are the only free-standing names on this payload and they came
+        # back the way they went in, so a caller can see which blueprint it
+        # actually authorised.
+        if params.product is not None:
+            param_payload["product"] = params.product
+        if params.count is not None:
+            param_payload["count"] = params.count
+        if params.structure is not None:
+            param_payload["structure"] = params.structure
         data: JsonDict = {
             "goal_id": as_token(record.goal_id),
             "kind": record.kind.value,

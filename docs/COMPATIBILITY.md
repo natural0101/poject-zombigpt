@@ -8,7 +8,7 @@ against the build actually installed on this machine.
 
 This document describes the capability model in
 `packages/pz_agent_core/src/pz_agent_core/capabilities/` — four modules:
-`model.py` (the states, the evidence, the report), `probes.py` (the fifteen
+`model.py` (the states, the evidence, the report), `probes.py` (the sixteen
 probes), `scanner.py` (the read-only symbol scan) and `report_io.py` (loading and
 saving). The generated result lives in `compat/generated_api_report.json`, which
 is gitignored — it describes *your* installation, not the project's.
@@ -100,15 +100,17 @@ fails on the first unusual file.
 
 ---
 
-## The fifteen probes
+## The sixteen probes
 
-`PROBES` in `probes.py` holds exactly fifteen `ProbeDefinition`s. Each names the
+`PROBES` in `probes.py` holds exactly sixteen `ProbeDefinition`s. Each names the
 symbols a static scan must find (an AND over all of them), the runtime
 confirmation that could raise it to `verified`, and a ceiling.
 
-This section and the tool table below had drifted: both said twelve and both
-were missing `door_toggle` and `combat_assist`, which shipped in earlier waves.
-They are restored here along with `crafting`, which is new.
+This section and the tool table below had drifted once: both said twelve and
+both were missing `door_toggle` and `combat_assist`, which had shipped in
+earlier waves. They were restored along with `crafting`, and `building` — the
+sixteenth — is added here in the wave that introduced it, which is the habit the
+drift is meant to teach.
 
 | Capability | Required symbols | Static ceiling | Confirmed by evidence keys |
 | --- | --- | --- | --- |
@@ -126,6 +128,7 @@ They are restored here along with `crafting`, which is new.
 | `door_toggle` | `ISWalkToTimedAction`, `.new`, `ISTimedActionQueue.add` | `available_unverified` | `door_ref`, `open_before`, `open_after` |
 | `combat_assist` | `ISWalkToTimedAction`, `.new`, `ISTimedActionQueue.add` | **`experimental`** (`EXPERIMENTAL_API`) | `target_ref` |
 | `crafting` | `ISWalkToTimedAction`, `.new`, `ISTimedActionQueue.add` | **`experimental`** (`EXPERIMENTAL_API`) | `recipe`, `product` |
+| `building` | `ISWalkToTimedAction`, `.new`, `ISTimedActionQueue.add` | **`experimental`** (`EXPERIMENTAL_API`) | `blueprint`, `square` |
 | `autonomous_attack` | none | **`unsupported`**, hard ceiling (`NO_VERIFIED_API`) | none accepted |
 
 Three design decisions that are visible in that table and are worth reading as
@@ -146,31 +149,36 @@ available is reported by the mod, per attempt.
 `unsupported`, so `confirm()` cannot raise it even with a live ack. The decision
 not to drive autonomous combat is a design decision.
 
-**`door_toggle`, `combat_assist` and `crafting` all require the same
+**`door_toggle`, `combat_assist`, `crafting` and `building` all require the same
 walk-and-queue set, and their ceilings still differ.** That is not an
-inconsistency: the required symbols are what a *scan* can see, and for all three
+inconsistency: the required symbols are what a *scan* can see, and for all four
 the thing that actually matters — the door toggle, the swing and shove presses,
-the recipe tables and the craft entry point — lives behind Java accessors no
-scan of the install reaches. Naming those in `required_symbols` would report
+the recipe tables and the craft entry point, the blueprint definitions and the
+call that puts an object on a square — lives behind Java accessors no scan of
+the install reaches. Naming those in `required_symbols` would report
 `unsupported` on a perfectly healthy build. So the difference between them is
 the ceiling, argued per capability: opening a door is reversible and reads
-`available_unverified`; a swing and a craft are not, and both cap at
-`experimental` until a live run's re-observed evidence confirms the entry
+`available_unverified`; a swing, a craft and a placement are not, and all three
+cap at `experimental` until a live run's re-observed evidence confirms the entry
 points. For `crafting` the argument is sharper than for combat — a craft that
 goes wrong has already spent the materials by the time anyone finds out, and
-nothing observes them back.
+nothing observes them back. For `building` it is sharper again, and it is the
+strongest case in this table: a placement that goes wrong has put an object into
+the world, and **no action in this project removes one.**
 
-Four actions have **no probe at all**: `world.inspect`, `container.inspect`,
-`inventory.search` and `crafting.inspect`. Everything they read is reached
-through Java accessors that never appear in the game's Lua, so a probe over
-those names would report `unsupported` on a perfectly healthy install. They gate
-on the observation tier they need instead. The consequence is honest and worth
-stating: those four are the actions whose availability rests on no runtime
-evidence.
+Five actions have **no probe at all**: `world.inspect`, `container.inspect`,
+`inventory.search`, `crafting.inspect` and `building.inspect`. Everything they
+read is reached through Java accessors that never appear in the game's Lua, so a
+probe over those names would report `unsupported` on a perfectly healthy
+install. They gate on the observation tier they need instead, and the mod's own
+declarations agree — `adapters/Building.lua` names `capability = nil` for
+`building.inspect`, as `Crafting.lua` does for its reading. The consequence is
+honest and worth stating: those five are the actions whose availability rests on
+no runtime evidence.
 
 ## Which tools each capability gates
 
-`pz_agent_mcp.catalog` names the capability on the tool. Fourteen of the fifteen
+`pz_agent_mcp.catalog` names the capability on the tool. Fifteen of the sixteen
 probes gate a tool; `autonomous_attack` gates nothing, because nothing was built
 on it.
 
@@ -190,13 +198,14 @@ on it.
 | `door_toggle` | `pz_action_open_door`, `pz_action_close_door`, `pz_action_unlock_door` |
 | `combat_assist` | `pz_action_equip_best_weapon`, `pz_action_shove`, `pz_action_engage`, `pz_action_retreat` |
 | `crafting` | `pz_action_craft` |
+| `building` | `pz_action_build` |
 
 `pz_action_open_container` is gated on `move_to_square` and not on a container
 capability, because what it does is walk the character to within reach.
 
-**Four capabilities are experimental.** `experimental` is upgradeable but not
+**Five capabilities are experimental.** `experimental` is upgradeable but not
 usable, so on a clean scan `pz_action_sleep`, `pz_action_drink_source`, the four
-combat tools and `pz_action_craft` are all withheld — named, with their reason,
+combat tools, `pz_action_craft` and `pz_action_build` are all withheld — named, with their reason,
 in `pz://capabilities` and by `withheld_tools()`. `drink_world_source` is capped
 because §12.4 lists the world water action as unconfirmed. `survival_sleep` is
 capped for a sharper reason: vanilla drives sleep from a context-menu callback,
@@ -205,11 +214,28 @@ queue entry to cancel, and a panic stop cannot reach them. `combat_assist` is
 capped because the swing and shove presses have never been called from this
 project. `crafting` is capped because Build 42 rewrote crafting and none of the
 recipe spellings has been seen answering — and because a wrong guess there is
-paid for in materials that no later observation returns.
+paid for in materials that no later observation returns. `building` is capped
+for those two reasons and one that has no counterpart anywhere else in this
+table: a placement leaves an object in the world and this project ships no
+action that takes it down, so a wrong guess is not paid for in materials but in
+a save the agent cannot restore.
 
-`crafting.inspect` is the counter-example worth naming: it is part of the same
-rung and it is *not* withheld, because reading a recipe spends nothing. A build
-that cannot answer says so per call.
+`crafting.inspect` and `building.inspect` are the counter-examples worth naming:
+each is part of a capped rung and neither is withheld, because reading spends
+nothing and places nothing. A build that cannot answer says so per call. Said
+plainly for the building rung, because it is the split a release note should not
+have to be read twice to learn: **on a clean install the reading is published
+and the placement is not.**
+
+**One consequence of `experimental` deserves to be read as a limitation rather
+than as a workflow.** An experimental capability is not usable, and the action
+engine refuses an unusable capability before it sends anything — so the live run
+that would promote one cannot itself be issued, and `safety.disabled_capabilities`
+only ever subtracts. For `survival_sleep`, `drink_world_source`, `combat_assist`,
+`crafting` and `building` alike, promotion is therefore a deliberate change to
+this project and not something an operator can do from a running session.
+`docs/LIVE_TEST_PLAYBOOK.md` records that where it bites: S21 and S22 can reach
+their reading halves on any install and their write halves on none.
 
 `eat_percentage` is a good example of why the state matters. If percentage
 eating is usable — `verified` or `available_unverified` from the scan — the food

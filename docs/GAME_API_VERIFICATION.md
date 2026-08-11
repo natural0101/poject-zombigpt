@@ -461,6 +461,53 @@ yet — a gap by the closing paragraph's rule.
 | `CraftRecipe.getNearItem` | `() -> string or nil`; non-empty when the recipe needs something to stand at | `Observe.lua` (`recipeNeedsSurface`) — the `needs_surface` flag | **tri-state, and absent stays absent**: `false` is returned only when a reader actually answered that there is no such requirement. The sidecar escalates the craft to `P4` on anything that is not a positive `false` | `tests/lua/test_observe.lua`, `tests/unit/test_policy_crafting.py` | none — field absent, and the absence costs one permission tier | `requires_live` | A fabricated `false` would buy a craft queued where it cannot run; the absence buys caution instead |
 | `ISCraftRecipeAction` / `ISCraftAction` | `(player, recipe) -> timed action`; probed in that order — **both spellings and the argument order are guesses** | `adapters/Crafting.lua` (`crafting.craft`) — one timed action per item asked for, all queued at accept time | command refused naming both candidates; there is no fallback and deliberately no synthetic input | `tests/lua/test_adapter_crafting.lua` | `ISCraftRecipeAction / ISCraftAction is not available in this build` | `requires_live` | **Least certain constructor in this file**, jointly with the combat presses. `succeeded` is minted only off the re-observed product *and* the consumed materials, never off the action queueing |
 
+## Building — the blueprint surface (`adapters/Building.lua`, capability `building`)
+
+Read the crafting section above first: this is the same uncertainty, one rung
+worse. Build 42 rewrote construction, none of the spellings below has been seen
+answering in a live session, every one is probed through a short closed
+candidate list in the order written, and a missing name costs one
+`CAPABILITY_UNAVAILABLE` *naming every candidate that was looked for* — the good
+failure. The bad failure is a name that exists and means something else.
+
+What makes these rows the most consequential in the file is what a wrong guess
+leaves behind. A wrong crafting guess spends materials; a wrong building guess
+puts an object into the world, and **this project ships no action that removes
+one** — there is no demolition verb in the protocol, in the adapters or in the
+mod. That asymmetry is why the postcondition is doubled: a build is `succeeded`
+only when an object under the blueprint's own sprite stands on the square **and**
+the square that read clear beforehand no longer does, so a wrong-but-existing
+action class that queues and returns proves nothing.
+
+`building` therefore publishes at an `experimental` ceiling and `pz_action_build`
+is withheld on every install until a live run promotes it. `building.inspect` is
+*not* withheld with it — reading a square places nothing — so on a clean install
+this rung offers the reading and not the placement, and the reading is what
+reports the `SQUARE_OCCUPIED` and `WOULD_TRAP_PLAYER` verdicts a placement would
+meet.
+
+Reused surfaces, recorded on their own rows elsewhere rather than repeated:
+`getCell` and `IsoCell.getGridSquare` (resolving the target square),
+`ISTimedActionQueue.add` (the build is queued through the same queue every timed
+action uses), `IsoGameCharacter.getKnownRecipes` and `getScriptManager` (the
+crafting rows above — the same readers answer for blueprints), `IsoObject.getSprite`
+with `IsoSprite.getName`, and `IsoObject.getObjectName` / `getName`. The playbook
+scenario that exercises this rung is **S22_BUILD**, and it can only reach the
+refusal half on a stock install; the placement half is BLOCKED until the
+capability can be promoted.
+
+| Symbol | Assumed signature | Used by | Fallback | Test | Failure signature | Status | Actual |
+|---|---|---|---|---|---|---|---|
+| `ScriptManager.getBuildRecipe` / `getCraftRecipe` / `getRecipe` | `(name) -> a recipe object`; probed in that order — the *first* name is new here and is a guess at Build 42's construction table | `adapters/Building.lua` (`Building.blueprintObject`) | the entry is a name and nothing more: it cannot be resolved to a blueprint, so it is counted `unreadable` in the reading and a build naming it refuses | S22; `tests/lua/test_adapter_building.lua` | `getScriptManager().getBuildRecipe / getCraftRecipe / getRecipe is not available in this build` | `requires_live` | A known recipe that resolves and carries no sprite is a *craft*, not a blueprint, and is neither listed nor counted unreadable |
+| `CraftRecipe.getSpriteName` / `getTileName`, then `getSprite().getName` | `() -> string`; the tile a blueprint would place, probed in that order | `adapters/Building.lua` (`Building.blueprintSprite`) | no sprite means this side cannot tell what would appear on the square, so the entry is treated as a craft rather than a blueprint and no build can name it | S22; `tests/lua/test_adapter_building.lua` | none — the entry is absent from the blueprint listing | `requires_live` | **The sprite is the postcondition.** `verify` looks for an object answering to exactly this name on the square, so a wrong reader here fails an otherwise successful build rather than passing a failed one |
+| `CraftRecipe.getInputs` / `getSource`, and ingredient `getItems` / `getItemTypes` | the requirement list, exactly as the crafting rows describe them | `adapters/Building.lua` (`Building.blueprintInputs`) | the whole requirement list answers nil rather than partly — a verdict computed from the lines that happened to answer would call a placement affordable on requirements nobody read | S22; `tests/lua/test_adapter_building.lua` | `CraftRecipe.getInputs / getSource is not available in this build` | `requires_live` | Shared with crafting on purpose: a missing plank is a missing plank whatever it was going to become |
+| `ISBuildAction` / `ISBuildIsoEntityAction` | `(player, recipe, x, y, z) -> timed action`; probed in that order — **both spellings and the argument order are guesses** | `adapters/Building.lua` (`building.build`) — one timed action, queued once, with no branch that re-queues | command refused naming both candidates; there is no fallback and deliberately no synthetic placement | S22; `tests/lua/test_adapter_building.lua` | `ISBuildAction / ISBuildIsoEntityAction is not available in this build` | `requires_live` | **The least certain constructor in this file.** It is also the only one whose success cannot be undone by this project, which is why `succeeded` is minted only off the re-read square |
+| `IsoGridSquare.getObjects` (square state) | `() -> a zero-based list`; walked to decide whether a square is free | `adapters/Building.lua` (`Building.squareState`, `structureOn`) | the square cannot be judged at all, and the command refuses naming the symbol — never "probably clear" | S22; `tests/lua/test_adapter_building.lua` | `IsoGridSquare.getObjects is not available in this build` | `requires_live` | A square holding more objects than one reading walks counts as **occupied**, not as clear-so-far |
+| `IsoObject.isSolid` / `isSolidTrans` | boolean readers; either one true means something stands in the way | `adapters/Building.lua` (`occupies`) | an object answering neither is judged by the container and door/window readers below; an object answering none of them is not treated as a blocker | S22; `tests/lua/test_adapter_building.lua` | none — the object is simply not counted as occupying | `requires_live` | The one place in this rung where an absent reader is *permissive*, which is why `isFree` below is consulted as well |
+| `IsoGridSquare.isFree` | `(ignoreCharacter) -> boolean`; the engine's own answer to "is this square clear" | `adapters/Building.lua` (`Building.squareState`) | absent changes nothing: the object walk has already answered, and this reader is what catches what the walk cannot name — a character standing there among them | S22; `tests/lua/test_adapter_building.lua` | none — the reading falls back to the walk | `requires_live` | A positive `false` marks the square occupied even when the walk named nothing |
+| `IsoObject.getContainer`, `IsOpen`, `isSmashed` (as occupancy tests) | the readers a crate, a door and a window answer | `adapters/Building.lua` (`occupies`) — classified by reader rather than by `instanceof`, which several builds spell differently | an object exposing none of them is not counted as occupying the square | S22; `tests/lua/test_adapter_building.lua` | none — silent, and the square may read free | `requires_live` | A door or a window means a wall already stands there, which is why they count as occupancy rather than as passage here |
+| `IsoGridSquare.getFloor` | `() -> IsoObject` | `adapters/Building.lua` (`Building.squareState`) — to *exclude* the floor from the occupancy walk | with no floor reader every square would read occupied by its own floor, so the walk simply keeps every object | S22; `tests/lua/test_adapter_building.lua` | none — a square may read occupied when it is merely floored | `requires_live` | Recorded because the failure is a build that refuses *every* square, which reads like a broken policy rather than a missing reader |
+
 ## The game clock and the save's identity
 
 All observation-only. A missing accessor here costs a field of the observation
@@ -589,3 +636,13 @@ already record that finding from the desk: nothing in the playbook kills the
 character (`Events.OnPlayerDeath`), nothing issues `world.inspect`
 (`IsoGridSquare.getFloor`, `getLightLevel`), and nothing opens a vehicle
 container (`BaseVehicle.getPartById` and its two companions).
+
+Two more rows record a *different* shape of the same finding, and it is worth
+naming separately. The crafting and building sections are exercised by
+S21_CRAFT and S22_BUILD, so they are no longer unscheduled — but both
+capabilities resolve to `experimental`, an experimental capability is not
+usable, and the action engine refuses an unusable capability before it sends
+anything. The write half of each scenario therefore cannot be reached on a
+stock install at all: `ISCraftRecipeAction` and `ISBuildAction` stay
+`requires_live` until that gate is opened deliberately, and the scenarios say
+so rather than leaving an operator to discover it at the keyboard.

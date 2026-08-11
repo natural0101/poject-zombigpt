@@ -392,6 +392,23 @@ def _cases() -> list[tuple[ActionName, Command, Observation]]:
             a_command(ActionName.CRAFTING_CRAFT, {"recipe": "MakeCrate", "count": 1}),
             world,
         ),
+        # The two building actions. Both carry a square reference, which is the
+        # argument shape this table has checked since movement — but here it
+        # names where a permanent object would go rather than where a character
+        # would walk, so a rename on either side is worth catching twice over.
+        (
+            ActionName.BUILDING_INSPECT,
+            a_command(ActionName.BUILDING_INSPECT, {"square": square_ref(1201, 3400, 0)}),
+            world,
+        ),
+        (
+            ActionName.BUILDING_BUILD,
+            a_command(
+                ActionName.BUILDING_BUILD,
+                {"blueprint": "WoodenWall", "square": square_ref(1201, 3400, 0)},
+            ),
+            world,
+        ),
     ]
 
 

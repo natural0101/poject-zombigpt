@@ -1,0 +1,360 @@
+# Building: what this build's own code refuses, and what nobody here has checked.
+#
+# Crafting is the first thing the agent does that cannot be undone. Building is
+# the first thing it does that cannot be undone *and stays in the world*: two
+# planks spent on a spear are gone, but the world is where it was, while a wall
+# is a new fact on a square — and this project ships no action that takes one
+# down, because removing what somebody else put there is a different authority
+# and this build does not have it. Every rule below that says "refuses" is that
+# asymmetry showing through.
+#
+# The split between statuses is the corpus rule and it is worth restating here.
+# Rules about *our* policy, adapters, capability and goal are verified_script:
+# they restate code with tests behind them, and both paths are checked against
+# this tree at load. Everything about how Project Zomboid itself builds — what
+# a blueprint costs, how construction knowledge is learned, what a raised wall
+# does to a zombie's path — is unverified and carries a secondary source,
+# because Build 42 rewrote construction and nothing in this repository has ever
+# seen it answer. Nothing here is verified_live: this wave has no live evidence,
+# and the playbook scenario that would produce some (S22_BUILD) has not been run.
+schema_version: "1.0"
+domain: building
+rules:
+  - id: building_placement_is_p4_and_never_the_agents_own_idea
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_core/src/pz_agent_core/actions/adapters/building.py::BuildingBuildAdapter"
+    status: verified_script
+    claim: "building.build is P4 and the tier is a constant: there is no argument that makes placing a permanent object cheaper, no escalation to reach it and no tier above it, and P4 has no autonomous path in this codebase at all."
+    observed_inputs: []
+    preconditions:
+      - "The command names a blueprint and a square, both required"
+    decision: "The adapter declares risk as a class constant and grows no risk_for, unlike crafting.craft which escalates P3 to P4 per recipe. MODE_LIMITS names no P4 ceiling in any mode and _p4_gate demands the user's own initiative plus an explicit per-call grant, so no configuration and no mode lets the agent raise a wall on its own."
+    actions:
+      - building.build
+    postconditions: []
+    on_failure: "A P4 command reached on the agent's initiative is refused by the permission engine before anything is queued; the refusal names the tier, not the blueprint."
+    risk_class: P4
+    goal_kinds:
+      - build_structure
+    proven_by:
+      - tests/unit/test_adapters_building.py
+      - tests/unit/test_mcp_catalog_actions.py
+
+  - id: building_nothing_in_this_build_takes_a_structure_down
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_core/src/pz_agent_core/protocol/enums.py::ActionName"
+    status: verified_script
+    claim: "There is no demolition action in this build: the protocol carries building.inspect and building.build and nothing that removes an object, so every placement the agent makes is one the agent cannot reverse — which is why the gates around it refuse more readily than crafting's."
+    observed_inputs: []
+    preconditions: []
+    decision: "Not a decision made per command: it is the shape of the action census. ActionName holds no removal verb, no adapter implements one, and the mod registers none, so a planner asking to undo a build has nothing to name. The consequence is written into the policy rather than left implicit — a refused wall costs a sentence, a wall in the wrong place is permanent."
+    actions: []
+    postconditions: []
+    on_failure: "A request to remove something is refused as an unknown action; nothing approximates it by building over the square or by clearing it."
+    risk_class: P0
+    goal_kinds:
+      - build_structure
+    proven_by:
+      - tests/unit/test_mcp_catalog.py
+      - tests/lua/test_adapter_registry.lua
+
+  - id: building_a_placement_that_would_seal_the_character_in_is_refused
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_core/src/pz_agent_core/policy/building.py::enclosure_after"
+    status: verified_script
+    claim: "A structure that would leave the square the character stands on with no remaining route to open ground is refused with WOULD_TRAP_PLAYER before anything is queued, and the check is a four-connected flood fill over the observed window with the placement treated as a wall."
+    observed_inputs:
+      - player.position
+      - nearby.objects[].position
+      - nearby.objects[].semantics
+    preconditions:
+      - "The observation described a window of squares on the character's floor"
+    decision: "enclosure_after fills from the character's own square and succeeds only on reaching a square at the edge of the described window. Diagonals are deliberately absent — whether a character may cut a wall's corner is an engine question this side cannot answer — and a door counts as a way out only when the observer positively read it as neither locked nor barricaded."
+    actions:
+      - building.build
+    postconditions: []
+    on_failure: "WOULD_TRAP_PLAYER, carrying the enclosure answer and the claim it is entitled to make. The command does not exist yet, so nothing is cancelled and nothing is half-built."
+    risk_class: P4
+    goal_kinds:
+      - build_structure
+    proven_by:
+      - tests/unit/test_policy_building.py
+      - tests/unit/test_adapters_building.py
+    numbers:
+      - name: max_flood_squares
+        value: 1024
+        unit: squares
+        status: verified_script
+      - name: max_window_squares
+        value: 1024
+        unit: squares
+        status: verified_script
+
+  - id: building_the_enclosure_claim_is_bounded_by_what_was_observed
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_core/src/pz_agent_core/policy/building.py::EnclosureCheck"
+    status: verified_script
+    claim: "A passing enclosure check proves less than it looks: it cannot show the character is not already shut in by something outside the observed window, only that this placement removes no exit the observation itself found — and every way the check can fail to run is a refusal rather than a pass."
+    observed_inputs:
+      - player.position
+      - nearby.objects[].semantics
+    preconditions: []
+    decision: "The window is a bounded reading, so the claim EnclosureCheck carries is stated in the answer rather than inferred by the reader. An unreadable window, a character whose own square was not described, and a fill that reached MAX_FLOOD_SQUARES all refuse: an unreadable map is where a trapping wall is most likely, not least, and a search that ran out of budget has proven nothing."
+    actions:
+      - building.build
+      - building.inspect
+    postconditions: []
+    on_failure: "The refusal is WOULD_TRAP_PLAYER whichever of the three it was, with the detail naming which; erring toward refusal is the direction chosen, because a refused wall costs a sentence and a wall that traps the character costs the save."
+    risk_class: P4
+    goal_kinds:
+      - build_structure
+    proven_by:
+      - tests/unit/test_policy_building.py
+
+  - id: building_an_occupied_square_is_never_cleared_to_make_room
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_core/src/pz_agent_core/policy/building.py::assess_placement"
+    status: verified_script
+    claim: "Something already standing on the target square refuses the placement with SQUARE_OCCUPIED naming what was found; the agent never removes it, and a square that merely could not be read as clear counts as occupied too."
+    observed_inputs:
+      - nearby.objects[].position
+      - nearby.objects[].semantics
+      - nearby.objects[].kind
+    preconditions:
+      - "The observation described the target square on the character's floor"
+    decision: "The gate order is fixed — window, structure, square readable, square free, enclosure, materials — so a picture failing several always reports the most fundamental refusal. In the mod the same question is asked again at accept time and once more before the timed action is queued, because a square that was clear at validate may not be clear now."
+    actions:
+      - building.build
+      - building.inspect
+    postconditions: []
+    on_failure: "SQUARE_OCCUPIED with the blocker named where the build would say what it was; the mission's next move is another square, never clearing this one."
+    risk_class: P4
+    goal_kinds:
+      - build_structure
+    proven_by:
+      - tests/unit/test_policy_building.py
+      - tests/lua/test_adapter_building.lua
+
+  - id: building_one_command_raises_one_structure_once
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_core/src/pz_agent_core/actions/adapters/building.py::MAX_BLUEPRINT_NAME_LEN"
+    status: verified_script
+    claim: "One building.build command raises one structure on one square. There is no count argument anywhere on the wire — deliberately unlike crafting, which publishes its one — and no branch in the mod re-queues, so a second structure is a second command through every gate again."
+    observed_inputs: []
+    preconditions:
+      - "The command carries a bounded blueprint identifier and a square reference this session minted"
+    decision: "The adapter's argument set is blueprint and square and nothing else; the mod declares the same two. A count argument is exactly what a loop would read, and an orientation argument is one more thing a P4 approval would have to cover, so neither exists."
+    actions:
+      - building.build
+    postconditions:
+      - "Exactly one timed action was queued, and the command is terminal whether or not it produced anything"
+    on_failure: "A window that closes with nothing standing is POSTCONDITION_FAILED carrying the object counts; whether to try again is the next submission's question."
+    risk_class: P4
+    goal_kinds:
+      - build_structure
+    proven_by:
+      - tests/unit/test_adapters_building.py
+      - tests/lua/test_adapter_building.lua
+    numbers:
+      - name: max_blueprint_name_len
+        value: 64
+        unit: characters
+        status: verified_script
+      - name: build_window_ms
+        value: 30000
+        unit: ms
+        status: verified_script
+
+  - id: building_success_is_the_structure_observed_on_the_square
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_core/src/pz_agent_core/actions/adapters/building.py::BuildingBuildAdapter"
+    status: verified_script
+    claim: "A build succeeds only when the re-observed square carries something it did not before — a new object, or the assessment turning to blocked — and the mod wants the blueprint's own sprite standing there; an ack is a statement about the queue."
+    observed_inputs:
+      - nearby.objects[].ref
+      - nearby.objects[].position
+      - nearby.objects[].semantics
+    preconditions:
+      - "A reading of the square from before the build exists to compare against"
+    decision: "verify compares the two observations and answers nothing when the square reads exactly as it did. Both readings are differences, so an unreadable before is an unproven postcondition rather than a lenient one — a square with something on it is as true of a square that always had it."
+    actions:
+      - building.build
+    postconditions:
+      - "An object stands on the square that the preceding observation did not carry, or the square turned from clear to blocked"
+      - "In the mod, an object under the blueprint's sprite stands there and the square no longer reads free"
+    on_failure: "POSTCONDITION_FAILED with the object counts. Nothing is retried on the assumption the build is still running: the window closed."
+    risk_class: P4
+    goal_kinds:
+      - build_structure
+    proven_by:
+      - tests/unit/test_adapters_building.py
+      - tests/lua/test_adapter_building.lua
+
+  - id: building_reading_a_square_places_nothing
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_core/src/pz_agent_core/actions/adapters/building.py::BuildingInspectAdapter"
+    status: verified_script
+    claim: "building.inspect is read-only in fact as well as in the protocol — the character does not move and touches nothing — and it answers each observed blueprint with the verdict a build on that square would reach, so a refusal is seen before the P4 is granted rather than after."
+    observed_inputs:
+      - inventory.items[].extra
+      - nearby.objects[].position
+      - nearby.objects[].semantics
+    preconditions:
+      - "The observation carries an inventory tier and a nearby tier"
+    decision: "The adapter sits at P0 in READ_ONLY_ACTIONS beside the other four reads and names no capability, for their reason: a probe over the Java accessors behind a blueprint table would report unsupported on a healthy install. adapters/Building.lua declares capability = nil for the same action, which is the agreement the two halves of the wire owe each other."
+    actions:
+      - building.inspect
+    postconditions:
+      - "The answer names the square, whether it is free, and one entry per readable blueprint with its verdict"
+    on_failure: "An observation carrying no building readout, or no window to read the square out of, is reported as a failed reading — never as 'nothing can be built here'."
+    risk_class: P0
+    goal_kinds:
+      - build_structure
+    proven_by:
+      - tests/unit/test_adapters_building.py
+
+  - id: building_materials_are_counted_by_the_crafting_rule
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_core/src/pz_agent_core/policy/building.py::assess_placement"
+    status: verified_script
+    claim: "A placement short of materials is refused with the crafting rung's own codes — RECIPE_MATERIALS_MISSING naming each shortfall, RESOURCE_RESERVED when a reserve would cover it — on the crafting policy's tally, imported rather than copied."
+    observed_inputs:
+      - inventory.items[].full_type
+      - inventory.items[].extra
+    preconditions:
+      - "The square is readable, free, and the placement passed the enclosure check"
+    decision: "The materials gate runs last of the six, because 'you cannot build here at all' outranks 'you are two planks short' and because a reserved plank is a question the user can answer while a trapping wall is not. Reserved items are counted separately and never added to what may be spent."
+    actions:
+      - building.build
+    postconditions: []
+    on_failure: "The sidecar refuses before any command exists, with each short line reported as held-of-needed; the mission does not go looting to cover it."
+    risk_class: P4
+    goal_kinds:
+      - build_structure
+    proven_by:
+      - tests/unit/test_policy_building.py
+    numbers:
+      - name: max_reported_shortfalls
+        value: 6
+        unit: lines
+        status: verified_script
+
+  - id: building_capability_is_withheld_until_a_live_run
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_core/src/pz_agent_core/capabilities/probes.py::PROBES"
+    status: verified_script
+    claim: "The building capability declares itself experimental, so pz_action_build is withheld on every install this project can ship to and only a live build — the structure observed standing on the square — promotes it; the square reading is not withheld with it, because reading places nothing."
+    observed_inputs: []
+    preconditions:
+      - "A capability report exists for the installed build"
+    decision: "The probe requires only the walk-and-queue symbols a static scan can see; the blueprint definitions, the learned test and the entry point that puts an object on a square are Java accessors and build-specific tables no Lua scan resolves. The runtime confirmation is the build's own evidence keys, blueprint and square."
+    actions:
+      - building.build
+    postconditions: []
+    on_failure: "An unusable capability means the tool is not listed and not callable, with the reason in pz://capabilities; a goal that reaches the action engine ends CAPABILITY_UNAVAILABLE rather than being attempted."
+    risk_class: P4
+    goal_kinds:
+      - build_structure
+    proven_by:
+      - tests/unit/test_mcp_catalog_actions.py
+
+  - id: building_the_goal_names_both_the_blueprint_and_the_square
+    build: "42"
+    source: code
+    source_detail: "packages/pz_agent_core/src/pz_agent_core/goals/model.py::GOAL_SPECS"
+    status: verified_script
+    claim: "A build_structure goal requires four parameters — the structure and the three coordinates — and takes nothing optional: the one square this side could fill in unaided is the one the character is standing on, and walling in the square somebody is standing on is the mistake this rung exists to refuse."
+    observed_inputs: []
+    preconditions:
+      - "An explicit typed submission: the voice grammar declares the kind unspeakable, no provider plans it and no arbiter mints it"
+    decision: "The channel's spec table declares the four as required with no optional set, so a submission missing either half is refused before a mission exists. The blueprint is a bounded identifier compared only against names the observation reported; nothing in this process interprets it."
+    actions:
+      - building.build
+      - building.inspect
+    postconditions:
+      - "The structure is observed standing on the named square"
+    on_failure: "A refusal from the building policy ends the goal with the policy's own reason code; the mission does not pick another square and does not go looting for materials."
+    risk_class: P4
+    goal_kinds:
+      - build_structure
+    proven_by:
+      - tests/unit/test_mcp_catalog_goals.py
+      - tests/unit/test_voice_intents.py
+
+  - id: building_build42_rewrote_construction
+    build: "42"
+    source: official
+    source_detail: "https://projectzomboid.com/blog/news/2024/12/build-42-unstable-released/ — Build 42's new crafting and construction system"
+    status: unverified
+    claim: "Build 42 replaced Build 41's construction model with a new recipe and script system, so every blueprint accessor this mod probes is a guess: none of the spellings has been seen answering in a live session, and each is probed through a short closed candidate list."
+    observed_inputs: []
+    preconditions: []
+    decision: "Not a decision this repository makes: it is why the mod probes candidate spellings and refuses naming every candidate rather than assuming one, and why the capability starts experimental with both tools' evidence still outstanding."
+    actions: []
+    postconditions: []
+    on_failure: "A spelling that does not answer costs one CAPABILITY_UNAVAILABLE naming every candidate that was looked for; docs/GAME_API_VERIFICATION.md carries the rows."
+    risk_class: P0
+    proven_by: []
+
+  - id: building_blueprints_must_be_known_before_they_can_be_raised
+    build: "42"
+    source: wiki
+    source_detail: "https://pzwiki.net/wiki/Carpentry — construction recipes, carpentry level and what unlocks them"
+    status: unverified
+    claim: "A character can only raise structures it knows how to build — gated in Project Zomboid by skill level, profession and read literature — and this repository has never observed how Build 42 reports that knowledge for a construction recipe."
+    observed_inputs:
+      - inventory.items[].extra
+    preconditions: []
+    decision: "Not decided here. The policy asks the observation whether the character knows the blueprint and refuses as STRUCTURE_UNKNOWN when the build will not say — the tri-state rule the door and crafting policies established, where an absent flag is never read as the convenient answer."
+    actions: []
+    postconditions: []
+    on_failure: "An unreadable knowledge flag is a refusal, never an attempt; nothing here infers a blueprint from a skill level or an occupation."
+    risk_class: P0
+    goal_kinds:
+      - build_structure
+    proven_by: []
+
+  - id: building_a_raised_wall_changes_where_anything_can_walk
+    build: "42"
+    source: wiki
+    source_detail: "https://pzwiki.net/wiki/Construction — walls, doorframes and how built tiles block movement"
+    status: unverified
+    claim: "A structure raised in Project Zomboid blocks movement for the character, for zombies and for pathfinding alike, and how Build 42 recomputes routes around a newly placed tile has not been observed from this repository."
+    observed_inputs: []
+    preconditions: []
+    decision: "Not decided here, and it is the reason the enclosure check exists rather than a fact the check relies on: this side treats a solid blueprint as impassable when it asks whether a way out remains, which is the cautious reading whichever way the engine actually recomputes."
+    actions: []
+    postconditions: []
+    on_failure: "A route that a raised wall invalidated shows up as a movement failure — PATH_NOT_FOUND — on the next journey, not as a build failure."
+    risk_class: P0
+    goal_kinds:
+      - build_structure
+    proven_by: []
+
+  - id: building_material_costs_and_placement_rules_are_unmeasured
+    build: "42"
+    source: wiki
+    source_detail: "https://pzwiki.net/wiki/Construction — material costs, tools required and where a tile may be placed"
+    status: unverified
+    claim: "What a given blueprint costs, which tools must be carried, and which squares Project Zomboid itself considers legal to build on are unmeasured here: no number about the game's own construction costs appears anywhere in this repository."
+    observed_inputs:
+      - inventory.items[].extra
+    preconditions: []
+    decision: "Nothing plans on a cost. The requirement list is read from the observation per command and counted against what is carried, and a square the game refuses for a reason this side cannot see ends as a build that queued and produced nothing — which is the shape that failure takes."
+    actions: []
+    postconditions: []
+    on_failure: "POSTCONDITION_FAILED with the observed object counts, and no second attempt on the assumption that it was a placement rule rather than a missing plank."
+    risk_class: P0
+    goal_kinds:
+      - build_structure
+    proven_by: []

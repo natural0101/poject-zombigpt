@@ -47,6 +47,7 @@ from pz_agent_core.actions.adapters import register_game_adapters
 from pz_agent_core.capabilities.model import REASON_NO_VERIFIED_API
 from pz_agent_core.capabilities.probes import (
     AUTONOMOUS_ATTACK,
+    BUILDING,
     COMBAT_ASSIST,
     CRAFTING,
     DOOR_TOGGLE,
@@ -67,6 +68,7 @@ from pz_agent_core.capabilities.probes import (
     resolve_static,
 )
 from pz_agent_core.capabilities.scanner import SymbolIndex, scan_lua_tree
+from pz_agent_core.policy.building import BUILDING_KEY, SEMANTIC_BLOCKED, SEMANTIC_LOADED
 from pz_agent_core.protocol import (
     ActionName,
     ActionResult,
@@ -74,6 +76,7 @@ from pz_agent_core.protocol import (
     Command,
     Hands,
     InventoryView,
+    NearbyObject,
     NearbyView,
     NearbyZombie,
     Observation,
@@ -386,6 +389,64 @@ def _crafting() -> Exercise:
     )
 
 
+def _building() -> Exercise:
+    """One wall raised on the square next door, proved by the square changing.
+
+    The probe demands ``blueprint`` and ``square``, and the adapter mints them
+    only from a *difference*: the wall stands on the square afterwards and did
+    not stand there before. Both worlds therefore carry the same bounded window
+    of described squares — without a before-picture there is no change to
+    observe, only a square with something on it, which is as true of a square
+    that always had it.
+    """
+    target_x, target_y = HOME_X + 1, HOME_Y
+    wall = "WoodenWall"
+    plank_type = "Base.Plank"
+    plank = an_item(
+        runtime_id="m1",
+        container_ref=MAIN_REF,
+        full_type=plank_type,
+        display_name="Plank",
+        category="Item",
+        extra={
+            BUILDING_KEY: {
+                "structure_count": 1,
+                "known_structure_count": 1,
+                "structures": [
+                    {
+                        "name": wall,
+                        "display_name": "Wooden Wall",
+                        "known": True,
+                        "blocks_movement": True,
+                        "materials": [{"full_type": plank_type, "count": 1}],
+                    }
+                ],
+            }
+        },
+    )
+
+    def window(*, blocked: bool) -> list[NearbyObject]:
+        described = []
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                marks = [SEMANTIC_LOADED]
+                if blocked and (HOME_X + dx, HOME_Y + dy) == (target_x, target_y):
+                    marks.append(SEMANTIC_BLOCKED)
+                described.append(a_square(HOME_X + dx, HOME_Y + dy, 0, semantics=marks))
+        return described
+
+    containers = [main_container()]
+    return Exercise(
+        capability=BUILDING,
+        command=a_command(
+            ActionName.BUILDING_BUILD,
+            {"blueprint": wall, "square": square_ref(target_x, target_y, 0)},
+        ),
+        before=a_world(items=[plank], containers=containers, objects=window(blocked=False)),
+        after=a_world(seq=2, items=[plank], containers=containers, objects=window(blocked=True)),
+    )
+
+
 #: One run per probe this file can drive. Hand-built for the same reason the
 #: argument-agreement table is: a generated world would prove the generator
 #: agrees with itself, and the adapters are exactly what must not be trusted.
@@ -404,6 +465,7 @@ EXERCISES: Final[tuple[Exercise, ...]] = (
     _survival_sleep(),
     _combat_assist(),
     _crafting(),
+    _building(),
 )
 
 #: The probes no run above can reach, and why. Named rather than skipped: an

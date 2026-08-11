@@ -138,6 +138,12 @@ REQUIRED_PARAMS: dict[GoalKind, GoalParams] = {
     # remote link that could spend a character's materials is a protocol
     # change, not a table entry.
     GoalKind.CRAFT_ITEM: GoalParams(product="Base.SpearCrude"),
+    # The building kind needs four: what to raise, and the square to raise it
+    # on. The square reuses navigate_to's coordinates rather than minting a
+    # second triple — one place for "where the world ends", not two.
+    GoalKind.BUILD_STRUCTURE: GoalParams(
+        structure="carpentry_wall", target_x=1200, target_y=3400, target_z=0
+    ),
 }
 
 #: Tokens that are not goals. None of them resolves through ``parse_kind`` —

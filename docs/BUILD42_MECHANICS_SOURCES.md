@@ -1,7 +1,7 @@
 <!--
   GENERATED FILE - DO NOT EDIT BY HAND.
   Generator: pz_agent_core.knowledge.docgen.render_sources
-  Corpus revision: d4258d6e19fc5d33 (sha256/16 of the canonical corpus)
+  Corpus revision: 0a01c0921b02a5a0 (sha256/16 of the canonical corpus)
   Edit knowledge/gameplay/*.yaml and regenerate; the drift test
   byte-compares this file against a fresh render.
 -->
@@ -20,6 +20,21 @@ paths; a `verified_live` row's proofs include a live evidence pointer; an
 | Rule | Build | Source | Source detail | Status | Proven by |
 | --- | --- | --- | --- | --- | --- |
 | `avoid_retreat_criteria` | 42 | `code` | `packages/pz_agent_cli/src/pz_agent_cli/avoid_mission.py::SAFE_DISTANCE` | `verified_script` | `tests/unit/test_avoid_mission.py` |
+| `building_a_placement_that_would_seal_the_character_in_is_refused` | 42 | `code` | `packages/pz_agent_core/src/pz_agent_core/policy/building.py::enclosure_after` | `verified_script` | `tests/unit/test_policy_building.py`, `tests/unit/test_adapters_building.py` |
+| `building_a_raised_wall_changes_where_anything_can_walk` | 42 | `wiki` | `https://pzwiki.net/wiki/Construction — walls, doorframes and how built tiles block movement` | `unverified` | — |
+| `building_an_occupied_square_is_never_cleared_to_make_room` | 42 | `code` | `packages/pz_agent_core/src/pz_agent_core/policy/building.py::assess_placement` | `verified_script` | `tests/unit/test_policy_building.py`, `tests/lua/test_adapter_building.lua` |
+| `building_blueprints_must_be_known_before_they_can_be_raised` | 42 | `wiki` | `https://pzwiki.net/wiki/Carpentry — construction recipes, carpentry level and what unlocks them` | `unverified` | — |
+| `building_build42_rewrote_construction` | 42 | `official` | `https://projectzomboid.com/blog/news/2024/12/build-42-unstable-released/ — Build 42's new crafting and construction system` | `unverified` | — |
+| `building_capability_is_withheld_until_a_live_run` | 42 | `code` | `packages/pz_agent_core/src/pz_agent_core/capabilities/probes.py::PROBES` | `verified_script` | `tests/unit/test_mcp_catalog_actions.py` |
+| `building_material_costs_and_placement_rules_are_unmeasured` | 42 | `wiki` | `https://pzwiki.net/wiki/Construction — material costs, tools required and where a tile may be placed` | `unverified` | — |
+| `building_materials_are_counted_by_the_crafting_rule` | 42 | `code` | `packages/pz_agent_core/src/pz_agent_core/policy/building.py::assess_placement` | `verified_script` | `tests/unit/test_policy_building.py` |
+| `building_nothing_in_this_build_takes_a_structure_down` | 42 | `code` | `packages/pz_agent_core/src/pz_agent_core/protocol/enums.py::ActionName` | `verified_script` | `tests/unit/test_mcp_catalog.py`, `tests/lua/test_adapter_registry.lua` |
+| `building_one_command_raises_one_structure_once` | 42 | `code` | `packages/pz_agent_core/src/pz_agent_core/actions/adapters/building.py::MAX_BLUEPRINT_NAME_LEN` | `verified_script` | `tests/unit/test_adapters_building.py`, `tests/lua/test_adapter_building.lua` |
+| `building_placement_is_p4_and_never_the_agents_own_idea` | 42 | `code` | `packages/pz_agent_core/src/pz_agent_core/actions/adapters/building.py::BuildingBuildAdapter` | `verified_script` | `tests/unit/test_adapters_building.py`, `tests/unit/test_mcp_catalog_actions.py` |
+| `building_reading_a_square_places_nothing` | 42 | `code` | `packages/pz_agent_core/src/pz_agent_core/actions/adapters/building.py::BuildingInspectAdapter` | `verified_script` | `tests/unit/test_adapters_building.py` |
+| `building_success_is_the_structure_observed_on_the_square` | 42 | `code` | `packages/pz_agent_core/src/pz_agent_core/actions/adapters/building.py::BuildingBuildAdapter` | `verified_script` | `tests/unit/test_adapters_building.py`, `tests/lua/test_adapter_building.lua` |
+| `building_the_enclosure_claim_is_bounded_by_what_was_observed` | 42 | `code` | `packages/pz_agent_core/src/pz_agent_core/policy/building.py::EnclosureCheck` | `verified_script` | `tests/unit/test_policy_building.py` |
+| `building_the_goal_names_both_the_blueprint_and_the_square` | 42 | `code` | `packages/pz_agent_core/src/pz_agent_core/goals/model.py::GOAL_SPECS` | `verified_script` | `tests/unit/test_mcp_catalog_goals.py`, `tests/unit/test_voice_intents.py` |
 | `combat_assisted_unverified` | 42 | `code` | `packages/pz_agent_core/src/pz_agent_core/combat/policy.py::assess_engagement` | `unverified` | — |
 | `crafting_build42_rewrote_the_system` | 42 | `official` | `https://projectzomboid.com/blog/news/2024/12/build-42-unstable-released/ — Build 42 crafting and the new recipe/script model` | `unverified` | — |
 | `crafting_capability_is_withheld_until_a_live_run` | 42 | `code` | `packages/pz_agent_core/src/pz_agent_core/capabilities/probes.py::PROBES` | `verified_script` | `tests/unit/test_mcp_catalog_actions.py` |

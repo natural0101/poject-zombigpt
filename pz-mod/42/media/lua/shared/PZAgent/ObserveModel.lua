@@ -68,6 +68,50 @@ ObserveModel.MAX_ITEMS_PER_CONTAINER = 128
 ObserveModel.MAX_DEPTH = 4
 ObserveModel.MAX_OBJECTS = 64
 ObserveModel.MAX_ZOMBIES = 64
+
+--- Square descriptions one observation publishes, and the kind that separates
+--- them from the objects they ride beside.
+---
+--- They travel inside `nearby.objects` because that array is the only place in
+--- schemas/observation.schema.json a new nearby shape can go: the nearby block
+--- is `additionalProperties: false`, while each entry inside it is open. The
+--- kind token is what tells the two populations apart, and the two caps are
+--- separate for a reason -- a talkative floor must never be what pushes the
+--- doors and the containers out of the document. Set to the reader's own window
+--- (Observe.MAX_DESCRIBED_SQUARES), so the cap here only ever bites on a caller
+--- that sent more than the window holds.
+ObserveModel.MAX_SQUARE_ENTRIES = 49
+ObserveModel.SQUARE_KIND = "square"
+
+--- The vocabulary a square description speaks, and the whole of it.
+---
+--- Not invented here. `pz_agent_core.actions.adapters.movement` has read these
+--- exact tokens off `nearby.objects` since it was written -- `loaded` gates
+--- move_to, `blocked` fails it, `drop` and `closed_window` refuse it -- and
+--- `pz_agent_core.navigation.local_map` and `pz_agent_core.policy.building`
+--- read the same ones. Nothing in the mod emitted them until the build policy
+--- needed a map, which is why they are declared here as a table rather than
+--- spelled inline: one place decides what the planner sees, and a test can
+--- assert the set instead of restating it.
+---
+--- Each token is a POSITIVE reading and never a default. A square whose
+--- passability no reader would answer carries no `blocked` -- it carries no
+--- claim at all, and the limit counters below say the reading was missing, so
+--- a consumer can tell "there is a way through" from "we could not tell".
+---
+--- `closed_window` and `stairs` are absent on purpose: both are facts about an
+--- object standing on a square rather than about the square, and the object
+--- entries already carry them. Emitting them here would be the same fact in two
+--- places, free to disagree.
+ObserveModel.SQUARE_SEMANTIC = {
+  LOADED = "loaded",
+  BLOCKED = "blocked",
+  DROP = "drop",
+  -- Not part of the movement vocabulary: this one is the build policy's, and it
+  -- is the engine's own answer to "is anything standing here", which is a
+  -- different question from whether a character could walk through.
+  OCCUPIED = "occupied",
+}
 ObserveModel.MAX_MOODLES = 24
 ObserveModel.MAX_WOUNDS = 24
 ObserveModel.MAX_STATS = 48
@@ -385,6 +429,10 @@ local function newLimits()
     stats_omitted = 0,
     objects_truncated = false,
     objects_omitted = 0,
+    squares_truncated = false,
+    squares_omitted = 0,
+    passable_unknown = false,
+    occupied_unknown = false,
     zombies_truncated = false,
     zombies_omitted = 0,
     wounds_truncated = false,
@@ -407,6 +455,16 @@ local LIMIT_KEYS = {
   "stats_omitted",
   "objects_truncated",
   "objects_omitted",
+  "squares_truncated",
+  "squares_omitted",
+  -- The two readings a square description can be missing. They are limit keys
+  -- rather than per-square tokens because they are a property of the build --
+  -- either the accessor is there or it is not -- and because the alternative
+  -- is emitting a token for something nobody read. A consumer that needs the
+  -- square map must treat either of these as "this map cannot be trusted to
+  -- show a way out", which is what the build policy does with them.
+  "passable_unknown",
+  "occupied_unknown",
   "zombies_truncated",
   "zombies_omitted",
   "wounds_truncated",
@@ -1246,6 +1304,80 @@ local function buildObject(sessionId, descriptor)
   return object
 end
 
+--- One square description, or nil when the square cannot be named.
+---
+--- Named by its square reference, which is the reference `movement.move_to`
+--- and `building.build` both take, so the square a planner reasons about and
+--- the square a command names are the same string rather than two spellings
+--- that have to agree.
+---
+--- That choice has a cost and it is paid deliberately. An object with no
+--- container and no object index is also named by its square, so a description
+--- can carry the same `ref` as an object entry beside it; `observation.diff`
+--- keys a ref array by `ref` and requires those to be unique, so an array
+--- holding such a pair is diffed whole rather than entry by entry. The
+--- alternative was a reference of some other kind, which would be a reference
+--- no command could take -- and a square the planner can reason about but not
+--- name back is worth less than a compact delta. Nothing is corrupted either
+--- way: the diff falls back, it does not mis-key.
+---
+--- Every semantic is a positive reading. A fact the reader could not establish
+--- produces no token and raises a limit instead, because the consumers here are
+--- a walk that must not step into a wall and a placement that must not seal
+--- somebody in -- and for both of those, a fabricated token is the one value
+--- that turns "we could not tell" into "there is a way out".
+local function buildSquare(sessionId, descriptor, limits)
+  if type(descriptor) ~= "table" then
+    return nil
+  end
+  local distance = ObserveModel.clamp(descriptor.distance, 0, math.huge)
+  local ref = refs().buildSquare(
+    sessionId,
+    ObserveModel.integer(descriptor.x),
+    ObserveModel.integer(descriptor.y),
+    ObserveModel.integer(descriptor.z)
+  )
+  if ref == nil or distance == nil then
+    return nil
+  end
+  local names = ObserveModel.SQUARE_SEMANTIC
+  local semantics = {}
+  local loaded = descriptor.loaded == true
+  if loaded then
+    semantics[#semantics + 1] = names.LOADED
+  end
+  if descriptor.passable == false then
+    semantics[#semantics + 1] = names.BLOCKED
+  elseif loaded and type(descriptor.passable) ~= "boolean" and type(limits) == "table" then
+    -- Loaded, and this build would not say whether it can be crossed. Declared
+    -- once for the document rather than guessed at per square.
+    limits.passable_unknown = true
+  end
+  if descriptor.free == false then
+    semantics[#semantics + 1] = names.OCCUPIED
+  elseif loaded and type(descriptor.free) ~= "boolean" and type(limits) == "table" then
+    limits.occupied_unknown = true
+  end
+  if descriptor.floor == false then
+    -- The floor reader answered, and answered that there is none. A missing
+    -- reader leaves this out entirely: `drop` refuses a square outright, and
+    -- refusing solid ground because nobody could read its floor would be the
+    -- same fabrication pointing the other way.
+    semantics[#semantics + 1] = names.DROP
+  end
+  local entry = {
+    ref = ref,
+    kind = ObserveModel.SQUARE_KIND,
+    distance = distance,
+    semantics = tokenList(semantics, nil, ObserveModel.MAX_SEMANTICS),
+  }
+  local position = nearbyPosition(descriptor)
+  if position ~= nil then
+    entry.position = position
+  end
+  return entry
+end
+
 --- One zombie. `visible` and `chasing` are omitted when the reader could not
 --- read them, and the omission is declared through the limit counters -- the
 --- sidecar reads a missing `chasing` as false, which understates the threat, so
@@ -1313,10 +1445,32 @@ local function boundedNearby(built, cap, truncatedKey, omittedKey, limits)
   return json().array(built)
 end
 
+--- Two separately capped populations in one array, still nearest first.
+---
+--- The caps are applied before the merge and the order after it, so the square
+--- descriptions can neither displace an object nor break the "nearest first"
+--- promise the whole array makes. Ties fall back to the reference, exactly as
+--- byDistance does everywhere else, so the same world produces the same bytes.
+local function mergeNearby(objects, squares)
+  if #squares == 0 then
+    return objects
+  end
+  local merged = {}
+  for index = 1, #objects do
+    merged[index] = objects[index]
+  end
+  for index = 1, #squares do
+    merged[#merged + 1] = squares[index]
+  end
+  sort(merged, byDistance)
+  return json().array(merged)
+end
+
 --- The nearby block: what is around the player, nearest first.
 function ObserveModel.nearby(sessionId, fields, limits)
   local objects = {}
   local zombies = {}
+  local squares = {}
   if type(fields) == "table" then
     local rawObjects = type(fields.objects) == "table" and fields.objects or {}
     for index = 1, #rawObjects do
@@ -1336,9 +1490,26 @@ function ObserveModel.nearby(sessionId, fields, limits)
         zombies[#zombies + 1] = zombie
       end
     end
+    local rawSquares = type(fields.squares) == "table" and fields.squares or {}
+    for index = 1, #rawSquares do
+      local entry = buildSquare(sessionId, rawSquares[index], limits)
+      if entry == nil then
+        limits.squares_omitted = limits.squares_omitted + 1
+      else
+        squares[#squares + 1] = entry
+      end
+    end
     if fields.objects_truncated == true then
       limits.objects_truncated = true
       limits.objects_omitted = limits.objects_omitted + (ObserveModel.integer(fields.objects_dropped) or 1)
+    end
+    if fields.squares_truncated == true then
+      -- The reader's own count of squares it never described, which no cap here
+      -- can see. It has to travel: a square nobody described sits at the edge
+      -- of the window, and the edge of the window is where a trap check stops
+      -- and calls it a way out.
+      limits.squares_truncated = true
+      limits.squares_omitted = limits.squares_omitted + (ObserveModel.integer(fields.squares_dropped) or 1)
     end
     if fields.zombies_truncated == true then
       limits.zombies_truncated = true
@@ -1346,7 +1517,10 @@ function ObserveModel.nearby(sessionId, fields, limits)
     end
   end
   return {
-    objects = boundedNearby(objects, ObserveModel.MAX_OBJECTS, "objects_truncated", "objects_omitted", limits),
+    objects = mergeNearby(
+      boundedNearby(objects, ObserveModel.MAX_OBJECTS, "objects_truncated", "objects_omitted", limits),
+      boundedNearby(squares, ObserveModel.MAX_SQUARE_ENTRIES, "squares_truncated", "squares_omitted", limits)
+    ),
     zombies = boundedNearby(zombies, ObserveModel.MAX_ZOMBIES, "zombies_truncated", "zombies_omitted", limits),
   }
 end

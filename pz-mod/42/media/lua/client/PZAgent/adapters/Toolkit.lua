@@ -87,6 +87,15 @@ Toolkit.CAPABILITY = {
   -- recipe cannot be put back -- so the tool stays withheld on every install
   -- until a live craft promotes it.
   CRAFTING = "crafting",
+  -- Claimed by `building.build` alone. `building.inspect` only reads, so it
+  -- declares none for the reason the other read-only actions declare none, and
+  -- the build is the half a live run can confirm. It starts experimental for a
+  -- reason stronger than crafting's: a craft spends materials the character
+  -- owned, while a build leaves a structure standing in the world and this mod
+  -- ships no way to take one down. The tool therefore stays withheld on every
+  -- install until a live build promotes it, and even then the sidecar keeps the
+  -- action at P4, which has no autonomous path in any mode.
+  BUILDING = "building",
 }
 
 --- Health scale the game reports body parts on.
