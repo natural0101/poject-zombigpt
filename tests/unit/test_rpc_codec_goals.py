@@ -64,6 +64,7 @@ from pz_agent_mcp.remote.codec.goals import (
     encode_goal_cancellation,
     encode_goal_channel_status,
     encode_goal_id,
+    encode_goal_params,
     encode_goal_query,
     encode_goal_record,
     encode_goal_refusal,
@@ -98,7 +99,33 @@ REQUIRED_PARAMS: dict[GoalKind, GoalParams] = {
     # to the sidecar and not on this wire — the schema-conformance contract
     # test pins that carve-out, the same one navigate_to's coordinates carry.
     GoalKind.LOOT_AREA: GoalParams(),
+    # Bare goals both, by their kinds' own specs: home's whereabouts live in
+    # the save's memory, and explore's scope/radius are local to the sidecar,
+    # under the same not-on-the-wire carve-out the loot parameters carry.
+    GoalKind.RETURN_HOME: GoalParams(),
+    GoalKind.EXPLORE_AREA: GoalParams(),
+    # The care wave. treat_wounds and sleep_until_rested are admissible bare;
+    # rest_until's required target rides the carve-out pinned in
+    # TestTheCareKindsOnThisLink below — this codec does not carry it, so the
+    # kind cannot cross this link at all yet.
+    GoalKind.TREAT_WOUNDS: GoalParams(),
+    GoalKind.REST_UNTIL: GoalParams(target_endurance=0.8),
+    GoalKind.SLEEP_UNTIL_RESTED: GoalParams(),
+    # The retreat kind is admissible bare — parameterless by its own spec —
+    # and rides the same not-on-the-wire carve-out the other local kinds do
+    # (the schema-conformance contract test pins it); this codec's kind door
+    # is parse_kind, so the token itself round-trips.
+    GoalKind.AVOID_THREAT: GoalParams(),
 }
+
+#: The one kind whose *minimal* request this codec cannot carry: rest_until
+#: requires ``target_endurance``, and this codec predates the parameter. The
+#: gap is loud rather than silent — pinned in TestTheCareKindsOnThisLink —
+#: and the wire schema refuses all three care kinds upstream of this codec
+#: (the conformance contract test's NOT_YET_ON_THE_WIRE), so growing the
+#: parameters here is part of the same protocol change that would put the
+#: kinds on the wire.
+NOT_CROSSING_YET = frozenset({GoalKind.REST_UNTIL})
 
 #: Tokens that are not goals. None of them resolves through ``parse_kind`` —
 #: asserted below rather than assumed — and each is a different way of being
@@ -263,9 +290,15 @@ HAND_WRITTEN_RECORD: JsonDict = {
 
 
 class TestARequestSurvivesTheCrossing:
-    @pytest.mark.parametrize("kind", sorted(GoalKind))
+    @pytest.mark.parametrize("kind", sorted(set(GoalKind) - NOT_CROSSING_YET))
     def test_every_declared_kind_round_trips(self, kind: GoalKind) -> None:
-        """Driven off the enum, so a sixth member cannot be added untested."""
+        """Driven off the enum, so a new member cannot be added untested.
+
+        ``NOT_CROSSING_YET`` is subtracted with its own dedicated pin below:
+        a kind whose required parameter this codec does not carry must fail
+        the crossing loudly, and asserting a round trip of it would assert a
+        thing that cannot be true.
+        """
         request = a_request(kind=kind, budget=CHOSEN_BUDGET)
 
         assert decode_goal_request(crossing(encode_goal_request(request))) == request
@@ -454,6 +487,70 @@ class TestARequestSurvivesTheCrossing:
                     "budget": {"max_wall_ms": 1, "max_steps": 3, "pending_ttl_ms": 9000},
                 }
             )
+
+
+class TestTheCareKindsOnThisLink:
+    """The care wave's carve-out on the RPC codec, pinned both ways.
+
+    The wire schema already refuses all three care kinds at the gate (the
+    conformance contract test's ``NOT_YET_ON_THE_WIRE``), so no remote
+    submission of one legally reaches this codec. What these tests pin is
+    the codec's own half of the carve-out: the kind *tokens* cross — the
+    decoder resolves them through ``parse_kind`` like every other member —
+    but the care *parameters* are not carried, and the one kind that
+    requires one therefore cannot cross at all, loudly. Growing the
+    parameters here is part of the same protocol change that would put the
+    kinds on the schema; when that change lands, these assertions fail and
+    the carve-out is dismantled on purpose rather than lingering.
+    """
+
+    def test_the_care_parameters_are_not_carried_by_this_codec(self) -> None:
+        # The pinned gap itself: an encoder that learns either parameter
+        # fails this line, which is the review trigger — the decode side and
+        # the wire schema must learn them in the same change.
+        assert encode_goal_params(GoalParams(target_endurance=0.8)) == {}
+        assert encode_goal_params(GoalParams(hours=6)) == {}
+
+    def test_a_rest_until_request_cannot_cross_and_the_failure_is_loud(self) -> None:
+        """Refused at decode, never a widened goal.
+
+        The encoder drops the parameter it does not know, so what arrives is
+        a rest_until with no target — and the request type requires one, so
+        the decoder raises instead of admitting a goal the channel would
+        run with a target the caller never chose. A silent success here
+        would be the worse outcome this test exists to rule out.
+        """
+        request = a_request(kind=GoalKind.REST_UNTIL)
+
+        body = encode_goal_request(request)
+        assert body["kind"] == "rest_until"
+        assert body["params"] == {}
+        with pytest.raises(CodecError) as refused:
+            decode_goal_request(crossing(body))
+        # The refusal names the contract, not the caller's values.
+        assert "0.8" not in str(refused.value)
+
+    def test_a_smuggled_hours_value_does_not_reach_the_goal(self) -> None:
+        """The decoder ignores a parameter it does not carry.
+
+        With the kind refused by the wire schema upstream, this branch is
+        defence in depth: a hand-built payload naming ``hours`` decodes to a
+        bare sleep goal — the adapter's own default night — never to a goal
+        carrying a number this codec cannot range-check. Pinned so the
+        behaviour is a decision; the honest fix, when sleep goes on the
+        wire, is a decoder that carries and checks the parameter.
+        """
+        restored = decode_goal_request(
+            {
+                "kind": "sleep_until_rested",
+                "idempotency_key": "goal-1:attempt-1",
+                "params": {"hours": 6},
+            }
+        )
+
+        assert restored.kind is GoalKind.SLEEP_UNTIL_RESTED
+        assert restored.params.hours is None
+        assert restored.params.present() == frozenset()
 
 
 # ---------------------------------------------------------------------------

@@ -1609,7 +1609,42 @@ TOOLS: Final[tuple[ToolSpec, ...]] = (
             "skip reason — and its terminal answer reports the looted scope "
             "(the pinned room, building or sweep), the containers inspected, "
             "the containers skipped each with its reason, and the items "
-            "taken per category and left per reason."
+            "taken per category and left per reason. An 'explore_area' goal "
+            "finishes on the matching criterion — no frontier square remains "
+            "in scope: every scope square is known to the local map or "
+            "carries a recorded skip reason — and its report carries the "
+            "pinned scope, the map growth (cells_discovered), the waypoints "
+            "visited, and each skipped square with its reason (a locked or "
+            "barricaded door named by reference, a proven no-route). A "
+            "'return_home' goal takes no parameters at all: the target is "
+            "the save's remembered home point ('pz-agent remember home'), "
+            "no home set is a typed PRECONDITION_FAILED whose detail is the "
+            "remedy, and the goal succeeds only on the observed arrival. "
+            "The care kinds are deterministic missions over the medical and "
+            "survival adapters: 'treat_wounds' (no parameters — triage and "
+            "dressing choice are policy, remade per observation) dresses "
+            "every observed bleeding wound and finishes only when none "
+            "bleeds, with dressings running out a typed partial failure "
+            "naming the honest count; 'rest_until' sends one survival.rest "
+            "to its required target_endurance, verified by the adapter from "
+            "the observation; 'sleep_until_rested' sleeps on an observed bed "
+            "for its optional hours (absent means the adapter's own night), "
+            "and the sleep adapter's danger refusal reaches the goal typed "
+            "and unchanged, never retried. 'satisfy_hunger' and "
+            "'satisfy_thirst' are served the same deterministic way now — "
+            "food and water found in known containers, moved to the main "
+            "inventory, unsafe candidates (rotten, burnt, poisonous, "
+            "reserved) skipped with recorded reasons, and success only by "
+            "the observed stat moving. An 'avoid_threat' goal (no parameters "
+            "— where to retreat to is decided deterministically from the "
+            "observed threat picture) walks threat-avoiding journeys to the "
+            "nearest remembered user safe zone or to open ground away from "
+            "the observed zombies, re-reading the picture every step; it "
+            "succeeds only on the observed postcondition — nearest zombie at "
+            "a safe distance, or standing in a safe zone with nothing "
+            "chasing — and a retreat that cannot open the distance is a "
+            "typed THREAT_INTERRUPTED naming the nearest observed threat "
+            "distance."
         ),
         input_schema=_goal_channel(
             {
@@ -1676,22 +1711,26 @@ TOOLS: Final[tuple[ToolSpec, ...]] = (
                 "scope": {
                     "type": "string",
                     "description": (
-                        "What 'the area' means to a 'loot_area' goal: the room "
-                        "or building the character stands in when the goal "
-                        "activates, or a bounded sweep around the activation "
-                        "square. Absent means room. 'room' and 'building' need "
-                        "a build that reports rooms and are refused with a "
-                        "typed failure naming 'radius' otherwise; 'radius' "
-                        "always works."
+                        "What 'the area' means to a 'loot_area' or "
+                        "'explore_area' goal: the room or building the "
+                        "character stands in when the goal activates, or a "
+                        "bounded sweep around the activation square. Absent "
+                        "means room for loot_area and radius for explore_area "
+                        "— exploring the room already observed is a no-op. "
+                        "'room' and 'building' need a build that reports "
+                        "rooms and are refused with a typed failure naming "
+                        "'radius' otherwise; 'radius' always works."
                     ),
                     "enum": sorted(scope.value for scope in LootScope),
                 },
                 "radius": {
                     "type": "integer",
                     "description": (
-                        "Chebyshev sweep of a 'loot_area' goal, in squares "
-                        "around the activation square. Meaningful only with "
-                        "scope 'radius' and refused beside any other scope."
+                        "Chebyshev sweep of a 'loot_area' or 'explore_area' "
+                        "goal, in squares around the activation square. "
+                        "Meaningful only with scope 'radius' — which for "
+                        "explore_area is also what the absent scope means — "
+                        "and refused beside 'room' or 'building'."
                     ),
                     "minimum": NUMERIC_RANGES["radius"].minimum,
                     "maximum": NUMERIC_RANGES["radius"].maximum,
@@ -1715,6 +1754,32 @@ TOOLS: Final[tuple[ToolSpec, ...]] = (
                     "pattern": _LOOT_CATEGORIES_PATTERN,
                     "maxLength": MAX_LOOT_CATEGORIES_CHARS,
                 },
+                # The two below belong to the care kinds and to nothing else.
+                # Their bounds are the survival adapters' own, imported via
+                # the goals model's NUMERIC_RANGES so this schema cannot
+                # advertise a target the adapter refuses.
+                "target_endurance": {
+                    "type": "number",
+                    "description": (
+                        "Endurance fraction a 'rest_until' goal rests to; the "
+                        "stat runs 0..1 and the adapter verifies the target "
+                        "from the observation. Required for that kind — a "
+                        "rest with no stated target has no postcondition."
+                    ),
+                    "minimum": NUMERIC_RANGES["target_endurance"].minimum,
+                    "maximum": NUMERIC_RANGES["target_endurance"].maximum,
+                },
+                "hours": {
+                    "type": "integer",
+                    "description": (
+                        "How long a 'sleep_until_rested' goal asks to sleep. "
+                        "Absent means the sleep adapter's own default night; "
+                        "the ceiling is the channel's — 'until rested' is not "
+                        "a request for the adapter's sixteen-hour maximum."
+                    ),
+                    "minimum": NUMERIC_RANGES["hours"].minimum,
+                    "maximum": NUMERIC_RANGES["hours"].maximum,
+                },
             },
             required=("kind",),
         ),
@@ -1729,7 +1794,22 @@ TOOLS: Final[tuple[ToolSpec, ...]] = (
             "and — when 'goal_id' names one — that goal's state, budget and how "
             "much of it is left. An id the channel has finished and forgotten is "
             "refused rather than answered as 'no such goal', because the two are "
-            "not the same fact."
+            "not the same fact. Three additive keys, each null when there is "
+            "nothing to say: 'progress' is the deterministic drive's phase (a "
+            "journey's planning/moving/arrived/refused; a loot sweep's "
+            "start/approach/open/inspect/transfer; an explore sweep's "
+            "start/approach; a consume drive's check/fetch/consume/verify; a "
+            "care drive's start/transfer/treat, start/rest or start/sleep; "
+            "an avoid drive's start/approach) "
+            "plus detail-free counters, for the named goal or, "
+            "with no id, the active one — a goal a plan provider serves has no "
+            "deterministic phase and honestly answers null; 'paused' is the goal "
+            "a manual takeover parked, visible until a fresh activation replaces "
+            "it; 'report' is the named loot or explore goal's ledger, live while "
+            "the mission runs and sealed after it ends. The phase is the "
+            "progress-messaging primitive: tell the user about transitions, when "
+            "the value changes — it moves exactly when the work does, so polling "
+            "faster buys nothing worth relaying."
         ),
         input_schema={
             "type": "object",

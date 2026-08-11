@@ -49,6 +49,7 @@ from types import MappingProxyType
 from typing import Final
 
 from ..actions.adapters.literature import MAX_READ_PAGES
+from ..actions.adapters.survival import MAX_REST_TARGET, MIN_REST_TARGET, MIN_SLEEP_HOURS
 from ..loot import LootCategory
 from ..planner.provider import Goal as PlannerGoal
 from ..planner.provider import GoalKind as PlannerGoalKind
@@ -68,6 +69,8 @@ __all__ = [
     "MAX_PENDING_TTL_MS",
     "MAX_RENDERED_VALUE_CHARS",
     "MAX_SKILL_LEVEL",
+    "MAX_SLEEP_GOAL_HOURS",
+    "MAX_SUSPENSIONS_PER_GOAL",
     "MAX_TARGET_FLOOR",
     "MAX_TARGET_SQUARE",
     "MIN_GOAL_WALL_MS",
@@ -76,6 +79,7 @@ __all__ = [
     "NUMERIC_RANGES",
     "PARAM_NAMES",
     "TERMINAL_GOAL_STATES",
+    "AreaScope",
     "GoalAdmission",
     "GoalBudget",
     "GoalKind",
@@ -179,10 +183,29 @@ MAX_LOOT_RADIUS: Final = 30
 #: loot under.
 MAX_LOOT_CATEGORIES_CHARS: Final = 128
 
+#: The longest night a ``sleep_until_rested`` goal may ask for. Deliberately
+#: narrower than the sleep adapter's own ``MAX_SLEEP_HOURS`` (16): the kind's
+#: whole meaning is "until rested", and a request for more than half a day of
+#: sleep is a typo to refuse at the door rather than a night to attempt. The
+#: adapter keeps its wider bound for callers that drive the action directly;
+#: the floor and the rest target's bounds are the adapters' own, imported
+#: rather than restated so the two layers cannot drift apart.
+MAX_SLEEP_GOAL_HOURS: Final = 12
+
 #: Postcondition field *names* kept on a finished goal. Values are deliberately
 #: not kept: evidence values are forwarded from the mod, which forwards them
 #: from the game, and game-authored text is untrusted data (AGENTS.md).
 MAX_EVIDENCE_KEYS: Final = 8
+
+#: How many times one goal may be suspended in favour of another before the
+#: channel refuses to preempt it again. Three is enough for a walk home to be
+#: interrupted by a wound, the bandaging by a threat retreat, and the retreat's
+#: aftermath once more — and small enough that preemption cannot ping-pong a
+#: goal forever: after the third suspension the goal runs to its own end and
+#: the arbiter must treat the refusal as "do not preempt". Declared here
+#: rather than in the queue because it caps a :class:`GoalRecord` field, and
+#: the record is what a persisted document is validated against.
+MAX_SUSPENSIONS_PER_GOAL: Final = 3
 
 #: Shape a protocol evidence key has. Anything else is recorded under
 #: :data:`_UNNAMED_EVIDENCE_KEY` rather than carried through. A key arrives from
@@ -253,15 +276,38 @@ class GoalKind(StrEnum):
     :data:`DEFAULT_BUDGETS` and to :data:`_PLANNER_KIND` together, and the tests
     fail until all three know about it.
 
-    ``NAVIGATE_TO`` and ``LOOT_AREA`` are the two kinds not served by a plan
-    provider: the sidecar's deterministic route executor
-    (``pz_agent_core.navigation``) walks the first square by square, the CLI's
-    deterministic loot mission (``pz_agent_cli.loot_mission``) drives the
-    second container by container, and
-    :class:`~pz_agent_core.planner.provider.NullProvider` refuses both by name
-    rather than approximating them with a plan. The mapping to the planner
-    vocabulary stays total all the same, because both goals still cross the
-    planner seam on their way to the deterministic server.
+    ``NAVIGATE_TO``, ``LOOT_AREA``, ``RETURN_HOME`` and ``EXPLORE_AREA`` are
+    the kinds not served by a plan provider: the sidecar's deterministic route
+    executor (``pz_agent_core.navigation``) walks the first square by square,
+    the CLI's deterministic loot mission (``pz_agent_cli.loot_mission``)
+    drives the second container by container, ``RETURN_HOME`` is one journey
+    to the square the save's memory remembers as home, and ``EXPLORE_AREA``
+    is the CLI's deterministic explore mission
+    (``pz_agent_cli.explore_mission``), driven frontier square by frontier
+    square. :class:`~pz_agent_core.planner.provider.NullProvider` refuses all
+    four by name rather than approximating them with a plan. The mapping to
+    the planner vocabulary stays total all the same, because these goals
+    still cross the planner seam on their way to the deterministic server.
+
+    ``TREAT_WOUNDS``, ``REST_UNTIL`` and ``SLEEP_UNTIL_RESTED`` join that
+    arrangement one wave later, served by the CLI's deterministic care
+    missions (``pz_agent_cli.care_mission``) over the existing medical and
+    survival adapters: bandage every observed bleeding wound, one
+    ``survival.rest`` to a target the adapter itself verifies, one
+    ``survival.sleep`` whose danger refusal surfaces unchanged.
+    :class:`~pz_agent_core.planner.provider.NullProvider` refuses all three
+    by name, exactly as it refuses the four above.
+
+    ``AVOID_THREAT`` is the retreat half of the threat directive («если
+    одиночного зомби безопасно убить — убей, иначе отступи» — this kind is
+    the отступи), served by the CLI's deterministic avoid mission
+    (``pz_agent_cli.avoid_mission``): read the observed threat picture, walk
+    a threat-avoiding journey to the nearest remembered user safe zone or to
+    open ground away from the observed zombies, and succeed only on the
+    observed postcondition — the nearest zombie at a safe distance, or
+    standing in a safe zone with nothing chasing.
+    :class:`~pz_agent_core.planner.provider.NullProvider` refuses it by name
+    like the rest of the deterministic column.
     """
 
     SATISFY_HUNGER = "satisfy_hunger"
@@ -271,10 +317,16 @@ class GoalKind(StrEnum):
     LEARN_RECIPE = "learn_recipe"
     NAVIGATE_TO = "navigate_to"
     LOOT_AREA = "loot_area"
+    RETURN_HOME = "return_home"
+    EXPLORE_AREA = "explore_area"
+    TREAT_WOUNDS = "treat_wounds"
+    REST_UNTIL = "rest_until"
+    SLEEP_UNTIL_RESTED = "sleep_until_rested"
+    AVOID_THREAT = "avoid_threat"
 
 
 class LootScope(StrEnum):
-    """What "the area" means to a ``loot_area`` goal.
+    """What "the area" means to a ``loot_area`` or ``explore_area`` goal.
 
     Closed for the same reason every other vocabulary here is: the scope is
     the widest thing about the goal — it decides how far the character may
@@ -285,11 +337,23 @@ class LootScope(StrEnum):
     :data:`NUMERIC_RANGES`'s ``radius`` squares around it. A build whose room
     reader is unavailable refuses ``ROOM`` and ``BUILDING`` with a typed
     failure naming ``RADIUS`` as the alternative — it never guesses.
+
+    The name keeps the loot epic's spelling although two kinds now share the
+    vocabulary; :data:`AreaScope` below is the same enum under the neutral
+    name, so new call sites need not pretend they are looting. One enum, not
+    two: a second scope vocabulary would be two definitions of how far the
+    character may wander, and the one that drifted would win somewhere.
     """
 
     ROOM = "room"
     BUILDING = "building"
     RADIUS = "radius"
+
+
+#: The scope vocabulary under its kind-neutral name — the very same enum, so
+#: ``AreaScope.RADIUS is LootScope.RADIUS`` and no import ever has to choose
+#: which of two vocabularies is authoritative.
+AreaScope = LootScope
 
 
 class TrainableSkill(StrEnum):
@@ -459,6 +523,13 @@ NUMERIC_RANGES: Final[Mapping[str, NumericRange]] = MappingProxyType(
         "target_y": NumericRange(0, MAX_TARGET_SQUARE),
         "target_z": NumericRange(MIN_TARGET_FLOOR, MAX_TARGET_FLOOR),
         "radius": NumericRange(MIN_LOOT_RADIUS, MAX_LOOT_RADIUS),
+        # The rest adapter's own bounds, imported rather than restated: a
+        # target the channel admitted and the adapter refused would be a goal
+        # that can only ever end in a downstream refusal.
+        "target_endurance": NumericRange(MIN_REST_TARGET, MAX_REST_TARGET),
+        # The floor is the sleep adapter's own; the ceiling is the channel's
+        # narrower MAX_SLEEP_GOAL_HOURS, documented on that constant.
+        "hours": NumericRange(MIN_SLEEP_HOURS, MAX_SLEEP_GOAL_HOURS),
     }
 )
 
@@ -553,6 +624,13 @@ class GoalParams:
     #: a mission is a set of reviewed tokens joined by commas and nothing
     #: else. A string field only because :class:`GoalParams` carries scalars.
     categories: str | None = None
+    #: Where a ``rest_until`` goal stops resting: the endurance fraction the
+    #: survival adapter is asked to reach and verifies from the observation.
+    target_endurance: float | None = None
+    #: How long a ``sleep_until_rested`` goal asks to sleep. Absent means the
+    #: sleep adapter's own default — the mission omits the argument rather
+    #: than restating the number here.
+    hours: int | None = None
 
     def __post_init__(self) -> None:
         if self.skill is not None and not isinstance(self.skill, TrainableSkill):
@@ -565,10 +643,13 @@ class GoalParams:
         if self.satisfy_to is not None:
             fraction = _require_number(self.satisfy_to, name="satisfy_to")
             NUMERIC_RANGES["satisfy_to"].check(fraction, name="satisfy_to")
+        if self.target_endurance is not None:
+            target = _require_number(self.target_endurance, name="target_endurance")
+            NUMERIC_RANGES["target_endurance"].check(target, name="target_endurance")
         if self.pages is not None:
             pages = _require_whole(self.pages, name="pages")
             NUMERIC_RANGES["pages"].check(pages, name="pages")
-        for name in ("target_x", "target_y", "target_z", "radius"):
+        for name in ("target_x", "target_y", "target_z", "radius", "hours"):
             value = getattr(self, name)
             if value is not None:
                 coordinate = _require_whole(value, name=name)
@@ -612,6 +693,8 @@ PARAM_NAMES: Final[tuple[str, ...]] = (
     "radius",
     "take_all",
     "categories",
+    "target_endurance",
+    "hours",
 )
 
 
@@ -693,6 +776,53 @@ _LOOT_BUDGET: Final = GoalBudget(
     max_wall_ms=MAX_GOAL_WALL_MS, max_steps=MAX_GOAL_STEPS, pending_ttl_ms=120_000
 )
 
+#: The homeward budget. Navigate-sized, because ``return_home`` *is* one
+#: journey — the only difference from ``navigate_to`` is where the target
+#: comes from (the save's remembered home point instead of three submitted
+#: coordinates), and a different budget for the same walk would be a claim
+#: that walking home is a different amount of work than walking anywhere.
+_RETURN_HOME_BUDGET: Final = _NAVIGATE_BUDGET
+
+#: The explore budget. Sized like :data:`_LOOT_BUDGET` and for the same
+#: reason: ``max_steps`` bounds only the goal-seam requests (completion
+#: probes), every approach leg travels the loop's action channel, and the
+#: mission's own bounds (waypoints per mission, consecutive failures, the
+#: journey budgets under each approach) bound the real work. A frontier sweep
+#: is mission-shaped like a loot sweep, and the wall clock is the umbrella.
+_EXPLORE_BUDGET: Final = GoalBudget(
+    max_wall_ms=MAX_GOAL_WALL_MS, max_steps=MAX_GOAL_STEPS, pending_ttl_ms=120_000
+)
+
+#: The treat budget. ``max_steps`` is sized to the care mission's own wound
+#: ceiling (``MAX_WOUNDS_PER_MISSION`` = 8, pinned by a test rather than
+#: imported — the channel keeps zero dependencies on the CLI): every bandage
+#: and every transfer in front of one travels the loop's action channel, so
+#: the goal seam only ever carries the no-work completion probe, and eight is
+#: room for it several times over. Five minutes of wall clock covers eight
+#: dressings at the bandage adapter's own thirty-second budget each.
+_TREAT_BUDGET: Final = GoalBudget(max_wall_ms=300_000, max_steps=8, pending_ttl_ms=120_000)
+
+#: The rest and sleep budgets, one constant because the two goals are the
+#: same shape of work: one survival action whose adapter does the waiting
+#: under its own wall-clock bounds, plus at most a completion probe on the
+#: goal seam. The wall clock sits at the channel ceiling — endurance and
+#: fatigue move at the game's pace, not this channel's — and the ceiling rule
+#: from the loot wave applies: the wire schema pins fifteen minutes, so
+#: "longer" is a protocol change, not a bigger constant here.
+_REST_BUDGET: Final = GoalBudget(max_wall_ms=MAX_GOAL_WALL_MS, max_steps=4, pending_ttl_ms=120_000)
+_SLEEP_BUDGET: Final = _REST_BUDGET
+
+#: The retreat budget. The wall clock is deliberately *below* the navigate
+#: budget — a retreat is at most a few bounded journeys inside the local map,
+#: and one that has run five minutes without the observed distance opening is
+#: a failure to report, not a walk to keep funding. The pending TTL is the
+#: tightest in the table for the same urgency reason: a retreat that sat
+#: un-activated for a minute describes a threat picture that no longer
+#: exists, and expiring it honestly beats running from remembered zombies.
+_AVOID_BUDGET: Final = GoalBudget(
+    max_wall_ms=300_000, max_steps=MAX_GOAL_STEPS, pending_ttl_ms=60_000
+)
+
 #: The whole channel in one table. Adding a kind without adding a row here
 #: fails :func:`_check_tables` at import time, not at the first submission.
 GOAL_SPECS: Final[Mapping[GoalKind, GoalSpec]] = MappingProxyType(
@@ -735,6 +865,60 @@ GOAL_SPECS: Final[Mapping[GoalKind, GoalSpec]] = MappingProxyType(
             required=frozenset(),
             optional=frozenset({"scope", "radius", "take_all", "categories"}),
             budget=_LOOT_BUDGET,
+        ),
+        # A bare goal on purpose: «домой» carries everything it means. Where
+        # home is comes from the save's memory (`pz-agent remember home`), and
+        # a parameter here would be a second, spoken definition of home that
+        # could disagree with the remembered one.
+        GoalKind.RETURN_HOME: GoalSpec(
+            required=frozenset(),
+            optional=frozenset(),
+            budget=_RETURN_HOME_BUDGET,
+        ),
+        # Both optional, and the absent scope means RADIUS — deliberately not
+        # loot's ROOM default: the room the character stands in is the one
+        # patch of world already observed, so "explore my own room" is a
+        # no-op, while a bounded sweep around where they stand is the thing
+        # the bare goal plausibly asks for. The mission reads the absence.
+        GoalKind.EXPLORE_AREA: GoalSpec(
+            required=frozenset(),
+            optional=frozenset({"scope", "radius"}),
+            budget=_EXPLORE_BUDGET,
+        ),
+        # Parameterless on purpose: «перевяжись» carries the whole goal. Which
+        # wound and which dressing are policy.medical.select_treatment's
+        # decisions, made deterministically per observation — a parameter here
+        # would be a spoken second opinion on the triage order.
+        GoalKind.TREAT_WOUNDS: GoalSpec(
+            required=frozenset(),
+            optional=frozenset(),
+            budget=_TREAT_BUDGET,
+        ),
+        # The target is required because it is the goal: "rest" without a
+        # stated endurance to reach has no postcondition to verify, and the
+        # adapter's own default would be this channel choosing one silently.
+        GoalKind.REST_UNTIL: GoalSpec(
+            required=frozenset({"target_endurance"}),
+            optional=frozenset(),
+            budget=_REST_BUDGET,
+        ),
+        # ``hours`` optional: the absent value means the sleep adapter's own
+        # default night, which the mission expresses by omitting the argument
+        # rather than by restating the adapter's number.
+        GoalKind.SLEEP_UNTIL_RESTED: GoalSpec(
+            required=frozenset(),
+            optional=frozenset({"hours"}),
+            budget=_SLEEP_BUDGET,
+        ),
+        # Parameterless on purpose, and urgently so: «отступай» carries the
+        # whole goal. Where to retreat *to* is the mission's deterministic
+        # decision from the observed threat picture and the remembered safe
+        # zones — a spoken destination would be a coordinate guess made while
+        # being chased, which is the worst possible time to interpret one.
+        GoalKind.AVOID_THREAT: GoalSpec(
+            required=frozenset(),
+            optional=frozenset(),
+            budget=_AVOID_BUDGET,
         ),
     }
 )
@@ -836,6 +1020,18 @@ class GoalRequest:
             # they bounded a sweep that is actually scoped to a room; the
             # mismatch is refused at the door, where it can still be fixed.
             raise ValueError("radius is meaningful only with scope=radius; set that scope too")
+        if (
+            self.kind is GoalKind.EXPLORE_AREA
+            and self.params.radius is not None
+            and self.params.scope not in (None, LootScope.RADIUS)
+        ):
+            # Same rule with explore's own default: the *absent* scope already
+            # means radius here (the kind's spec says so), so a bare radius is
+            # meaningful — only a radius beside room or building is the sweep
+            # bound the mission would silently ignore.
+            raise ValueError(
+                "radius is meaningful only with scope=radius; drop the scope or set that one"
+            )
 
     @property
     def effective_budget(self) -> GoalBudget:
@@ -873,6 +1069,31 @@ class GoalRecord:
     reason_code: ReasonCode | None = None
     evidence_keys: tuple[str, ...] = ()
     detail: str = ""
+    #: The id of the goal this one stepped aside for, while it waits at the
+    #: front of the backlog. A marker on the record, never a state:
+    #: :class:`GoalState` stays closed, and a suspended goal *is* pending — it
+    #: is served by the ordinary activation path, which clears the marker. Set
+    #: and cleared only by the queue; a value here on anything but a pending
+    #: record is refused below, because activation consumes the marker and a
+    #: terminal record answers "why did it end", not "who once paused it".
+    suspended_by: str | None = None
+    #: How many times this goal has stepped aside. Capped at
+    #: :data:`MAX_SUSPENSIONS_PER_GOAL` so preemption cannot ping-pong a goal
+    #: forever; the counter survives resumption and termination because it is
+    #: part of the truth about how the goal was served.
+    suspensions: int = 0
+    #: Active wall-clock milliseconds spent in *previous* activations. The
+    #: budget promise is ``max_wall_ms`` of ACTIVE time — a suspended goal's
+    #: clock stops while it waits — so the current activation's deadline is
+    #: the remainder, measured from ``started_at_ms``; see :attr:`deadline_ms`.
+    #: The queue clamps it at ``max_wall_ms`` on suspension, which is why the
+    #: range check below can be exact.
+    active_ms_before_suspend: int = 0
+    #: Position class in the backlog: 0 for an ordinary admission, more
+    #: negative is nearer the front. Minted by the queue's two front-insertion
+    #: paths (suspension and priority injection) and consumed — reset to 0 —
+    #: by activation; the backlog orders by ``(front_rank, sequence)``.
+    front_rank: int = 0
 
     def __post_init__(self) -> None:
         if self.sequence < 0 or self.submitted_at_ms < 0:
@@ -889,6 +1110,33 @@ class GoalRecord:
             raise ValueError(
                 f"steps_used must be within 0..{self.budget.max_steps}, "
                 f"got {_render_value(self.steps_used)}"
+            )
+        if not 0 <= self.suspensions <= MAX_SUSPENSIONS_PER_GOAL:
+            raise ValueError(
+                f"suspensions must be within 0..{MAX_SUSPENSIONS_PER_GOAL}, "
+                f"got {_render_value(self.suspensions)}"
+            )
+        if not 0 <= self.active_ms_before_suspend <= self.budget.max_wall_ms:
+            raise ValueError(
+                f"active_ms_before_suspend must be within 0..{self.budget.max_wall_ms}, "
+                f"got {_render_value(self.active_ms_before_suspend)}"
+            )
+        if self.front_rank > 0:
+            raise ValueError("front_rank must be zero or negative; the queue mints it")
+        if self.suspended_by is not None:
+            if not self.suspended_by:
+                raise ValueError("suspended_by must name the goal this one stepped aside for")
+            if self.state is not GoalState.PENDING:
+                # Activation consumes the marker and termination clears it, so
+                # a record carrying one anywhere else was not built by the
+                # queue — most likely an edited file trying to smuggle state.
+                raise ValueError("only a pending goal may carry a suspension marker")
+        if self.suspensions == 0 and (
+            self.suspended_by is not None or self.active_ms_before_suspend > 0
+        ):
+            raise ValueError(
+                "suspension bookkeeping (a marker or accrued active time) requires at "
+                "least one recorded suspension"
             )
         if self.state is GoalState.ACTIVE and self.started_at_ms is None:
             raise ValueError("an active goal must record when it started")
@@ -929,10 +1177,18 @@ class GoalRecord:
 
     @property
     def deadline_ms(self) -> int | None:
-        """When the active goal's wall clock runs out, or None while pending."""
+        """When the active goal's wall clock runs out, or None while pending.
+
+        The budget promise is ``max_wall_ms`` of *active* time: a goal that
+        was suspended already spent :attr:`active_ms_before_suspend` of it in
+        earlier activations, so the current activation only has the remainder.
+        A suspended goal has no deadline at all — its ``started_at_ms`` is
+        cleared when it parks — which is the same statement the queue makes by
+        measuring only the active goal against the wall clock.
+        """
         if self.started_at_ms is None:
             return None
-        return self.started_at_ms + self.budget.max_wall_ms
+        return self.started_at_ms + self.budget.max_wall_ms - self.active_ms_before_suspend
 
     @property
     def pending_expiry_ms(self) -> int:
@@ -1047,6 +1303,22 @@ _PLANNER_KIND: Final[Mapping[GoalKind, PlannerGoalKind]] = MappingProxyType(
         # mission serves it behind the same wrapper, and NullProvider refuses
         # it by name for a loop assembled without that wrapper.
         GoalKind.LOOT_AREA: PlannerGoalKind.LOOT_AREA,
+        # And the wave after that, twice over: one journey to the remembered
+        # home point, and one frontier-driven explore mission — both served
+        # behind the same wrapper, both refused by name by NullProvider.
+        GoalKind.RETURN_HOME: PlannerGoalKind.RETURN_HOME,
+        GoalKind.EXPLORE_AREA: PlannerGoalKind.EXPLORE_AREA,
+        # The care wave, three at once: bandaging, resting and sleeping are
+        # driven by the CLI's deterministic care missions over the medical and
+        # survival adapters, and NullProvider refuses each by name for a loop
+        # assembled without that wrapper.
+        GoalKind.TREAT_WOUNDS: PlannerGoalKind.TREAT_WOUNDS,
+        GoalKind.REST_UNTIL: PlannerGoalKind.REST_UNTIL,
+        GoalKind.SLEEP_UNTIL_RESTED: PlannerGoalKind.SLEEP_UNTIL_RESTED,
+        # The retreat kind, on the same no-provider terms: the CLI's
+        # deterministic avoid mission serves it behind the wrapper, and
+        # NullProvider refuses it by name for a loop assembled without one.
+        GoalKind.AVOID_THREAT: PlannerGoalKind.AVOID_THREAT,
     }
 )
 

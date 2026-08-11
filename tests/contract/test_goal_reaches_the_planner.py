@@ -73,15 +73,18 @@ from pz_agent_core.protocol import (
     ActionName,
     ActionStatus,
     InventoryView,
+    ItemView,
     NearbyObject,
     NearbyView,
+    NearbyZombie,
     Observation,
     PlayerState,
     Position,
     ReasonCode,
     RiskClass,
+    Wound,
 )
-from tests.fixtures import DEFAULT_SESSION, make_player
+from tests.fixtures import DEFAULT_SESSION, make_item, make_player
 from tests.fixtures.action_doubles import (
     AckPlan,
     FakeClock,
@@ -95,7 +98,13 @@ from tests.fixtures.planner_worlds import (
     item_ref,
     planner_observation,
 )
-from tests.fixtures.policy_items import drink_item, food_item, inventory, literature_item
+from tests.fixtures.policy_items import (
+    MAIN_REF,
+    drink_item,
+    food_item,
+    inventory,
+    literature_item,
+)
 
 pytestmark = pytest.mark.contract
 
@@ -112,15 +121,49 @@ CHANNEL_KINDS: Final[frozenset[str]] = frozenset(
         "learn_recipe",
         "navigate_to",
         "loot_area",
+        "return_home",
+        "explore_area",
+        "treat_wounds",
+        "rest_until",
+        "sleep_until_rested",
+        "avoid_threat",
     }
 )
 
-#: The kinds no plan provider serves: the deterministic route executor walks
-#: ``navigate_to`` (``pz_agent_core.navigation``) and the deterministic loot
-#: mission drives ``loot_area`` (``pz_agent_cli.loot_mission``), both behind
-#: the CLI's NavigatingPlanner. Written out by hand for the same reason
-#: CHANNEL_KINDS is.
-EXECUTOR_KINDS: Final[frozenset[str]] = frozenset({"navigate_to", "loot_area"})
+#: The kinds the goal channel never hands a plan provider: the deterministic
+#: route executor walks ``navigate_to`` and ``return_home``
+#: (``pz_agent_core.navigation`` — the homeward kind is the same walk with
+#: its target read from the save's memory), the deterministic loot mission
+#: drives ``loot_area`` (``pz_agent_cli.loot_mission``), the deterministic
+#: explore mission drives ``explore_area`` (``pz_agent_cli.explore_mission``),
+#: and the deterministic consume mission drives ``satisfy_hunger`` and
+#: ``satisfy_thirst`` (``pz_agent_cli.consume_mission``) — all behind the
+#: CLI's NavigatingPlanner. The two consume kinds differ from the other four
+#: in one respect: a provider still *serves* them on the autonomy loop's own
+#: initiative path (``AutonomyPlanner.propose`` mints such goals for the
+#: gate), so ``NullProvider`` keeps its eat/drink branches and only the goal
+#: channel reroutes. Written out by hand for the same reason CHANNEL_KINDS is.
+#: The care kinds (``treat_wounds``, ``rest_until``, ``sleep_until_rested``)
+#: are in the set on the same terms as the first four: driven by the
+#: deterministic care missions (``pz_agent_cli.care_mission``) and refused by
+#: name by every provider. ``avoid_threat`` joins on those terms — driven by
+#: the deterministic avoid mission (``pz_agent_cli.avoid_mission``) — and
+#: most emphatically: a model choosing where to run from zombies is the one
+#: proposal no provider may ever be allowed to make.
+EXECUTOR_KINDS: Final[frozenset[str]] = frozenset(
+    {
+        "navigate_to",
+        "loot_area",
+        "return_home",
+        "explore_area",
+        "satisfy_hunger",
+        "satisfy_thirst",
+        "treat_wounds",
+        "rest_until",
+        "sleep_until_rested",
+        "avoid_threat",
+    }
+)
 
 #: The empty parameter set, as a singleton because :class:`GoalParams` is frozen
 #: and a default argument that constructs one is a call at import time.
@@ -237,7 +280,15 @@ def world(items: InventoryView, player: PlayerState | None = None) -> Observatio
 
 
 class TestTheKindSurvivesTheTrip:
-    """Same world, different goals, and the plans have to differ."""
+    """Same world, different goals, and the plans have to differ.
+
+    The two consume plans below are the *provider's* answers, and the provider
+    still owes them: the goal channel routes ``satisfy_hunger`` and
+    ``satisfy_thirst`` to the deterministic consume mission now
+    (``TestSatisfyNeedsAreServedByTheMission``), but the autonomy loop's own
+    initiative path still mints exactly these goals and asks the provider, so
+    a kind lost between those two would still feed the wrong need.
+    """
 
     def test_a_hunger_goal_becomes_a_plan_to_eat_the_tin(self) -> None:
         record = activated(channel(), GoalKind.SATISFY_HUNGER)
@@ -455,9 +506,10 @@ class TestEveryAdmissibleKindIsServable:
         served: dict[str, tuple[str, ...]] = {}
         for index, kind in enumerate(GoalKind):
             if kind.value in EXECUTOR_KINDS:
-                # Served below by the route executor, and *refused* by the
-                # provider — TestNavigateToIsServedByTheExecutor owns both
-                # halves of that claim.
+                # Served below by the deterministic executors and missions —
+                # the TestXxxIsServedBy* classes own both halves of that claim
+                # (and, for the consume kinds, the provider's initiative-path
+                # answers stay pinned by TestTheKindSurvivesTheTrip).
                 continue
             params = (
                 GoalParams(skill=TrainableSkill.CARPENTRY)
@@ -470,10 +522,8 @@ class TestEveryAdmissibleKindIsServable:
             served[kind.value] = plan_step_refs(proposal)
 
         assert set(served) == CHANNEL_KINDS - EXECUTOR_KINDS
-        # The two consumables and the skill book are decided by the goal, not by
-        # a shared default: three of the five answers must be distinct items.
-        assert served["satisfy_hunger"] == (item_ref("beans"),)
-        assert served["satisfy_thirst"] == (item_ref("bottle"),)
+        # The skill book and the magazine are decided by the goal, not by a
+        # shared default: the two answers must be distinct items.
         assert served["train_skill"] == (item_ref("carp"),)
         assert served["learn_recipe"] == (item_ref("mag"),)
 
@@ -561,9 +611,23 @@ class TestNavigateToIsServedByTheExecutor:
         )
 
     def test_every_channel_kind_is_owned_by_exactly_one_server(self) -> None:
-        """Provider-served and executor-served partition the vocabulary."""
+        """Provider-served and executor-served partition the vocabulary.
+
+        The arithmetic is stated in full: thirteen kinds in the channel, ten
+        of them deterministic (four navigation-and-mission kinds, the two
+        rerouted consume kinds, the three care kinds, the retreat kind),
+        three left to a plan provider. A kind added to one census and not
+        the other fails here.
+        """
         assert EXECUTOR_KINDS <= CHANNEL_KINDS
         assert {kind.value for kind in GoalKind} == CHANNEL_KINDS
+        assert len(CHANNEL_KINDS) == 13
+        assert len(EXECUTOR_KINDS) == 10
+        assert {
+            "read_for_boredom",
+            "train_skill",
+            "learn_recipe",
+        } == CHANNEL_KINDS - EXECUTOR_KINDS
 
 
 class TestLootAreaIsServedByTheMission:
@@ -633,6 +697,402 @@ class TestLootAreaIsServedByTheMission:
         assert spy.goal_calls == [] and spy.propose_calls == 0, (
             "loot_area must never reach a plan provider"
         )
+
+
+@dataclass(frozen=True)
+class RememberedSquare:
+    """A remembered grid square, as much of one as the wrapper reads."""
+
+    x: int
+    y: int
+    z: int = 0
+
+
+@dataclass(frozen=True)
+class HomeMemory:
+    """A memory answering ``home_point``, standing where the sidecar's would."""
+
+    square: RememberedSquare
+
+    def home_point(self) -> RememberedSquare:
+        return self.square
+
+
+class TestReturnHomeIsServedByTheExecutor:
+    """The eighth kind's half of the seam: the same walk, the target from memory."""
+
+    def test_null_provider_refuses_return_home_by_name(self) -> None:
+        record = activated(channel(), GoalKind.RETURN_HOME)
+
+        proposal = proposed_for(record, world(pantry(), needy()))
+
+        assert proposal.refused
+        assert proposal.reason_code is ReasonCode.CAPABILITY_UNAVAILABLE
+        assert "route executor" in proposal.detail
+        assert "home" in proposal.detail
+
+    def test_the_wrapper_walks_home_and_never_asks_the_planner(self) -> None:
+        queue = channel()
+        spy = SpyGoalPlanner()
+        wrapper = NavigatingPlanner(spy, loot_memory=HomeMemory(RememberedSquare(1205, 3400)))
+        wrapper.bind(ExecutorHost(goals=queue, actions=ActionChannel(clock=FakeClock())))
+        record = activated(queue, GoalKind.RETURN_HOME)
+
+        value = wrapper.propose_for_goal(to_planner_goal(record), world(pantry()))
+
+        # Five squares is one final leg, so the request goes out the goal
+        # seam carrying the *remembered* square — nothing was submitted.
+        assert value is not None
+        assert value.action is ActionName.MOVEMENT_MOVE_TO
+        assert value.args["target"] == {"x": 1205, "y": 3400, "z": 0}
+        assert spy.goal_calls == [] and spy.propose_calls == 0, (
+            "return_home must never reach a plan provider"
+        )
+
+
+class TestExploreAreaIsServedByTheMission:
+    """The ninth kind's half of the seam: the explore mission answers."""
+
+    def test_null_provider_refuses_explore_area_by_name(self) -> None:
+        record = activated(channel(), GoalKind.EXPLORE_AREA)
+
+        proposal = proposed_for(record, world(pantry(), needy()))
+
+        assert proposal.refused
+        assert proposal.reason_code is ReasonCode.CAPABILITY_UNAVAILABLE
+        assert "explore mission" in proposal.detail
+
+    def test_the_wrapper_drives_the_mission_and_never_asks_the_planner(self) -> None:
+        queue = channel()
+        spy = SpyGoalPlanner()
+        wrapper = NavigatingPlanner(spy)
+        wrapper.bind(ExecutorHost(goals=queue, actions=ActionChannel(clock=FakeClock())))
+        record = activated(queue, GoalKind.EXPLORE_AREA)
+
+        value = wrapper.propose_for_goal(to_planner_goal(record), world(pantry()))
+
+        # The default radius sweep around a single known square resolves in
+        # arrival reach, so the mission's completion probe goes out the goal
+        # seam — a real engine request the loop settles the goal with.
+        assert value is not None
+        assert value.action is ActionName.MOVEMENT_MOVE_TO
+        assert value.idempotency_key.startswith(f"explore:{record.goal_id}")
+        assert spy.goal_calls == [] and spy.propose_calls == 0, (
+            "explore_area must never reach a plan provider"
+        )
+
+
+class TestSatisfyNeedsAreServedByTheMission:
+    """The founding kinds' new half of the seam: the consume mission answers.
+
+    The same joins proven for the other executor kinds: a real queue admits
+    and activates the goal, the real ``to_planner_goal`` widens it, and the
+    real :class:`NavigatingPlanner` drives the mission's first step — the
+    ``consume.eat``/``consume.drink`` the selection policies chose — into the
+    loop's action channel, while the wrapped planner, a spy, is never asked
+    anything at all. The provider is deliberately *not* refusing these kinds
+    by name: the autonomy loop's own initiative path still asks it
+    (``TestTheKindSurvivesTheTrip`` pins those answers); only the goal
+    channel reroutes.
+    """
+
+    def test_the_wrapper_eats_the_tin_and_never_asks_the_planner(self) -> None:
+        queue = channel()
+        spy = SpyGoalPlanner()
+        wrapper = NavigatingPlanner(spy)
+        actions = ActionChannel(clock=FakeClock())
+        wrapper.bind(ExecutorHost(goals=queue, actions=actions))
+        record = activated(queue, GoalKind.SATISFY_HUNGER)
+
+        value = wrapper.propose_for_goal(to_planner_goal(record), world(pantry(), needy()))
+
+        # Every ordinary mission step travels the action channel, never the
+        # goal seam — no step's success is by itself the goal's postcondition.
+        assert value is None
+        assert actions.pending_count == 1
+        taken = actions.take_next()
+        assert taken is not None
+        _, request = taken
+        assert request.action is ActionName.CONSUME_EAT
+        assert request.args["item_ref"] == item_ref("beans")
+        # Attribution, as everywhere in this file: the request is the goal's.
+        assert request.idempotency_key.startswith(f"consume:{record.goal_id}")
+        assert spy.goal_calls == [] and spy.propose_calls == 0, (
+            "a goal-channel satisfy_hunger must never reach a plan provider"
+        )
+
+    def test_the_thirst_goal_over_that_same_pantry_drinks(self) -> None:
+        queue = channel()
+        spy = SpyGoalPlanner()
+        wrapper = NavigatingPlanner(spy)
+        actions = ActionChannel(clock=FakeClock())
+        wrapper.bind(ExecutorHost(goals=queue, actions=actions))
+        record = activated(queue, GoalKind.SATISFY_THIRST)
+        # Thirst 0.8 is critical, so the drink policy's last-container rule
+        # does not withhold the lone bottle while portioning is unverified.
+        parched = make_player(stats={"hunger": 0.6, "thirst": 0.8})
+
+        value = wrapper.propose_for_goal(to_planner_goal(record), world(pantry(), parched))
+
+        assert value is None
+        assert actions.pending_count == 1
+        taken = actions.take_next()
+        assert taken is not None
+        _, request = taken
+        assert request.action is ActionName.CONSUME_DRINK
+        assert request.args["item_ref"] == item_ref("bottle")
+        assert spy.goal_calls == [] and spy.propose_calls == 0, (
+            "a goal-channel satisfy_thirst must never reach a plan provider"
+        )
+
+
+def bleeding_wound(part: str = "Head") -> Wound:
+    return Wound(
+        ref=f"wound:{DEFAULT_SESSION}:{part}",
+        kind="scratch",
+        severity=0.5,
+        bleeding=True,
+    )
+
+
+def dressing(runtime_id: str = "wrap") -> ItemView:
+    """One sterile bandage in the main inventory, as the medical policy reads it."""
+    return make_item(
+        item_ref(runtime_id),
+        MAIN_REF,
+        full_type="Base.Bandage",
+        display_name="Bandage",
+        category="FirstAid",
+        weight=0.1,
+    )
+
+
+class TestTreatWoundsIsServedByTheMission:
+    """The tenth kind's half of the seam: the care mission answers, no provider.
+
+    The same joins proven for the other executor kinds: a real queue admits
+    and activates the goal, the real ``to_planner_goal`` widens it, and the
+    real :class:`NavigatingPlanner` drives the mission's first step — the
+    ``medical.bandage`` the medical policy's triage chose — into the loop's
+    action channel, while the wrapped planner, a spy, is never asked.
+    """
+
+    def test_null_provider_refuses_treat_wounds_by_name(self) -> None:
+        record = activated(channel(), GoalKind.TREAT_WOUNDS)
+
+        proposal = proposed_for(record, world(pantry(), needy()))
+
+        assert proposal.refused
+        assert proposal.reason_code is ReasonCode.CAPABILITY_UNAVAILABLE
+        assert "care mission" in proposal.detail
+
+    def test_the_wrapper_bandages_the_wound_and_never_asks_the_planner(self) -> None:
+        queue = channel()
+        spy = SpyGoalPlanner()
+        wrapper = NavigatingPlanner(spy)
+        actions = ActionChannel(clock=FakeClock())
+        wrapper.bind(ExecutorHost(goals=queue, actions=actions))
+        record = activated(queue, GoalKind.TREAT_WOUNDS)
+        hurt = planner_observation(
+            inventory=inventory(dressing()),
+            player=make_player(wounds=[bleeding_wound()]),
+        )
+
+        value = wrapper.propose_for_goal(to_planner_goal(record), hurt)
+
+        # Every ordinary mission step travels the action channel, never the
+        # goal seam — a bandage that held is not yet "no wound bleeds".
+        assert value is None
+        assert actions.pending_count == 1
+        taken = actions.take_next()
+        assert taken is not None
+        _, request = taken
+        assert request.action is ActionName.MEDICAL_BANDAGE
+        assert request.args["body_part"] == "Head"
+        assert request.args["item_ref"] == item_ref("wrap")
+        # Attribution, as everywhere in this file: the request is the goal's.
+        assert request.idempotency_key.startswith(f"treat:{record.goal_id}")
+        assert spy.goal_calls == [] and spy.propose_calls == 0, (
+            "treat_wounds must never reach a plan provider"
+        )
+
+
+class TestRestUntilIsServedByTheMission:
+    """The eleventh kind's half of the seam: one ``survival.rest``, no provider."""
+
+    def test_null_provider_refuses_rest_until_by_name(self) -> None:
+        record = activated(channel(), GoalKind.REST_UNTIL, params=GoalParams(target_endurance=0.8))
+
+        proposal = proposed_for(record, world(pantry(), needy()))
+
+        assert proposal.refused
+        assert proposal.reason_code is ReasonCode.CAPABILITY_UNAVAILABLE
+        assert "care mission" in proposal.detail
+
+    def test_the_wrapper_rests_to_the_goals_target_and_never_asks_the_planner(self) -> None:
+        queue = channel()
+        spy = SpyGoalPlanner()
+        wrapper = NavigatingPlanner(spy)
+        actions = ActionChannel(clock=FakeClock())
+        wrapper.bind(ExecutorHost(goals=queue, actions=actions))
+        record = activated(queue, GoalKind.REST_UNTIL, params=GoalParams(target_endurance=0.8))
+        tired = planner_observation(player=make_player(stats={"endurance": 0.3}))
+
+        value = wrapper.propose_for_goal(to_planner_goal(record), tired)
+
+        assert value is None
+        assert actions.pending_count == 1
+        taken = actions.take_next()
+        assert taken is not None
+        _, request = taken
+        assert request.action is ActionName.SURVIVAL_REST
+        # The parameter survives the trip: the target the caller stated is
+        # the target the adapter will verify, not a default.
+        assert request.args == {"target_endurance": 0.8}
+        assert request.idempotency_key.startswith(f"rest:{record.goal_id}")
+        assert spy.goal_calls == [] and spy.propose_calls == 0, (
+            "rest_until must never reach a plan provider"
+        )
+
+
+class TestSleepUntilRestedIsServedByTheMission:
+    """The twelfth kind's half of the seam: one ``survival.sleep``, no provider."""
+
+    def test_null_provider_refuses_sleep_until_rested_by_name(self) -> None:
+        record = activated(channel(), GoalKind.SLEEP_UNTIL_RESTED)
+
+        proposal = proposed_for(record, world(pantry(), needy()))
+
+        assert proposal.refused
+        assert proposal.reason_code is ReasonCode.CAPABILITY_UNAVAILABLE
+        assert "care mission" in proposal.detail
+
+    def test_the_wrapper_sleeps_on_the_observed_bed_and_never_asks_the_planner(self) -> None:
+        queue = channel()
+        spy = SpyGoalPlanner()
+        wrapper = NavigatingPlanner(spy)
+        actions = ActionChannel(clock=FakeClock())
+        wrapper.bind(ExecutorHost(goals=queue, actions=actions))
+        record = activated(queue, GoalKind.SLEEP_UNTIL_RESTED, params=GoalParams(hours=6))
+        bed = NearbyObject(
+            ref=f"object:{DEFAULT_SESSION}:7001:0",
+            kind="bed",
+            distance=1.0,
+            position=Position(x=1201.0, y=3400.0, z=0),
+            semantics=["bed"],
+        )
+        bedside = planner_observation(nearby=NearbyView(objects=[bed]))
+
+        value = wrapper.propose_for_goal(to_planner_goal(record), bedside)
+
+        assert value is None
+        assert actions.pending_count == 1
+        taken = actions.take_next()
+        assert taken is not None
+        _, request = taken
+        assert request.action is ActionName.SURVIVAL_SLEEP
+        # Both decisions the mission owns survive the trip: the goal's own
+        # hours and the *square* of the nearest observed bed.
+        assert request.args["hours"] == 6
+        assert request.args["bed_ref"] == f"square:{DEFAULT_SESSION}:1201:3400:0"
+        assert request.idempotency_key.startswith(f"sleep:{record.goal_id}")
+        assert spy.goal_calls == [] and spy.propose_calls == 0, (
+            "sleep_until_rested must never reach a plan provider"
+        )
+
+
+class TestAvoidThreatIsServedByTheMission:
+    """The thirteenth kind's half of the seam: the retreat mission, no provider.
+
+    The same joins proven for the other deterministic kinds: a real queue
+    admits and activates it, the real ``to_planner_goal`` widens it, and the
+    real :class:`NavigatingPlanner` drives the mission's first retreat leg —
+    a ``movement.move_to`` pointed away from the observed zombie — into the
+    loop's action channel, while the wrapped planner, a spy, is never asked
+    anything at all.
+    """
+
+    def chased_world(self) -> Observation:
+        """One chasing zombie four tiles east — inside the safe distance."""
+        return planner_observation(
+            nearby=NearbyView(
+                zombies=[
+                    NearbyZombie(
+                        ref=f"zombie:{DEFAULT_SESSION}:z1",
+                        distance=4.0,
+                        visible=True,
+                        chasing=True,
+                        position=Position(x=1204.0, y=3400.0, z=0),
+                    )
+                ]
+            ),
+        )
+
+    def test_null_provider_refuses_avoid_threat_by_name(self) -> None:
+        """The deterministic provider's honest answer is a typed refusal.
+
+        The property that keeps a mis-assembled loop safe, at its sharpest:
+        a model must never be the thing that chooses where to run from
+        zombies, so a goal-capable planner with no navigating wrapper
+        refuses the kind and lets its budgets end it.
+        """
+        record = activated(channel(), GoalKind.AVOID_THREAT)
+
+        proposal = proposed_for(record, world(pantry(), needy()))
+
+        assert proposal.refused
+        assert proposal.reason_code is ReasonCode.CAPABILITY_UNAVAILABLE
+        assert "avoid mission" in proposal.detail
+
+    def test_the_wrapper_drives_the_retreat_and_never_asks_the_planner(self) -> None:
+        queue = channel()
+        spy = SpyGoalPlanner()
+        wrapper = NavigatingPlanner(spy)
+        actions = ActionChannel(clock=FakeClock())
+        wrapper.bind(ExecutorHost(goals=queue, actions=actions))
+        record = activated(queue, GoalKind.AVOID_THREAT)
+
+        value = wrapper.propose_for_goal(to_planner_goal(record), self.chased_world())
+
+        # Every retreat leg travels the action channel, never the goal seam:
+        # arriving at one waypoint is not "safe", so no leg's success may
+        # end the goal.
+        assert value is None
+        assert actions.pending_count == 1
+        taken = actions.take_next()
+        assert taken is not None
+        _, request = taken
+        assert request.action is ActionName.MOVEMENT_MOVE_TO
+        # The leg walks *away* from the zombie standing east of the player
+        # (1204, 3400): with no safe zone remembered, the open-ground
+        # fallback maximises distance from it, which means west.
+        assert request.args["target"]["x"] < 1200
+        assert request.idempotency_key.startswith("nav:")
+        assert spy.goal_calls == [] and spy.propose_calls == 0, (
+            "avoid_threat must never reach a plan provider"
+        )
+
+    def test_no_threat_observed_is_the_completion_probe_out_the_goal_seam(self) -> None:
+        """A retreat with nothing to retreat from completes without work.
+
+        The probe precedent: nothing ran, so nothing exists to succeed the
+        goal with, and the engine is asked to observe an ordinary fact — a
+        bounded move inside the character's own square — whose real result
+        the loop settles the goal on.
+        """
+        queue = channel()
+        spy = SpyGoalPlanner()
+        wrapper = NavigatingPlanner(spy)
+        wrapper.bind(ExecutorHost(goals=queue, actions=ActionChannel(clock=FakeClock())))
+        record = activated(queue, GoalKind.AVOID_THREAT)
+
+        value = wrapper.propose_for_goal(to_planner_goal(record), world(pantry()))
+
+        assert value is not None
+        assert value.action is ActionName.MOVEMENT_MOVE_TO
+        assert value.idempotency_key.startswith(f"avoid:{record.goal_id}")
+        assert value.args["max_distance"] == 1
+        assert spy.goal_calls == [] and spy.propose_calls == 0
 
 
 class TestAKindThePlannerCannotServeIsRefusedAtSubmission:

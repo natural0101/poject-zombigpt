@@ -11,8 +11,18 @@ from __future__ import annotations
 import pytest
 
 from pz_agent_core.navigation import LocalMap
-from pz_agent_core.navigation.local_map import NEVER_SEEN
-from pz_agent_core.protocol import NearbyObject, NearbyView, Observation, Position
+from pz_agent_core.navigation.local_map import (
+    MAX_THREAT_CELLS,
+    NEVER_SEEN,
+    THREAT_DECAY_SEQS,
+)
+from pz_agent_core.protocol import (
+    NearbyObject,
+    NearbyView,
+    NearbyZombie,
+    Observation,
+    Position,
+)
 from tests.fixtures import DEFAULT_SESSION, make_observation, make_player
 
 # ---------------------------------------------------------------------------
@@ -362,3 +372,158 @@ class TestBounds:
     def test_max_cells_below_one_is_refused(self) -> None:
         with pytest.raises(ValueError, match="max_cells"):
             LocalMap(max_cells=0)
+
+
+# ---------------------------------------------------------------------------
+# threat knowledge: sightings, decay, bounds
+# ---------------------------------------------------------------------------
+
+
+def a_zombie(
+    x: float,
+    y: float,
+    z: int = 0,
+    *,
+    ref_id: str = "z1",
+    chasing: bool = False,
+    with_position: bool = True,
+) -> NearbyZombie:
+    return NearbyZombie(
+        ref=f"zombie:{DEFAULT_SESSION}:{ref_id}",
+        distance=float(max(abs(x), abs(y))),
+        visible=True,
+        chasing=chasing,
+        position=Position(x=x, y=y, z=z) if with_position else None,
+    )
+
+
+def threatened(
+    seq: int,
+    *,
+    player_at: tuple[int, int, int] = (0, 0, 0),
+    zombies: list[NearbyZombie] | None = None,
+) -> Observation:
+    x, y, z = player_at
+    return make_observation(
+        seq=seq,
+        player=make_player(position=Position(x=float(x), y=float(y), z=z, direction="S")),
+        nearby=NearbyView(zombies=list(zombies or [])),
+    )
+
+
+class TestThreatLearning:
+    def test_a_position_bearing_zombie_lands_on_its_square(self) -> None:
+        world = LocalMap()
+        world.observe(threatened(1, zombies=[a_zombie(4.2, 1.7, chasing=True)]))
+        sighting = world.threat_at(4, 1, 0)
+        assert sighting is not None
+        assert sighting.square == (4, 1, 0)
+        assert sighting.chasing is True
+        assert sighting.last_seen_seq == 1
+        assert [seen.square for seen in world.threatened_cells()] == [(4, 1, 0)]
+
+    def test_a_zombie_without_a_position_taints_no_square(self) -> None:
+        # The distance alone says "somewhere near", which lands on no square:
+        # a fact that cannot be pinned cannot become threat knowledge.
+        world = LocalMap()
+        world.observe(threatened(1, zombies=[a_zombie(4, 1, with_position=False)]))
+        assert list(world.threatened_cells()) == []
+        assert world.threat_at(4, 1, 0) is None
+
+    def test_a_zombie_leaves_no_cell_knowledge_behind(self) -> None:
+        # Threats and cells are separate memories: a sighting must not make
+        # the square "known" (or obstructed) to the walkability store.
+        world = LocalMap()
+        world.observe(threatened(1, zombies=[a_zombie(4, 1)]))
+        assert not world.cell(4, 1, 0).known
+
+    def test_the_newest_sighting_wins_and_a_replay_cannot_regress_it(self) -> None:
+        world = LocalMap()
+        world.observe(threatened(3, zombies=[a_zombie(4, 1, chasing=True)]))
+        # Newer knowledge: the same square, no longer chasing.
+        world.observe(threatened(5, zombies=[a_zombie(4, 1, chasing=False)]))
+        sighting = world.threat_at(4, 1, 0)
+        assert sighting is not None
+        assert sighting.chasing is False
+        assert sighting.last_seen_seq == 5
+        # An out-of-order replay of the older, chasing sighting changes nothing.
+        world.observe(threatened(4, zombies=[a_zombie(4, 1, chasing=True)]))
+        sighting = world.threat_at(4, 1, 0)
+        assert sighting is not None
+        assert sighting.chasing is False
+        assert sighting.last_seen_seq == 5
+
+    def test_two_zombies_on_one_square_in_one_observation_merge_chasing(self) -> None:
+        world = LocalMap()
+        world.observe(
+            threatened(
+                1,
+                zombies=[
+                    a_zombie(4.1, 1.1, ref_id="calm", chasing=False),
+                    a_zombie(4.8, 1.8, ref_id="runner", chasing=True),
+                ],
+            )
+        )
+        sighting = world.threat_at(4, 1, 0)
+        assert sighting is not None
+        assert sighting.chasing is True
+
+
+class TestThreatDecay:
+    def test_a_sighting_inside_the_horizon_still_counts(self) -> None:
+        world = LocalMap()
+        world.observe(threatened(1, zombies=[a_zombie(4, 1)]))
+        # Exactly THREAT_DECAY_SEQS observations later: the boundary is kept.
+        world.observe(threatened(1 + THREAT_DECAY_SEQS))
+        assert world.threat_at(4, 1, 0) is not None
+        assert [seen.square for seen in world.threatened_cells()] == [(4, 1, 0)]
+
+    def test_a_sighting_past_the_horizon_stops_tainting_the_square(self) -> None:
+        # Zombies move: past the horizon the map forgets rather than routing
+        # around where one stood half a session ago.
+        world = LocalMap()
+        world.observe(threatened(1, zombies=[a_zombie(4, 1, chasing=True)]))
+        world.observe(threatened(2 + THREAT_DECAY_SEQS))
+        assert world.threat_at(4, 1, 0) is None
+        assert list(world.threatened_cells()) == []
+
+    def test_a_fresh_sighting_restarts_the_clock(self) -> None:
+        world = LocalMap()
+        world.observe(threatened(1, zombies=[a_zombie(4, 1)]))
+        world.observe(threatened(15, zombies=[a_zombie(4, 1)]))
+        world.observe(threatened(15 + THREAT_DECAY_SEQS))
+        assert world.threat_at(4, 1, 0) is not None
+
+
+class TestThreatBounds:
+    def test_the_default_cap_is_the_documented_one(self) -> None:
+        assert MAX_THREAT_CELLS == 256
+
+    def test_over_budget_evicts_exactly_the_oldest_sighting(self) -> None:
+        world = LocalMap(max_threat_cells=3)
+        world.observe(threatened(1, zombies=[a_zombie(10, 0, ref_id="a")]))
+        world.observe(threatened(2, zombies=[a_zombie(11, 0, ref_id="b")]))
+        world.observe(threatened(3, zombies=[a_zombie(12, 0, ref_id="c")]))
+        world.observe(threatened(4, zombies=[a_zombie(13, 0, ref_id="d")]))
+        assert world.threat_at(10, 0, 0) is None
+        assert world.threat_at(11, 0, 0) is not None
+        assert world.threat_at(12, 0, 0) is not None
+        assert world.threat_at(13, 0, 0) is not None
+
+    def test_eviction_tie_breaks_deterministically_on_the_square(self) -> None:
+        world = LocalMap(max_threat_cells=2)
+        world.observe(
+            threatened(
+                1,
+                zombies=[a_zombie(9, 9, ref_id="far"), a_zombie(3, 3, ref_id="near")],
+            )
+        )
+        world.observe(threatened(2, zombies=[a_zombie(5, 5, ref_id="new")]))
+        # Both seq-1 sightings tie; the smaller square goes first.
+        assert world.threat_at(3, 3, 0) is None
+        assert world.threat_at(9, 9, 0) is not None
+        assert world.threat_at(5, 5, 0) is not None
+
+    def test_max_threat_cells_below_one_is_refused(self) -> None:
+        with pytest.raises(ValueError, match="max_threat_cells"):
+            LocalMap(max_threat_cells=0)

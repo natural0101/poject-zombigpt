@@ -1319,6 +1319,10 @@ class TestTheProtocol:
             "started_at_ms": None,
             "finished_at_ms": None,
             "deadline_ms": None,
+            # Additive with the needs-arbiter wave: null for every goal that
+            # is not currently parked behind a preemptor, which a freshly
+            # admitted goal cannot be.
+            "suspended_by": None,
             "evidence_keys": [],
             "duplicate": False,
         }

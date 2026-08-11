@@ -25,6 +25,34 @@ The channel's shape follows from four things that must all stay true at once.
   :meth:`GoalQueue.activate_next`, and a step that lands against one ends it as
   cancelled rather than as whatever its budget would otherwise have said.
 
+One qualification joined the third promise with the preemption wave: a goal may
+*step aside and come back*. :meth:`GoalQueue.suspend` parks the active goal at
+the front of the backlog — state ``PENDING`` again, the closed enum stays
+closed, and a ``suspended_by`` marker on the record says who it stepped aside
+for — and :meth:`GoalQueue.submit_front` admits the preempting goal ahead of
+the backlog. Three consequences are the design rather than accidents of it:
+
+* **The wall clock stops while suspended.** The budget promise is
+  ``max_wall_ms`` of *active* time, so suspension banks the accrued active
+  milliseconds on the record (``active_ms_before_suspend``) and resumption
+  serves only the remainder. Steps carry across unchanged: a step spent was
+  spent.
+* **The pending time to live does not apply to a suspended goal.** The TTL
+  exists to end a goal that was admitted and never started; a suspended goal
+  already started, and expiring it for having been preempted would punish the
+  interruption the user never asked for. Its bound is the channel's own
+  progress instead: it sits at the front of the backlog behind goals whose
+  budgets are each finite, its own re-suspensions are capped, and every stop
+  lever (cancel, panic) still ends it like any pending goal. A caller that
+  stops activating strands it — the same caller-controlled exception the
+  paragraph above already grants to a caller that stops ticking.
+* **Preemption is bounded.** :data:`~.model.MAX_SUSPENSIONS_PER_GOAL`
+  suspensions per goal, then :meth:`GoalQueue.suspend` refuses and the arbiter
+  must let the goal finish. And suspension frees no slot — the parked goal is
+  still open — so injecting a preemptor needs one free ``max_open`` slot or
+  :meth:`GoalQueue.submit_front` refuses; nothing is ever evicted to make
+  room.
+
 Two details are deliberate rather than incidental.
 
 The clock is read through :data:`~pz_agent_core.ipc.clocks.Clock` and then
@@ -46,12 +74,13 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Final
 
 from ..ipc.clocks import Clock
 from ..protocol import ActionResult, ActionStatus, ReasonCode
 from .model import (
+    MAX_SUSPENSIONS_PER_GOAL,
     GoalAdmission,
     GoalRecord,
     GoalRefusal,
@@ -62,7 +91,14 @@ from .model import (
     normalise_evidence_keys,
 )
 
-__all__ = ["DEFAULT_MAX_OPEN", "DEFAULT_MAX_REMEMBERED", "GoalQueue", "UnknownGoalError"]
+__all__ = [
+    "DEFAULT_MAX_OPEN",
+    "DEFAULT_MAX_REMEMBERED",
+    "RESTART_LOST_DETAIL",
+    "GoalQueue",
+    "GoalSnapshot",
+    "UnknownGoalError",
+]
 
 #: Goals that may be open — pending plus active — at one time. Small because a
 #: backlog of user goals is a backlog of stale intentions: by the time the
@@ -73,6 +109,29 @@ DEFAULT_MAX_OPEN: Final = 4
 #: stay long enough that a retried submission returns *it* rather than starting
 #: the work again, and no longer.
 DEFAULT_MAX_REMEMBERED: Final = 32
+
+
+#: The detail a previous session's ACTIVE goal ends with when a fresh queue
+#: restores it. One constant rather than an f-string at the call site, because
+#: it is the sentence a client polling the old goal id will read, and a test
+#: pins it verbatim: the goal was not cancelled and did not run out of budget —
+#: the process serving it died under it, and the record says exactly that.
+RESTART_LOST_DETAIL: Final = "the sidecar restarted while this goal was active"
+
+
+@dataclass(frozen=True, slots=True)
+class GoalSnapshot:
+    """Everything the queue holds, frozen, in the queue's own retention order.
+
+    The unit persistence works in. ``records`` shares the queue's immutable
+    :class:`~.model.GoalRecord` objects — nothing is copied and nothing can be
+    mutated through it — and ``revision`` is the mutation count the records
+    were read at, so a writer can tell "the channel moved since my last write"
+    from "this tick changed nothing" without comparing documents.
+    """
+
+    records: tuple[GoalRecord, ...]
+    revision: int
 
 
 class UnknownGoalError(LookupError):
@@ -116,6 +175,10 @@ class GoalQueue:
         self._armed = armed
         self._now = 0
         self._sequence = 0
+        #: Counts every record mutation — admission, activation, a spent step,
+        #: a terminal transition, a restore. Read by the persistence seam to
+        #: skip the write on a tick that changed nothing; never reset.
+        self._revision = 0
         #: Every record this queue has minted and not yet evicted, oldest first.
         #: Open goals are never evicted, which is why max_remembered >= max_open.
         self._records: OrderedDict[str, GoalRecord] = OrderedDict()
@@ -145,9 +208,17 @@ class GoalQueue:
 
     @property
     def pending(self) -> tuple[GoalRecord, ...]:
-        """The backlog, oldest first by admission sequence."""
+        """The backlog: front-inserted goals first, then oldest by admission.
+
+        The key is ``(front_rank, sequence)``. Ordinary admissions all carry
+        rank 0, so between themselves this is the same FIFO by admission
+        sequence it always was; a suspended or front-injected goal carries a
+        negative rank minted below every rank already waiting, so the most
+        recently fronted goal is served first — which is what makes a
+        preemptor run next and a suspended goal resume before the backlog.
+        """
         waiting = [r for r in self._records.values() if r.state is GoalState.PENDING]
-        return tuple(sorted(waiting, key=lambda r: r.sequence))
+        return tuple(sorted(waiting, key=lambda r: (r.front_rank, r.sequence)))
 
     @property
     def open_count(self) -> int:
@@ -157,6 +228,106 @@ class GoalQueue:
     def record(self, goal_id: str) -> GoalRecord | None:
         """The record for *goal_id*, or None once it has been forgotten."""
         return self._records.get(goal_id)
+
+    @property
+    def revision(self) -> int:
+        """How many record mutations this queue has made. Monotonic, never reset."""
+        return self._revision
+
+    def snapshot(self) -> GoalSnapshot:
+        """A frozen view of every held record, for persistence.
+
+        Called under the same lock discipline as every other method — the queue
+        has no lock of its own, the loop's ``goal_lock`` governs — and cheap
+        enough to take on every tick: one tuple over at most ``max_remembered``
+        immutable records, no copying, no IO.
+        """
+        return GoalSnapshot(records=tuple(self._records.values()), revision=self._revision)
+
+    def restore(self, snapshot: GoalSnapshot, *, now_ms: int) -> tuple[GoalRecord, ...]:
+        """Refill a fresh queue from a previous process's snapshot, honestly.
+
+        The three cases, each the truthful reading of what the restart did:
+
+        * A ``PENDING`` record comes back pending, with its original id,
+          submission time and idempotency digest — so a client resubmitting the
+          same key resolves to the *same* goal across the restart, and the
+          pending time to live keeps counting from the original submission: a
+          goal whose TTL ran out while the sidecar was down expires on the
+          first tick rather than being granted a second life.
+        * An ``ACTIVE`` record is recorded terminal ``FAILED`` with
+          ``SESSION_TERMINATED`` and :data:`RESTART_LOST_DETAIL`. The process
+          serving it died under it and nobody observed how far it got;
+          ``GoalState`` stays closed — no ``LOST`` member — because "failed,
+          because the session ended" is that fact in the vocabulary every
+          client already reads. The returned tuple is these records, so the
+          caller can log what the restart cost.
+        * A terminal record comes back as terminal history, so a client
+          polling a recently finished goal id still gets its answer.
+
+        All-or-nothing: the new state is built aside and committed at the end,
+        so a snapshot that is refused leaves the queue exactly as fresh as it
+        was. Refusals are ``ValueError`` because every one of them means the
+        snapshot is not something this queue could ever have written — the
+        caller's honest move is to set the file aside, not to guess.
+
+        Raises:
+            ValueError: the queue already holds goals, the snapshot repeats a
+                goal id or an idempotency digest, or it carries more pending
+                goals than this queue's ``max_open`` admits.
+        """
+        if self._records or self._by_digest:
+            raise ValueError("restore only fills a fresh queue; this one already holds goals")
+        self._now = max(self._now, now_ms)
+        pending = sum(1 for record in snapshot.records if record.state is GoalState.PENDING)
+        if pending > self._max_open:
+            raise ValueError(
+                f"the snapshot holds {pending} pending goal(s), over this channel's cap of "
+                f"{self._max_open}; refusing to guess which to drop"
+            )
+        records: OrderedDict[str, GoalRecord] = OrderedDict()
+        by_digest: OrderedDict[str, str] = OrderedDict()
+        lost: list[GoalRecord] = []
+        sequence = self._sequence
+        for record in snapshot.records:
+            if record.goal_id in records:
+                raise ValueError("the snapshot names one goal id twice; refusing to pick one")
+            if record.key_digest in by_digest:
+                raise ValueError(
+                    "the snapshot reuses one idempotency digest across goals; refusing to pick one"
+                )
+            adopted = record
+            if record.state is GoalState.ACTIVE:
+                started = (
+                    record.started_at_ms
+                    if record.started_at_ms is not None
+                    else record.submitted_at_ms
+                )
+                adopted = replace(
+                    record,
+                    state=GoalState.FAILED,
+                    reason_code=ReasonCode.SESSION_TERMINATED,
+                    # Clamped so a wall clock that stepped back across the
+                    # restart cannot mint a goal that finished before it began.
+                    finished_at_ms=max(self._now, started, record.submitted_at_ms),
+                    evidence_keys=(),
+                    detail=RESTART_LOST_DETAIL,
+                )
+                lost.append(adopted)
+            records[adopted.goal_id] = adopted
+            by_digest[adopted.key_digest] = adopted.goal_id
+            sequence = max(sequence, adopted.sequence)
+        self._records = records
+        self._by_digest = by_digest
+        self._sequence = sequence
+        self._revision += 1
+        # Overflow falls to the ordinary retention rules: terminal history past
+        # the cap is evicted oldest-first, exactly as it would have been had
+        # this queue lived through the records itself. Open goals never are —
+        # the pending check above is what guarantees a victim exists.
+        self._evict()
+        self._trim_digests()
+        return tuple(lost)
 
     # -- admission ---------------------------------------------------------
 
@@ -169,7 +340,35 @@ class GoalQueue:
         content is refused instead, because that is a caller bug and silently
         serving the first goal would hide it.
         """
-        now = self._tick_clock()
+        self._tick_clock()
+        return self._admit(request, front_rank=0)
+
+    def submit_front(self, request: GoalRequest, *, now_ms: int) -> GoalAdmission:
+        """Admit *request* ahead of the whole backlog, or explain why not.
+
+        The priority-injection half of preemption: a preempting goal must
+        activate *next*, ahead of everything waiting — including the goal it
+        just suspended — so it is admitted with a front rank minted below every
+        rank in the backlog. Nothing is evicted to make room: the suspended
+        goal still occupies its open slot, so injection needs one free slot of
+        its own and is refused with the ordinary over-cap ``QUEUE_REJECTED``
+        when there is none. With the shipped :data:`DEFAULT_MAX_OPEN` of 4
+        that arithmetic reads: preemption fits while at most 3 goals are open.
+
+        A duplicate key resolves to the goal it already names *where it
+        already is* — repositioning on a retry would let a dropped
+        acknowledgement reorder the backlog.
+
+        ``now_ms`` is the arbiter's clock reading for the tick that decided to
+        preempt, monotonised exactly as :meth:`restore` treats its own — this
+        queue's clock never goes backwards, whoever reports the time.
+        """
+        self._now = max(self._now, now_ms)
+        return self._admit(request, front_rank=self._next_front_rank())
+
+    def _admit(self, request: GoalRequest, *, front_rank: int) -> GoalAdmission:
+        """The shared admission path; ``self._now`` is already current."""
+        now = self._now
         digest = request.digest
         existing_id = self._by_digest.get(digest)
         existing = self._records.get(existing_id) if existing_id is not None else None
@@ -214,6 +413,7 @@ class GoalQueue:
             sequence=self._next_sequence(),
             state=GoalState.PENDING,
             submitted_at_ms=now,
+            front_rank=front_rank,
         )
         self._remember(record)
         self._by_digest[digest] = record.goal_id
@@ -221,7 +421,7 @@ class GoalQueue:
         return GoalAdmission(goal=record)
 
     def activate_next(self) -> GoalAdmission:
-        """Promote the oldest pending goal to active, or explain why not.
+        """Promote the front pending goal to active, or explain why not.
 
         Refused while another goal is active, and the refusal names it: a user
         who is told "busy" learns nothing, and a user who is told which goal is
@@ -234,6 +434,16 @@ class GoalQueue:
         stopped, and that is the one outcome AGENTS.md's "user input always
         wins" exists to forbid. The goal stays pending and the next tick reports
         it cancelled.
+
+        This is also the whole of *resuming* a suspended goal — there is no
+        separate resume call, verified by the suspension tests rather than
+        asserted here. A suspended goal sits at the front of :attr:`pending`,
+        so the ordinary promotion below picks it first; activation consumes
+        the marker (``suspended_by`` cleared, ``front_rank`` reset, the
+        parked-reason detail wiped) and starts a fresh activation window whose
+        deadline is the goal's *remaining* wall budget, because
+        ``active_ms_before_suspend`` — which survives — is subtracted by
+        :attr:`~.model.GoalRecord.deadline_ms`. Steps carry across untouched.
         """
         self._tick_clock()
         if not self._armed:
@@ -276,9 +486,111 @@ class GoalQueue:
                     ),
                 )
             )
-        started = replace(startable[0], state=GoalState.ACTIVE, started_at_ms=self._now)
+        started = replace(
+            startable[0],
+            state=GoalState.ACTIVE,
+            started_at_ms=self._now,
+            # Resuming consumes the suspension marker and the front position:
+            # the goal is running again, and a second preemption earns it a
+            # fresh place at the front then. The detail is wiped with them —
+            # it held the parked reason, which is no longer the truth.
+            suspended_by=None,
+            front_rank=0,
+            detail="",
+        )
         self._remember(started)
         return GoalAdmission(goal=started)
+
+    def suspend(self, goal_id: str, *, by_goal_id: str, reason: str, now_ms: int) -> GoalAdmission:
+        """Park the active goal at the front of the backlog so another may run.
+
+        The interrupt half of preemption («прервать текущую цель … продолжить
+        исходную»): the goal returns to ``PENDING`` — the closed
+        :class:`~.model.GoalState` gains no ``SUSPENDED`` member — carrying a
+        ``suspended_by`` marker naming *by_goal_id* and a front rank that puts
+        it ahead of the whole backlog, so the ordinary activation path resumes
+        it as soon as the preemptor is done. Its wall clock stops: the active
+        milliseconds accrued so far are banked on the record (clamped at the
+        budget itself — a goal suspended past its deadline resumes only to
+        expire, honestly), and its steps carry across untouched. *reason* is a
+        bounded single line assembled by the caller from constants — it lands
+        in the parked record's ``detail`` for status readers and is wiped on
+        resume.
+
+        Typed refusals, each one the arbiter can act on:
+
+        * ``PRECONDITION_FAILED`` — the goal already ended, or is waiting
+          rather than active; there is nothing running to interrupt.
+        * ``CANCELLED_BY_REQUEST`` — the user already cancelled it; user input
+          outranks preemption, the next tick ends the goal, and parking it
+          would only delay that.
+        * ``QUEUE_REJECTED`` — the goal has been suspended
+          :data:`~.model.MAX_SUSPENSIONS_PER_GOAL` times already. The arbiter
+          must read this as "do not preempt": the goal runs to its own end.
+
+        An unknown *goal_id* raises :class:`UnknownGoalError` — a caller bug,
+        exactly as everywhere else on this surface. ``now_ms`` is monotonised
+        like :meth:`restore`'s; a stale reading cannot rewind the clock.
+
+        Suspension frees no ``max_open`` slot — the parked goal is still open.
+        The preemptor needs a free slot of its own via :meth:`submit_front`,
+        so the arbiter's order is: check, suspend, inject, activate.
+        """
+        record = self._require(goal_id)
+        self._now = max(self._now, now_ms)
+        if not record.is_open or record.state is not GoalState.ACTIVE:
+            return GoalAdmission(
+                refusal=GoalRefusal(
+                    reason_code=ReasonCode.PRECONDITION_FAILED,
+                    message=("only the active goal can be suspended; this one is not running."),
+                )
+            )
+        if goal_id in self._cancel_requested:
+            return GoalAdmission(
+                refusal=GoalRefusal(
+                    reason_code=ReasonCode.CANCELLED_BY_REQUEST,
+                    message=(
+                        "the user already cancelled that goal and the next tick ends it; "
+                        "there is nothing to suspend."
+                    ),
+                )
+            )
+        if record.suspensions >= MAX_SUSPENSIONS_PER_GOAL:
+            return GoalAdmission(
+                refusal=GoalRefusal(
+                    reason_code=ReasonCode.QUEUE_REJECTED,
+                    message=(
+                        f"goal {record.goal_id} has already been suspended "
+                        f"{MAX_SUSPENSIONS_PER_GOAL} times, which is its cap; let it "
+                        "finish instead of preempting it again."
+                    ),
+                    active_goal_id=record.goal_id,
+                )
+            )
+        started_at = record.started_at_ms
+        if started_at is None:
+            # Unreachable: an ACTIVE record cannot be constructed without its
+            # start time. Kept as a typed failure rather than an assert so a
+            # broken invariant surfaces as the bug it is, not as bad arithmetic.
+            raise ValueError("an active goal must record when it started")
+        accrued = self._now - started_at
+        parked = replace(
+            record,
+            state=GoalState.PENDING,
+            started_at_ms=None,
+            suspended_by=by_goal_id,
+            suspensions=record.suspensions + 1,
+            # The budget promise is max_wall_ms of ACTIVE time; the clamp keeps
+            # the bank inside the budget so a goal suspended at (or past) its
+            # deadline stores "the whole budget is spent" and nothing weirder.
+            active_ms_before_suspend=min(
+                record.active_ms_before_suspend + accrued, record.budget.max_wall_ms
+            ),
+            front_rank=self._next_front_rank(),
+            detail=reason,
+        )
+        self._remember(parked)
+        return GoalAdmission(goal=parked)
 
     # -- progress ----------------------------------------------------------
 
@@ -424,6 +736,13 @@ class GoalQueue:
                 )
 
         for record in self.pending:
+            if record.suspended_by is not None:
+                # The pending TTL bounds a goal that was admitted and never
+                # started; a suspended goal already started — expiring it for
+                # having been preempted would punish the interruption. Its
+                # bound is the channel's progress instead (documented at the
+                # top of this module), and the stop levers still apply.
+                continue
             if now >= record.pending_expiry_ms:
                 transitions.append(
                     self._terminate(
@@ -507,6 +826,11 @@ class GoalQueue:
             finished_at_ms=now,
             evidence_keys=evidence_keys,
             detail=detail,
+            # A terminal record answers "why did it end"; who once paused it is
+            # not part of that answer, and the model refuses a marker on
+            # anything but a pending record. The suspensions *count* survives —
+            # it is history, not state.
+            suspended_by=None,
         )
         self._remember(ended)
         self._cancel_requested.discard(record.goal_id)
@@ -523,6 +847,7 @@ class GoalQueue:
     def _remember(self, record: GoalRecord) -> None:
         self._records[record.goal_id] = record
         self._records.move_to_end(record.goal_id)
+        self._revision += 1
         self._evict()
 
     def _evict(self) -> None:
@@ -564,6 +889,26 @@ class GoalQueue:
             if victim is None:
                 return
             self._by_digest.pop(victim)
+
+    def _next_front_rank(self) -> int:
+        """A rank strictly ahead of every goal now waiting.
+
+        One below the minimum rank in the pending backlog (ordinary admissions
+        sit at 0), so each front insertion — a suspension or an injection —
+        lands ahead of everything already fronted: last suspended, first
+        resumed. Bounded without a counter to persist: a new minimum can only
+        be minted while the goal holding the old minimum is still open, so at
+        most ``max_open`` distinct negative ranks exist at once and no open
+        rank is ever below ``-max_open``; when the fronted goals drain, the
+        minimum relaxes back towards 0 by this same arithmetic. A test pins
+        the bound under a preemption storm.
+        """
+        waiting = [
+            record.front_rank
+            for record in self._records.values()
+            if record.state is GoalState.PENDING
+        ]
+        return min(waiting, default=0) - 1
 
     def _next_sequence(self) -> int:
         self._sequence += 1

@@ -23,6 +23,19 @@ Two rules keep the memory honest over time:
   kept; past that the oldest-seen cells are evicted. Eviction is forgetting,
   not an error: a forgotten square goes back to *unknown*, exactly as if it had
   never been observed.
+
+Threat knowledge follows the same two rules with one extra honesty clause.
+Every position-bearing zombie sighting lands on its square as a
+:class:`ThreatSighting` (a zombie reported without a position cannot be pinned
+to a square and taints none), the store is bounded at
+:data:`MAX_THREAT_CELLS` with the oldest-seq sightings evicted first, and a
+sighting older than :data:`THREAT_DECAY_SEQS` observation seqs stops counting
+entirely. The decay horizon is a stated guess either way: zombies move, so a
+remembered sighting is stale the moment it is made, and the map errs toward
+caution *within* the horizon (the square stays tainted although the zombie
+has probably wandered) and forgets *beyond* it (the square goes clean
+although a zombie may still stand there). Both errors are survivable because
+routing reads threat cost as a preference, never as a wall.
 """
 
 from __future__ import annotations
@@ -42,11 +55,14 @@ from ..protocol import NearbyObject, Observation, Position
 
 __all__ = [
     "MAX_CELLS",
+    "MAX_THREAT_CELLS",
     "SEMANTIC_OBSTACLE",
+    "THREAT_DECAY_SEQS",
     "CellSnapshot",
     "DoorKnowledge",
     "GridSquare",
     "LocalMap",
+    "ThreatSighting",
     "square_of",
 ]
 
@@ -57,6 +73,21 @@ GridSquare = tuple[int, int, int]
 #: the observer's own radius — so eviction only fires once a journey has walked
 #: well past everything it can currently see.
 MAX_CELLS: Final = 4096
+
+#: The cap on remembered threat squares. Far below :data:`MAX_CELLS` on
+#: purpose: a sighting decays within :data:`THREAT_DECAY_SEQS` observations,
+#: so the live working set is what one horde can occupy inside the observation
+#: radius, and 256 holds several hordes with room to spare. Past it the
+#: oldest-seq sightings are evicted first — the ones closest to decaying
+#: anyway, so eviction only ever hastens the forgetting already scheduled.
+MAX_THREAT_CELLS: Final = 256
+
+#: Observation seqs after which a sighting stops tainting its square. The
+#: number is a horizon, not a fact about zombies: within it the map treats the
+#: square as still dangerous (caution), beyond it as clean (zombies move).
+#: Neither answer is knowledge — the honesty is in decaying at all rather
+#: than remembering a zombie forever where it once stood.
+THREAT_DECAY_SEQS: Final = 20
 
 #: The semantic ``ObserveModel.BASE_SEMANTICS`` attaches to things a character
 #: cannot walk through (doors, windows, trees). Mirrored here because the
@@ -98,6 +129,29 @@ class DoorKnowledge:
         cannot resolve by itself count as impassable here.
         """
         return self.locked is not True and self.barricaded is not True
+
+
+@dataclass(frozen=True, slots=True)
+class ThreatSighting:
+    """The last zombie sighting recorded on one square.
+
+    ``chasing`` is the sighting's own fact, not a running maximum: the newest
+    observation of the square decides it, because a zombie that stopped
+    chasing is exactly the kind of newer knowledge that must win. Whether the
+    sighting still *counts* is the map's answer (:meth:`LocalMap.threat_at`
+    applies the decay horizon); the record itself only says what was seen and
+    when.
+    """
+
+    x: int
+    y: int
+    z: int
+    chasing: bool
+    last_seen_seq: int
+
+    @property
+    def square(self) -> GridSquare:
+        return (self.x, self.y, self.z)
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,11 +246,17 @@ def _merge_door(existing: DoorKnowledge | None, seen: NearbyObject, seq: int) ->
 class LocalMap:
     """The bounded store of observed squares near the character."""
 
-    def __init__(self, *, max_cells: int = MAX_CELLS) -> None:
+    def __init__(
+        self, *, max_cells: int = MAX_CELLS, max_threat_cells: int = MAX_THREAT_CELLS
+    ) -> None:
         if max_cells < 1:
             raise ValueError(f"max_cells must be at least 1, got {max_cells}")
+        if max_threat_cells < 1:
+            raise ValueError(f"max_threat_cells must be at least 1, got {max_threat_cells}")
         self._max_cells = max_cells
+        self._max_threat_cells = max_threat_cells
         self._cells: dict[GridSquare, _CellState] = {}
+        self._threats: dict[GridSquare, ThreatSighting] = {}
         self._revision = NEVER_SEEN
 
     @property
@@ -252,6 +312,52 @@ class LocalMap:
         for square, contribution in contributions.items():
             self._apply(square, contribution, seq)
         self._evict_over_budget()
+        self._observe_threats(observation, seq)
+
+    def _observe_threats(self, observation: Observation, seq: int) -> None:
+        """Record every position-bearing zombie sighting on its square.
+
+        A zombie reported without a position is skipped honestly — the
+        distance alone says "somewhere near", which lands on no square. Two
+        zombies on one square in one observation merge with chasing OR-ed:
+        one of them coming for the player makes the square a chasing square.
+        An out-of-order replay never regresses a newer sighting, exactly the
+        cell rule.
+        """
+        if observation.nearby is not None:
+            for zombie in observation.nearby.zombies:
+                if zombie.position is None:
+                    continue
+                square = square_of(zombie.position)
+                known = self._threats.get(square)
+                if known is not None and seq < known.last_seen_seq:
+                    continue
+                chasing = zombie.chasing
+                if known is not None and known.last_seen_seq == seq:
+                    chasing = chasing or known.chasing
+                self._threats[square] = ThreatSighting(
+                    x=square[0], y=square[1], z=square[2], chasing=chasing, last_seen_seq=seq
+                )
+        self._prune_threats()
+
+    def _prune_threats(self) -> None:
+        """Drop decayed sightings, then evict the oldest past the budget.
+
+        Decay first: an entry past the horizon answers nothing anywhere, so
+        keeping it would only let dead knowledge crowd live knowledge out of
+        the budget. The eviction tie-break is the square itself, keeping
+        forgetting deterministic like the cell store's.
+        """
+        horizon = self._revision - THREAT_DECAY_SEQS
+        decayed = [sq for sq, seen in self._threats.items() if seen.last_seen_seq < horizon]
+        for square in decayed:
+            del self._threats[square]
+        overflow = len(self._threats) - self._max_threat_cells
+        if overflow <= 0:
+            return
+        doomed = sorted(self._threats, key=lambda sq: (self._threats[sq].last_seen_seq, sq))
+        for square in doomed[:overflow]:
+            del self._threats[square]
 
     def _apply(self, square: GridSquare, contribution: _Contribution, seq: int) -> None:
         cell = self._cells.get(square)
@@ -364,3 +470,21 @@ class LocalMap:
     def known_squares(self) -> Iterator[GridSquare]:
         """Every remembered square, in insertion order (deterministic)."""
         yield from self._cells
+
+    def threat_at(self, x: int, y: int, z: int) -> ThreatSighting | None:
+        """The live sighting on one square, or None once it has decayed.
+
+        The decay horizon is applied here rather than trusted to pruning, so
+        an entry the last observation left one seq short of the horizon still
+        answers honestly the moment a later revision passes it.
+        """
+        found = self._threats.get((x, y, z))
+        if found is None or self._revision - found.last_seen_seq > THREAT_DECAY_SEQS:
+            return None
+        return found
+
+    def threatened_cells(self) -> Iterator[ThreatSighting]:
+        """Every live sighting, in insertion order (deterministic)."""
+        for sighting in self._threats.values():
+            if self._revision - sighting.last_seen_seq <= THREAT_DECAY_SEQS:
+                yield sighting

@@ -103,9 +103,12 @@ from .envelope import (
 )
 from .idempotency import CachedCall, IdempotencyCache
 from .ports import (
+    MAX_PROGRESS_COUNTERS,
     ActionRecord,
     CoreServices,
     GoalPort,
+    GoalProgress,
+    PausedGoalRecord,
     PlanRecord,
     PlanRequest,
     evidence_payload,
@@ -1054,6 +1057,17 @@ class ToolRouter:
                 self._goal_payload(record) for record in pending[:MAX_PENDING_GOALS_REPORTED]
             ],
             "pending_truncated": truncated,
+            # Additive tails, each null when the port had nothing to say —
+            # a goal an LLM planner serves has no deterministic phase, and a
+            # core link whose codec does not carry these answers none.
+            "progress": self._progress_payload(status.progress),
+            "paused": self._paused_payload(status.paused),
+            # The mission's ledger document for the named goal. Its room and
+            # building names were redacted at source; it is scrubbed again
+            # here because the port is a seam, not a promise — every free
+            # string in it (a skip reason, a name) leaves under the same
+            # quarantine key as any other game-adjacent text.
+            "report": None if status.report is None else scrub_payload(status.report),
         }
         warnings = (
             (
@@ -1132,10 +1146,62 @@ class ToolRouter:
                     radius=args.get("radius"),
                     take_all=args.get("take_all"),
                     categories=args.get("categories"),
+                    target_endurance=args.get("target_endurance"),
+                    hours=args.get("hours"),
                 ),
             )
         except ValueError as rejected:
             raise ToolFailure(ReasonCode.INVALID_ARGUMENT, f"{spec.name}: {rejected}") from rejected
+
+    @staticmethod
+    def _progress_payload(progress: GoalProgress | None) -> JsonDict | None:
+        """One drive's phase and counters, shape-checked on the way out.
+
+        The record's own constructor already refuses a phase or counter name
+        that is not a closed token, but the port is another process's answer
+        decoded by foreign code, so what leaves here is what the shape check
+        kept: a token phase (or no payload at all — a progress answer whose
+        phase cannot be published as a token has nothing safe to say), token
+        counter names, plain non-negative integers, and never more than
+        :data:`~.ports.MAX_PROGRESS_COUNTERS` of them.
+        """
+        if progress is None:
+            return None
+        phase = as_token(progress.phase)
+        if phase is None:
+            return None
+        return {
+            "phase": phase,
+            "counters": {
+                name: value
+                for name, value in list(progress.counters.items())[:MAX_PROGRESS_COUNTERS]
+                if as_token(name) is not None
+                and isinstance(value, int)
+                and not isinstance(value, bool)
+                and value >= 0
+            },
+        }
+
+    @staticmethod
+    def _paused_payload(paused: PausedGoalRecord | None) -> JsonDict | None:
+        """The takeover marker, with its one sentence quarantined.
+
+        ``goal_id`` and ``kind`` are tokens this process minted (an id from
+        the queue, a member of the closed kind set) and are shape-checked like
+        every other token. ``reason`` is the loop's own sentence — a constant
+        today — and it still leaves under the quarantine key, because "who
+        wrote it" is exactly the argument this boundary refuses to accept.
+        """
+        if paused is None:
+            return None
+        payload: JsonDict = {
+            "goal_id": as_token(paused.goal_id),
+            "kind": as_token(paused.kind),
+            "paused_at_ms": paused.paused_at_ms,
+            UNTRUSTED_TEXT_KEY: {"reason": scrub_text(paused.reason)},
+            "content_marker": CONTENT_MARKER,
+        }
+        return payload
 
     @staticmethod
     def _goal_payload(record: GoalRecord) -> JsonDict:
@@ -1182,6 +1248,10 @@ class ToolRouter:
             param_payload["take_all"] = params.take_all
         if params.categories is not None:
             param_payload["categories"] = params.categories
+        if params.target_endurance is not None:
+            param_payload["target_endurance"] = params.target_endurance
+        if params.hours is not None:
+            param_payload["hours"] = params.hours
         data: JsonDict = {
             "goal_id": as_token(record.goal_id),
             "kind": record.kind.value,
@@ -1203,6 +1273,14 @@ class ToolRouter:
             "started_at_ms": record.started_at_ms,
             "finished_at_ms": record.finished_at_ms,
             "deadline_ms": record.deadline_ms,
+            # Additive, null for every goal that is not currently suspended: a
+            # pending record carrying the queue's suspension marker is a goal
+            # that stepped aside for the named preemptor and resumes when it
+            # ends. The marker is a token this process minted (the arbiter's
+            # deterministic key or a goal id), shape-checked like every other
+            # token; activation clears it, so it can never describe a goal
+            # that is actually running.
+            "suspended_by": as_token(record.suspended_by),
             # Field *names* only, and each one dropped unless it is a token: the
             # record's own bound caps how many there are, and the shape check is
             # what stops a port putting a sentence where a field name belongs.

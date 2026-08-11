@@ -93,13 +93,29 @@ class GoalKind(StrEnum):
     so the set of goals is a reviewed list rather than a free string that a
     provider could stretch into an instruction.
 
-    ``NAVIGATE_TO`` and ``LOOT_AREA`` are in the vocabulary and deliberately
-    not in any provider's repertoire: routes are walked by the deterministic
-    executor in :mod:`pz_agent_core.navigation`, one observed square at a
-    time, and loot sweeps are driven by the CLI's deterministic loot mission,
-    one observed container at a time. A provider asked for either answers with
-    a typed refusal naming the deterministic server — never with a plan that
-    approximates the work with something else.
+    ``NAVIGATE_TO``, ``LOOT_AREA``, ``RETURN_HOME`` and ``EXPLORE_AREA`` are
+    in the vocabulary and deliberately not in any provider's repertoire:
+    routes are walked by the deterministic executor in
+    :mod:`pz_agent_core.navigation`, one observed square at a time — a
+    ``return_home`` is that same walk with its target read from the save's
+    memory — loot sweeps are driven by the CLI's deterministic loot mission,
+    one observed container at a time, and explore sweeps by the CLI's
+    deterministic explore mission, one frontier square at a time. A provider
+    asked for any of them answers with a typed refusal naming the
+    deterministic server — never with a plan that approximates the work with
+    something else.
+
+    ``TREAT_WOUNDS``, ``REST_UNTIL`` and ``SLEEP_UNTIL_RESTED`` sit in the
+    same column, served by the CLI's deterministic care missions over the
+    medical and survival adapters — bandaging wound by observed wound,
+    resting and sleeping under the adapters' own verification. A provider
+    asked for any of the three answers with the same typed refusal shape.
+
+    ``AVOID_THREAT`` sits there too, and most emphatically: a retreat is
+    driven by the CLI's deterministic avoid mission over the threat-aware
+    route executor, from the observed threat picture, and a provider asked
+    to plan one would be a model choosing where to run from zombies. The
+    typed refusal names the deterministic server, like the rest.
     """
 
     SATISFY_HUNGER = "satisfy_hunger"
@@ -109,6 +125,12 @@ class GoalKind(StrEnum):
     LEARN_RECIPE = "learn_recipe"
     NAVIGATE_TO = "navigate_to"
     LOOT_AREA = "loot_area"
+    RETURN_HOME = "return_home"
+    EXPLORE_AREA = "explore_area"
+    TREAT_WOUNDS = "treat_wounds"
+    REST_UNTIL = "rest_until"
+    SLEEP_UNTIL_RESTED = "sleep_until_rested"
+    AVOID_THREAT = "avoid_threat"
 
 
 @dataclass(frozen=True, slots=True)
@@ -264,6 +286,62 @@ class NullProvider:
                 "loot_area is driven by the deterministic loot mission, not planned by "
                 "a provider; a sidecar without the navigating planner wired cannot "
                 "serve it.",
+            )
+        if request.goal.kind is GoalKind.RETURN_HOME:
+            # The same walk as navigate_to with its target read from the
+            # save's memory; a provider holds neither the memory nor the map.
+            return PlanProposal.refusal(
+                ReasonCode.CAPABILITY_UNAVAILABLE,
+                "return_home is walked by the deterministic route executor to the "
+                "remembered home point, not planned by a provider; a sidecar without "
+                "the navigating planner wired cannot serve it.",
+            )
+        if request.goal.kind is GoalKind.EXPLORE_AREA:
+            # Frontier selection is arithmetic over the local map, and the map
+            # lives behind the navigating wrapper, not behind any provider.
+            return PlanProposal.refusal(
+                ReasonCode.CAPABILITY_UNAVAILABLE,
+                "explore_area is driven by the deterministic explore mission, not "
+                "planned by a provider; a sidecar without the navigating planner "
+                "wired cannot serve it.",
+            )
+        if request.goal.kind is GoalKind.TREAT_WOUNDS:
+            # Triage is policy.medical's decision made per observation; a plan
+            # would freeze one wound and one dressing into a guess about a
+            # body that is re-observed between every bandage.
+            return PlanProposal.refusal(
+                ReasonCode.CAPABILITY_UNAVAILABLE,
+                "treat_wounds is driven by the deterministic care mission, not "
+                "planned by a provider; a sidecar without the navigating planner "
+                "wired cannot serve it.",
+            )
+        if request.goal.kind is GoalKind.REST_UNTIL:
+            # One survival.rest whose adapter does the waiting and the
+            # verifying; a provider holds neither the wait nor the proof.
+            return PlanProposal.refusal(
+                ReasonCode.CAPABILITY_UNAVAILABLE,
+                "rest_until is driven by the deterministic care mission, not "
+                "planned by a provider; a sidecar without the navigating planner "
+                "wired cannot serve it.",
+            )
+        if request.goal.kind is GoalKind.AVOID_THREAT:
+            # A retreat is decided from the observed threat picture by the
+            # deterministic avoid mission; a provider planning one would be
+            # a model choosing where to run from zombies.
+            return PlanProposal.refusal(
+                ReasonCode.CAPABILITY_UNAVAILABLE,
+                "avoid_threat is driven by the deterministic avoid mission, not "
+                "planned by a provider; a sidecar without the navigating planner "
+                "wired cannot serve it.",
+            )
+        if request.goal.kind is GoalKind.SLEEP_UNTIL_RESTED:
+            # Sleep is the one P4 action; the reflex-guard refusal must reach
+            # the goal unchanged, which only the deterministic server does.
+            return PlanProposal.refusal(
+                ReasonCode.CAPABILITY_UNAVAILABLE,
+                "sleep_until_rested is driven by the deterministic care mission, "
+                "not planned by a provider; a sidecar without the navigating "
+                "planner wired cannot serve it.",
             )
         if request.observation.inventory is None:
             return PlanProposal.refusal(

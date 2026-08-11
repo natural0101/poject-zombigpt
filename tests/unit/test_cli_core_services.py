@@ -30,14 +30,37 @@ from pz_agent_cli.core_services import (
 )
 from pz_agent_cli.doctor import CheckResult, CheckStatus, DoctorReport
 from pz_agent_cli.memory import SidecarMemory
+from pz_agent_cli.navigation_planner import NavigatingPlanner
 from pz_agent_cli.runtime import CapabilityLedger, LoopError
 from pz_agent_core.actions import ActionRequest
 from pz_agent_core.diagnostics import DiagnosticLog
-from pz_agent_core.goals import GoalKind, GoalQueue, GoalRequest
+from pz_agent_core.goals import (
+    GoalKind,
+    GoalParams,
+    GoalQueue,
+    GoalRecord,
+    GoalRequest,
+    GoalState,
+    to_planner_goal,
+)
+from pz_agent_core.goals.model import LootScope
 from pz_agent_core.memory import MemoryStore, Square
 from pz_agent_core.planner import Goal as PlannerGoal
-from pz_agent_core.protocol import ActionName, Observation, SessionMode
-from pz_agent_mcp.ports import CoreServices, PlanRequest
+from pz_agent_core.protocol import (
+    ActionName,
+    NearbyObject,
+    NearbyView,
+    Observation,
+    Position,
+    SessionMode,
+)
+from pz_agent_mcp.ports import CoreServices, PausedGoalRecord, PlanRequest
+from tests.fixtures import (
+    DEFAULT_SESSION,
+    make_observation,
+    make_player,
+    make_safety,
+)
 from tests.fixtures.ipc_builders import BASE_TIME_MS
 from tests.fixtures.mcp_doubles import make_report
 from tests.fixtures.sidecar_worlds import (
@@ -350,6 +373,187 @@ class TestUnservedSurfacesRefuseByName:
 
             assert admission.goal is not None, "the queue's own admission crossed the port"
             assert goals.status(admission.goal.goal_id).named == admission.goal
+
+
+class TestGoalStatusTails:
+    """The three additive status answers, read through the real port.
+
+    ``progress``, ``paused`` and ``report`` are projections of state the loop
+    and its deterministic wrapper already hold — a mission's pipeline phase, a
+    takeover's parked marker, a mission's ledger — so each test drives the real
+    thing (a :class:`~pz_agent_cli.navigation_planner.NavigatingPlanner` bound
+    to the real loop, a scripted takeover through the real tick) and reads the
+    answer back through :class:`LoopGoalPort`, never through the producer's own
+    attributes. The producers' own honesty is ``test_goal_progress.py``'s and
+    ``test_two_phase_arm.py``'s subject; this class owns the crossing.
+    """
+
+    def _wrapped(self, world: SidecarWorld) -> tuple[NavigatingPlanner, GoalQueue]:
+        """A real queue and a bound wrapper on *world*'s loop, port-visible."""
+        queue = GoalQueue(clock=world.clock)
+        world.loop.goals = queue
+        wrapper = NavigatingPlanner(None)
+        wrapper.bind(world.loop)
+        world.loop.planner = wrapper
+        return wrapper, queue
+
+    def _activated(self, world: SidecarWorld, request: GoalRequest) -> GoalRecord:
+        queue = world.loop.goals
+        assert queue is not None
+        with world.loop.goal_lock:
+            admission = queue.submit(request)
+            assert admission.goal is not None, admission.refusal
+            started = queue.activate_next()
+            assert started.goal is not None, started.refusal
+            return started.goal
+
+    def _goal_port(self, world: SidecarWorld) -> LoopGoalPort:
+        goals = _services(world).goals
+        assert isinstance(goals, LoopGoalPort)
+        return goals
+
+    @staticmethod
+    def _crate(x: int, y: int) -> NearbyObject:
+        return NearbyObject(
+            ref=f"container:{DEFAULT_SESSION}:world:{x}:{y}:0:1:0",
+            kind="container",
+            distance=max(abs(x - 1200), abs(y - 3400)),
+            position=Position(x=float(x), y=float(y), z=0),
+            room="kitchen",
+            building="house",
+        )
+
+    def test_a_live_missions_phase_and_report_cross_the_port(self, tmp_path: Path) -> None:
+        with attached_world(tmp_path) as world:
+            wrapper, _ = self._wrapped(world)
+            record = self._activated(
+                world,
+                GoalRequest(
+                    kind=GoalKind.LOOT_AREA,
+                    idempotency_key="tail-loot",
+                    params=GoalParams(scope=LootScope.ROOM),
+                ),
+            )
+            # A candidate 32 squares out: past the single-move distance, so
+            # the mission's first move is an approach journey down the channel.
+            observation = make_observation(
+                player=make_player(room="kitchen", building="house"),
+                nearby=NearbyView(objects=[self._crate(1232, 3400)]),
+            )
+            assert wrapper.propose_for_goal(to_planner_goal(record), observation) is None
+            port = self._goal_port(world)
+
+            ambient = port.status()
+            named = port.status(record.goal_id)
+
+            assert ambient.progress is not None, "the active goal's drive answers with no id"
+            assert ambient.progress.phase == "approach"
+            assert ambient.report is None, "a report describes a named goal, not ambient state"
+            assert named.progress is not None and named.progress.phase == "approach"
+            assert named.report is not None, "the live mission's snapshot is readable"
+            assert named.report["ended"] == "in_progress"
+
+    def test_a_sealed_report_outlives_its_goal_and_progress_does_not(self, tmp_path: Path) -> None:
+        with attached_world(tmp_path) as world:
+            wrapper, _ = self._wrapped(world)
+            record = self._activated(
+                world,
+                GoalRequest(
+                    kind=GoalKind.LOOT_AREA,
+                    idempotency_key="tail-sealed",
+                    params=GoalParams(scope=LootScope.ROOM),
+                ),
+            )
+            # scope=room with no room readable: the mission refuses on its
+            # first decision, the goal fails, and the report seals "unpinned".
+            observation = make_observation(player=make_player(room=None, building=None))
+            assert wrapper.propose_for_goal(to_planner_goal(record), observation) is None
+
+            status = self._goal_port(world).status(record.goal_id)
+
+            assert status.named is not None and status.named.state is GoalState.FAILED
+            assert status.progress is None, "a drive pruned with its goal reports no stale phase"
+            assert status.report is not None, "the ledger answers after the mission is gone"
+            assert status.report["ended"] == "unpinned"
+
+    def test_an_llm_served_goal_crosses_with_no_deterministic_phase(self, tmp_path: Path) -> None:
+        # read_for_boredom: still a provider-served kind. The consume kinds
+        # left this category when the wrapper's own mission took them over.
+        with attached_world(tmp_path) as world:
+            self._wrapped(world)
+            record = self._activated(
+                world, GoalRequest(kind=GoalKind.READ_FOR_BOREDOM, idempotency_key="tail-llm")
+            )
+
+            status = self._goal_port(world).status(record.goal_id)
+
+            assert status.named is not None and status.named.state is GoalState.ACTIVE
+            assert status.progress is None, "no deterministic drive serves this kind"
+            assert status.report is None
+            assert status.paused is None
+
+    def test_a_takeover_is_visible_as_paused_until_a_fresh_activation(self, tmp_path: Path) -> None:
+        """The scripted takeover from ``test_two_phase_arm``, read at the port.
+
+        A read_for_boredom goal, because the pause semantics need a goal that
+        idles ACTIVE under a planner-less wrapper: the consume kinds are
+        served by the wrapper's own mission now, and over this world's empty
+        inventory a satisfy goal would end typed before the takeover arrived.
+        """
+        with attached_world(tmp_path) as world:
+            queue = GoalQueue(clock=world.clock, armed=False)
+            world.loop.goals = queue
+            wrapper = NavigatingPlanner(None)
+            wrapper.bind(world.loop)
+            world.loop.planner = wrapper
+            mod = ScriptedMod(world)
+            arm_for_real(world, mod, SessionMode.AUTONOMOUS)
+            with world.loop.goal_lock:
+                admission = queue.submit(
+                    GoalRequest(kind=GoalKind.READ_FOR_BOREDOM, idempotency_key="tail-pause")
+                )
+            assert admission.goal is not None
+            goal_id = admission.goal.goal_id
+            world.observe(safety=make_safety(armed=True, mode=SessionMode.AUTONOMOUS))
+            world.loop.tick()
+            port = self._goal_port(world)
+            assert port.status().paused is None, "nothing is parked before the takeover"
+
+            # The user takes over; the loop parks the goal on its next tick.
+            world.observe(
+                safety=make_safety(armed=True, mode=SessionMode.AUTONOMOUS, manual_takeover=True)
+            )
+            world.loop.tick()
+
+            paused = port.status().paused
+            assert isinstance(paused, PausedGoalRecord)
+            assert paused.goal_id == goal_id
+            assert paused.kind == GoalKind.READ_FOR_BOREDOM.value
+            assert paused.reason == "manual takeover"
+            assert paused.paused_at_ms >= BASE_TIME_MS
+
+            # A bare re-arm keeps the marker: authority returned, the goal did
+            # not, and saying otherwise would hide the goal the user parked.
+            world.loop.disarm(reason="user asked")
+            mod.beat()
+            arm_for_real(world, mod, SessionMode.AUTONOMOUS)
+            world.observe(safety=make_safety(armed=True, mode=SessionMode.AUTONOMOUS))
+            world.loop.tick()
+            assert port.status().paused is not None
+
+            # The explicit path: a fresh submission activates and the parked
+            # marker has served its purpose.
+            with world.loop.goal_lock:
+                fresh = queue.submit(
+                    GoalRequest(kind=GoalKind.READ_FOR_BOREDOM, idempotency_key="tail-resume")
+                )
+            assert fresh.goal is not None
+            world.observe(safety=make_safety(armed=True, mode=SessionMode.AUTONOMOUS))
+            world.loop.tick()
+
+            cleared = port.status()
+            assert cleared.paused is None, "the fresh activation replaced the marker"
+            assert cleared.active is not None and cleared.active.goal_id == fresh.goal.goal_id
 
 
 class TestMemoryPort:

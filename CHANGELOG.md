@@ -12,6 +12,79 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Added
 
+- **A need can interrupt the current goal — and give it back**
+  (`epic/p2-goal-controller`, wave 3). The queue learned suspension without a
+  new state: `suspend()` parks the ACTIVE goal at the front of the backlog
+  with a marker, its wall budget stops burning while parked, and ordinary
+  activation resumes it with exactly the remaining budget; a fourth
+  suspension of the same goal is a typed refusal, so preemption cannot
+  ping-pong a goal forever. On top rides the NeedsArbiter — AUTONOMOUS mode
+  only, edge-triggered (a crossing, never a level): bleeding appearing
+  outranks danger reaching HIGH outranks thirst outranks hunger past the
+  policies' own critical lines. It suspends, injects the satisfy/care/avoid
+  goal at the front, and on that goal's *any* terminal — success or failure —
+  the original resumes mid-mission with its drive intact (a loot mission
+  continues its candidate list after lunch). Every decision lands in a
+  bounded ledger; a suspended goal shows its `suspended_by` through
+  `pz_goal_status`. A restart mid-preemption restores the original as
+  pending-with-marker while the in-flight preemptor honestly ends
+  `SESSION_TERMINATED`.
+- **Retreat is a route, not just a stop.** The local map remembers zombie
+  sightings (bounded, decaying — stale threat is a guess either way, so the
+  map errs toward caution within the horizon and forgets beyond it), and the
+  route search tolls threatened squares so journeys detour around them —
+  costs, never walls: a cornered character still finds the least-bad way out.
+  `avoid_threat` (13th kind, speakable — «отступай», «беги») retreats to the
+  nearest user safe zone or the square that maximises distance from every
+  observed threat, and succeeds only on the observed postcondition: the
+  nearest zombie at twice the threat ladder's close distance, or a safe zone
+  with nothing chasing. Chasing threats at close range stay the reflex
+  guard's band — no second driver under the wheel.
+- **The mandatory survival chain runs without an LLM** (`epic/p2-goal-controller`,
+  wave 2). `satisfy_hunger` and `satisfy_thirst` — speakable since the voice
+  epic, LLM-served until now — are deterministic missions: read the stat
+  (absent is a typed refusal, never zero), eat carried safe food first (the
+  safety gates stay where they live, in the food/drink policies — the mission
+  restates nothing), fetch from reachable containers when nothing is carried
+  (memory-known category shelves first, nearest first, locked doors recorded
+  as skips), transfer to main, consume, and claim success only when the stat
+  is observed at the target. The user's reserves outrank hunger at any level:
+  the agent fails typed before eating the strategic stock. Only the goal
+  channel reroutes — the autonomy initiative path still asks its provider,
+  and the asymmetry is documented in the contract test.
+- **Three more care kinds** (12 total, nine deterministic): `treat_wounds`
+  (speakable — «перевяжись»; bandages every observed bleeding wound
+  worst-first, verifies each stopped from observation, honest partial failure
+  when dressings run out), `rest_until` (target endurance, the rest adapter's
+  own bounds), `sleep_until_rested` (the sleep adapter's danger>NONE refusal
+  surfaces unchanged and is never retried into danger). Care missions carry
+  phase tokens and sealed reports like the rest.
+- **Goals survive a sidecar restart, honestly** (`epic/p2-goal-controller`,
+  wave 1). One versioned `goals.json` beside the memory dir, written
+  atomically at most once per tick and only when a goal actually changed
+  state. On the next start the previous ACTIVE goal answers terminal
+  `FAILED`/`SESSION_TERMINATED` — "the sidecar restarted while this goal was
+  active" — never silence; PENDING goals come back under their original ids
+  and idempotency digests (a resubmitted key resolves to the same goal, and a
+  TTL that ran out during the downtime expires on the first tick). A corrupt
+  file is set aside as `goals.json.corrupt` with a typed diagnostic, and the
+  channel starts empty rather than guessing.
+- **«Домой» is a word the agent obeys.** `return_home` (parameterless, the
+  first new speakable voice goal since the voice epic) walks the character to
+  the remembered home point through the deterministic navigation executor; no
+  home set answers the exact remedy — "stand at home and run: pz-agent
+  remember home". `explore_area` sweeps the unknown frontier of the local map
+  within a scope (radius by default — exploring one's own room is a no-op),
+  approaches each waypoint through a Journey, records locked doors as named
+  skips, and claims `complete` only when no frontier cell remains. Nine goal
+  kinds; four of them deterministic missions the LLM never touches.
+- **`pz_goal_status` finally says what phase the work is in.** Additive
+  `progress` (closed phase tokens + counters: approach/open/inspect/transfer,
+  legs walked, waypoints visited), `paused` (the manual-takeover marker,
+  invisible since the arm epic, now projected with its reason quarantined as
+  untrusted text), and `report` (the loot/explore mission ledger, scrubbed,
+  live or sealed). An LLM-served goal answers `progress: null` honestly — a
+  deterministic phase is a claim only a deterministic server may make.
 - **«Облутай квартиру» is now a typed goal** (`epic/p1-loot-area`, wave 2).
   `loot_area` (7 goal kinds) takes a scope — `room` (default), `building`, or
   `radius` 1..30 — plus `take_all` and an optional closed category list, and

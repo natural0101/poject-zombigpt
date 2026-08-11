@@ -38,7 +38,7 @@ from pz_agent_core.actions.adapter import AdapterRegistry
 from pz_agent_core.actions.adapters import register_game_adapters
 from pz_agent_core.actions.builtin import register_builtins
 from pz_agent_core.diagnostics import DiagnosticLog, LogLevel, TraceWriter
-from pz_agent_core.goals import GoalQueue
+from pz_agent_core.goals import GoalQueue, GoalStore
 from pz_agent_core.ipc.layout import IpcLayout
 from pz_agent_core.protocol import JsonDict, SessionMode
 from pz_agent_core.version import PRODUCT_VERSION
@@ -584,6 +584,13 @@ def build_loop(
     # constructor argument: the wrapper needs the loop's queue, lock and
     # action channel, and until this call it serves navigation to nobody.
     navigating.bind(loop)
+    # Goals survive a sidecar restart: one file in the state directory, beside
+    # the memory directory, adopted here — the queue above is fresh and no
+    # thread is serving yet, so the restore is race-free — and rewritten by
+    # the loop on every goal transition from then on. The previous session's
+    # active goal comes back as an honest FAILED/SESSION_TERMINATED record,
+    # its pending backlog comes back pending under the original ids.
+    loop.adopt_goal_store(GoalStore(workspace.state_dir))
     publish_planner_record(
         workspace.state_dir / PLANNER_FILE_NAME,
         # Read off the loop, not off the intent above: this is the field that

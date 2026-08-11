@@ -1005,3 +1005,384 @@ class TestTheInjectedClock:
         ended = queue.record(record.goal_id)
         assert ended is not None
         assert ended.finished_at_ms == 10_000
+
+
+# --------------------------------------------------------------------------
+# T009 — a goal can step aside and come back
+# --------------------------------------------------------------------------
+
+
+def suspend_ok(
+    queue: GoalQueue, goal_id: str, *, by: str = "preemptor", now_ms: int, reason: str = "a threat"
+) -> GoalRecord:
+    """Suspend *goal_id*, asserting the queue accepted it, and return the record."""
+    parked = queue.suspend(goal_id, by_goal_id=by, reason=reason, now_ms=now_ms)
+    assert parked.goal is not None, parked.refusal
+    return parked.goal
+
+
+class TestT009SuspendAndResume:
+    def test_suspension_parks_the_active_goal_at_the_front_with_a_marker(self) -> None:
+        clock = ManualClock()
+        queue = GoalQueue(clock=clock, max_open=3)
+        running = start_one(queue, hunger("original", budget=PATIENT))
+        behind = admit(queue, hunger("backlog", budget=PATIENT))
+
+        parked = suspend_ok(queue, running.goal_id, by="preemptor-id", now_ms=clock.now)
+
+        # PENDING again — the closed enum stays closed — with the marker on the
+        # record saying who it stepped aside for, ahead of the whole backlog.
+        assert parked.state is GoalState.PENDING
+        assert parked.suspended_by == "preemptor-id"
+        assert parked.suspensions == 1
+        assert parked.started_at_ms is None
+        assert queue.active is None
+        assert [r.goal_id for r in queue.pending] == [running.goal_id, behind.goal_id]
+        # Suspension freed no slot: the parked goal is still open.
+        assert queue.open_count == 2
+
+    def test_the_wall_clock_stops_while_suspended(self) -> None:
+        # Arithmetic written out. Started at 5_000 with 2_000 ms of budget;
+        # suspended at 5_500 having burned 500. Resumed at 100_000, so the
+        # remaining 1_500 ms run out at 101_500 — not at 7_000, which is where
+        # a deadline that kept burning through the suspension would have died.
+        clock = ManualClock(start=5_000)
+        queue = GoalQueue(clock=clock)
+        running = start_one(queue, hunger("k", budget=SHORT))
+        assert running.started_at_ms == 5_000
+
+        clock.set(5_500)
+        parked = suspend_ok(queue, running.goal_id, now_ms=5_500)
+        assert parked.active_ms_before_suspend == 500
+
+        clock.set(100_000)
+        assert queue.tick() == (), "nothing expires while the goal waits"
+        resumed = activate(queue)
+        assert resumed.goal_id == running.goal_id
+        assert resumed.started_at_ms == 100_000
+        assert resumed.deadline_ms == 101_500
+
+        clock.set(101_499)
+        assert queue.tick() == ()
+        clock.set(101_500)
+        transitions = queue.tick()
+        assert [(t.goal_id, t.state) for t in transitions] == [(running.goal_id, GoalState.EXPIRED)]
+
+    def test_resuming_through_the_ordinary_activation_clears_the_marker(self) -> None:
+        clock = ManualClock()
+        queue = GoalQueue(clock=clock)
+        running = start_one(queue, hunger("k", budget=PATIENT))
+        suspend_ok(queue, running.goal_id, now_ms=clock.now, reason="threat within reach")
+
+        resumed = activate(queue)
+
+        assert resumed.goal_id == running.goal_id
+        assert resumed.state is GoalState.ACTIVE
+        assert resumed.suspended_by is None
+        assert resumed.front_rank == 0
+        assert resumed.detail == "", "the parked reason is no longer the truth"
+        assert resumed.suspensions == 1, "the count is history and survives"
+
+    def test_the_parked_reason_is_readable_while_parked(self) -> None:
+        clock = ManualClock()
+        queue = GoalQueue(clock=clock)
+        running = start_one(queue, hunger("k", budget=PATIENT))
+
+        suspend_ok(queue, running.goal_id, now_ms=clock.now, reason="threat within reach")
+
+        parked = queue.record(running.goal_id)
+        assert parked is not None
+        assert parked.detail == "threat within reach"
+
+    def test_steps_carry_across_a_suspension(self) -> None:
+        clock = ManualClock()
+        queue = GoalQueue(clock=clock)
+        running = start_one(queue, hunger("k", budget=PATIENT))  # 3 steps
+        assert queue.note_step(running.goal_id) is None
+
+        suspend_ok(queue, running.goal_id, now_ms=clock.now)
+        resumed = activate(queue)
+
+        assert resumed.steps_used == 1, "a step spent before the suspension stays spent"
+        assert queue.note_step(running.goal_id) is None
+        exhausted = queue.note_step(running.goal_id)
+        assert exhausted is not None
+        assert exhausted.state is GoalState.EXPIRED
+        assert exhausted.reason_code is ReasonCode.NO_PROGRESS
+
+    def test_the_pending_ttl_does_not_apply_to_a_suspended_goal(self) -> None:
+        # Both goals share the SHORT budget, whose time to live is 4_000 ms
+        # from submission at 0. At 50_000 the ordinary pending goal is long
+        # dead — and the suspended one is not, because it already started, and
+        # expiring it for having been preempted would punish the interruption.
+        clock = ManualClock()
+        queue = GoalQueue(clock=clock, max_open=2)
+        running = start_one(queue, hunger("preempted", budget=SHORT))
+        waiting = admit(queue, hunger("ordinary", budget=SHORT))
+        suspend_ok(queue, running.goal_id, now_ms=clock.now)
+
+        clock.set(50_000)
+        transitions = queue.tick()
+
+        assert [(t.goal_id, t.state) for t in transitions] == [(waiting.goal_id, GoalState.EXPIRED)]
+        assert states(queue, [running.goal_id]) == [GoalState.PENDING]
+        # And it still resumes, with its stopped clock intact.
+        assert activate(queue).goal_id == running.goal_id
+
+    def test_the_fourth_suspension_is_refused_and_names_the_cap(self) -> None:
+        clock = ManualClock()
+        queue = GoalQueue(clock=clock)
+        running = start_one(queue, hunger("k", budget=PATIENT))
+        for _ in range(3):
+            suspend_ok(queue, running.goal_id, now_ms=clock.now)
+            assert activate(queue).goal_id == running.goal_id
+
+        refused = queue.suspend(
+            running.goal_id, by_goal_id="preemptor", reason="again", now_ms=clock.now
+        )
+
+        assert refused.goal is None
+        assert refused.refusal is not None
+        assert refused.refusal.reason_code is ReasonCode.QUEUE_REJECTED
+        assert refused.refusal.active_goal_id == running.goal_id
+        assert "3 times" in refused.refusal.message
+        assert "let it finish" in refused.refusal.message
+        # The refusal changed nothing: the goal is still running.
+        assert queue.active is not None
+        assert queue.active.goal_id == running.goal_id
+        assert queue.active.suspensions == 3
+
+    def test_suspending_what_is_not_running_is_refused_typed(self) -> None:
+        clock = ManualClock()
+        queue = GoalQueue(clock=clock, max_open=2)
+        waiting = admit(queue, hunger("waiting", budget=PATIENT))
+
+        pending_refusal = queue.suspend(
+            waiting.goal_id, by_goal_id="p", reason="r", now_ms=clock.now
+        )
+        assert pending_refusal.refusal is not None
+        assert pending_refusal.refusal.reason_code is ReasonCode.PRECONDITION_FAILED
+
+        started = activate(queue)
+        queue.succeed(started.goal_id, observed())
+        ended_refusal = queue.suspend(started.goal_id, by_goal_id="p", reason="r", now_ms=clock.now)
+        assert ended_refusal.refusal is not None
+        assert ended_refusal.refusal.reason_code is ReasonCode.PRECONDITION_FAILED
+
+        with pytest.raises(UnknownGoalError):
+            queue.suspend("never-minted", by_goal_id="p", reason="r", now_ms=clock.now)
+
+    def test_a_goal_the_user_already_cancelled_is_not_suspended(self) -> None:
+        # User input outranks preemption: the next tick ends this goal, and
+        # parking it would only delay what the user asked for.
+        clock = ManualClock()
+        queue = GoalQueue(clock=clock)
+        running = start_one(queue, hunger("k", budget=PATIENT))
+        assert queue.request_cancel(running.goal_id) is True
+
+        refused = queue.suspend(running.goal_id, by_goal_id="p", reason="r", now_ms=clock.now)
+
+        assert refused.refusal is not None
+        assert refused.refusal.reason_code is ReasonCode.CANCELLED_BY_REQUEST
+        assert [t.state for t in queue.tick()] == [GoalState.CANCELLED]
+
+    def test_cancelling_a_suspended_goal_ends_it_and_drops_the_marker(self) -> None:
+        clock = ManualClock()
+        queue = GoalQueue(clock=clock)
+        running = start_one(queue, hunger("k", budget=PATIENT))
+        suspend_ok(queue, running.goal_id, now_ms=clock.now)
+
+        assert queue.request_cancel(running.goal_id) is True
+        transitions = queue.tick()
+
+        assert [(t.goal_id, t.previous, t.state) for t in transitions] == [
+            (running.goal_id, GoalState.PENDING, GoalState.CANCELLED)
+        ]
+        ended = queue.record(running.goal_id)
+        assert ended is not None
+        assert ended.suspended_by is None, (
+            "a terminal record answers why it ended, not who paused it"
+        )
+        assert ended.suspensions == 1, "the count is history and survives the end"
+        assert_nothing_in_flight(queue, [running.goal_id])
+
+    def test_a_panic_stop_clears_a_suspended_goal_like_any_open_goal(self) -> None:
+        clock = ManualClock()
+        queue = GoalQueue(clock=clock)
+        running = start_one(queue, hunger("k", budget=PATIENT))
+        suspend_ok(queue, running.goal_id, now_ms=clock.now)
+
+        transitions = queue.panic_stop()
+
+        assert [(t.goal_id, t.state) for t in transitions] == [
+            (running.goal_id, GoalState.CANCELLED)
+        ]
+        assert_nothing_in_flight(queue, [running.goal_id])
+
+    def test_a_suspension_at_the_deadline_banks_the_whole_budget_and_no_more(self) -> None:
+        # Suspended exactly when its wall clock ran out (the tick that would
+        # have expired it had not landed yet): the bank clamps at the budget,
+        # so it resumes only to expire honestly on the next tick.
+        clock = ManualClock()
+        queue = GoalQueue(clock=clock)
+        running = start_one(queue, hunger("k", budget=SHORT))
+
+        clock.set(9_000)  # 7_000 past a 2_000 ms budget
+        parked = suspend_ok(queue, running.goal_id, now_ms=9_000)
+
+        assert parked.active_ms_before_suspend == SHORT.max_wall_ms
+        resumed = activate(queue)
+        assert resumed.deadline_ms == clock.now, "no budget is left; the deadline is now"
+        assert [t.state for t in queue.tick()] == [GoalState.EXPIRED]
+
+
+class TestT010PriorityInjection:
+    def test_the_injected_goal_activates_next_and_evicts_nothing(self) -> None:
+        clock = ManualClock()
+        queue = GoalQueue(clock=clock, max_open=4)
+        original = start_one(queue, hunger("original", budget=PATIENT))
+        backlog = admit(queue, hunger("backlog", budget=PATIENT))
+        suspend_ok(queue, original.goal_id, by="will-be-preemptor", now_ms=clock.now)
+
+        injected = queue.submit_front(hunger("preemptor", budget=PATIENT), now_ms=clock.now)
+
+        assert injected.goal is not None, injected.refusal
+        # Ahead of everything — including the goal it displaced — and nothing
+        # was evicted to make room.
+        assert [r.goal_id for r in queue.pending] == [
+            injected.goal.goal_id,
+            original.goal_id,
+            backlog.goal_id,
+        ]
+        assert queue.open_count == 3
+        assert activate(queue).goal_id == injected.goal.goal_id
+
+    def test_the_original_resumes_after_the_preemptor_finishes(self) -> None:
+        # The directive's whole sentence in one test: прервать текущую цель,
+        # выполнить срочную, продолжить исходную.
+        clock = ManualClock()
+        queue = GoalQueue(clock=clock)
+        original = start_one(queue, hunger("original", budget=PATIENT))
+        suspend_ok(queue, original.goal_id, now_ms=clock.now)
+        injected = queue.submit_front(hunger("preemptor", budget=PATIENT), now_ms=clock.now)
+        assert injected.goal is not None
+        assert activate(queue).goal_id == injected.goal.goal_id
+
+        queue.succeed(injected.goal.goal_id, observed())
+        resumed = activate(queue)
+
+        assert resumed.goal_id == original.goal_id
+        assert resumed.suspended_by is None
+
+    def test_a_full_channel_refuses_the_injection_rather_than_evicting(self) -> None:
+        # The pinned arithmetic: the suspended goal still counts as open, so
+        # injection needs one free slot of its own. max_open=2 with an active
+        # goal and a pending one is full; suspension does not change the count,
+        # and the injection is refused with the ordinary over-cap reason.
+        clock = ManualClock()
+        queue = GoalQueue(clock=clock, max_open=2)
+        original = start_one(queue, hunger("original", budget=PATIENT))
+        backlog = admit(queue, hunger("backlog", budget=PATIENT))
+        assert queue.open_count == 2
+        suspend_ok(queue, original.goal_id, now_ms=clock.now)
+        assert queue.open_count == 2, "suspension frees no slot"
+
+        refused = queue.submit_front(hunger("preemptor", budget=PATIENT), now_ms=clock.now)
+
+        assert refused.goal is None
+        assert refused.refusal is not None
+        assert refused.refusal.reason_code is ReasonCode.QUEUE_REJECTED
+        # Refused, not evicted: both open goals are exactly where they were.
+        assert [r.goal_id for r in queue.pending] == [original.goal_id, backlog.goal_id]
+
+    def test_with_one_free_slot_the_whole_preemption_fits(self) -> None:
+        clock = ManualClock()
+        queue = GoalQueue(clock=clock, max_open=2)
+        original = start_one(queue, hunger("original", budget=PATIENT))
+        assert queue.open_count == 1
+
+        suspend_ok(queue, original.goal_id, now_ms=clock.now)
+        injected = queue.submit_front(hunger("preemptor", budget=PATIENT), now_ms=clock.now)
+
+        assert injected.goal is not None, injected.refusal
+        assert queue.open_count == 2
+        assert activate(queue).goal_id == injected.goal.goal_id
+
+    def test_a_duplicate_key_is_not_repositioned_by_submit_front(self) -> None:
+        # A retry through the front door resolves to the goal it already
+        # names, where it already is: repositioning on a dropped
+        # acknowledgement would let a retry reorder the backlog.
+        clock = ManualClock()
+        queue = GoalQueue(clock=clock, max_open=3)
+        first = admit(queue, hunger("a", budget=PATIENT))
+        second = admit(queue, hunger("b", budget=PATIENT))
+
+        again = queue.submit_front(hunger("b", budget=PATIENT), now_ms=clock.now)
+
+        assert again.duplicate is True
+        assert again.goal is not None
+        assert again.goal.goal_id == second.goal_id
+        assert [r.goal_id for r in queue.pending] == [first.goal_id, second.goal_id]
+
+    def test_front_ranks_stay_within_the_channel_cap_under_a_preemption_storm(self) -> None:
+        # The bound the rank comment claims, exercised: a chain of preemptions
+        # deep enough to fill the channel never mints a rank below -max_open,
+        # because minting a new minimum needs the old minimum's goal still
+        # open and open goals are capped.
+        clock = ManualClock()
+        queue = GoalQueue(clock=clock, max_open=4)
+        chain = [start_one(queue, hunger("g-0", budget=PATIENT))]
+        for index in range(1, 4):
+            suspend_ok(queue, chain[-1].goal_id, by=f"g-{index}", now_ms=clock.now)
+            injected = queue.submit_front(hunger(f"g-{index}", budget=PATIENT), now_ms=clock.now)
+            assert injected.goal is not None, injected.refusal
+            chain.append(injected.goal)
+            assert activate(queue).goal_id == injected.goal.goal_id
+        # The channel is full: three parked goals plus the running preemptor.
+        assert queue.open_count == 4
+        ranks = [r.front_rank for r in queue.pending]
+        assert ranks == sorted(ranks), "the backlog serves most recently fronted first"
+        assert all(rank >= -queue.max_open for rank in ranks)
+        # A fifth preemption cannot fit and is refused, not squeezed in.
+        suspended = queue.suspend(
+            chain[-1].goal_id, by_goal_id="g-4", reason="storm", now_ms=clock.now
+        )
+        assert suspended.goal is not None
+        overflow = queue.submit_front(hunger("g-4", budget=PATIENT), now_ms=clock.now)
+        assert overflow.refusal is not None
+        assert overflow.refusal.reason_code is ReasonCode.QUEUE_REJECTED
+        assert min(r.front_rank for r in queue.pending) >= -queue.max_open
+
+    def test_nested_preemption_resumes_innermost_first(self) -> None:
+        # A preempts nothing, B preempts A, C preempts B: the unwinding order
+        # is C's end -> B resumes -> B's end -> A resumes. Last suspended,
+        # first resumed — a stack of interrupted work, not a queue of it.
+        clock = ManualClock()
+        queue = GoalQueue(clock=clock, max_open=3)
+        a = start_one(queue, hunger("a", budget=PATIENT))
+        suspend_ok(queue, a.goal_id, by="b", now_ms=clock.now)
+        b_admission = queue.submit_front(hunger("b", budget=PATIENT), now_ms=clock.now)
+        assert b_admission.goal is not None
+        b = b_admission.goal
+        assert activate(queue).goal_id == b.goal_id
+        suspend_ok(queue, b.goal_id, by="c", now_ms=clock.now)
+        c_admission = queue.submit_front(hunger("c", budget=PATIENT), now_ms=clock.now)
+        assert c_admission.goal is not None
+        assert activate(queue).goal_id == c_admission.goal.goal_id
+
+        queue.succeed(c_admission.goal.goal_id, observed())
+        assert activate(queue).goal_id == b.goal_id
+        queue.succeed(b.goal_id, observed())
+        assert activate(queue).goal_id == a.goal_id
+
+    def test_submit_front_reads_time_like_restore_does(self) -> None:
+        # now_ms is monotonised: a stale reading cannot rewind the clock, and
+        # a fresh one advances it for the record's own timestamps.
+        clock = ManualClock(start=10_000)
+        queue = GoalQueue(clock=clock)
+        start_one(queue, hunger("running", budget=PATIENT))
+
+        injected = queue.submit_front(hunger("preemptor", budget=PATIENT), now_ms=400)
+
+        assert injected.goal is not None
+        assert injected.goal.submitted_at_ms == 10_000, "the stale reading did not rewind"

@@ -46,7 +46,13 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Final
 
-from pz_agent_core.capabilities import DRINK_CARRIED, EAT_PERCENTAGE, READ_LITERATURE
+from pz_agent_core.capabilities import (
+    DRINK_CARRIED,
+    EAT_PERCENTAGE,
+    MOVE_TO_SQUARE,
+    READ_LITERATURE,
+)
+from pz_agent_core.capabilities.probes import MEDICAL_BANDAGE
 from pz_agent_core.goals import (
     GOAL_SPECS,
     NUMERIC_RANGES,
@@ -269,6 +275,68 @@ KIND_WORDS: Final[dict[GoalKind, frozenset[str]]] = {
     GoalKind.LEARN_RECIPE: frozenset(
         {"рецепт", "рецепты", "рецептов", "рецепту", "выучи", "выучить", "recipe"}
     ),
+    # The first parameterless kind added since the voice epic, speakable for
+    # the same reason satisfy_hunger is: the bare word carries the whole
+    # goal. «домой» / «идём домой» / «возвращайся домой» all reach the same
+    # member through these tokens; where home *is* stays in the save's
+    # memory, so nothing spoken here ever becomes a coordinate.
+    GoalKind.RETURN_HOME: frozenset(
+        {
+            "домой",
+            "дом",
+            "дому",
+            "возвращайся",
+            "вернись",
+            "вернуться",
+            "возвращаться",
+            "home",
+        }
+    ),
+    # Parameterless like return_home, and speakable on the same argument: the
+    # bare word carries the whole goal, and everything after it — which wound,
+    # which dressing — is the medical policy's decision, never the
+    # transcript's. «перевязку» is deliberately absent: it is first aid's
+    # *skill* word, and the one-namespace rule below would rightly refuse a
+    # token two tables claim.
+    GoalKind.TREAT_WOUNDS: frozenset(
+        {
+            "перевяжись",
+            "перевяжи",
+            "перевязать",
+            "забинтуй",
+            "забинтуйся",
+            "бинтуй",
+            "обработай",
+            "раны",
+            "рану",
+            "bandage",
+            "wounds",
+        }
+    ),
+    # Parameterless and urgent, speakable on return_home's argument taken to
+    # its sharpest case: the bare word carries the whole goal, and the person
+    # shouting it is watching a zombie close in. Where to retreat *to* is the
+    # avoid mission's deterministic decision from the observed threat picture
+    # — nothing spoken here ever becomes a coordinate or a direction. «стой»
+    # and friends stay stop words: stopping and retreating are different
+    # orders, and the one-namespace rule keeps them from ever blurring.
+    GoalKind.AVOID_THREAT: frozenset(
+        {
+            "отступай",
+            "отступи",
+            "отступить",
+            "отступаем",
+            "беги",
+            "бегите",
+            "убегай",
+            "уходи",
+            "уходим",
+            "спрячься",
+            "укройся",
+            "retreat",
+            "flee",
+        }
+    ),
 }
 
 #: The three kinds served by the same in-game action. Their overlap is resolved
@@ -325,11 +393,52 @@ SKILL_WORDS: Final[dict[TrainableSkill, frozenset[str]]] = {
 #: sentence a vocabulary therefore means first giving the grammar closed-token
 #: parameters, which is the voice epic's change, not the loot epic's; until
 #: then the kind travels through ``pz_goal_submit`` like navigation does.
+#: ``explore_area`` sits here by loot_area's own argument, one wave later:
+#: the bare goal is speakable in principle, but its optional parameters — the
+#: scope token and the radius — are the very tokens this grammar declares
+#: unspeakable, and the partition check refuses a speakable kind that takes
+#: unspeakable parameters even optionally. A spoken «исследуй только двор»
+#: that swept the default radius instead would be the invention that check
+#: exists to prevent; the kind travels through ``pz_goal_submit`` until the
+#: grammar grows closed-token parameters.
+#:
+#: ``return_home`` is deliberately *not* here: it takes no parameter at all,
+#: so it is the first kind since the voice epic to clear the partition check
+#: as speakable, and :data:`KIND_WORDS` carries its vocabulary.
+#:
+#: ``rest_until`` sits here by the pinned required-parameter argument:
+#: ``target_endurance`` is a fraction with no unit word of its own — the
+#: percent vocabulary already belongs to ``satisfy_to``, and one namespace
+#: across the tables is the rule — so the kind's *required* parameter is
+#: unspeakable and the kind travels through ``pz_goal_submit``.
+#:
+#: ``sleep_until_rested`` sits here by loot_area's argument, decided honestly
+#: against the grammar's own checks rather than inherited: the bare goal is a
+#: legitimate spoken sentence («выспись» needs no parameter at all), and its
+#: one optional parameter ``hours`` even has the number-with-unit-word shape
+#: this grammar's machinery speaks — but the spoken-quantity path runs through
+#: more than this module's unit table (the session's spoken-scale table
+#: converts every speakable numeric parameter, and its import check refuses a
+#: speakable number it cannot convert), and this wave does not grow that path.
+#: Until the grammar carries an hour quantity end to end, a speakable sleep
+#: would be a kind speech can start but never qualify — «поспи два часа» that
+#: silently slept the default night is the invention the partition check
+#: exists to prevent — so the kind travels through ``pz_goal_submit``.
+#:
+#: ``treat_wounds`` is deliberately *not* here: parameterless like
+#: ``return_home``, it clears the partition check as speakable and
+#: :data:`KIND_WORDS` carries its vocabulary.
 #: The grammar checks below still hold: a *new* kind must land either in
 #: :data:`KIND_WORDS` or here — a kind in neither refuses the import, and a
 #: kind in both refuses it too.
 UNSPEAKABLE_KINDS: Final[frozenset[GoalKind]] = frozenset(
-    {GoalKind.NAVIGATE_TO, GoalKind.LOOT_AREA}
+    {
+        GoalKind.NAVIGATE_TO,
+        GoalKind.LOOT_AREA,
+        GoalKind.EXPLORE_AREA,
+        GoalKind.REST_UNTIL,
+        GoalKind.SLEEP_UNTIL_RESTED,
+    }
 )
 
 #: The parameters only those kinds carry, excluded from the unit-word table
@@ -337,7 +446,23 @@ UNSPEAKABLE_KINDS: Final[frozenset[GoalKind]] = frozenset(
 #: :func:`_check_channel_tables` against :data:`~pz_agent_core.goals.GOAL_SPECS`
 #: so no speakable kind can ever require a parameter speech cannot supply.
 UNSPEAKABLE_PARAMS: Final[frozenset[str]] = frozenset(
-    {"target_x", "target_y", "target_z", "scope", "radius", "take_all", "categories"}
+    {
+        "target_x",
+        "target_y",
+        "target_z",
+        "scope",
+        "radius",
+        "take_all",
+        "categories",
+        # rest_until's required target: a fraction whose natural unit word
+        # ("процентов") is already satisfy_to's, and a word two parameters
+        # claim is a number the grammar could not honestly assign.
+        "target_endurance",
+        # sleep_until_rested's optional night length: unit-word-shaped, and
+        # still unspeakable until the whole spoken-quantity path carries an
+        # hour scale — the reasoning is on UNSPEAKABLE_KINDS above.
+        "hours",
+    }
 )
 
 #: The unit word that gives a bare number its parameter. Keyed by the parameter
@@ -410,6 +535,18 @@ CAPABILITY_FOR_KIND: Final[dict[GoalKind, str]] = {
     GoalKind.READ_FOR_BOREDOM: READ_LITERATURE,
     GoalKind.TRAIN_SKILL: READ_LITERATURE,
     GoalKind.LEARN_RECIPE: READ_LITERATURE,
+    # Walking home is the movement capability and nothing else: the target
+    # comes from memory, and the journey's doors and stairs ride the same
+    # move the probe verified.
+    GoalKind.RETURN_HOME: MOVE_TO_SQUARE,
+    # Bandaging needs exactly the adapter that serves it; rest_until and
+    # sleep_until_rested are unspeakable and so — per the check below —
+    # deliberately absent.
+    GoalKind.TREAT_WOUNDS: MEDICAL_BANDAGE,
+    # Retreating is walking away: the movement capability, exactly as
+    # return_home. The threat picture comes from the observation, which
+    # every build that observes at all provides.
+    GoalKind.AVOID_THREAT: MOVE_TO_SQUARE,
 }
 
 ALL_VOICE_CAPABILITIES: Final[frozenset[str]] = frozenset(CAPABILITY_FOR_KIND.values())
