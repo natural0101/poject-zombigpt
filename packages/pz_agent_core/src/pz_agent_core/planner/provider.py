@@ -110,6 +110,12 @@ class GoalKind(StrEnum):
     medical and survival adapters — bandaging wound by observed wound,
     resting and sleeping under the adapters' own verification. A provider
     asked for any of the three answers with the same typed refusal shape.
+
+    ``AVOID_THREAT`` sits there too, and most emphatically: a retreat is
+    driven by the CLI's deterministic avoid mission over the threat-aware
+    route executor, from the observed threat picture, and a provider asked
+    to plan one would be a model choosing where to run from zombies. The
+    typed refusal names the deterministic server, like the rest.
     """
 
     SATISFY_HUNGER = "satisfy_hunger"
@@ -124,6 +130,7 @@ class GoalKind(StrEnum):
     TREAT_WOUNDS = "treat_wounds"
     REST_UNTIL = "rest_until"
     SLEEP_UNTIL_RESTED = "sleep_until_rested"
+    AVOID_THREAT = "avoid_threat"
 
 
 @dataclass(frozen=True, slots=True)
@@ -314,6 +321,16 @@ class NullProvider:
             return PlanProposal.refusal(
                 ReasonCode.CAPABILITY_UNAVAILABLE,
                 "rest_until is driven by the deterministic care mission, not "
+                "planned by a provider; a sidecar without the navigating planner "
+                "wired cannot serve it.",
+            )
+        if request.goal.kind is GoalKind.AVOID_THREAT:
+            # A retreat is decided from the observed threat picture by the
+            # deterministic avoid mission; a provider planning one would be
+            # a model choosing where to run from zombies.
+            return PlanProposal.refusal(
+                ReasonCode.CAPABILITY_UNAVAILABLE,
+                "avoid_threat is driven by the deterministic avoid mission, not "
                 "planned by a provider; a sidecar without the navigating planner "
                 "wired cannot serve it.",
             )

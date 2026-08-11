@@ -70,6 +70,7 @@ __all__ = [
     "MAX_RENDERED_VALUE_CHARS",
     "MAX_SKILL_LEVEL",
     "MAX_SLEEP_GOAL_HOURS",
+    "MAX_SUSPENSIONS_PER_GOAL",
     "MAX_TARGET_FLOOR",
     "MAX_TARGET_SQUARE",
     "MIN_GOAL_WALL_MS",
@@ -196,6 +197,16 @@ MAX_SLEEP_GOAL_HOURS: Final = 12
 #: from the game, and game-authored text is untrusted data (AGENTS.md).
 MAX_EVIDENCE_KEYS: Final = 8
 
+#: How many times one goal may be suspended in favour of another before the
+#: channel refuses to preempt it again. Three is enough for a walk home to be
+#: interrupted by a wound, the bandaging by a threat retreat, and the retreat's
+#: aftermath once more — and small enough that preemption cannot ping-pong a
+#: goal forever: after the third suspension the goal runs to its own end and
+#: the arbiter must treat the refusal as "do not preempt". Declared here
+#: rather than in the queue because it caps a :class:`GoalRecord` field, and
+#: the record is what a persisted document is validated against.
+MAX_SUSPENSIONS_PER_GOAL: Final = 3
+
 #: Shape a protocol evidence key has. Anything else is recorded under
 #: :data:`_UNNAMED_EVIDENCE_KEY` rather than carried through. A key arrives from
 #: the mod, which forwarded it from the game, so a ``$`` anchor here would let
@@ -286,6 +297,17 @@ class GoalKind(StrEnum):
     ``survival.sleep`` whose danger refusal surfaces unchanged.
     :class:`~pz_agent_core.planner.provider.NullProvider` refuses all three
     by name, exactly as it refuses the four above.
+
+    ``AVOID_THREAT`` is the retreat half of the threat directive («если
+    одиночного зомби безопасно убить — убей, иначе отступи» — this kind is
+    the отступи), served by the CLI's deterministic avoid mission
+    (``pz_agent_cli.avoid_mission``): read the observed threat picture, walk
+    a threat-avoiding journey to the nearest remembered user safe zone or to
+    open ground away from the observed zombies, and succeed only on the
+    observed postcondition — the nearest zombie at a safe distance, or
+    standing in a safe zone with nothing chasing.
+    :class:`~pz_agent_core.planner.provider.NullProvider` refuses it by name
+    like the rest of the deterministic column.
     """
 
     SATISFY_HUNGER = "satisfy_hunger"
@@ -300,6 +322,7 @@ class GoalKind(StrEnum):
     TREAT_WOUNDS = "treat_wounds"
     REST_UNTIL = "rest_until"
     SLEEP_UNTIL_RESTED = "sleep_until_rested"
+    AVOID_THREAT = "avoid_threat"
 
 
 class LootScope(StrEnum):
@@ -789,6 +812,17 @@ _TREAT_BUDGET: Final = GoalBudget(max_wall_ms=300_000, max_steps=8, pending_ttl_
 _REST_BUDGET: Final = GoalBudget(max_wall_ms=MAX_GOAL_WALL_MS, max_steps=4, pending_ttl_ms=120_000)
 _SLEEP_BUDGET: Final = _REST_BUDGET
 
+#: The retreat budget. The wall clock is deliberately *below* the navigate
+#: budget — a retreat is at most a few bounded journeys inside the local map,
+#: and one that has run five minutes without the observed distance opening is
+#: a failure to report, not a walk to keep funding. The pending TTL is the
+#: tightest in the table for the same urgency reason: a retreat that sat
+#: un-activated for a minute describes a threat picture that no longer
+#: exists, and expiring it honestly beats running from remembered zombies.
+_AVOID_BUDGET: Final = GoalBudget(
+    max_wall_ms=300_000, max_steps=MAX_GOAL_STEPS, pending_ttl_ms=60_000
+)
+
 #: The whole channel in one table. Adding a kind without adding a row here
 #: fails :func:`_check_tables` at import time, not at the first submission.
 GOAL_SPECS: Final[Mapping[GoalKind, GoalSpec]] = MappingProxyType(
@@ -875,6 +909,16 @@ GOAL_SPECS: Final[Mapping[GoalKind, GoalSpec]] = MappingProxyType(
             required=frozenset(),
             optional=frozenset({"hours"}),
             budget=_SLEEP_BUDGET,
+        ),
+        # Parameterless on purpose, and urgently so: «отступай» carries the
+        # whole goal. Where to retreat *to* is the mission's deterministic
+        # decision from the observed threat picture and the remembered safe
+        # zones — a spoken destination would be a coordinate guess made while
+        # being chased, which is the worst possible time to interpret one.
+        GoalKind.AVOID_THREAT: GoalSpec(
+            required=frozenset(),
+            optional=frozenset(),
+            budget=_AVOID_BUDGET,
         ),
     }
 )
@@ -1025,6 +1069,31 @@ class GoalRecord:
     reason_code: ReasonCode | None = None
     evidence_keys: tuple[str, ...] = ()
     detail: str = ""
+    #: The id of the goal this one stepped aside for, while it waits at the
+    #: front of the backlog. A marker on the record, never a state:
+    #: :class:`GoalState` stays closed, and a suspended goal *is* pending — it
+    #: is served by the ordinary activation path, which clears the marker. Set
+    #: and cleared only by the queue; a value here on anything but a pending
+    #: record is refused below, because activation consumes the marker and a
+    #: terminal record answers "why did it end", not "who once paused it".
+    suspended_by: str | None = None
+    #: How many times this goal has stepped aside. Capped at
+    #: :data:`MAX_SUSPENSIONS_PER_GOAL` so preemption cannot ping-pong a goal
+    #: forever; the counter survives resumption and termination because it is
+    #: part of the truth about how the goal was served.
+    suspensions: int = 0
+    #: Active wall-clock milliseconds spent in *previous* activations. The
+    #: budget promise is ``max_wall_ms`` of ACTIVE time — a suspended goal's
+    #: clock stops while it waits — so the current activation's deadline is
+    #: the remainder, measured from ``started_at_ms``; see :attr:`deadline_ms`.
+    #: The queue clamps it at ``max_wall_ms`` on suspension, which is why the
+    #: range check below can be exact.
+    active_ms_before_suspend: int = 0
+    #: Position class in the backlog: 0 for an ordinary admission, more
+    #: negative is nearer the front. Minted by the queue's two front-insertion
+    #: paths (suspension and priority injection) and consumed — reset to 0 —
+    #: by activation; the backlog orders by ``(front_rank, sequence)``.
+    front_rank: int = 0
 
     def __post_init__(self) -> None:
         if self.sequence < 0 or self.submitted_at_ms < 0:
@@ -1041,6 +1110,33 @@ class GoalRecord:
             raise ValueError(
                 f"steps_used must be within 0..{self.budget.max_steps}, "
                 f"got {_render_value(self.steps_used)}"
+            )
+        if not 0 <= self.suspensions <= MAX_SUSPENSIONS_PER_GOAL:
+            raise ValueError(
+                f"suspensions must be within 0..{MAX_SUSPENSIONS_PER_GOAL}, "
+                f"got {_render_value(self.suspensions)}"
+            )
+        if not 0 <= self.active_ms_before_suspend <= self.budget.max_wall_ms:
+            raise ValueError(
+                f"active_ms_before_suspend must be within 0..{self.budget.max_wall_ms}, "
+                f"got {_render_value(self.active_ms_before_suspend)}"
+            )
+        if self.front_rank > 0:
+            raise ValueError("front_rank must be zero or negative; the queue mints it")
+        if self.suspended_by is not None:
+            if not self.suspended_by:
+                raise ValueError("suspended_by must name the goal this one stepped aside for")
+            if self.state is not GoalState.PENDING:
+                # Activation consumes the marker and termination clears it, so
+                # a record carrying one anywhere else was not built by the
+                # queue — most likely an edited file trying to smuggle state.
+                raise ValueError("only a pending goal may carry a suspension marker")
+        if self.suspensions == 0 and (
+            self.suspended_by is not None or self.active_ms_before_suspend > 0
+        ):
+            raise ValueError(
+                "suspension bookkeeping (a marker or accrued active time) requires at "
+                "least one recorded suspension"
             )
         if self.state is GoalState.ACTIVE and self.started_at_ms is None:
             raise ValueError("an active goal must record when it started")
@@ -1081,10 +1177,18 @@ class GoalRecord:
 
     @property
     def deadline_ms(self) -> int | None:
-        """When the active goal's wall clock runs out, or None while pending."""
+        """When the active goal's wall clock runs out, or None while pending.
+
+        The budget promise is ``max_wall_ms`` of *active* time: a goal that
+        was suspended already spent :attr:`active_ms_before_suspend` of it in
+        earlier activations, so the current activation only has the remainder.
+        A suspended goal has no deadline at all — its ``started_at_ms`` is
+        cleared when it parks — which is the same statement the queue makes by
+        measuring only the active goal against the wall clock.
+        """
         if self.started_at_ms is None:
             return None
-        return self.started_at_ms + self.budget.max_wall_ms
+        return self.started_at_ms + self.budget.max_wall_ms - self.active_ms_before_suspend
 
     @property
     def pending_expiry_ms(self) -> int:
@@ -1211,6 +1315,10 @@ _PLANNER_KIND: Final[Mapping[GoalKind, PlannerGoalKind]] = MappingProxyType(
         GoalKind.TREAT_WOUNDS: PlannerGoalKind.TREAT_WOUNDS,
         GoalKind.REST_UNTIL: PlannerGoalKind.REST_UNTIL,
         GoalKind.SLEEP_UNTIL_RESTED: PlannerGoalKind.SLEEP_UNTIL_RESTED,
+        # The retreat kind, on the same no-provider terms: the CLI's
+        # deterministic avoid mission serves it behind the wrapper, and
+        # NullProvider refuses it by name for a loop assembled without one.
+        GoalKind.AVOID_THREAT: PlannerGoalKind.AVOID_THREAT,
     }
 )
 

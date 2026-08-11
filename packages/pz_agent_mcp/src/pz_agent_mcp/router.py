@@ -1273,6 +1273,14 @@ class ToolRouter:
             "started_at_ms": record.started_at_ms,
             "finished_at_ms": record.finished_at_ms,
             "deadline_ms": record.deadline_ms,
+            # Additive, null for every goal that is not currently suspended: a
+            # pending record carrying the queue's suspension marker is a goal
+            # that stepped aside for the named preemptor and resumes when it
+            # ends. The marker is a token this process minted (the arbiter's
+            # deterministic key or a goal id), shape-checked like every other
+            # token; activation clears it, so it can never describe a goal
+            # that is actually running.
+            "suspended_by": as_token(record.suspended_by),
             # Field *names* only, and each one dropped unless it is a token: the
             # record's own bound caps how many there are, and the shape check is
             # what stops a port putting a sentence where a field name belongs.

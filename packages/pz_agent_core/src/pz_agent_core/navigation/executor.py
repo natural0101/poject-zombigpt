@@ -19,6 +19,14 @@ door observed (or refused) *locked* is a :data:`ReasonCode.DOOR_LOCKED`
 refusal when no route avoids it — the executor does not hunt keys — and
 barricaded mirrors it as :data:`ReasonCode.DOOR_BARRICADED`.
 
+Threats are costs, never walls. With :attr:`JourneyLimits.avoid_threats` on
+(the default), the search charges :data:`THREAT_STEP_COST` for every square
+within :data:`THREAT_AVOID_RADIUS` of a live zombie sighting the map holds,
+and :data:`CHASING_STEP_COST` — impassable-preferred, deliberately finite —
+for the square of a chasing sighting itself, so routes detour around
+remembered zombies and a cornered character still gets the least-bad way out
+instead of a fabricated ``NO_ROUTE``.
+
 Everything is bounded, and every exhausted bound is a typed refusal rather
 than a loop: the A* search by :data:`MAX_EXPANDED_NODES`, the journey by
 :data:`MAX_LEGS` move legs and :data:`MAX_REPLANS` replans, and stuck
@@ -56,12 +64,15 @@ from ..protocol import (
 from .local_map import CellSnapshot, DoorKnowledge, GridSquare, LocalMap, square_of
 
 __all__ = [
+    "CHASING_STEP_COST",
     "DOOR_STEP_COST",
     "MAX_CONSECUTIVE_FAILURES",
     "MAX_EXPANDED_NODES",
     "MAX_JOURNEY_ID_LEN",
     "MAX_LEGS",
     "MAX_REPLANS",
+    "THREAT_AVOID_RADIUS",
+    "THREAT_STEP_COST",
     "Arrived",
     "Journey",
     "JourneyLimits",
@@ -96,6 +107,27 @@ MAX_CONSECUTIVE_FAILURES: Final = 3
 #: Extra route cost for stepping through a known closed door: the walk stops
 #: to open it, so a detour of up to this many squares is worth taking first.
 DOOR_STEP_COST: Final = 2.0
+
+#: Chebyshev radius around a live threat sighting whose squares carry the
+#: threat toll. Two squares is a lunge plus a step — the ground a standing
+#: zombie can contest before the walk clears it.
+THREAT_AVOID_RADIUS: Final = 2
+
+#: Extra route cost for a square within :data:`THREAT_AVOID_RADIUS` of a live
+#: threat sighting. Well above the door toll on purpose: a detour of up to
+#: eight squares — several rooms — is worth walking rather than brushing past
+#: a remembered zombie, while a truly long way round still loses to a short
+#: dash. A preference, not a wall: the sighting is a decaying guess
+#: (:data:`~.local_map.THREAT_DECAY_SEQS`), and guesses do not seal routes.
+THREAT_STEP_COST: Final = 8.0
+
+#: Extra route cost for the square of a live *chasing* sighting itself:
+#: impassable-preferred, deliberately not impassable. Finite because a
+#: cornered character must still get a route — when every way out crosses a
+#: chaser, the least-bad way out is the answer, and an infinite cost would
+#: turn "surrounded" into ``NO_ROUTE``, which claims a proof about walls the
+#: map never made about zombies.
+CHASING_STEP_COST: Final = 64.0
 
 #: ``journey_id`` feeds the idempotency key, whose total length the protocol
 #: caps at 120; this leaves room for the ``nav:``/``:stepNNN`` framing.
@@ -163,13 +195,23 @@ class NavigationTarget:
 
 @dataclass(frozen=True, slots=True)
 class JourneyLimits:
-    """Every bound one journey runs under. All of them are load-bearing."""
+    """Every bound one journey runs under. All of them are load-bearing.
+
+    ``avoid_threats`` is the one knob that is not a bound: whether the route
+    search charges the threat tolls (:data:`THREAT_STEP_COST`,
+    :data:`CHASING_STEP_COST`) around the map's live zombie sightings. On by
+    default because every journey this stack drives — navigation, homeward,
+    every mission approach — should detour around remembered zombies rather
+    than walk through them; off is for a caller that has decided the straight
+    line is worth the brush.
+    """
 
     max_legs: int = MAX_LEGS
     max_replans: int = MAX_REPLANS
     max_consecutive_failures: int = MAX_CONSECUTIVE_FAILURES
     max_expanded_nodes: int = MAX_EXPANDED_NODES
     leg_distance: int = MAX_MOVE_DISTANCE_SQUARES
+    avoid_threats: bool = True
 
     def __post_init__(self) -> None:
         for name in ("max_legs", "max_replans", "max_consecutive_failures", "max_expanded_nodes"):
@@ -286,6 +328,32 @@ def _step_cost(current: GridSquare, neighbour: GridSquare, cell: CellSnapshot) -
     return cost
 
 
+def _threat_costs(local_map: LocalMap) -> dict[GridSquare, float]:
+    """The additive threat toll per square, from the map's live sightings.
+
+    Built once per search rather than probed per expansion: the live sighting
+    set is small (bounded by ``MAX_THREAT_CELLS``) and each sighting taints a
+    fixed :data:`THREAT_AVOID_RADIUS` neighbourhood, so the whole field is a
+    few thousand entries at worst. Overlaps keep the maximum toll — a square
+    beside one zombie and under a chasing one costs the chaser's price. The
+    tolls stay additive extras on top of the ordinary step cost, so the
+    Chebyshev heuristic (which ignores them) remains admissible.
+    """
+    costs: dict[GridSquare, float] = {}
+
+    def bump(square: GridSquare, cost: float) -> None:
+        if cost > costs.get(square, 0.0):
+            costs[square] = cost
+
+    for sighting in local_map.threatened_cells():
+        for dx in range(-THREAT_AVOID_RADIUS, THREAT_AVOID_RADIUS + 1):
+            for dy in range(-THREAT_AVOID_RADIUS, THREAT_AVOID_RADIUS + 1):
+                bump((sighting.x + dx, sighting.y + dy, sighting.z), THREAT_STEP_COST)
+        if sighting.chasing:
+            bump(sighting.square, CHASING_STEP_COST)
+    return costs
+
+
 def _heuristic(square: GridSquare, goal: GridSquare) -> float:
     """Chebyshev distance plus floor gap — admissible for unit diagonal steps."""
     return float(max(abs(square[0] - goal[0]), abs(square[1] - goal[1])) + abs(square[2] - goal[2]))
@@ -339,11 +407,31 @@ def _find_route(
     *,
     max_expanded_nodes: int,
     pass_sealed_doors: bool = False,
+    avoid_threats: bool = True,
 ) -> _SearchOutcome:
-    """A* over the local map. Deterministic: ties break on the square itself."""
+    """A* over the local map. Deterministic: ties break on the square itself.
+
+    ``avoid_threats`` charges the threat tolls from :func:`_threat_costs` on
+    top of the ordinary step cost. Costs only, never passability: a threat
+    changes which route wins, and can never manufacture a ``NO_ROUTE``.
+    """
     if start == goal:
         return _RouteFound(squares=())
+    threat_costs = _threat_costs(local_map) if avoid_threats else {}
     box = _search_box(local_map, start, goal)
+    if threat_costs:
+        # The tolled squares are knowledge the box must contain, exactly as
+        # known cells are: without them a sparse map's box would pin the
+        # search to the tainted corridor and the toll could never buy a
+        # detour. One extra margin ring around the field keeps a toll-free
+        # way past it inside the box.
+        min_x, max_x, min_y, max_y = box
+        box = (
+            min(min_x, min(square[0] for square in threat_costs) - 1),
+            max(max_x, max(square[0] for square in threat_costs) + 1),
+            min(min_y, min(square[1] for square in threat_costs) - 1),
+            max(max_y, max(square[1] for square in threat_costs) + 1),
+        )
     frontier: list[tuple[float, float, GridSquare]] = [(_heuristic(start, goal), 0.0, start)]
     best_cost: dict[GridSquare, float] = {start: 0.0}
     came_from: dict[GridSquare, GridSquare] = {}
@@ -366,6 +454,7 @@ def _find_route(
             if not _passable(cell, pass_sealed_doors=pass_sealed_doors):
                 continue
             next_cost = cost + _step_cost(current, neighbour, cell)
+            next_cost += threat_costs.get(neighbour, 0.0)
             if next_cost < best_cost.get(neighbour, float("inf")):
                 best_cost[neighbour] = next_cost
                 came_from[neighbour] = current
@@ -637,6 +726,7 @@ class Journey:
             here,
             self._target.square,
             max_expanded_nodes=self._limits.max_expanded_nodes,
+            avoid_threats=self._limits.avoid_threats,
         )
         if isinstance(outcome, _RouteExhausted):
             return self._refuse(
@@ -677,6 +767,7 @@ class Journey:
             self._target.square,
             max_expanded_nodes=self._limits.max_expanded_nodes,
             pass_sealed_doors=True,
+            avoid_threats=self._limits.avoid_threats,
         )
         if isinstance(diagnosis, _RouteFound):
             sealed = _first_sealed_door(self._map, diagnosis.squares)

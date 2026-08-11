@@ -313,6 +313,30 @@ KIND_WORDS: Final[dict[GoalKind, frozenset[str]]] = {
             "wounds",
         }
     ),
+    # Parameterless and urgent, speakable on return_home's argument taken to
+    # its sharpest case: the bare word carries the whole goal, and the person
+    # shouting it is watching a zombie close in. Where to retreat *to* is the
+    # avoid mission's deterministic decision from the observed threat picture
+    # — nothing spoken here ever becomes a coordinate or a direction. «стой»
+    # and friends stay stop words: stopping and retreating are different
+    # orders, and the one-namespace rule keeps them from ever blurring.
+    GoalKind.AVOID_THREAT: frozenset(
+        {
+            "отступай",
+            "отступи",
+            "отступить",
+            "отступаем",
+            "беги",
+            "бегите",
+            "убегай",
+            "уходи",
+            "уходим",
+            "спрячься",
+            "укройся",
+            "retreat",
+            "flee",
+        }
+    ),
 }
 
 #: The three kinds served by the same in-game action. Their overlap is resolved
@@ -519,6 +543,10 @@ CAPABILITY_FOR_KIND: Final[dict[GoalKind, str]] = {
     # sleep_until_rested are unspeakable and so — per the check below —
     # deliberately absent.
     GoalKind.TREAT_WOUNDS: MEDICAL_BANDAGE,
+    # Retreating is walking away: the movement capability, exactly as
+    # return_home. The threat picture comes from the observation, which
+    # every build that observes at all provides.
+    GoalKind.AVOID_THREAT: MOVE_TO_SQUARE,
 }
 
 ALL_VOICE_CAPABILITIES: Final[frozenset[str]] = frozenset(CAPABILITY_FOR_KIND.values())

@@ -76,6 +76,7 @@ from pz_agent_core.protocol import (
     ItemView,
     NearbyObject,
     NearbyView,
+    NearbyZombie,
     Observation,
     PlayerState,
     Position,
@@ -125,6 +126,7 @@ CHANNEL_KINDS: Final[frozenset[str]] = frozenset(
         "treat_wounds",
         "rest_until",
         "sleep_until_rested",
+        "avoid_threat",
     }
 )
 
@@ -144,7 +146,10 @@ CHANNEL_KINDS: Final[frozenset[str]] = frozenset(
 #: The care kinds (``treat_wounds``, ``rest_until``, ``sleep_until_rested``)
 #: are in the set on the same terms as the first four: driven by the
 #: deterministic care missions (``pz_agent_cli.care_mission``) and refused by
-#: name by every provider.
+#: name by every provider. ``avoid_threat`` joins on those terms — driven by
+#: the deterministic avoid mission (``pz_agent_cli.avoid_mission``) — and
+#: most emphatically: a model choosing where to run from zombies is the one
+#: proposal no provider may ever be allowed to make.
 EXECUTOR_KINDS: Final[frozenset[str]] = frozenset(
     {
         "navigate_to",
@@ -156,6 +161,7 @@ EXECUTOR_KINDS: Final[frozenset[str]] = frozenset(
         "treat_wounds",
         "rest_until",
         "sleep_until_rested",
+        "avoid_threat",
     }
 )
 
@@ -607,15 +613,16 @@ class TestNavigateToIsServedByTheExecutor:
     def test_every_channel_kind_is_owned_by_exactly_one_server(self) -> None:
         """Provider-served and executor-served partition the vocabulary.
 
-        The arithmetic is stated in full: twelve kinds in the channel, nine
+        The arithmetic is stated in full: thirteen kinds in the channel, ten
         of them deterministic (four navigation-and-mission kinds, the two
-        rerouted consume kinds, the three care kinds), three left to a plan
-        provider. A kind added to one census and not the other fails here.
+        rerouted consume kinds, the three care kinds, the retreat kind),
+        three left to a plan provider. A kind added to one census and not
+        the other fails here.
         """
         assert EXECUTOR_KINDS <= CHANNEL_KINDS
         assert {kind.value for kind in GoalKind} == CHANNEL_KINDS
-        assert len(CHANNEL_KINDS) == 12
-        assert len(EXECUTOR_KINDS) == 9
+        assert len(CHANNEL_KINDS) == 13
+        assert len(EXECUTOR_KINDS) == 10
         assert {
             "read_for_boredom",
             "train_skill",
@@ -992,6 +999,100 @@ class TestSleepUntilRestedIsServedByTheMission:
         assert spy.goal_calls == [] and spy.propose_calls == 0, (
             "sleep_until_rested must never reach a plan provider"
         )
+
+
+class TestAvoidThreatIsServedByTheMission:
+    """The thirteenth kind's half of the seam: the retreat mission, no provider.
+
+    The same joins proven for the other deterministic kinds: a real queue
+    admits and activates it, the real ``to_planner_goal`` widens it, and the
+    real :class:`NavigatingPlanner` drives the mission's first retreat leg —
+    a ``movement.move_to`` pointed away from the observed zombie — into the
+    loop's action channel, while the wrapped planner, a spy, is never asked
+    anything at all.
+    """
+
+    def chased_world(self) -> Observation:
+        """One chasing zombie four tiles east — inside the safe distance."""
+        return planner_observation(
+            nearby=NearbyView(
+                zombies=[
+                    NearbyZombie(
+                        ref=f"zombie:{DEFAULT_SESSION}:z1",
+                        distance=4.0,
+                        visible=True,
+                        chasing=True,
+                        position=Position(x=1204.0, y=3400.0, z=0),
+                    )
+                ]
+            ),
+        )
+
+    def test_null_provider_refuses_avoid_threat_by_name(self) -> None:
+        """The deterministic provider's honest answer is a typed refusal.
+
+        The property that keeps a mis-assembled loop safe, at its sharpest:
+        a model must never be the thing that chooses where to run from
+        zombies, so a goal-capable planner with no navigating wrapper
+        refuses the kind and lets its budgets end it.
+        """
+        record = activated(channel(), GoalKind.AVOID_THREAT)
+
+        proposal = proposed_for(record, world(pantry(), needy()))
+
+        assert proposal.refused
+        assert proposal.reason_code is ReasonCode.CAPABILITY_UNAVAILABLE
+        assert "avoid mission" in proposal.detail
+
+    def test_the_wrapper_drives_the_retreat_and_never_asks_the_planner(self) -> None:
+        queue = channel()
+        spy = SpyGoalPlanner()
+        wrapper = NavigatingPlanner(spy)
+        actions = ActionChannel(clock=FakeClock())
+        wrapper.bind(ExecutorHost(goals=queue, actions=actions))
+        record = activated(queue, GoalKind.AVOID_THREAT)
+
+        value = wrapper.propose_for_goal(to_planner_goal(record), self.chased_world())
+
+        # Every retreat leg travels the action channel, never the goal seam:
+        # arriving at one waypoint is not "safe", so no leg's success may
+        # end the goal.
+        assert value is None
+        assert actions.pending_count == 1
+        taken = actions.take_next()
+        assert taken is not None
+        _, request = taken
+        assert request.action is ActionName.MOVEMENT_MOVE_TO
+        # The leg walks *away* from the zombie standing east of the player
+        # (1204, 3400): with no safe zone remembered, the open-ground
+        # fallback maximises distance from it, which means west.
+        assert request.args["target"]["x"] < 1200
+        assert request.idempotency_key.startswith("nav:")
+        assert spy.goal_calls == [] and spy.propose_calls == 0, (
+            "avoid_threat must never reach a plan provider"
+        )
+
+    def test_no_threat_observed_is_the_completion_probe_out_the_goal_seam(self) -> None:
+        """A retreat with nothing to retreat from completes without work.
+
+        The probe precedent: nothing ran, so nothing exists to succeed the
+        goal with, and the engine is asked to observe an ordinary fact — a
+        bounded move inside the character's own square — whose real result
+        the loop settles the goal on.
+        """
+        queue = channel()
+        spy = SpyGoalPlanner()
+        wrapper = NavigatingPlanner(spy)
+        wrapper.bind(ExecutorHost(goals=queue, actions=ActionChannel(clock=FakeClock())))
+        record = activated(queue, GoalKind.AVOID_THREAT)
+
+        value = wrapper.propose_for_goal(to_planner_goal(record), world(pantry()))
+
+        assert value is not None
+        assert value.action is ActionName.MOVEMENT_MOVE_TO
+        assert value.idempotency_key.startswith(f"avoid:{record.goal_id}")
+        assert value.args["max_distance"] == 1
+        assert spy.goal_calls == [] and spy.propose_calls == 0
 
 
 class TestAKindThePlannerCannotServeIsRefusedAtSubmission:

@@ -290,6 +290,12 @@ class GoalChannelStatus:
     :attr:`~pz_agent_core.goals.GoalQueue.pending` orders it: by admission
     sequence and never by timestamp, because Windows' wall clock advances in
     ~15.6 ms granules and two goals submitted in one granule carry the same one.
+    A *suspended* goal — one the needs arbiter parked so a preemptor could run
+    — appears here too, at the front, as the pending record it honestly is; its
+    :attr:`~pz_agent_core.goals.GoalRecord.suspended_by` marker names what it
+    stepped aside for, and the router publishes that marker additively on the
+    goal payload so a status reader can tell "waiting its turn" from "paused
+    mid-mission, resuming when the preemptor ends".
 
     The three optional tails are additive and each defaults to the honest
     nothing, so a port that cannot answer them — a bundle without the

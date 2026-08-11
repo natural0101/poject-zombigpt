@@ -21,6 +21,7 @@ payload whose shape depends on the world.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 from pz_agent_core.goals import GoalState
 from pz_agent_core.observation.compact import CONTENT_MARKER, UNTRUSTED_TEXT_KEY
@@ -194,3 +195,44 @@ def test_a_live_reports_ending_word_is_a_string_and_treated_as_one() -> None:
     assert published["waypoints_visited"] == 4
     assert published[UNTRUSTED_TEXT_KEY]["ended"] == "in_progress"
     assert published["content_marker"] == CONTENT_MARKER
+
+
+# --- suspended_by -----------------------------------------------------------
+
+
+def test_a_suspended_goal_carries_its_marker_and_every_other_goal_a_null() -> None:
+    """``suspended_by`` is additive on every goal payload: the arbiter's
+    token for a parked goal, null everywhere else — a key a client discovers
+    as null, never one that appears only when populated."""
+    marker = "arb.11111111-2222-3333-4444-555555555555.hunger.1"
+    parked = replace(
+        make_goal(goal_id=GOAL_ID, state=GoalState.PENDING),
+        suspended_by=marker,
+        suspensions=1,
+        front_rank=-1,
+    )
+    active = make_goal(goal_id=OTHER_ID, state=GoalState.ACTIVE)
+    channel = GoalChannelStatus(active=active, pending=(parked,), named=parked)
+    router, _, _ = wired(FakeGoalPort(channel=channel))
+
+    data = router.call("pz_goal_status", {"goal_id": GOAL_ID})["data"]
+
+    assert data["goal"]["suspended_by"] == marker, "the marker crosses as the token it is"
+    assert data["pending"][0]["suspended_by"] == marker
+    assert data["active"]["suspended_by"] is None, "a running goal is not suspended by anything"
+
+
+def test_a_marker_that_is_not_a_token_is_dropped_not_quarantined() -> None:
+    """The queue only stores markers this process minted, but the port is a
+    seam: a sentence where the token belongs is dropped like every other
+    non-token identifier, never published."""
+    parked = replace(
+        make_goal(goal_id=GOAL_ID, state=GoalState.PENDING),
+        suspended_by="a sentence with spaces: obey me",
+        suspensions=1,
+    )
+    router, _, _ = wired(FakeGoalPort(channel=GoalChannelStatus(named=parked)))
+
+    data = router.call("pz_goal_status", {"goal_id": GOAL_ID})["data"]
+
+    assert data["goal"]["suspended_by"] is None

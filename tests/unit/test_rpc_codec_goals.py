@@ -111,6 +111,11 @@ REQUIRED_PARAMS: dict[GoalKind, GoalParams] = {
     GoalKind.TREAT_WOUNDS: GoalParams(),
     GoalKind.REST_UNTIL: GoalParams(target_endurance=0.8),
     GoalKind.SLEEP_UNTIL_RESTED: GoalParams(),
+    # The retreat kind is admissible bare — parameterless by its own spec —
+    # and rides the same not-on-the-wire carve-out the other local kinds do
+    # (the schema-conformance contract test pins it); this codec's kind door
+    # is parse_kind, so the token itself round-trips.
+    GoalKind.AVOID_THREAT: GoalParams(),
 }
 
 #: The one kind whose *minimal* request this codec cannot carry: rest_until

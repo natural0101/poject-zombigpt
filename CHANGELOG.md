@@ -12,6 +12,34 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Added
 
+- **A need can interrupt the current goal — and give it back**
+  (`epic/p2-goal-controller`, wave 3). The queue learned suspension without a
+  new state: `suspend()` parks the ACTIVE goal at the front of the backlog
+  with a marker, its wall budget stops burning while parked, and ordinary
+  activation resumes it with exactly the remaining budget; a fourth
+  suspension of the same goal is a typed refusal, so preemption cannot
+  ping-pong a goal forever. On top rides the NeedsArbiter — AUTONOMOUS mode
+  only, edge-triggered (a crossing, never a level): bleeding appearing
+  outranks danger reaching HIGH outranks thirst outranks hunger past the
+  policies' own critical lines. It suspends, injects the satisfy/care/avoid
+  goal at the front, and on that goal's *any* terminal — success or failure —
+  the original resumes mid-mission with its drive intact (a loot mission
+  continues its candidate list after lunch). Every decision lands in a
+  bounded ledger; a suspended goal shows its `suspended_by` through
+  `pz_goal_status`. A restart mid-preemption restores the original as
+  pending-with-marker while the in-flight preemptor honestly ends
+  `SESSION_TERMINATED`.
+- **Retreat is a route, not just a stop.** The local map remembers zombie
+  sightings (bounded, decaying — stale threat is a guess either way, so the
+  map errs toward caution within the horizon and forgets beyond it), and the
+  route search tolls threatened squares so journeys detour around them —
+  costs, never walls: a cornered character still finds the least-bad way out.
+  `avoid_threat` (13th kind, speakable — «отступай», «беги») retreats to the
+  nearest user safe zone or the square that maximises distance from every
+  observed threat, and succeeds only on the observed postcondition: the
+  nearest zombie at twice the threat ladder's close distance, or a safe zone
+  with nothing chasing. Chasing threats at close range stay the reflex
+  guard's band — no second driver under the wheel.
 - **The mandatory survival chain runs without an LLM** (`epic/p2-goal-controller`,
   wave 2). `satisfy_hunger` and `satisfy_thirst` — speakable since the voice
   epic, LLM-served until now — are deterministic missions: read the stat

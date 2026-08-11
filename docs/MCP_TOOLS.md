@@ -606,11 +606,11 @@ No arguments.
 
 ### `pz_goal_submit`
 
-Ask the typed goal channel for one of the things it carries. The kind set is closed and there is no free-text field at all: an invented kind is refused, never approximated. The channel admits the goal to a bounded backlog and answers with its id and state — 'pending' is the honest word for a goal nothing has started yet, and every goal carries a wall-clock, step and time-to-live budget so that it reaches a terminal state whether or not it is served. Which sandwich satisfies a hunger goal is never decided here. A 'loot_area' goal finishes on one provable criterion — every reachable container in scope was inspected or has a recorded skip reason — and its terminal answer reports the looted scope (the pinned room, building or sweep), the containers inspected, the containers skipped each with its reason, and the items taken per category and left per reason. An 'explore_area' goal finishes on the matching criterion — no frontier square remains in scope: every scope square is known to the local map or carries a recorded skip reason — and its report carries the pinned scope, the map growth (cells_discovered), the waypoints visited, and each skipped square with its reason (a locked or barricaded door named by reference, a proven no-route). A 'return_home' goal takes no parameters at all: the target is the save's remembered home point ('pz-agent remember home'), no home set is a typed PRECONDITION_FAILED whose detail is the remedy, and the goal succeeds only on the observed arrival. The care kinds are deterministic missions over the medical and survival adapters: 'treat_wounds' (no parameters — triage and dressing choice are policy, remade per observation) dresses every observed bleeding wound and finishes only when none bleeds, with dressings running out a typed partial failure naming the honest count; 'rest_until' sends one survival.rest to its required target_endurance, verified by the adapter from the observation; 'sleep_until_rested' sleeps on an observed bed for its optional hours (absent means the adapter's own night), and the sleep adapter's danger refusal reaches the goal typed and unchanged, never retried. 'satisfy_hunger' and 'satisfy_thirst' are served the same deterministic way now — food and water found in known containers, moved to the main inventory, unsafe candidates (rotten, burnt, poisonous, reserved) skipped with recorded reasons, and success only by the observed stat moving.
+Ask the typed goal channel for one of the things it carries. The kind set is closed and there is no free-text field at all: an invented kind is refused, never approximated. The channel admits the goal to a bounded backlog and answers with its id and state — 'pending' is the honest word for a goal nothing has started yet, and every goal carries a wall-clock, step and time-to-live budget so that it reaches a terminal state whether or not it is served. Which sandwich satisfies a hunger goal is never decided here. A 'loot_area' goal finishes on one provable criterion — every reachable container in scope was inspected or has a recorded skip reason — and its terminal answer reports the looted scope (the pinned room, building or sweep), the containers inspected, the containers skipped each with its reason, and the items taken per category and left per reason. An 'explore_area' goal finishes on the matching criterion — no frontier square remains in scope: every scope square is known to the local map or carries a recorded skip reason — and its report carries the pinned scope, the map growth (cells_discovered), the waypoints visited, and each skipped square with its reason (a locked or barricaded door named by reference, a proven no-route). A 'return_home' goal takes no parameters at all: the target is the save's remembered home point ('pz-agent remember home'), no home set is a typed PRECONDITION_FAILED whose detail is the remedy, and the goal succeeds only on the observed arrival. The care kinds are deterministic missions over the medical and survival adapters: 'treat_wounds' (no parameters — triage and dressing choice are policy, remade per observation) dresses every observed bleeding wound and finishes only when none bleeds, with dressings running out a typed partial failure naming the honest count; 'rest_until' sends one survival.rest to its required target_endurance, verified by the adapter from the observation; 'sleep_until_rested' sleeps on an observed bed for its optional hours (absent means the adapter's own night), and the sleep adapter's danger refusal reaches the goal typed and unchanged, never retried. 'satisfy_hunger' and 'satisfy_thirst' are served the same deterministic way now — food and water found in known containers, moved to the main inventory, unsafe candidates (rotten, burnt, poisonous, reserved) skipped with recorded reasons, and success only by the observed stat moving. An 'avoid_threat' goal (no parameters — where to retreat to is decided deterministically from the observed threat picture) walks threat-avoiding journeys to the nearest remembered user safe zone or to open ground away from the observed zombies, re-reading the picture every step; it succeeds only on the observed postcondition — nearest zombie at a safe distance, or standing in a safe zone with nothing chasing — and a retreat that cannot open the distance is a typed THREAT_INTERRUPTED naming the nearest observed threat distance.
 
 | Argument | Required | Schema |
 | --- | --- | --- |
-| `kind` | yes | one of `explore_area`, `learn_recipe`, `loot_area`, `navigate_to`, `read_for_boredom`, `rest_until`, `return_home`, `satisfy_hunger`, `satisfy_thirst`, `sleep_until_rested`, `train_skill`, `treat_wounds` |
+| `kind` | yes | one of `avoid_threat`, `explore_area`, `learn_recipe`, `loot_area`, `navigate_to`, `read_for_boredom`, `rest_until`, `return_home`, `satisfy_hunger`, `satisfy_thirst`, `sleep_until_rested`, `train_skill`, `treat_wounds` |
 | `skill` | no | one of `carpentry`, `cooking`, `electrical`, `farming`, `first_aid`, `fishing`, `foraging`, `mechanics`, `metalworking`, `tailoring`, `trapping` |
 | `target_level` | no | `integer`; minimum 1; maximum 10 |
 | `satisfy_to` | no | `number`; minimum 0.0; maximum 1.0 |
@@ -734,9 +734,29 @@ and the goal succeeds only on the observed stat moving. A plan provider may
 still *propose* eating on the autonomy loop's initiative path; a goal
 submitted here never reaches one.
 
+`avoid_threat` takes no parameters at all: where to retreat *to* is the
+deterministic avoid mission's decision from the observed threat picture,
+re-read from the current observation at every step — never a snapshot, and
+never a spoken or submitted coordinate. The target is the nearest remembered
+user safe zone within thirty squares (`pz-agent remember`), or, with none in
+range, the square on a bounded ring that maximises the minimum distance to
+the observed zombies; the journeys there run with threat-aware routing, so
+the route itself detours around remembered sightings and treats a chasing
+zombie's square as impassable-preferred (very high cost, never infinite — a
+cornered character still gets the least-bad way out). Success is only the
+observed postcondition: the newest observation reporting the nearest zombie
+at twelve tiles or beyond (twice the threat ladder's reaction range), or the
+character standing in a user safe zone with no chasing zombie observed. No
+threat observed at activation completes without work through the bounded
+completion probe; a retreat that cannot open the distance — cornered,
+unroutable, or out of its bounded retreat legs — is a typed
+`THREAT_INTERRUPTED` naming the nearest observed threat distance, and the
+report (threats at start, nearest before/after, target kind, how it ended)
+survives the goal in the sidecar's bounded ledger.
+
 ### `pz_goal_status`
 
-The goal channel: which goal is active, what is waiting behind it, and — when 'goal_id' names one — that goal's state, budget and how much of it is left. An id the channel has finished and forgotten is refused rather than answered as 'no such goal', because the two are not the same fact. Three additive keys, each null when there is nothing to say: 'progress' is the deterministic drive's phase (a journey's planning/moving/arrived/refused; a loot sweep's start/approach/open/inspect/transfer; an explore sweep's start/approach; a consume drive's check/fetch/consume/verify; a care drive's start/transfer/treat, start/rest or start/sleep) plus detail-free counters, for the named goal or, with no id, the active one — a goal a plan provider serves has no deterministic phase and honestly answers null; 'paused' is the goal a manual takeover parked, visible until a fresh activation replaces it; 'report' is the named loot or explore goal's ledger, live while the mission runs and sealed after it ends. The phase is the progress-messaging primitive: tell the user about transitions, when the value changes — it moves exactly when the work does, so polling faster buys nothing worth relaying.
+The goal channel: which goal is active, what is waiting behind it, and — when 'goal_id' names one — that goal's state, budget and how much of it is left. An id the channel has finished and forgotten is refused rather than answered as 'no such goal', because the two are not the same fact. Three additive keys, each null when there is nothing to say: 'progress' is the deterministic drive's phase (a journey's planning/moving/arrived/refused; a loot sweep's start/approach/open/inspect/transfer; an explore sweep's start/approach; a consume drive's check/fetch/consume/verify; a care drive's start/transfer/treat, start/rest or start/sleep; an avoid drive's start/approach) plus detail-free counters, for the named goal or, with no id, the active one — a goal a plan provider serves has no deterministic phase and honestly answers null; 'paused' is the goal a manual takeover parked, visible until a fresh activation replaces it; 'report' is the named loot or explore goal's ledger, live while the mission runs and sealed after it ends. The phase is the progress-messaging primitive: tell the user about transitions, when the value changes — it moves exactly when the work does, so polling faster buys nothing worth relaying.
 
 | Argument | Required | Schema |
 | --- | --- | --- |
@@ -753,11 +773,13 @@ The three additive payload keys in detail:
   `explore_area`, `check`/`fetch`/`consume`/`verify` for `satisfy_hunger`
   and `satisfy_thirst`, `start`/`transfer`/`treat` for `treat_wounds`,
   `start`/`rest` for `rest_until`, `start`/`sleep` for
-  `sleep_until_rested` — and `counters` carries the drive's own detail-free
+  `sleep_until_rested`, `start`/`approach` for `avoid_threat` — and
+  `counters` carries the drive's own detail-free
   numbers (`legs_used`; `containers_inspected` and `containers_skipped`;
   `waypoints_visited` and `cells_discovered`; `candidates_tried`,
   `consumed` and `skipped`; `wounds_bandaged` and `bleeding_remaining`;
-  `requested` as 0 or 1 for the one-action rest and sleep drives). A goal
+  `requested` as 0 or 1 for the one-action rest and sleep drives;
+  `threats_at_start` and `legs_started` for the retreat drive). A goal
   served by a plan provider has no deterministic phase and answers `null`,
   honestly, as does a goal whose drive already ended. **Clients should
   report progress on phase *transitions*, not on every poll**: the field
@@ -782,9 +804,29 @@ The three additive payload keys in detail:
   constants-and-counts summary in `detail` and the observed evidence key
   names on success.
 
-Over the two-process assembly these three keys additionally require the Core
-RPC link to carry them; a link whose codec predates them answers `null` for
-all three rather than inventing a value.
+One additive key rides on every *goal payload* (the `goal`, `active` and
+`pending[]` objects) rather than beside them:
+
+* `suspended_by` — `null` for every goal that is not currently suspended. A
+  pending goal carrying a value is one the sidecar's needs arbiter parked so
+  a more urgent need could run first: in `AUTONOMOUS` mode, a need *crossing*
+  its critical threshold between observations (hunger or thirst through the
+  policy's own critical line, bleeding appearing, danger reaching HIGH with
+  nothing chasing) suspends the active goal, injects the matching
+  `satisfy_*`/`treat_wounds`/`avoid_threat` goal at the front of the backlog,
+  and lets ordinary activation resume the original — wall clock banked, steps
+  and mission position intact — once the preemptor reaches any terminal
+  state, success or failure alike. The value is the arbiter's deterministic
+  token naming the preemptor (`arb.<original-goal-id>.<trigger>.<n>`, also
+  the preemptor's idempotency key), shape-checked like every token;
+  activation consumes the marker, so a running goal always answers `null`.
+  `ASSISTED` sessions never see one — that mode asks, it does not preempt.
+  Preemption is bounded by the channel's own suspension cap (three per
+  goal); past it the arbiter stands down and the goal runs to its own end.
+
+Over the two-process assembly these keys additionally require the Core
+RPC link to carry them; a link whose codec predates them answers `null`
+rather than inventing a value.
 
 ### `pz_goal_cancel`
 

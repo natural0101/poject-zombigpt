@@ -456,3 +456,190 @@ class TestRevision:
         marks.append(queue.revision)
 
         assert marks == sorted(set(marks)), "submit, activate and a step each move the revision"
+
+
+# --------------------------------------------------------------------------
+# suspension survives the file: the marker, the stopped clock, the migration
+# --------------------------------------------------------------------------
+
+
+def a_preempted_queue(clock: FakeClock) -> tuple[GoalQueue, GoalRecord, GoalRecord]:
+    """A queue caught mid-preemption: the original parked, the preemptor running.
+
+    The original ran for 500 ms of its budget and spent one step before it
+    stepped aside, so the restore has numbers to answer for, not just a flag.
+    """
+    queue = GoalQueue(clock=clock)
+    original = submitted(queue, eat("original-key"))
+    activated(queue)
+    assert queue.note_step(original.goal_id) is None
+    clock.advance(500)
+    parked = queue.suspend(
+        original.goal_id, by_goal_id="preemptor", reason="a threat", now_ms=clock.now
+    )
+    assert parked.goal is not None, parked.refusal
+    injected = queue.submit_front(eat("preemptor-key"), now_ms=clock.now)
+    assert injected.goal is not None, injected.refusal
+    running = activated(queue)
+    assert running.goal_id == injected.goal.goal_id
+    return queue, parked.goal, running
+
+
+class TestSuspensionRoundTrip:
+    def test_a_suspended_goal_survives_the_file_field_for_field(self, tmp_path: Path) -> None:
+        clock = FakeClock(10_000)
+        queue, parked, _ = a_preempted_queue(clock)
+        store = GoalStore(tmp_path)
+
+        store.save_snapshot(queue.snapshot())
+        loaded = store.load()
+
+        assert loaded is not None
+        by_id = {record.goal_id: record for record in loaded.records}
+        restored = by_id[parked.goal_id]
+        # The same frozen dataclass from the same values: marker, counter,
+        # banked active time and front position all included.
+        assert restored == queue.record(parked.goal_id)
+        assert restored.suspended_by == "preemptor"
+        assert restored.suspensions == 1
+        assert restored.active_ms_before_suspend == 500
+        assert restored.front_rank == -1
+        assert restored.steps_used == 1
+
+    def test_a_restart_during_a_preemption_restores_both_goals_honestly(
+        self, tmp_path: Path
+    ) -> None:
+        """The pinned scenario: the original comes back parked, the preemptor dies.
+
+        The suspended original is a pending record, so it is restored pending
+        — marker, stopped clock and front position intact. The preemptor was
+        ACTIVE, and the process serving it died under it, so it ends
+        ``FAILED`` / ``SESSION_TERMINATED`` exactly like any other goal a
+        restart caught running.
+        """
+        clock = FakeClock(10_000)
+        queue, parked, preemptor = a_preempted_queue(clock)
+        store = GoalStore(tmp_path)
+        store.save_snapshot(queue.snapshot())
+
+        clock.advance(60_000)
+        fresh = GoalQueue(clock=clock, armed=False)
+        loaded = store.load()
+        assert loaded is not None
+        lost = fresh.restore(loaded, now_ms=clock.now)
+
+        assert [record.goal_id for record in lost] == [preemptor.goal_id]
+        dead = fresh.record(preemptor.goal_id)
+        assert dead is not None
+        assert dead.state is GoalState.FAILED
+        assert dead.reason_code is ReasonCode.SESSION_TERMINATED
+        assert dead.detail == RESTART_LOST_DETAIL
+
+        survivor = fresh.record(parked.goal_id)
+        assert survivor is not None
+        assert survivor.state is GoalState.PENDING
+        assert survivor.suspended_by == "preemptor"
+        assert survivor.active_ms_before_suspend == 500
+        assert [record.goal_id for record in fresh.pending] == [parked.goal_id]
+
+        # The suspended goal's exemption from the pending TTL crossed the
+        # restart with it (60 s is far past its 60_000 ms TTL already)...
+        assert fresh.tick() == ()
+        # ...and resuming serves only the remaining budget: started now, minus
+        # the 500 ms banked before the restart.
+        fresh.arm()
+        resumed = fresh.activate_next()
+        assert resumed.goal is not None, resumed.refusal
+        assert resumed.goal.goal_id == parked.goal_id
+        assert resumed.goal.suspended_by is None
+        assert resumed.goal.deadline_ms == clock.now + parked.budget.max_wall_ms - 500
+
+    def test_a_version_one_file_migrates_to_never_suspended(self) -> None:
+        # A v1 document is exactly a v2 document with the four suspension
+        # fields absent, so one is built by stripping them — which also pins
+        # that the migration supplies every name the v2 reader requires.
+        document = valid_document(FakeClock(10_000))
+        for section in ("open", "terminal"):
+            for entry in document[section]:
+                for name in (
+                    "suspended_by",
+                    "suspensions",
+                    "active_ms_before_suspend",
+                    "front_rank",
+                ):
+                    del entry[name]
+        document["schema_version"] = 1
+
+        loaded = snapshot_from_document(document)
+
+        assert loaded.records, "the migrated channel is not empty"
+        for record in loaded.records:
+            assert record.suspended_by is None
+            assert record.suspensions == 0
+            assert record.active_ms_before_suspend == 0
+            assert record.front_rank == 0
+
+    def test_a_version_two_file_missing_the_bookkeeping_is_refused(self) -> None:
+        # Only the migration may supply defaults. A document that claims v2
+        # and lacks the fields was written by nobody, and it is refused rather
+        # than guessed at.
+        document = valid_document(FakeClock(10_000))
+        del document["open"][0]["suspensions"]
+
+        with pytest.raises(GoalDocumentError, match="suspensions"):
+            snapshot_from_document(document)
+
+    @pytest.mark.parametrize(
+        ("corruption", "complaint"),
+        [
+            # A marker on a running goal: activation consumes it, so no queue
+            # ever wrote this.
+            (
+                lambda d: d["open"][0].__setitem__("suspended_by", "smuggled"),
+                "pending goal may carry",
+            ),
+            (lambda d: d["open"][1].__setitem__("suspended_by", 7), "string or null"),
+            # More suspensions than the channel ever grants.
+            (lambda d: d["open"][1].__setitem__("suspensions", 99), "suspensions"),
+            # More banked active time than the budget it banks against.
+            (
+                lambda d: d["open"][1].__setitem__("active_ms_before_suspend", 10**9),
+                "active_ms_before_suspend",
+            ),
+            # A positive rank: the queue mints 0 or below, nothing else.
+            (lambda d: d["open"][1].__setitem__("front_rank", 1), "front_rank"),
+            # A marker with no recorded suspension behind it.
+            (
+                lambda d: d["open"][1].__setitem__("suspended_by", "ghost"),
+                "at least one recorded suspension",
+            ),
+        ],
+    )
+    def test_suspension_bookkeeping_that_lies_is_refused(
+        self, corruption: Any, complaint: str
+    ) -> None:
+        document = valid_document(FakeClock(10_000))
+        assert document["open"][0]["state"] == "active"
+        assert document["open"][1]["state"] == "pending"
+        corruption(document)
+
+        with pytest.raises(GoalDocumentError, match=complaint):
+            snapshot_from_document(document)
+
+    def test_the_file_lists_open_goals_in_serving_order(self, tmp_path: Path) -> None:
+        # The preemptor is active; the parked original — fronted — reads ahead
+        # of any later admission, exactly as the queue would serve them.
+        clock = FakeClock(10_000)
+        queue, parked, preemptor = a_preempted_queue(clock)
+        behind = submitted(queue, eat("behind-key"))
+        store = GoalStore(tmp_path)
+
+        store.save_snapshot(queue.snapshot())
+
+        document = json.loads((tmp_path / GOALS_FILE_NAME).read_text(encoding="utf-8"))
+        assert document["schema_version"] == GOALS_SCHEMA_VERSION
+        assert [entry["goal_id"] for entry in document["open"]] == [
+            parked.goal_id,
+            preemptor.goal_id,
+            behind.goal_id,
+        ]

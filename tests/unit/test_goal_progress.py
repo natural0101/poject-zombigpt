@@ -556,3 +556,37 @@ class TestDelegatedKindsAnswerNothing:
         wrapper, _, _ = bound_wrapper()
 
         assert wrapper.goal_progress("never-minted") is None
+
+
+class TestASuspendedGoalKeepsItsDrive:
+    def test_progress_survives_a_suspension_and_the_drive_is_not_pruned(self) -> None:
+        """The wrapper's half of interrupt-and-resume: a parked goal's drive
+        — and with it the phase and counters a status reader sees — waits out
+        the preemptor instead of being pruned with the dead."""
+        wrapper, queue, channel = bound_wrapper()
+        record = submitted_and_active(
+            queue,
+            GoalRequest(
+                kind=GoalKind.NAVIGATE_TO,
+                idempotency_key="parked-nav-key",
+                params=GoalParams(target_x=1260, target_y=3400, target_z=0),
+            ),
+        )
+        goal = to_planner_goal(record)
+        assert wrapper.propose_for_goal(goal, observed(1)) is None
+        assert channel.pending_count == 1
+
+        suspended = queue.suspend(
+            record.goal_id, by_goal_id="arb.test.hunger.1", reason="parked for a meal", now_ms=0
+        )
+        assert suspended.goal is not None, suspended.refusal
+
+        # The wrapper is asked again while the goal is parked: it serves
+        # nothing, and it keeps the drive — pruning here is what would turn
+        # resumption into a restart.
+        assert wrapper.propose_for_goal(goal, observed(2)) is None
+        assert wrapper.tracked_journeys == 1
+        progress = wrapper.goal_progress(record.goal_id)
+        assert progress is not None
+        assert progress.phase == "moving"
+        assert progress.counters == {"legs_used": 1}

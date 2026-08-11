@@ -250,7 +250,7 @@ def outside_values(name: str) -> tuple[object, object]:
 
 
 class TestClosedVocabulary:
-    def test_goal_kinds_are_exactly_these_twelve(self) -> None:
+    def test_goal_kinds_are_exactly_these_thirteen(self) -> None:
         # Hand-written. Adding a kind is a reviewed change to three tables, and
         # this literal is the thing that makes the review happen.
         assert {k.value for k in GoalKind} == {
@@ -266,6 +266,7 @@ class TestClosedVocabulary:
             "treat_wounds",
             "rest_until",
             "sleep_until_rested",
+            "avoid_threat",
         }
 
     def test_trainable_skills_are_exactly_these_eleven(self) -> None:
@@ -320,7 +321,7 @@ class TestClosedVocabulary:
         # strips deliberately; the constructor does neither.
         with pytest.raises(ValueError, match="is not a valid"):
             GoalKind(unknown)
-        assert len(GoalKind) == 12
+        assert len(GoalKind) == 13
 
     def test_no_lookup_hook_invents_a_member(self) -> None:
         # ``_missing_`` is the one hook that can turn an unrecognised value into
@@ -373,6 +374,10 @@ class TestClosedVocabulary:
             # Absent hours mean the sleep adapter's own default night, which
             # the mission expresses by omitting the argument.
             "sleep_until_rested": (set(), {"hours"}),
+            # Parameterless and urgent: where to retreat to is the avoid
+            # mission's deterministic decision from the observed threat
+            # picture, never a coordinate interpreted mid-chase.
+            "avoid_threat": (set(), set()),
         }
         actual = {
             kind.value: (set(spec.required), set(spec.optional))
@@ -2566,3 +2571,122 @@ class TestImportTimeTables:
     def test_the_healthy_tree_passes_both(self) -> None:
         goal_model._check_tables()
         goal_model._check_planner_mapping()
+
+
+# --------------------------------------------------------------------------
+# the suspension marker on the record: additive fields, closed enum
+# --------------------------------------------------------------------------
+
+
+class TestSuspensionBookkeeping:
+    """The preemption wave's record fields, at the model's own door.
+
+    The queue's behaviour — parking, resuming, the refusal after the third
+    suspension — lives in :mod:`tests.unit.test_goal_queue`. What belongs here
+    is the shape: the closed :class:`GoalState` gained no ``SUSPENDED``
+    member, the marker is a record field with checked invariants, and every
+    number the bookkeeping carries has a bound a hostile file is checked
+    against.
+    """
+
+    def test_the_suspension_cap_is_three(self) -> None:
+        # Hand-written, like every load-bearing bound in this file: the cap is
+        # what stops preemption ping-ponging a goal forever, and loosening it
+        # must be a reviewed change.
+        assert goal_model.MAX_SUSPENSIONS_PER_GOAL == 3
+
+    def test_goal_state_gained_no_suspended_member(self) -> None:
+        # The marker lives on the record; the enum every client reads stays
+        # exactly as wide as it was.
+        assert "suspended" not in {state.value for state in GoalState}
+        assert not any("suspend" in state.value for state in GoalState)
+
+    def test_a_pending_record_may_carry_the_marker(self) -> None:
+        parked = a_record(suspended_by="preemptor-id", suspensions=1)
+        assert parked.suspended_by == "preemptor-id"
+        assert parked.state is GoalState.PENDING
+
+    @pytest.mark.parametrize(
+        "overrides",
+        [
+            # Active: activation consumes the marker, so no queue wrote this.
+            {
+                "state": GoalState.ACTIVE,
+                "started_at_ms": 1,
+                "suspended_by": "p",
+                "suspensions": 1,
+            },
+            # Terminal: the record answers "why did it end", not "who paused it".
+            {
+                "state": GoalState.CANCELLED,
+                "reason_code": ReasonCode.CANCELLED_BY_REQUEST,
+                "finished_at_ms": 1,
+                "suspended_by": "p",
+                "suspensions": 1,
+            },
+        ],
+    )
+    def test_the_marker_is_refused_off_a_pending_record(self, overrides: dict[str, Any]) -> None:
+        with pytest.raises(ValueError, match="pending goal may carry"):
+            a_record(**overrides)
+
+    def test_an_empty_marker_is_refused(self) -> None:
+        with pytest.raises(ValueError, match="must name the goal"):
+            a_record(suspended_by="", suspensions=1)
+
+    def test_bookkeeping_without_a_recorded_suspension_is_refused(self) -> None:
+        with pytest.raises(ValueError, match="at least one recorded suspension"):
+            a_record(suspended_by="p", suspensions=0)
+        with pytest.raises(ValueError, match="at least one recorded suspension"):
+            a_record(active_ms_before_suspend=1, suspensions=0)
+
+    def test_the_suspension_count_is_bounded_both_ways(self) -> None:
+        a_record(suspensions=goal_model.MAX_SUSPENSIONS_PER_GOAL)
+        with pytest.raises(ValueError, match="suspensions must be within"):
+            a_record(suspensions=goal_model.MAX_SUSPENSIONS_PER_GOAL + 1)
+        with pytest.raises(ValueError, match="suspensions must be within"):
+            a_record(suspensions=-1)
+
+    def test_the_banked_active_time_is_bounded_by_the_budget(self) -> None:
+        budget = GOAL_SPECS[GoalKind.SATISFY_HUNGER].budget
+        a_record(active_ms_before_suspend=budget.max_wall_ms, suspensions=1)
+        with pytest.raises(ValueError, match="active_ms_before_suspend must be within"):
+            a_record(active_ms_before_suspend=budget.max_wall_ms + 1, suspensions=1)
+        with pytest.raises(ValueError, match="active_ms_before_suspend must be within"):
+            a_record(active_ms_before_suspend=-1, suspensions=1)
+
+    def test_a_positive_front_rank_is_refused(self) -> None:
+        a_record(front_rank=0)
+        a_record(front_rank=-3)
+        with pytest.raises(ValueError, match="front_rank must be zero or negative"):
+            a_record(front_rank=1)
+
+    def test_the_deadline_serves_only_the_remaining_budget(self) -> None:
+        # Written-out arithmetic, in this file's own style: started at 10_000
+        # with 120_000 ms of budget and 500 already spent before a suspension
+        # is dead at 129_500 — not at 130_000, which would grant the goal the
+        # suspension back as free time.
+        budget = GOAL_SPECS[GoalKind.SATISFY_HUNGER].budget
+        assert budget.max_wall_ms == 120_000
+        resumed = a_record(
+            state=GoalState.ACTIVE,
+            submitted_at_ms=0,
+            started_at_ms=10_000,
+            suspensions=1,
+            active_ms_before_suspend=500,
+        )
+        assert resumed.deadline_ms == 129_500
+
+    def test_the_marker_is_not_free_text_into_the_core(self) -> None:
+        # The field carries an id this process minted, and nothing reads it
+        # back into behaviour: it is a name for status readers. What must hold
+        # is the record-wide rule — no raw transcript field appeared beside it.
+        names = {f.name for f in fields(GoalRecord)}
+        assert {
+            "suspended_by",
+            "suspensions",
+            "active_ms_before_suspend",
+            "front_rank",
+        } <= names
+        assert "idempotency_key" not in names
+        assert "transcript" not in names

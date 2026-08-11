@@ -57,6 +57,11 @@ KIND_VALUES = frozenset(
         # argument — the bare word carries the whole goal, and the triage
         # stays the medical policy's.
         "treat_wounds",
+        # The retreat kind: parameterless and urgent, speakable on the same
+        # argument at its sharpest — the person shouting «отступай» is
+        # watching a zombie close in, and where to run stays the avoid
+        # mission's deterministic decision.
+        "avoid_threat",
     }
 )
 
@@ -142,6 +147,13 @@ ATTESTED: dict[str, tuple[str, ...]] = {
         "агент, перевяжи рану",
         "забинтуйся",
         "перевяжи меня",
+    ),
+    "avoid_threat": (
+        "отступай",
+        "беги",
+        "уходи оттуда",
+        "агент, отступи",
+        "спрячься",
     ),
 }
 
@@ -353,6 +365,29 @@ def test_the_homeward_word_resolves_to_return_home() -> None:
         assert resolution.kind is GoalKind.RETURN_HOME
         assert resolution.params.present() == frozenset()
         assert resolution.refusal is None
+
+
+def test_the_retreat_word_resolves_to_avoid_threat() -> None:
+    """«отступай» is the whole goal, pinned end to end like «домой».
+
+    Parameterless by the kind's own spec — where to retreat to is the avoid
+    mission's deterministic decision from the observed threat picture — so
+    the bare word, the two-word sentence and the wake-word sentence all
+    reach the same member with no parameters at all. And the stop vocabulary
+    stays sovereign: «стой» beside a retreat word is a stop, because
+    stopping and retreating are different orders and the safety one wins.
+    """
+    avoid = parse_kind("avoid_threat")
+    assert avoid is not None
+    assert core_goals.GOAL_SPECS[avoid].required == frozenset()
+    assert core_goals.GOAL_SPECS[avoid].optional == frozenset()
+    for transcript in ("отступай", "беги", "уходи оттуда", "агент, отступи"):
+        resolution = resolve(transcript)
+        assert resolution.intent is VoiceIntent.GOAL, transcript
+        assert resolution.kind is avoid
+        assert resolution.params.present() == frozenset()
+        assert resolution.refusal is None
+    assert resolve("стой, беги").intent is VoiceIntent.STOP
 
 
 @pytest.mark.parametrize(
@@ -844,6 +879,7 @@ def test_nothing_is_carried_between_two_transcripts() -> None:
         ("выучи рецепт", READ_CAP, "чтение"),
         ("иди домой", MOVE_CAP, "передвижение"),
         ("перевяжись", BANDAGE_CAP, "перевязка"),
+        ("отступай", MOVE_CAP, "передвижение"),
     ],
 )
 def test_a_kind_the_build_cannot_serve_names_the_missing_capability(
@@ -885,6 +921,7 @@ GOOD_GRAMMAR: dict[str, frozenset[str]] = {
     "learn_recipe": frozenset({"рецепт"}),
     "return_home": frozenset({"домой"}),
     "treat_wounds": frozenset({"перевяжись"}),
+    "avoid_threat": frozenset({"отступай"}),
 }
 
 
@@ -1063,6 +1100,10 @@ GOAL_UTTERANCES: tuple[tuple[str, str, dict[str, object]], ...] = (
     ("перевяжись", "treat_wounds", {}),
     ("обработай раны", "treat_wounds", {}),
     ("забинтуй рану", "treat_wounds", {}),
+    ("отступай", "avoid_threat", {}),
+    ("беги", "avoid_threat", {}),
+    ("уходи оттуда", "avoid_threat", {}),
+    ("агент, отступи", "avoid_threat", {}),
 )
 
 

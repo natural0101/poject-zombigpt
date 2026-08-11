@@ -50,6 +50,7 @@ from pz_agent_core.protocol import (
     InventoryView,
     NearbyObject,
     NearbyView,
+    NearbyZombie,
     Observation,
     Position,
     ReasonCode,
@@ -63,6 +64,7 @@ from tests.fixtures import (
     make_game,
     make_item,
     make_player,
+    make_safety,
 )
 from tests.fixtures.policy_items import food_item
 from tests.fixtures.sidecar_worlds import SidecarWorld, arm_for_real, attached_world
@@ -1046,6 +1048,100 @@ class TestCareGoalsAreServedByTheMissions:
 
 
 # --------------------------------------------------------------------------
+# the retreat kind: avoid_threat in the loop
+# --------------------------------------------------------------------------
+
+
+def a_looming_zombie() -> NearbyZombie:
+    """Four tiles east, seen, not yet chasing — inside the retreat's safe
+    distance but below the reflex guard's block rung.
+
+    Deliberately not chasing: a chaser at four tiles assesses HIGH, and at
+    HIGH the loop's reflex gate starts nothing new — that band belongs to
+    the guard, and the retreat goal serves the band below it, where the
+    threat is real but the loop is still allowed to begin work.
+    """
+    return NearbyZombie(
+        ref=f"zombie:{DEFAULT_SESSION}:z1",
+        distance=4.0,
+        visible=True,
+        chasing=False,
+        position=Position(x=1204.0, y=3400.0, z=0),
+    )
+
+
+class TestAvoidGoalsAreServedByTheMission:
+    """The thirteenth kind end to end through the loop, spy planner never asked.
+
+    The idiom of :class:`TestCareGoalsAreServedByTheMissions`: a real loop
+    over a real exchange directory, the wrapper standing where the shipped
+    assembly puts it, the mod faked at the files. The registry carries no
+    movement adapter, so the engine's own refusal is still the proof that
+    the mission's retreat leg reached the engine with no planner involved.
+    """
+
+    def test_a_retreat_step_reaches_the_engine_without_asking_the_planner(
+        self, tmp_path: Path
+    ) -> None:
+        spy = RecordingGoalPlanner()
+        world, wrapper = navigating_world(tmp_path, spy)
+        with world:
+            armed_autonomous(world)
+            record = submit(
+                world, GoalRequest(kind=GoalKind.AVOID_THREAT, idempotency_key="avoid-key")
+            )
+
+            world.observe(nearby=NearbyView(zombies=[a_looming_zombie()]))
+            world.loop.tick()
+
+            # Tick one: the retreat leg — a move away from the observed
+            # zombie — was submitted into the loop's action channel, never
+            # out the goal seam: arriving at one waypoint is not "safe".
+            channel = world.loop.actions
+            assert channel is not None and channel.pending_count == 1
+            assert wrapper.tracked_avoids == 1
+            assert spy.goal_calls == [], "avoid_threat must never reach the wrapped planner"
+            assert spy.propose_calls == 0, "the goal outranks the planner's own initiative"
+
+            world.beat_game()
+            world.observe(nearby=NearbyView(zombies=[a_looming_zombie()]))
+            outcome = world.loop.tick()
+
+            # Tick two: the loop drained the submission through the same
+            # engine every action takes; the refusal for the adapter this
+            # registry does not carry is still proof of the join, one failed
+            # leg inside the mission's bounded streak; the goal stays active.
+            assert "movement.move_to" in [result.action for result in outcome.results]
+            assert spy.goal_calls == []
+            assert record_of(world, record.goal_id).state is GoalState.ACTIVE
+
+    def test_a_threatless_retreat_probes_out_the_goal_seam(self, tmp_path: Path) -> None:
+        """No threat observed at activation: the no-work completion probe.
+
+        The probe travels the goal seam — it is the one request whose own
+        observed result may settle the goal — so the loop dispatches it as
+        the goal's step and charges the queue one honest step for it.
+        """
+        spy = RecordingGoalPlanner()
+        world, wrapper = navigating_world(tmp_path, spy)
+        with world:
+            armed_autonomous(world)
+            record = submit(
+                world, GoalRequest(kind=GoalKind.AVOID_THREAT, idempotency_key="calm-key")
+            )
+            world.observe()
+
+            outcome = world.loop.tick()
+
+            assert [result.action for result in outcome.results] == ["movement.move_to"]
+            assert spy.goal_calls == [] and spy.propose_calls == 0
+            served = record_of(world, record.goal_id)
+            assert served.steps_used == 1
+            report = wrapper.avoid_report(record.goal_id)
+            assert report is not None and report["threats_at_start"] == 0
+
+
+# --------------------------------------------------------------------------
 # goals survive a sidecar restart, honestly
 # --------------------------------------------------------------------------
 
@@ -1212,3 +1308,109 @@ class TestGoalsSurviveARestart:
             )
             assert world.loop.goal_store is None
             assert not (world.state_dir / GOALS_FILE_NAME).exists()
+
+
+# --------------------------------------------------------------------------
+# the needs arbiter in the running loop: interrupt, satisfy, resume
+# --------------------------------------------------------------------------
+
+
+class TestTheNeedsArbiterInTheLoop:
+    """The interrupt-satisfy-resume cycle end to end through the real loop.
+
+    The unit half lives in ``test_needs_arbiter.py``; this class owns the
+    loop-side joins: the observation's own safety block is what carries
+    ``AUTONOMOUS`` to the arbiter, the loop's ordinary activation is what
+    serves the preemptor and resumes the original, and the served port is
+    where the suspension marker becomes visible to a status reader.
+    """
+
+    def autonomous_world(self, seq_hunger: float) -> dict[str, object]:
+        """Observation overrides: an autonomous safety block and a hunger stat."""
+        return {
+            "safety": make_safety(mode=SessionMode.AUTONOMOUS),
+            "player": make_player(stats={"hunger": seq_hunger}),
+        }
+
+    def test_a_hunger_crossing_suspends_serves_the_meal_and_resumes(self, tmp_path: Path) -> None:
+        world, wrapper = navigating_world(tmp_path)
+        with world:
+            armed_autonomous(world)
+            record = submit(world, navigate_request(1260, 3400, key="journey-key"))
+
+            # Tick 1: the journey is the active goal; a leg is in the channel.
+            world.observe(**self.autonomous_world(0.5))
+            world.loop.tick()
+            assert record_of(world, record.goal_id).state is GoalState.ACTIVE
+            assert wrapper.tracked_journeys == 1
+
+            # Tick 2: hunger crosses the critical line inside the observation
+            # the loop hands the wrapper. The arbiter suspends the journey's
+            # goal and injects the meal; nothing new is served this tick.
+            world.beat_game()
+            world.observe(**self.autonomous_world(0.8))
+            world.loop.tick()
+
+            parked = record_of(world, record.goal_id)
+            assert parked.state is GoalState.PENDING
+            assert parked.suspended_by is not None
+            assert parked.suspended_by.startswith("arb.")
+            assert wrapper.tracked_journeys == 1, "the journey drive waits out the meal"
+            status = LoopGoalPort(loop=world.loop).status(record.goal_id)
+            named = status.named
+            assert named is not None and named.suspended_by == parked.suspended_by, (
+                "the served port reports the marker a status reader needs"
+            )
+            entry = wrapper.arbiter_log[-1]
+            assert entry["trigger"] == "hunger"
+            assert entry["suspended_goal"] == record.goal_id
+
+            # Tick 3: ordinary activation serves the injected meal. Nothing
+            # edible exists anywhere, so the consume mission ends it typed —
+            # a FAILED preemptor, exactly the case that must not orphan the
+            # original.
+            world.beat_game()
+            world.observe(**self.autonomous_world(0.8))
+            world.loop.tick()
+            queue = world.loop.goals
+            assert queue is not None
+            meal_id = entry["injected_goal"]
+            assert isinstance(meal_id, str)
+            meal = record_of(world, meal_id)
+            assert meal.kind is GoalKind.SATISFY_HUNGER
+            assert meal.state is GoalState.FAILED
+            assert meal.reason_code is ReasonCode.NO_SAFE_FOOD
+
+            # Tick 4: the journey's goal resumes through the loop's own
+            # activation, marker consumed, drive still tracked.
+            world.beat_game()
+            world.observe(**self.autonomous_world(0.8))
+            world.loop.tick()
+            resumed = record_of(world, record.goal_id)
+            assert resumed.state is GoalState.ACTIVE
+            assert resumed.suspended_by is None
+            assert wrapper.tracked_journeys == 1
+            settled = wrapper.arbiter_log[-1]
+            assert settled["outcome"] == GoalState.FAILED.value
+
+    def test_assisted_observations_never_preempt_in_the_loop(self, tmp_path: Path) -> None:
+        """The same crossing with the mod reporting ASSISTED reshuffles nothing.
+
+        The loop itself is armed AUTONOMOUS — the arbiter's gate is the
+        observation's own safety block, the mod's word for the session.
+        """
+        world, wrapper = navigating_world(tmp_path)
+        with world:
+            armed_autonomous(world)
+            record = submit(world, navigate_request(1260, 3400, key="assist-key"))
+
+            world.observe(player=make_player(stats={"hunger": 0.5}))
+            world.loop.tick()
+            assert record_of(world, record.goal_id).state is GoalState.ACTIVE
+
+            world.beat_game()
+            world.observe(player=make_player(stats={"hunger": 0.8}))
+            world.loop.tick()
+
+            assert record_of(world, record.goal_id).state is GoalState.ACTIVE
+            assert wrapper.arbiter_log == ()

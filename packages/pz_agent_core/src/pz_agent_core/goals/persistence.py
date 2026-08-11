@@ -9,7 +9,11 @@ comes back pending under its original ids and idempotency digests, the goal
 that was active comes back as an honest terminal record (``FAILED`` /
 ``SESSION_TERMINATED`` — the queue's :meth:`~.queue.GoalQueue.restore` owns
 that reading), and the recent terminal history comes back so a client polling
-a finished goal's id still gets its answer.
+a finished goal's id still gets its answer. A restart in the middle of a
+preemption is those two rules composed, not a new case: the suspended
+original is a pending record, so it comes back parked — marker, stopped wall
+clock and front position intact — while the preemptor that was running dies
+with the session that was running it.
 
 The write discipline is :mod:`pz_agent_core.memory.persistence`'s, restated
 rather than imported because the two stores share no path and deliberately no
@@ -90,7 +94,14 @@ MAX_PERSISTED_TERMINAL: Final = 16
 #:
 #: * 1 — first on-disk layout: ``open`` (pending and active records, admission
 #:   order) and ``terminal`` (recent finished records, oldest first).
-GOALS_SCHEMA_VERSION: Final = 1
+#: * 2 — the preemption wave: every record gains the suspension bookkeeping
+#:   (``suspended_by``, ``suspensions``, ``active_ms_before_suspend``,
+#:   ``front_rank``), and ``open`` is ordered by the queue's own serving order
+#:   ``(front_rank, sequence)`` — identical to admission order until something
+#:   is fronted. The bump is what makes a suspended goal's stopped wall clock
+#:   and front-of-backlog position survive a restart instead of silently
+#:   defaulting away in an old reader.
+GOALS_SCHEMA_VERSION: Final = 2
 
 #: Oldest schema this build still upgrades; below it the document is refused
 #: rather than migrated through code nobody exercises.
@@ -131,7 +142,13 @@ def snapshot_to_document(snapshot: GoalSnapshot) -> dict[str, Any]:
     """
     open_records = sorted(
         (record for record in snapshot.records if record.is_open),
-        key=lambda record: record.sequence,
+        # The queue's own serving order — fronted goals (suspension, priority
+        # injection) ahead of the admission sequence — so the file reads in the
+        # order the channel would serve. Restore does not depend on it (order
+        # is derived from the records' own fields), but a document that lists
+        # goals in an order the queue would never serve them in is a document
+        # that misleads whoever opens it.
+        key=lambda record: (record.front_rank, record.sequence),
     )
     terminal = [record for record in snapshot.records if not record.is_open]
     return {
@@ -183,9 +200,9 @@ def _migrate(document: Mapping[str, Any]) -> dict[str, Any]:
     The same seam :mod:`pz_agent_core.memory.migrations` keeps: every version
     from :data:`MIN_SUPPORTED_GOALS_SCHEMA` up has a named step to the next
     one, a future version is refused rather than partially read, and the chain
-    is bounded by the version arithmetic. With one schema in existence the
-    chain is empty; the seam exists so that adding schema 2 is a migration
-    function and a constant, not a file-format fork.
+    is bounded by the version arithmetic. The chain today is one step,
+    :func:`_upgrade_v1_to_v2` — exactly the migration-function-and-a-constant
+    this seam was built for.
     """
     if "schema_version" not in document:
         raise GoalDocumentError(
@@ -219,9 +236,40 @@ def _migrate(document: Mapping[str, Any]) -> dict[str, Any]:
     return working
 
 
-#: version -> the function that turns it into version + 1. Empty until a
-#: second schema exists; see :func:`_migrate`.
-_MIGRATIONS: Final[dict[int, Any]] = {}
+def _upgrade_v1_to_v2(document: dict[str, Any]) -> dict[str, Any]:
+    """Schema 2 added suspension bookkeeping to every record.
+
+    A v1 record predates preemption, so the truthful values are "never
+    suspended": no marker, zero suspensions, zero banked active time, an
+    ordinary back-of-the-queue rank. Written as defaults *under* the entry —
+    a v1 file that somehow already carries one of these names keeps its value
+    and answers for it to the validators, rather than having evidence of
+    tampering silently overwritten. Anything that is not the expected shape
+    is passed through untouched; the shape checks after migration own every
+    refusal, so this step never has to guess.
+    """
+    working = dict(document)
+    for section in ("open", "terminal"):
+        entries = working.get(section)
+        if not isinstance(entries, list):
+            continue
+        working[section] = [
+            {
+                "suspended_by": None,
+                "suspensions": 0,
+                "active_ms_before_suspend": 0,
+                "front_rank": 0,
+                **entry,
+            }
+            if isinstance(entry, dict)
+            else entry
+            for entry in entries
+        ]
+    return working
+
+
+#: version -> the function that turns it into version + 1; see :func:`_migrate`.
+_MIGRATIONS: Final[dict[int, Any]] = {1: _upgrade_v1_to_v2}
 
 
 def _record_to_document(record: GoalRecord) -> dict[str, Any]:
@@ -252,6 +300,10 @@ def _record_to_document(record: GoalRecord) -> dict[str, Any]:
         "reason_code": None if record.reason_code is None else record.reason_code.value,
         "evidence_keys": list(record.evidence_keys),
         "detail": record.detail,
+        "suspended_by": record.suspended_by,
+        "suspensions": record.suspensions,
+        "active_ms_before_suspend": record.active_ms_before_suspend,
+        "front_rank": record.front_rank,
     }
 
 
@@ -290,6 +342,9 @@ def _record_from_document(entry: Mapping[str, Any], *, where: str) -> GoalRecord
     detail = entry.get("detail", "")
     if not isinstance(detail, str):
         raise GoalDocumentError(f"{where}: detail must be a string")
+    suspended_by = entry.get("suspended_by")
+    if suspended_by is not None and not isinstance(suspended_by, str):
+        raise GoalDocumentError(f"{where}: suspended_by must be a string or null")
     budget_doc = entry.get("budget")
     if not isinstance(budget_doc, dict):
         raise GoalDocumentError(f"{where}: budget must be a JSON object")
@@ -314,6 +369,15 @@ def _record_from_document(entry: Mapping[str, Any], *, where: str) -> GoalRecord
             reason_code=reason,
             evidence_keys=tuple(evidence_raw),
             detail=detail,
+            suspended_by=suspended_by,
+            # Required, not defaulted: a v2 writer always writes them and
+            # _upgrade_v1_to_v2 supplies the v1 truth, so an absence here is a
+            # document nobody wrote. front_rank is the one legitimately
+            # negative number in the record; _whole checks type, the model's
+            # own invariants check sign and range.
+            suspensions=_whole(entry, "suspensions", where=where),
+            active_ms_before_suspend=_whole(entry, "active_ms_before_suspend", where=where),
+            front_rank=_whole(entry, "front_rank", where=where),
         )
     except ValueError as exc:
         raise GoalDocumentError(f"{where}: {exc}") from None

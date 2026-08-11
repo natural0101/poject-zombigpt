@@ -96,6 +96,7 @@ DOCUMENTED_KINDS: Final[frozenset[str]] = frozenset(
         "treat_wounds",
         "rest_until",
         "sleep_until_rested",
+        "avoid_threat",
     }
 )
 

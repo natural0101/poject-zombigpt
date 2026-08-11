@@ -23,11 +23,14 @@ from pz_agent_core.navigation import (
     Refused,
     Step,
 )
+from pz_agent_core.navigation.executor import THREAT_AVOID_RADIUS
+from pz_agent_core.navigation.local_map import THREAT_DECAY_SEQS
 from pz_agent_core.protocol import (
     ActionName,
     ActionResult,
     NearbyObject,
     NearbyView,
+    NearbyZombie,
     Observation,
     Position,
     ReasonCode,
@@ -428,3 +431,98 @@ class TestDeterminism:
         second = expect_step(journey.next_step(observed(2, player_at=(30, 0, 0))))
         assert first.request.idempotency_key == "nav:keys:step1"
         assert second.request.idempotency_key == "nav:keys:step2"
+
+
+# ---------------------------------------------------------------------------
+# threat-aware routing: detours are preferred, walls are never invented
+# ---------------------------------------------------------------------------
+
+
+def a_zombie(x: float, y: float, z: int = 0, *, chasing: bool = False) -> NearbyZombie:
+    return NearbyZombie(
+        ref=f"zombie:{DEFAULT_SESSION}:z{int(x)}x{int(y)}",
+        distance=float(max(abs(x), abs(y))),
+        visible=True,
+        chasing=chasing,
+        position=Position(x=x, y=y, z=z),
+    )
+
+
+def threatened(
+    seq: int,
+    *,
+    player_at: tuple[int, int, int] = (0, 0, 0),
+    objects: list[NearbyObject] | None = None,
+    zombies: list[NearbyZombie] | None = None,
+) -> Observation:
+    x, y, z = player_at
+    return make_observation(
+        seq=seq,
+        player=make_player(position=Position(x=float(x), y=float(y), z=z, direction="S")),
+        nearby=NearbyView(objects=list(objects or []), zombies=list(zombies or [])),
+    )
+
+
+def boxed_in(gap: tuple[int, int]) -> list[NearbyObject]:
+    """A sealed ring of obstacles around (0, 0) at radius 2, minus *gap*."""
+    ring: list[NearbyObject] = []
+    for dx in range(-2, 3):
+        for dy in range(-2, 3):
+            if max(abs(dx), abs(dy)) != 2 or (dx, dy) == gap:
+                continue
+            ring.append(an_obstacle(dx, dy))
+    return ring
+
+
+class TestThreatAwareRouting:
+    def test_the_route_detours_around_a_remembered_zombie(self) -> None:
+        """Two routes to (6, 0): the straight line brushes the sighting at
+        (3, 0); the threat toll (8.0 per tainted square, several tainted)
+        makes the clean detour past the avoid radius strictly cheaper."""
+        journey = Journey(LocalMap(), NavigationTarget(6, 0, 0), journey_id="detour")
+        step = expect_step(journey.next_step(threatened(1, zombies=[a_zombie(3.5, 0.5)])))
+        assert all(
+            max(abs(square[0] - 3), abs(square[1] - 0)) > THREAT_AVOID_RADIUS
+            for square in step.route
+            if square != (6, 0, 0)
+        ), f"route {step.route} brushes the sighting at (3, 0)"
+        # The target itself sits outside the tainted neighbourhood too.
+        assert max(abs(6 - 3), 0) > THREAT_AVOID_RADIUS
+
+    def test_without_avoid_threats_the_short_way_wins(self) -> None:
+        """The same world with the knob off: the straight line through the
+        sighting's neighbourhood is the cheapest route again."""
+        journey = Journey(
+            LocalMap(),
+            NavigationTarget(6, 0, 0),
+            journey_id="straight",
+            limits=JourneyLimits(avoid_threats=False),
+        )
+        step = expect_step(journey.next_step(threatened(1, zombies=[a_zombie(3.5, 0.5)])))
+        assert step.route == tuple((x, 0, 0) for x in range(1, 7))
+
+    def test_a_chasing_square_is_least_preferred_but_never_a_wall(self) -> None:
+        """Cornered: a sealed obstacle ring whose only gap holds a chasing
+        sighting. The chaser's square costs a lot (64.0) but not infinity,
+        so the journey still finds the least-bad way out through it instead
+        of refusing NO_ROUTE — being surrounded must not read as walls."""
+        journey = Journey(LocalMap(), NavigationTarget(6, 0, 0), journey_id="cornered")
+        world = threatened(
+            1,
+            objects=boxed_in(gap=(2, 0)),
+            zombies=[a_zombie(2.5, 0.5, chasing=True)],
+        )
+        step = expect_step(journey.next_step(world))
+        assert (2, 0, 0) in step.route, f"route {step.route} missed the only gap"
+
+    def test_a_decayed_sighting_stops_costing(self) -> None:
+        """Past the decay horizon the straight route is cheap again: the
+        toll follows the map's live sightings, not its history."""
+        shared = LocalMap()
+        journey = Journey(shared, NavigationTarget(6, 0, 0), journey_id="decayed")
+        # Age the sighting past the horizon with empty observations, without
+        # ever asking for a step (the journey would cache an outcome).
+        shared.observe(threatened(1, zombies=[a_zombie(3.5, 0.5)]))
+        shared.observe(threatened(2 + THREAT_DECAY_SEQS))
+        step = expect_step(journey.next_step(threatened(3 + THREAT_DECAY_SEQS)))
+        assert step.route == tuple((x, 0, 0) for x in range(1, 7))

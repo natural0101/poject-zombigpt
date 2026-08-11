@@ -1635,7 +1635,16 @@ TOOLS: Final[tuple[ToolSpec, ...]] = (
             "food and water found in known containers, moved to the main "
             "inventory, unsafe candidates (rotten, burnt, poisonous, "
             "reserved) skipped with recorded reasons, and success only by "
-            "the observed stat moving."
+            "the observed stat moving. An 'avoid_threat' goal (no parameters "
+            "— where to retreat to is decided deterministically from the "
+            "observed threat picture) walks threat-avoiding journeys to the "
+            "nearest remembered user safe zone or to open ground away from "
+            "the observed zombies, re-reading the picture every step; it "
+            "succeeds only on the observed postcondition — nearest zombie at "
+            "a safe distance, or standing in a safe zone with nothing "
+            "chasing — and a retreat that cannot open the distance is a "
+            "typed THREAT_INTERRUPTED naming the nearest observed threat "
+            "distance."
         ),
         input_schema=_goal_channel(
             {
@@ -1790,7 +1799,8 @@ TOOLS: Final[tuple[ToolSpec, ...]] = (
             "journey's planning/moving/arrived/refused; a loot sweep's "
             "start/approach/open/inspect/transfer; an explore sweep's "
             "start/approach; a consume drive's check/fetch/consume/verify; a "
-            "care drive's start/transfer/treat, start/rest or start/sleep) "
+            "care drive's start/transfer/treat, start/rest or start/sleep; "
+            "an avoid drive's start/approach) "
             "plus detail-free counters, for the named goal or, "
             "with no id, the active one — a goal a plan provider serves has no "
             "deterministic phase and honestly answers null; 'paused' is the goal "

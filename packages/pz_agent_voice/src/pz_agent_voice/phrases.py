@@ -152,6 +152,9 @@ KIND_ACCEPTED: Final[dict[GoalKind, str]] = {
     GoalKind.LEARN_RECIPE: "Ищу книгу с рецептами.",
     GoalKind.RETURN_HOME: "Иду домой.",
     GoalKind.TREAT_WOUNDS: "Перевязываю раны.",
+    # The acceptance phrase in the grammar's voice: one word of confirmation,
+    # because the user who shouted «отступай» is not waiting for a sentence.
+    GoalKind.AVOID_THREAT: "Отступаю.",
 }
 
 #: How to say each goal parameter, in the nominative singular so one sentence
