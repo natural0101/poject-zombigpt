@@ -24,11 +24,11 @@ still unfixed.
 | `PZD003` | `user_directory` | The `Zomboid` user directory could not be found — the one holding `Saves/`, `mods/` and `console.txt`, not the install. On Windows it follows `USERPROFILE` and OneDrive redirection. Set `game.user_dir` to override. |
 | `PZD004` | `directory_permissions` | The Zomboid directory exists but could not be written to. Fixing `PZD003` first is usually the answer; permissions cannot be tested on a directory that was never located. |
 | `PZD005` | `mod_installed` | The bridge mod is not in the mods folder. Run `pz-agent install-mod`. Present on disk is not the same as loaded — see `PZD006`. |
-| `PZD006` | `game_heartbeat` | No `heartbeat.game.json`, or one whose timestamp is not advancing. This is the check that distinguishes "the mod is installed" from "the mod is running": a mod that threw during load looks identical to an idle exchange directory everywhere except here. Enable **PZ Agent Bridge** in the in-game mod list and load a save. |
+| `PZD006` | `game_heartbeat` | No `heartbeat.game.json`, or one whose timestamp is not advancing. This is the check that distinguishes "the mod is installed" from "the mod is running": a mod that threw during load looks identical to an idle exchange directory everywhere except here. Enable **PZ Agent Bridge** in the in-game mod list and load a save. A fourth cause has its own remediation: a heartbeat stamped *ahead* of this machine's clock is refused as describing no moment on it, and the answer there is the system clock and time synchronisation, not the mod list. |
 | `PZD007` | `ipc_writable` | The exchange directory could not be written to, so the sidecar could not send a command even if everything else were healthy. |
 | `PZD008` | `timed_actions` | The timed-action classes the adapters construct could not be found by a scan of the install's own Lua. This is what turns capabilities from unprobed into a state backed by evidence; a failure here explains a later `CAPABILITY_UNAVAILABLE`. |
 | `PZD009` | `conflicting_files` | Something is left over in the exchange directory that this build did not write — usually a previous version's journals. |
-| `PZD010` | `active_session` | Reports whether a session is open and which mode it is in. `unknown` with no exchange directory is normal before the first run. |
+| `PZD010` | `active_session` | Reports whether a session is open and which mode it is in. `unknown` with no exchange directory is normal before the first run. A session is called active only when the game's heartbeat *names it and is current*: a matching id in a heartbeat that has gone silent is reported as the last word of a game that is no longer running, because a crashed game leaves a file carrying exactly that id. |
 
 A check can report `pass`, `info`, `warn`, `fail` or `unknown` — `info` is a
 fact rather than a verdict ("no session is attached" is neither healthy nor
@@ -249,6 +249,34 @@ One side stopped writing its heartbeat.
 
 Neither side re-arms itself on recovery. Restart the sidecar with
 `pz-agent start`, then arm again deliberately.
+
+## "play said it armed, but the agent does nothing"
+
+Two different faults print almost the same thing, and the difference is which
+session the evidence belongs to.
+
+- **`play` refuses with "the game's heartbeat belongs to session … , not to the
+  session this sidecar attached"** → the game is still running against a save an
+  earlier sidecar attached to. Nothing was armed. Stop the game, or run
+  `pz-agent stop` and start again, so both sides agree on one session. This
+  refusal is the correct answer, not a bug: an arm confirmed by a previous
+  session's heartbeat would be authority nobody granted.
+- **`pz-agent status` shows the game attached and armed, but no action ever
+  runs** → check the sidecar's diagnostics for a refused snapshot naming another
+  session. A sidecar that attaches into an exchange directory still holding the
+  previous session's observation slots reports that it has no picture of the
+  world rather than acting on a dead one, and it clears as soon as the mod
+  publishes under the live session. If it does not clear, the mod is not
+  publishing: see `PZD006`.
+
+## "The goal stopped without saying anything"
+
+It should not, and if you see it the report is worth filing. Every goal ends by
+a named reason: a step whose outcome could never be observed — the action's
+record aged out of the channel's history, or the channel was replaced — ends the
+goal `CAPABILITY_UNAVAILABLE` on the next tick rather than leaving it running
+against a step nobody can settle. A goal that sits in progress with nothing
+being dispatched is a defect, not a slow plan.
 
 ## "Restore refused"
 

@@ -10,6 +10,60 @@ drift out of sync with `pz_agent_core.version`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Thirteen defects of one family: evidence read without checking whose it was,
+  or when it was written** (`stabilize/arm-session-confirmation`). A static audit
+  along the P0 causal chain — mod visibility, session identity, heartbeat
+  freshness, the two-phase arm, terminality, pointer and sequence recovery, one
+  action, goals made of several — starting from one found in `pz-agent play` and
+  generalising its shape. Every fix below was watched red first.
+
+  *Claims resting on evidence that did not prove them.* `play` confirmed its arm
+  from any fresh heartbeat reporting armed in the requested mode, without
+  comparing the session — so a heartbeat left by an **earlier** sidecar could
+  confirm an arm this session never got, and the command exited 0. `doctor`
+  PZD010 called a session active from an undated read, telling the owner of a
+  game that crashed an hour ago that it was live, two lines under PZD006 saying
+  that same heartbeat was stale. `HeartbeatMonitor` read a *future*-stamped
+  heartbeat as fresh for the whole of the skew, so a peer whose clock ran ahead
+  could publish once and stop forever while every reader saw "fresh" — the
+  handshake and the snapshot reader already refuse a document stamped past their
+  window; the heartbeat was the one with no ceiling in that direction. The
+  `engage_single_zombie` mission reported a kill it had not made: a failed window
+  plus a succeeded `combat.shove` — whose adapter verifies "down **or strictly
+  further away**" — plus the zombie leaving the nearby tier closed the goal as
+  done, the shove that pushed it away serving as the evidence. `avoid_threat`
+  read a *missing* nearby tier as an open horizon, completing a retreat with a
+  chaser four tiles out. `status` printed a silent heartbeat's armed/mode/player
+  as the state now, three lines under the word "stale".
+
+  *A previous run's document taken as current.* The snapshot reader compared
+  session-scoped sequence numbers **across** sessions, so after a game session
+  change it refused every new snapshot as a rewind and the sidecar went blind
+  while handshake and heartbeat both looked healthy. A fresh reader also adopted
+  the previous session's slots as its first observation — the picture an attach
+  and an arm decision are made against. Both are now scoped to the session the
+  sidecar handshook. An arm request stamped ahead of the tick's clock was
+  consumed and armed the run, and a pid record stamped ahead read as a ticking
+  sidecar forever: the same one-sided subtraction of two processes' clocks.
+
+  *Work that reached no end.* A disarm superseding a pending arm countermanded
+  nothing at the game, so the mod could finish arming into a mode the sidecar had
+  abandoned. `disarm` stranded a suspended goal for ever — exempt from the
+  pending TTL because activation was supposed to resume it, and activation
+  refuses once disarmed — holding an open slot no timer could reach. A mission
+  whose step record aged out of the channel's bounded history left the wrapper
+  proposing nothing tick after tick, the goal idling to its wall clock; it now
+  ends `CAPABILITY_UNAVAILABLE` on the next tick, identically across all six
+  goal kinds. A journal recreated at an earlier serial now reports the loss
+  instead of silently renumbering.
+
+  Recorded and deliberately **not** fixed, a third door onto the same silence:
+  the mission-cap eviction path marks a drive abandoned and banks its report
+  without ending the goal. It fired in no test, and reproducing it needs a
+  concurrency the queue does not currently produce.
+
 ### Added
 
 - **A terminal is enough to play** (`epic/ux-one-command-play`, wave 1). The
