@@ -365,8 +365,12 @@ def _arm_and_confirm(
     certain to refuse spends the user's wait to tell them what this process
     could already see.
     """
+    # The session this run attached to. Every confirmation below is measured
+    # against it, so an armed heartbeat belonging to some other session is not
+    # mistaken for an answer to this request.
+    attached = report.session.session_id if report.session is not None else None
     beat = report.game.heartbeat if report.game is not None else None
-    if beat is not None and beat.armed and beat.mode is mode:
+    if beat is not None and beat.armed and beat.mode is mode and beat.session_id == attached:
         out.note(f"arm: the game already reports armed in {mode.value}; nothing was requested")
         return beat
     if report.panic_stop:
@@ -383,25 +387,43 @@ def _arm_and_confirm(
     poller = _Poller(
         clock=ctx.clock_ms, sleep=sleep, ceiling_ms=ARM_CONFIRM_CEILING_MS, period_ms=ARM_POLL_MS
     )
-    confirmed = poller.until(lambda: _armed_in(ctx, workspace, mode))
+    confirmed = poller.until(lambda: _armed_in(ctx, workspace, mode, session_id=attached))
     if confirmed is not None:
         return confirmed
-    return _arm_never_confirmed(ctx, workspace, supervisor, mode)
+    return _arm_never_confirmed(ctx, workspace, supervisor, mode, session_id=attached)
 
 
-def _armed_in(ctx: CliContext, workspace: Workspace, mode: SessionMode) -> Heartbeat | None:
-    """The game's heartbeat, but only when it reports armed in *mode*.
+def _armed_in(
+    ctx: CliContext, workspace: Workspace, mode: SessionMode, *, session_id: str | None
+) -> Heartbeat | None:
+    """The game's heartbeat, but only when it reports armed in *mode*, for *us*.
 
     The mode is compared rather than assumed. A loop that granted ``ASSISTED``
     to a request for ``AUTONOMOUS`` has not done what was asked, and reporting
     that as success is precisely the fabricated postcondition the two-phase arm
     exists to prevent.
+
+    The session is compared for the same reason, one step further out. The mod
+    publishes while the game runs, so a heartbeat left by an earlier sidecar can
+    be fresh, armed and in the mode being asked for while naming a session this
+    process never attached to — and crediting it would report authority nobody
+    granted here. ``StatusReport.attached`` already makes this comparison to
+    decide whether a game is *ours*; the confirmation had been reading the file
+    without it, which is the one place the answer matters most.
+
+    An unknown session is not a match. If the descriptor could not be read there
+    is nothing to compare against, and a confirmation that cannot identify whose
+    arm it is describing is not a confirmation.
     """
+    if session_id is None:
+        return None
     liveness = game_liveness(ctx, workspace)
     if liveness is None or not liveness.alive:
         return None
     beat = liveness.heartbeat
     if beat is None or not beat.armed or beat.mode is not mode:
+        return None
+    if beat.session_id != session_id:
         return None
     return beat
 
@@ -411,10 +433,27 @@ def _arm_never_confirmed(
     workspace: Workspace,
     supervisor: SidecarSupervisor,
     mode: SessionMode,
+    *,
+    session_id: str | None = None,
 ) -> str:
-    """What the game and the sidecar actually said when the confirmation did not come."""
+    """What the game and the sidecar actually said when the confirmation did not come.
+
+    The session mismatch is reported ahead of the armed flag because it changes
+    what the flag means: "the game reports armed" beside a heartbeat naming
+    another session would send a reader looking for a fault in the arm, when
+    what they are seeing is somebody else's arm.
+    """
     liveness = game_liveness(ctx, workspace)
     beat = None if liveness is None else liveness.heartbeat
+    if beat is not None and session_id is not None and beat.session_id != session_id:
+        return (
+            f"the arm into {mode.value} was requested and never confirmed: the game's "
+            f"heartbeat belongs to session {beat.session_id}, not to the session this "
+            f"sidecar attached ({session_id}). Nothing this process did was armed. A "
+            "heartbeat from an earlier session usually means the game is still running "
+            "against a save that a previous sidecar attached to: stop the game, or run "
+            "pz-agent stop and start again so both sides agree on one session."
+        )
     if beat is None:
         said = "the game is publishing no readable heartbeat"
     else:

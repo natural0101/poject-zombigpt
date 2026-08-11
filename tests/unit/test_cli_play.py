@@ -430,3 +430,100 @@ def test_play_writes_no_request_when_the_game_already_reports_the_mode(
     assert set(document) == {"played", "mode", "session_id", "build", "game", "armed"}
     # Progress notes are diagnostics; stdout carries the document alone.
     assert "already reports armed" in world.stderr
+
+
+# ---------------------------------------------------------------------------
+# whose arm, and when: the two ways a heartbeat can lie about this request
+# ---------------------------------------------------------------------------
+
+
+def _publish_beat(
+    world: CliWorld,
+    *,
+    session_id: str,
+    armed: bool | None,
+    mode: SessionMode | None,
+    nonce: str = "play-beat",
+) -> None:
+    """One game heartbeat, with the session it belongs to said out loud.
+
+    ``_attach_game`` always publishes this session's id, which is exactly what
+    the two tests below need to vary: the whole question is what happens when
+    the beat that says ``armed`` belongs to somebody else.
+    """
+    HeartbeatMonitor(_layout(world), clock=world.clock).publish(
+        Peer.GAME,
+        session_id=session_id,
+        nonce=nonce,
+        version="0.1.0",
+        build=BUILD,
+        armed=armed,
+        mode=mode,
+    )
+
+
+def test_play_does_not_accept_an_armed_heartbeat_from_another_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A previous session's armed beat is not this session's arm.
+
+    The mod keeps publishing while the game runs, so a heartbeat left by an
+    earlier sidecar can be fresh, armed, and in the mode being asked for, while
+    naming a session this process never attached to. Crediting it reports
+    authority that was never granted here — the fabricated postcondition the
+    two-phase arm exists to prevent, arriving through the confirmation instead
+    of through the request.
+    """
+    world = _configured(tmp_path)
+    sleeps = Sleeps()
+    # Attach properly first, so the wait for the game succeeds and the arm is
+    # actually requested; then let a stranger's armed beat land mid-confirmation.
+    _attach_game(world)
+    sleeps.on[1] = lambda: _publish_beat(
+        world,
+        session_id="00000000-0000-4000-8000-00000000dead",
+        armed=True,
+        mode=SessionMode.ASSISTED,
+        nonce="someone-elses-beat",
+    )
+    _use_supervisor(monkeypatch, world, spawned=[])
+    _use_sleeper(monkeypatch, sleeps)
+
+    exit_code = world.run("play")
+
+    assert exit_code == EXIT_FAILURE, "an arm confirmed by a stranger's heartbeat is not an arm"
+    assert "never confirmed" in world.stderr
+    # And the refusal names the real cause rather than the armed flag it saw.
+    assert "belongs to session" in world.stderr
+    assert "Nothing this process did was armed" in world.stderr
+
+
+def test_play_does_not_accept_a_heartbeat_older_than_its_own_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Evidence that predates the request cannot be evidence for it.
+
+    ``play`` refuses to send a request when the game already reports armed in
+    the mode asked for, so reaching the confirmation wait means the last thing
+    read said otherwise. A beat from before the request that says ``armed``
+    therefore describes some other moment — and accepting it would let this
+    command take credit for an arm it did not cause.
+    """
+    world = _configured(tmp_path)
+    _attach_game(world)
+    sleeps = Sleeps()
+    _use_supervisor(monkeypatch, world, spawned=[])
+    _use_sleeper(monkeypatch, sleeps)
+    # The beat is this session's and says armed, but it was published before the
+    # request was written — the clock does not move, so nothing that arrives
+    # during the wait can be newer than the request either.
+    _publish_beat(
+        world, session_id=DEFAULT_SESSION, armed=True, mode=SessionMode.ASSISTED, nonce="stale-arm"
+    )
+    world.clock.advance(5_000)
+
+    exit_code = world.run("play")
+
+    assert exit_code == EXIT_OK, "an already-armed game is reported, not requested"
+    assert "already reports armed" in world.stdout
+    assert _control(world).read() is None, "nothing should have been asked for"
