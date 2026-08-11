@@ -56,14 +56,22 @@ DUMPER: Final = REPO_ROOT / "tests" / "lua" / "support" / "dump_adapter_capabili
 
 _INTERPRETERS: Final = ("lua5.4", "lua")
 
-#: The three read-only actions, gated on an observation tier rather than a
-#: probe. Listed rather than derived, so that adding a fourth has to be done
-#: here, by someone who then has to justify it.
+#: The read-only actions, gated on an observation tier rather than a probe.
+#: Listed rather than derived, so that adding one has to be done here, by
+#: someone who then has to justify it.
+#:
+#: ``crafting.inspect`` is the fourth, and the justification is the same as the
+#: other three's: it reads the recipe tables and the materials already on the
+#: character, spends nothing and moves no one. Its cost is the one they all
+#: carry — it is published on every install with no runtime evidence behind it,
+#: while ``crafting.craft``, which spends materials, stays behind the
+#: ``crafting`` probe and is withheld until a live run promotes it.
 NO_PROBE_BY_DESIGN: Final = frozenset(
     {
         ActionName.WORLD_INSPECT,
         ActionName.CONTAINER_INSPECT,
         ActionName.INVENTORY_SEARCH,
+        ActionName.CRAFTING_INSPECT,
     }
 )
 

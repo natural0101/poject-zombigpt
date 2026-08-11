@@ -74,6 +74,7 @@ def test_every_capability_named_by_the_blueprint_has_a_probe() -> None:
         "autonomous_attack",
         "door_toggle",
         "combat_assist",
+        "crafting",
     }
 
 

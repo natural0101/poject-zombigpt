@@ -14,6 +14,7 @@ import pytest
 from pz_agent_core.actions import PreconditionFailed
 from pz_agent_core.capabilities.probes import (
     COMBAT_ASSIST,
+    CRAFTING,
     DOOR_TOGGLE,
     DRINK_CARRIED,
     DRINK_WORLD_SOURCE,
@@ -82,6 +83,7 @@ ALL_CAPABILITIES = (
     SURVIVAL_REST,
     SURVIVAL_SLEEP,
     COMBAT_ASSIST,
+    CRAFTING,
 )
 
 #: A username that cannot occur by accident inside another word.
@@ -970,6 +972,7 @@ def every_payload(router: ToolRouter) -> Iterator[tuple[str, Any]]:
         ("pz_action_inspect_world", {"idempotency_key": "iw1"}),
         ("pz_action_inspect_container", {"container_ref": MAIN_REF, "idempotency_key": "ic1"}),
         ("pz_action_search_inventory", {"edible": True, "idempotency_key": "is1"}),
+        ("pz_action_inspect_recipe", {"recipe": "MakeSpear", "idempotency_key": "ir1"}),
         ("pz_action_move_to", {"target": {"x": 1, "y": 2, "z": 0}, "idempotency_key": "m1"}),
         ("pz_action_move_near", {"object_ref": CRATE_REF, "idempotency_key": "mn1"}),
         ("pz_action_open_container", {"container_ref": CRATE_REF, "idempotency_key": "oc1"}),
@@ -1013,6 +1016,7 @@ def every_payload(router: ToolRouter) -> Iterator[tuple[str, Any]]:
         ("pz_action_shove", {"target_ref": ZOMBIE_REF, "idempotency_key": "cb2"}),
         ("pz_action_engage", {"target_ref": ZOMBIE_REF, "idempotency_key": "cb3"}),
         ("pz_action_retreat", {"idempotency_key": "cb4"}),
+        ("pz_action_craft", {"recipe": "MakeSpear", "idempotency_key": "cf1"}),
         ("pz_action_rest", {"target_endurance": 0.95, "idempotency_key": "rs1"}),
         ("pz_action_sleep", {"bed_ref": SQUARE_REF, "idempotency_key": "sl1"}),
         ("pz_action_wait", {"game_seconds": 10, "idempotency_key": "w1"}),

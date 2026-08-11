@@ -79,6 +79,14 @@ Toolkit.CAPABILITY = {
   SURVIVAL_SLEEP = "survival_sleep",
   DOOR_TOGGLE = "door_toggle",
   COMBAT_ASSIST = "combat_assist",
+  -- Claimed by `crafting.craft` alone. `crafting.inspect` only reads, so it
+  -- declares none for the reason the other three read-only actions declare
+  -- none, and the craft is the half a live run can actually confirm. It starts
+  -- experimental for a reason of its own rather than an inherited one --
+  -- crafting consumes materials irreversibly, and a plank spent on the wrong
+  -- recipe cannot be put back -- so the tool stays withheld on every install
+  -- until a live craft promotes it.
+  CRAFTING = "crafting",
 }
 
 --- Health scale the game reports body parts on.

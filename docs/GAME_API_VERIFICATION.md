@@ -18,7 +18,7 @@ grep -rn "Build 42:" pz-mod/
 ```
 
 `grep -rn "Build 42:" pz-mod/` returns nine lines, in two files. It is a
-*shortcut*, not an inventory: the table below marks 146 symbol rows
+*shortcut*, not an inventory: the table below marks 159 symbol rows
 `requires_live` (several rows carry two or three slash-separated spellings,
 probed in the order written), so the grep covers a small fraction of what is
 unconfirmed. **This document is the list.** Use the grep to jump to a comment;
@@ -412,6 +412,54 @@ scenario issues a combat command yet — a gap by the closing paragraph's rule.
 | `IsoPlayer.setForceShove` / `setDoShove` / `DoShove` | probed in that order; the first two called with `true`, the last with no argument — **all three spellings and all three signatures are guesses** | `adapters/Combat.lua` (`combat.shove`) | command refused naming every candidate; there is no fallback and deliberately no synthetic input | `tests/lua/test_adapter_combat.lua` | `IsoPlayer.setForceShove / setDoShove / DoShove is not available in this build` | `requires_live` | **Least certain row in this file**, jointly with the attack press below. The postcondition (target re-observed prone, or measurably farther) is what keeps a wrong-but-existing name from lying |
 | `IsoPlayer.pressAttack` / `DoAttack` | probed in that order; `pressAttack(true)`, `DoAttack(0)` — **spellings and signatures are guesses** | `adapters/Combat.lua` (`combat.engage`) — one press per swing, at most `max_swings` (1..3) per window, window closed by `ENGAGE_WINDOW_MS=4000` | command refused naming both candidates; no synthetic input | `tests/lua/test_adapter_combat.lua` | `IsoPlayer.pressAttack / DoAttack is not available in this build` | `requires_live` | As above: succeeded is minted only off the re-observed target (prone/dead/absent), never off the press returning |
 | `instanceof(item, "HandWeapon")` | the engine's own class test, probed like the door classification above | `adapters/Combat.lua` (`isWeapon`) — equip_best's weapon classification, first authority | falls back to the display category reading `weapon` (case-insensitive); an item matching neither is simply not ranked | `tests/lua/test_adapter_combat.lua` | none — silent fallback | `requires_live` | |
+
+## Crafting — the recipe surface (`adapters/Crafting.lua`, `Observe.lua`, capability `crafting`)
+
+Two actions: `crafting.inspect`, which reads and spends nothing, and
+`crafting.craft`, which runs one recipe once and destroys what it spends. The
+readout the sidecar's crafting policy plans on is built by `Observe.lua` from
+the same accessors, so a wrong name here costs the planner its whole view of
+crafting as well as the action.
+
+**These rows are jointly the least certain in this document**, alongside the
+combat presses above. Build 42 rewrote crafting, none of the spellings below
+has been seen answering in a live session, and every one is probed through a
+short closed candidate list, in the order written, with a `pcall` around the
+call. A missing name costs one `CAPABILITY_UNAVAILABLE` *naming every candidate
+that was looked for* — the good failure. The bad failure is a name that exists
+and means something else, and the postcondition is what catches it: a craft is
+`succeeded` only when the re-observed inventory holds more of the product **and**
+something the recipe consumes is measurably gone, so a wrong-but-existing action
+class that queues and returns proves nothing.
+
+That uncertainty is why `crafting` publishes at an `experimental` ceiling and
+why `pz_action_craft` is withheld on every install until a live run promotes it.
+It is also why the readers below fail *absent* rather than *empty*: "this
+character knows no recipes" and "this build would not say" are opposite facts,
+and only the first is something a player can act on.
+
+Reused surfaces, recorded on their own rows above rather than repeated:
+`ISTimedActionQueue.add` (the craft is queued through the same queue every timed
+action uses), `InventoryItem.getFullType` and `getName` (reading an ingredient's
+or a product's type), and `ItemContainer.getItems` (the inventory walk the
+material tally is computed from). No playbook scenario issues a crafting command
+yet — a gap by the closing paragraph's rule.
+
+| Symbol | Assumed signature | Used by | Fallback | Test | Failure signature | Status | Actual |
+|---|---|---|---|---|---|---|---|
+| `IsoGameCharacter.getKnownRecipes` | `() -> a collection of recipe names or recipe objects`; either shape is accepted | `Observe.lua` (`knownRecipeQuery`, `knownRecipeNames`), `adapters/Crafting.lua` (`Crafting.knownRecipes`) | every crafting question answers "could not tell": the observation carries no recipe knowledge, `crafting.inspect` refuses naming the symbol, and `crafting.craft` refuses rather than crafting something unverifiable | `tests/lua/test_adapter_crafting.lua`, `tests/lua/test_observe.lua` | `IsoGameCharacter.getKnownRecipes is not available in this build` | `requires_live` | **Least certain row in this section.** Never answers an empty list for a missing reader — absent and empty are opposite facts |
+| known-recipe collection `contains(name)` | `(string) -> boolean`; the membership test preferred over materialising the set | `Observe.lua` (`knownRecipeQuery`) | falls back to a bounded walk of the collection, and if that runs past `MAX_KNOWN_WALK` the set is not materialised at all and every knowledge question answers "could not tell" | `tests/lua/test_observe.lua` | none — the query is simply unavailable and `unread_recipes` stays absent | `requires_live` | Half a walked set would answer "not known" for everything it did not reach; that fabrication is what the bound prevents |
+| `InventoryItem.getTeachedRecipes` | `() -> a collection of recipe names`; what a book would teach | `Observe.lua` (`unreadRecipes`) — the `unread_recipes` field the `learn_recipe` goal selects on | field absent, never 0: `pz_agent_core.policy.literature` reads a missing count as "no unread recipes" and refuses the book, which is the safe direction to be wrong in | `tests/lua/test_observe.lua` | none — field absent | `requires_live` | |
+| `getScriptManager` (global) | `() -> ScriptManager`; reached through a guarded global lookup, never as a bare global | `Observe.lua` (`recipeObject`), `adapters/Crafting.lua` (`Crafting.recipeObject`) | a recipe entry that is only a name cannot be resolved to an object; the recipe is listed with no product and no ingredients, and a craft naming it refuses | `tests/lua/test_adapter_crafting.lua` | `getScriptManager().getCraftRecipe / getRecipe is not available in this build` | `requires_live` | An unverified symbol must not become one the file depends on being present, which is why the lookup is guarded rather than direct |
+| `ScriptManager.getCraftRecipe` / `getRecipe` | `(name) -> CraftRecipe`; probed in that order | `Observe.lua` (`recipeObject`), `adapters/Crafting.lua` (`Crafting.recipeObject`) | as the row above: the craft refuses naming the pair rather than queueing a recipe it could not read | `tests/lua/test_adapter_crafting.lua` | `getScriptManager().getCraftRecipe / getRecipe is not available in this build` | `requires_live` | |
+| `CraftRecipe.getName` / `getOriginalname` | `() -> string`; used only when the known-recipe collection holds objects rather than strings | `Observe.lua` (`recipeNameOf`), `adapters/Crafting.lua` (`recipeNameOf`) | the entry has no name, so it has no wire token either and is dropped from the listing — a mangled token would be worse than a recipe this agent cannot name | `tests/lua/test_adapter_crafting.lua` | none — the entry is absent from the listing | `requires_live` | |
+| `CraftRecipe.getInputs` / `getSource` | `() -> a zero-based list of ingredient entries`; probed in that order | `Observe.lua` (`recipeInputs`), `adapters/Crafting.lua` (`Crafting.recipeInputs`) | the whole ingredient list answers nil rather than partly: a verdict computed from the ingredients that happened to answer would call a recipe ready on requirements nobody read, which is the one wrong answer that spends materials for nothing | `tests/lua/test_adapter_crafting.lua` | `CraftRecipe.getInputs / getSource is not available in this build` | `requires_live` | |
+| ingredient `getItems` / `getItemTypes` | `() -> a zero-based list of item types or type strings`; probed in that order | `Observe.lua` (`recipeInputs`), `adapters/Crafting.lua` (`Crafting.recipeInputs`) | as the row above — one unreadable ingredient drops the whole recipe rather than shortening its requirement list | `tests/lua/test_adapter_crafting.lua` | `CraftRecipe.getInputs / getSource is not available in this build` | `requires_live` | The alternatives one ingredient lists are summed, so a recipe taking "a plank or a log" is satisfied by one of each |
+| ingredient `getCount` / `getAmount` | `() -> number`; how many of the ingredient one run consumes | `Observe.lua` (`recipeInputs`), `adapters/Crafting.lua` (`Crafting.recipeInputs`) | **falls back to 1**, which is the one defaulted number in this section: a requirement that cannot say how many it takes is read as taking one, and the postcondition (materials measurably gone) is what catches an understated line | `tests/lua/test_adapter_crafting.lua` | none — the count is defaulted and the craft is verified afterwards | `requires_live` | The only fallback here that could understate a cost; recorded rather than hidden |
+| `CraftRecipe.getOutputs` | `() -> a zero-based list of output entries` | `Observe.lua` (`recipeProduct`), `adapters/Crafting.lua` (`Crafting.recipeProduct`) | falls through to `getResult` below; with neither, the recipe has no product, and a craft with no product has no postcondition and is refused before anything is queued | `tests/lua/test_adapter_crafting.lua` | `CraftRecipe.getOutputs / getResult is not available in this build` | `requires_live` | |
+| `CraftRecipe.getResult` | `() -> an item or a type string`; the older single-result spelling | `Observe.lua` (`recipeProduct`), `adapters/Crafting.lua` (`Crafting.recipeProduct`) | as the row above: without a product name there is no proof a craft happened, so the command is refused rather than run and then guessed at | `tests/lua/test_adapter_crafting.lua` | `CraftRecipe.getOutputs / getResult is not available in this build` | `requires_live` | |
+| `CraftRecipe.getNearItem` | `() -> string or nil`; non-empty when the recipe needs something to stand at | `Observe.lua` (`recipeNeedsSurface`) — the `needs_surface` flag | **tri-state, and absent stays absent**: `false` is returned only when a reader actually answered that there is no such requirement. The sidecar escalates the craft to `P4` on anything that is not a positive `false` | `tests/lua/test_observe.lua`, `tests/unit/test_policy_crafting.py` | none — field absent, and the absence costs one permission tier | `requires_live` | A fabricated `false` would buy a craft queued where it cannot run; the absence buys caution instead |
+| `ISCraftRecipeAction` / `ISCraftAction` | `(player, recipe) -> timed action`; probed in that order — **both spellings and the argument order are guesses** | `adapters/Crafting.lua` (`crafting.craft`) — one timed action per item asked for, all queued at accept time | command refused naming both candidates; there is no fallback and deliberately no synthetic input | `tests/lua/test_adapter_crafting.lua` | `ISCraftRecipeAction / ISCraftAction is not available in this build` | `requires_live` | **Least certain constructor in this file**, jointly with the combat presses. `succeeded` is minted only off the re-observed product *and* the consumed materials, never off the action queueing |
 
 ## The game clock and the save's identity
 

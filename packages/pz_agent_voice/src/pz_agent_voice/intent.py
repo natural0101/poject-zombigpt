@@ -442,6 +442,27 @@ SKILL_WORDS: Final[dict[TrainableSkill, frozenset[str]]] = {
 #: harmful action this project can take, so the kind travels only through
 #: ``pz_goal_submit``, where the caller types the kind. Deliberate, and
 #: pinned by its own test so relaxing it is a reviewed decision.
+#:
+#: ``craft_item`` is the second entry of that second sort, and the decision
+#: was taken here rather than inherited. The kind's *required* parameter is
+#: ``product``, an item type spelled the way the build files it
+#: (``Base.SpearCrude``), and a transcript cannot be trusted to spell one: a
+#: recogniser hears «копьё», not a type, and the two are joined by a table
+#: nothing in this process is allowed to hold — what a build can craft is the
+#: build's fact, and a closed product vocabulary written here would be a
+#: second, drifting copy of the game's (``pz_agent_core.policy.crafting``
+#: refuses to keep one for the same reason). A *small* closed set was the
+#: alternative and it was rejected on its own merits, not on effort: the set
+#: would be a guess at which recipes this install has, correct only for the
+#: vanilla ones, and a spoken «сделай копьё» that resolved to the one spear
+#: this module happened to know would spend the wrong planks with the user's
+#: sentence as its authority. That is the same shape as the kill order above,
+#: with one difference that makes it no better — the mishearing cannot be
+#: walked back. A misheard retreat makes the character safer, a misheard
+#: sandwich costs a sandwich, and a misheard craft destroys materials no
+#: later observation can return. So the kind travels only through
+#: ``pz_goal_submit``, where the caller *types* the product, and the grammar
+#: says nothing rather than guessing. Pinned by its own test.
 UNSPEAKABLE_KINDS: Final[frozenset[GoalKind]] = frozenset(
     {
         GoalKind.NAVIGATE_TO,
@@ -450,6 +471,7 @@ UNSPEAKABLE_KINDS: Final[frozenset[GoalKind]] = frozenset(
         GoalKind.REST_UNTIL,
         GoalKind.SLEEP_UNTIL_RESTED,
         GoalKind.ENGAGE_SINGLE_ZOMBIE,
+        GoalKind.CRAFT_ITEM,
     }
 )
 
@@ -474,6 +496,17 @@ UNSPEAKABLE_PARAMS: Final[frozenset[str]] = frozenset(
         # still unspeakable until the whole spoken-quantity path carries an
         # hour scale — the reasoning is on UNSPEAKABLE_KINDS above.
         "hours",
+        # craft_item's required product: an item type as the build spells it,
+        # which is the one goal parameter no closed vocabulary in this process
+        # may hold. There is nothing for a matcher to match against, and the
+        # full argument is on UNSPEAKABLE_KINDS above.
+        "product",
+        # craft_item's optional run count. Unit-word-shaped like `hours` and
+        # unspeakable for the same reason plus a sharper one: even with an
+        # hour scale to borrow, a number the grammar bound to the wrong
+        # parameter here would authorise runs that destroy materials, and the
+        # kind that carries it is unspeakable anyway.
+        "count",
     }
 )
 

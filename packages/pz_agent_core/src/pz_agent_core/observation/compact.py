@@ -130,9 +130,23 @@ _LITERATURE_FIELDS: Final = (
     "pages_read",
     "reading_time_ms",
     "teaches_recipe",
+    # How many recipes in it the character has not learned yet. The literature
+    # policy turns its whole recipe filter on this key, and it is tri-state
+    # there: absent means the build could not tell, which is neither "none"
+    # nor "some". Carrying it lets the planner see the same three answers the
+    # policy sees instead of inferring two from ``teaches_recipe``.
+    "unread_recipes",
 )
 
 _FLUID_FIELDS: Final = ("kind", "amount", "capacity", "tainted", "potable", "uses_remaining")
+
+#: The crafting readout, reduced to the two counts a planner may act on. The
+#: recipe list itself is deliberately not here: recipe names and their material
+#: tables are game-authored data, and *which* recipe spends *which* planks is a
+#: decision :mod:`pz_agent_core.policy.crafting` makes deterministically from
+#: the full observation. The planner gets to know that crafting is possible at
+#: all, which is what a goal needs; it never gets the table to pick from.
+_CRAFTING_FIELDS: Final = ("recipe_count", "known_recipe_count")
 
 #: In-game free text carried per item, quarantined rather than dropped.
 _ITEM_TEXT_FIELDS: Final = ("title", "author")
@@ -374,6 +388,13 @@ def _compact_item(item: ItemView) -> JsonDict:
     ``ItemView.extra`` is deliberately not copied. It is whatever the mod put on
     the wire beyond the known keys, which is precisely where an engine handle or
     an unreviewed string would show up.
+
+    The crafting readout is the one thing read *out* of it, and only through the
+    same whitelist the typed domains go through: ``ItemView`` has no ``crafting``
+    field to type it into yet, so the block rides ``extra`` on the wire, and
+    :data:`_CRAFTING_FIELDS` names the two scalars that reach the planner. The
+    nested recipe list is dropped by :func:`_scalar` like any other non-scalar,
+    which is the intended outcome rather than a side effect.
     """
     literature = item.literature or {}
     text: dict[str, str | None] = {"display_name": item.display_name}
@@ -392,10 +413,12 @@ def _compact_item(item: ItemView) -> JsonDict:
         "tags": _tokens(item.tags, MAX_TAGS),
         UNTRUSTED_TEXT_KEY: _untrusted(text),
     }
+    crafting = item.extra.get("crafting")
     for key, payload, fields in (
         ("food", item.food, _FOOD_FIELDS),
         ("literature", item.literature, _LITERATURE_FIELDS),
         ("fluid", item.fluid, _FLUID_FIELDS),
+        ("crafting", crafting if isinstance(crafting, Mapping) else None, _CRAFTING_FIELDS),
     ):
         domain = _domain(payload, fields)
         if domain is not None:

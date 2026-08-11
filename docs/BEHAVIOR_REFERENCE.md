@@ -1,7 +1,7 @@
 <!--
   GENERATED FILE - DO NOT EDIT BY HAND.
   Generator: pz_agent_core.knowledge.docgen.render_behavior_reference
-  Corpus revision: 7e8169d348d5b434 (sha256/16 of the canonical corpus)
+  Corpus revision: d4258d6e19fc5d33 (sha256/16 of the canonical corpus)
   Edit knowledge/gameplay/*.yaml and regenerate; the drift test
   byte-compares this file against a fresh render.
 -->
@@ -225,6 +225,376 @@ A loot mission finishes on a provable criterion — every reachable container in
 - `default_loot_radius` = 10 squares — `verified_script`
 
 **Proven by:** `tests/unit/test_loot_mission.py`
+
+## Crafting (`crafting`)
+
+### `crafting_recipe_is_chosen_deterministically`
+
+**Status:** `verified_script` · **Source:** `code` — `packages/pz_agent_core/src/pz_agent_core/policy/crafting.py::recipes_for_product` · **Build:** 42 · **Risk:** P0
+
+A craft goal names a product, never a recipe: which recipe spends which materials is deterministic policy, ranked known-first, then no-surface-first, then the shorter requirement list, then the name — so two runs over one observation always weigh the same recipe first.
+
+- **Goals:** `craft_item`
+- **Observed inputs:** `inventory.items[].full_type`, `inventory.items[].extra`, `inventory.containers[].kind`, `inventory.containers[].accessible`
+
+**Preconditions**
+
+- The observation carries an inventory tier; nothing else is consulted
+
+**Actions**
+
+- None — the rule drives no action.
+
+**Decision** — recipes_for_product filters the observed crafting readout to the requested product and sorts by a total key; assess_craft takes the first candidate that may run, and reports the best candidate's refusal when none may. There is no recipe database in this package and there will not be one — a table written here would be a second, drifting copy of the game's.
+
+**Postconditions**
+
+- None recorded.
+
+**Fallback** — Nothing observed participating in a recipe for the product is RECIPE_UNKNOWN naming the product, never a substitute recipe.
+
+**Numbers**
+
+- `max_candidate_recipes` = 8 recipes — `verified_script`
+- `max_recipes_per_item` = 16 entries — `verified_script`
+- `max_materials_per_recipe` = 8 lines — `verified_script`
+
+**Proven by:** `tests/unit/test_policy_crafting.py`
+
+### `crafting_unreadable_is_never_the_convenient_reading`
+
+**Status:** `verified_script` · **Source:** `code` — `packages/pz_agent_core/src/pz_agent_core/policy/crafting.py::assess_recipe` · **Build:** 42 · **Risk:** P0
+
+Both crafting flags are tri-state and neither absence is read as the convenient answer: an unreported 'known' refuses the recipe as unknown, and an unreported 'needs_surface' is treated as needing one — which costs a permission tier rather than a craft queued where it cannot run.
+
+- **Goals:** `craft_item`
+- **Observed inputs:** `inventory.items[].extra`
+
+**Preconditions**
+
+- The mod published a crafting readout for at least one observed item
+
+**Actions**
+
+- `crafting.inspect`
+
+**Decision** — RecipeView.is_known is true only when the build said so; may_need_surface is true unless the build positively said false. The gate order in assess_recipe is fixed — knowledge, then materials, then whose materials they are — so one picture always produces the most fundamental refusal rather than an arbitrary one.
+
+**Postconditions**
+
+- None recorded.
+
+**Fallback** — An unreadable knowledge flag ends as RECIPE_UNKNOWN whose detail says the build would not say, which is a different sentence from 'the character has not learned it'.
+
+**Proven by:** `tests/unit/test_policy_crafting.py`
+
+### `crafting_reserved_materials_get_their_own_refusal`
+
+**Status:** `verified_script` · **Source:** `code` — `packages/pz_agent_core/src/pz_agent_core/policy/crafting.py::assess_recipe` · **Build:** 42 · **Risk:** P3
+
+A user-reserved item is never spent by a craft, and when reserves are the only reason a recipe is short the refusal says so with its own token — so the user answers 'release the reserve?' instead of being told the materials do not exist.
+
+- **Goals:** `craft_item`
+- **Observed inputs:** `inventory.items[].full_type`, `inventory.items[].extra`
+
+**Preconditions**
+
+- The recipe is known and at least one requirement line is short
+
+**Actions**
+
+- `crafting.craft`
+
+**Decision** — _tally counts reserved items separately from free ones and never adds them to what may be spent; the refusal is MATERIALS_RESERVED only when every short line would be covered by releasing reserves, and a genuine shortage outranks a reserved one.
+
+**Postconditions**
+
+- None recorded.
+
+**Fallback** — The sidecar refuses before any command exists: RESOURCE_RESERVED for the reserved case, RECIPE_MATERIALS_MISSING with each shortfall's needed/free/reserved counts otherwise.
+
+**Numbers**
+
+- `max_reported_shortfalls` = 6 lines — `verified_script`
+
+**Proven by:** `tests/unit/test_policy_crafting.py`
+
+### `crafting_one_command_runs_one_recipe_once`
+
+**Status:** `verified_script` · **Source:** `code` — `packages/pz_agent_core/src/pz_agent_core/actions/adapters/crafting.py::MAX_CRAFT_COUNT` · **Build:** 42 · **Risk:** P3
+
+One crafting.craft command runs one recipe once. The count is on the wire rather than defaulted by the mod, both halves cap it at one, and there is no loop and no retry behind the command id: a recipe that could run again is a report, and running it again is another command.
+
+- **Goals:** `craft_item`
+
+**Preconditions**
+
+- The command carries a bounded recipe identifier; a pattern or a phrase is INVALID_ARGUMENT
+
+**Actions**
+
+- `crafting.craft`
+
+**Decision** — MAX_CRAFT_COUNT is 1 in the sidecar adapter and Crafting.MAX_COUNT is 1 in the mod; the mod fixes the fan-out at accept time and no branch re-queues. Raising either is a visible change on both halves of the wire, not a bound that quietly moved.
+
+**Postconditions**
+
+- Exactly one run was queued, and the command is terminal whether or not it produced anything
+
+**Fallback** — A window that closes with nothing made is POSTCONDITION_FAILED carrying the observed counts; the next run is the mission's decision, taken where safety.stop and the reflex guard can reach it.
+
+**Numbers**
+
+- `max_craft_count` = 1 runs — `verified_script`
+- `max_recipe_name_len` = 64 characters — `verified_script`
+- `craft_timeout_ms` = 60000 ms — `verified_script`
+
+**Proven by:** `tests/unit/test_adapters_crafting.py`, `tests/lua/test_adapter_crafting.lua`
+
+### `crafting_success_is_the_product_observed`
+
+**Status:** `verified_script` · **Source:** `code` — `packages/pz_agent_core/src/pz_agent_core/actions/adapters/crafting.py::CraftingCraftAdapter` · **Build:** 42 · **Risk:** P3
+
+A craft succeeds only when the re-observed inventory holds more of the recipe's product than before; the mod requires the second half too — that something the recipe consumes is measurably gone — because a product that appeared while nothing was spent did not come out of this recipe.
+
+- **Goals:** `craft_item`
+- **Observed inputs:** `inventory.items[].full_type`, `inventory.items[].extra`
+
+**Preconditions**
+
+- The product type was read from the observation taken before the craft
+
+**Actions**
+
+- `crafting.craft`
+
+**Decision** — verify counts the product type in the before and after observations and answers only if the count rose; an unreadable inventory on either side leaves the postcondition unproven rather than assumed. The product is read from the before observation on purpose: a successful craft consumes the materials, and with them the readout entry naming what the recipe makes.
+
+**Postconditions**
+
+- The following observation holds strictly more of the product type than the preceding one
+- In the mod, a material line the recipe consumes fell as well
+
+**Fallback** — POSTCONDITION_FAILED with the counts in the detail. An ack saying the craft finished is a statement about the queue, and it is never accepted as evidence.
+
+**Proven by:** `tests/unit/test_adapters_crafting.py`, `tests/lua/test_adapter_crafting.lua`
+
+### `crafting_risk_escalates_from_the_arguments`
+
+**Status:** `verified_script` · **Source:** `code` — `packages/pz_agent_core/src/pz_agent_core/actions/adapters/crafting.py::CraftingCraftAdapter` · **Build:** 42 · **Risk:** P4
+
+Spending what the character carries is P3 because it is irreversible; the same command becomes P4 — never automatic — when the named recipe may need a surface or is only afforded by items in a world container, which is the escalate-by-arguments rule move_to applies off-radius.
+
+- **Goals:** `craft_item`
+- **Observed inputs:** `inventory.items[].extra`, `inventory.containers[].kind`
+
+**Preconditions**
+
+- The recipe named by the command was found in the observed readout
+
+**Actions**
+
+- `crafting.craft`
+
+**Decision** — risk_for re-assesses the recipe against the current observation and answers P4 when CraftingDecision.needs_travel holds, never below the declared P3. The tool publishes P3 as the floor because neither fact is visible from the action name; there is no argument on the tool naming a station or a world container, because this rung crafts from the character's own bags.
+
+**Postconditions**
+
+- None recorded.
+
+**Fallback** — A P4 craft on the agent's own initiative is refused by the permission engine's _p4_gate before anything is queued, and no configuration raises it.
+
+**Proven by:** `tests/unit/test_adapters_crafting.py`
+
+### `crafting_reading_a_recipe_spends_nothing`
+
+**Status:** `verified_script` · **Source:** `code` — `packages/pz_agent_core/src/pz_agent_core/actions/adapters/crafting.py::CraftingInspectAdapter` · **Build:** 42 · **Risk:** P0
+
+crafting.inspect is read-only in fact as well as in the protocol: the character does not move and touches nothing, the answer comes off the crafting readout the observer already produces, and a recipe that was not found is a finding rather than a failure.
+
+- **Goals:** `craft_item`
+- **Observed inputs:** `inventory.items[].extra`
+
+**Preconditions**
+
+- The observation carries an inventory tier at all
+
+**Actions**
+
+- `crafting.inspect`
+
+**Decision** — The adapter sits at P0 in READ_ONLY_ACTIONS beside the other three reads and names no capability, for their reason: a probe over the Java recipe accessors no Lua scan can see would report unsupported on a healthy install. Its own postcondition is that some observed item carries a crafting readout — 'nobody described any recipe' is the failure, not 'this recipe is unknown'.
+
+**Postconditions**
+
+- The answer names the recipe that was asked about and whether it was found
+
+**Fallback** — An observation carrying no crafting readout at all is reported as a failed reading, never as an absent recipe.
+
+**Proven by:** `tests/unit/test_adapters_crafting.py`
+
+### `crafting_goal_bounds_what_one_submission_spends`
+
+**Status:** `verified_script` · **Source:** `code` — `packages/pz_agent_cli/src/pz_agent_cli/craft_mission.py::CraftItemMission` · **Build:** 42 · **Risk:** P3
+
+A craft_item goal names a product and at most four runs, one command each, and the mission will not go and fetch what is missing: a known recipe short of materials ends the goal naming the shortfall, and whether to loot for it is the user's next submission.
+
+- **Goals:** `craft_item`
+- **Observed inputs:** `inventory.items[].full_type`, `inventory.items[].extra`
+
+**Preconditions**
+
+- An explicit user submission: no plan provider serves this kind and no arbiter mints it
+- The product is a bounded item-type identifier, compared only against observed products
+
+**Actions**
+
+- `crafting.craft`
+- `crafting.inspect`
+
+**Decision** — The mission re-asks the crafting policy against a fresh observation before every run, submits one crafting.craft per item, and stops at its own attempt, recipe and consecutive-failure ceilings. A submission is the unit a user consents in, which is why the channel caps count rather than the adapter.
+
+**Postconditions**
+
+- The requested number of the product is observed in the inventory
+
+**Fallback** — RECIPE_UNKNOWN or RECIPE_MATERIALS_MISSING naming the shortfall ends the goal; a partial run reports how many were actually made, never how many were asked for.
+
+**Numbers**
+
+- `max_craft_goal_count` = 4 runs — `verified_script`
+- `max_craft_attempts` = 6 attempts — `verified_script`
+- `max_recipes_tried` = 3 recipes — `verified_script`
+
+**Proven by:** `tests/unit/test_craft_mission.py`, `tests/unit/test_goal_channel.py`
+
+### `crafting_capability_is_withheld_until_a_live_run`
+
+**Status:** `verified_script` · **Source:** `code` — `packages/pz_agent_core/src/pz_agent_core/capabilities/probes.py::PROBES` · **Build:** 42 · **Risk:** P3
+
+The crafting capability declares itself experimental, so pz_action_craft is withheld on every install this project can ship to and only a live craft — the recipe's product observed in the inventory afterwards — promotes it; the recipe reading is not withheld with it, because reading spends nothing.
+
+**Preconditions**
+
+- A capability report exists for the installed build
+
+**Actions**
+
+- `crafting.craft`
+
+**Decision** — The probe requires only the walk-and-queue symbols a scan can see; the recipe tables, the learned test and the craft entry point are Java accessors no Lua scan reaches, so naming them would report unsupported on a healthy install and omitting them means a static scan cannot confirm them. The runtime confirmation is the craft's own evidence keys, recipe and product.
+
+**Postconditions**
+
+- None recorded.
+
+**Fallback** — An unusable capability means the tool is not listed and not callable, with the reason in pz://capabilities; a goal that reaches the action engine ends CAPABILITY_UNAVAILABLE rather than being attempted.
+
+**Proven by:** `tests/unit/test_mcp_catalog_actions.py`
+
+### `crafting_build42_rewrote_the_system`
+
+**Status:** `unverified` · **Source:** `official` — `https://projectzomboid.com/blog/news/2024/12/build-42-unstable-released/ — Build 42 crafting and the new recipe/script model` · **Build:** 42 · **Risk:** P0
+
+Build 42 replaced Build 41's crafting model with a new recipe and script system, so every recipe accessor this mod probes is a guess: none of the spellings has been seen answering in a live session, and each is probed through a short closed candidate list.
+
+**Preconditions**
+
+- None recorded.
+
+**Actions**
+
+- None — the rule drives no action.
+
+**Decision** — Not a decision this repository makes: it is why the mod probes candidate spellings and refuses naming the symbol rather than assuming one, and why the capability starts experimental.
+
+**Postconditions**
+
+- None recorded.
+
+**Fallback** — A spelling that does not answer costs one CAPABILITY_UNAVAILABLE naming every candidate that was looked for; docs/GAME_API_VERIFICATION.md carries the rows.
+
+**Proven by:** nothing — which is why the status says so.
+
+### `crafting_recipes_are_learned_before_they_can_be_run`
+
+**Status:** `unverified` · **Source:** `wiki` — `https://pzwiki.net/wiki/Crafting — recipe knowledge, skill books and magazines` · **Build:** 42 · **Risk:** P0
+
+A character can only craft recipes it has learned — some known from the start or from an occupation, others taught by reading a magazine or skill book — and this repository has never observed how Build 42 reports that knowledge.
+
+- **Goals:** `learn_recipe`, `craft_item`
+- **Observed inputs:** `inventory.items[].literature`, `inventory.items[].extra`
+
+**Preconditions**
+
+- None recorded.
+
+**Actions**
+
+- None — the rule drives no action.
+
+**Decision** — Not decided here. The policy asks the observation whether the character knows a recipe and refuses when the build will not say; the learn_recipe goal reads magazines, and whether reading one actually teaches what the observation counted as unread is exactly what a live session has to establish.
+
+**Postconditions**
+
+- None recorded.
+
+**Fallback** — An unreadable knowledge flag is a refusal, never an attempt; nothing here infers knowledge from an occupation or a skill level.
+
+**Proven by:** nothing — which is why the status says so.
+
+### `crafting_some_recipes_need_a_surface_or_a_station`
+
+**Status:** `unverified` · **Source:** `wiki` — `https://pzwiki.net/wiki/Crafting — recipes requiring a nearby item, workstation or heat source` · **Build:** 42 · **Risk:** P4
+
+Some Project Zomboid recipes require the character to be at or near something — a workbench, a fire, a specific nearby item — rather than merely holding the materials, and how Build 42 expresses that requirement has not been observed from this repository.
+
+- **Goals:** `craft_item`
+- **Observed inputs:** `inventory.items[].extra`
+
+**Preconditions**
+
+- None recorded.
+
+**Actions**
+
+- None — the rule drives no action.
+
+**Decision** — This wave crafts only from materials counted on the character; nothing in the mod's adapter reads a crafting surface or a world container. The requirement is honoured defensively instead: an unread surface flag escalates the command to P4, which is a permission cost rather than a craft queued where it cannot run.
+
+**Postconditions**
+
+- None recorded.
+
+**Fallback** — A craft that queues and produces nothing ends POSTCONDITION_FAILED with the observed counts, which is the shape a missed surface requirement would take.
+
+**Proven by:** nothing — which is why the status says so.
+
+### `crafting_yield_and_skill_effects_are_unmeasured`
+
+**Status:** `unverified` · **Source:** `wiki` — `https://pzwiki.net/wiki/Crafting — outputs, success chance and skill effects` · **Build:** 42 · **Risk:** P0
+
+How much a recipe yields, whether a craft can fail or produce a lower-quality result, and what a skill level changes about any of it are unmeasured here: no number about Project Zomboid's own crafting outcomes appears anywhere in this repository.
+
+- **Goals:** `craft_item`
+
+**Preconditions**
+
+- None recorded.
+
+**Actions**
+
+- None — the rule drives no action.
+
+**Decision** — Nothing plans on a yield. The postcondition is the product count rising by the amount the command asked for, so a recipe that yields more than one satisfies it and a recipe that fails does not — the agent finds out by observing, not by predicting.
+
+**Postconditions**
+
+- None recorded.
+
+**Fallback** — A craft whose product count did not rise fails honestly with the counts; no retry is attempted on the assumption that it was a chance failure.
+
+**Proven by:** nothing — which is why the status says so.
 
 ## Doors and windows (`doors_windows`)
 

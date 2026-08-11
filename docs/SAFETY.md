@@ -56,8 +56,8 @@ it was never given.
 | `P0` | Read-only | observe, inspect, wait |
 | `P1` | Reversible, on-person | transfer within your own inventory, cancel |
 | `P2` | Consumes a resource or moves you | eat, drink, read, equip, bandage, rest |
-| `P3` | Touches the world or leaves the safe radius | open a world container, travel |
-| `P4` | Never automatic | sleep |
+| `P3` | Touches the world, leaves the safe radius, or destroys something | open a world container, travel, craft from what you carry |
+| `P4` | Never automatic | sleep, every assisted-combat action, a craft that needs a surface or a world container |
 
 | Rule | Enforced by |
 | --- | --- |
@@ -73,10 +73,29 @@ explicit `P4` grant for that one call.
 
 The tier a tool advertises is the *base* tier its adapter declares, never a
 worst case. `movement.move_to` escalates to `P3` when the destination changes
-floor or leaves the safe radius, and `inventory.transfer` escalates to `P3` when
-the source is a world container; neither is visible from the tool name, so
-neither is published. `mcp/catalog.py`'s module docstring is where that decision
-is recorded.
+floor or leaves the safe radius, `inventory.transfer` escalates to `P3` when
+the source is a world container, and `crafting.craft` escalates to `P4` when the
+recipe it names may need a surface to run on or is only afforded by materials in
+a world container; none of that is visible from the tool name, so none of it is
+published. `mcp/catalog.py`'s module docstring is where that decision is
+recorded.
+
+**Crafting is the first thing this agent does that cannot be undone**, and the
+tiers say so. A walk can be re-walked, a door can be closed again, a shove costs
+the character nothing it keeps; two planks and a nail spent on a spear are
+spent, and no later observation puts them back. That is why crafting from
+materials the character carries is `P3` even though nothing moves and nothing in
+the world is touched — the tier is paid for the irreversibility, not for the
+travel. When travel *is* implied the call is `P4` and `_p4_gate` applies in
+full: the initiative must be the user's, the mode must be mutating, and the call
+must carry an explicit `P4` grant. Three further bounds sit under that:
+`crafting.craft` runs one recipe once with no loop and no retry, its capability
+is `experimental` so the tool is withheld until a live run promotes it, and
+success is the product *observed* in the inventory rather than the craft being
+queued. `pz_agent_core/policy/crafting.py` decides which recipe spends which
+materials — deterministic code with unit tests, exactly as food and literature
+selection are — and it never spends a user-reserved item, refusing with its own
+token so the user can answer the real question.
 
 ---
 

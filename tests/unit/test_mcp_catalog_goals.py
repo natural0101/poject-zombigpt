@@ -103,6 +103,13 @@ DOCUMENTED_KINDS: Final[frozenset[str]] = frozenset(
         # carrying the token is not a loophole — it is the one door, and the
         # caller types the kind.
         "engage_single_zombie",
+        # The crafting kind, on the same terms and for the sharper
+        # reason: typed submission is the only route to it, because the
+        # voice grammar declares it unspeakable (a transcript cannot
+        # spell an item type), no provider plans it, and nothing on the
+        # agent's own initiative decides what to destroy. The caller
+        # types the kind and types the product.
+        "craft_item",
     }
 )
 

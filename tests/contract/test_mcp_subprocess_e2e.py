@@ -455,6 +455,7 @@ _QUARANTINE: Final = "untrusted_text"
 #: what makes the running server publish the whole catalogue.
 _ALL_CAPABILITIES: Final[tuple[str, ...]] = (
     "combat_assist",
+    "crafting",
     "door_toggle",
     "drink_carried",
     "drink_world_source",
@@ -482,6 +483,7 @@ _EVERY_TOOL: Final[tuple[str, ...]] = (
     "pz_action_inspect_world",
     "pz_action_inspect_container",
     "pz_action_search_inventory",
+    "pz_action_inspect_recipe",
     "pz_action_move_to",
     "pz_action_move_near",
     "pz_action_open_container",
@@ -502,6 +504,10 @@ _EVERY_TOOL: Final[tuple[str, ...]] = (
     "pz_action_shove",
     "pz_action_engage",
     "pz_action_retreat",
+    # The crafting rung's write half, published after the combat block and
+    # before the survival pair — where the catalogue puts it and therefore
+    # where a client's picker shows it.
+    "pz_action_craft",
     "pz_action_rest",
     "pz_action_sleep",
     "pz_action_wait",

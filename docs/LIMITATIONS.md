@@ -14,7 +14,7 @@ running game — see [`PROGRESS.md`](PROGRESS.md).
 **1. Live game validation has never run.** Not once. No probe in
 `pz_agent_core.capabilities` has ever been confirmed against a running Project
 Zomboid; every row in `docs/GAME_API_VERIFICATION.md` is `requires_live` with an
-empty "Actual" column, 52 symbols in total; all twenty scenarios in
+empty "Actual" column, 159 symbol rows in total; all twenty scenarios in
 `pz_agent_cli.livetest` are `NOT_RUN`; the sixteen files under
 `tests/game-smoke/` have never been executed against a game. That includes
 `ISTakeWaterAction`, whose argument order the document flags as unconfirmed and
@@ -100,6 +100,21 @@ vehicle's storage can be named as a container, and `survival.sleep` takes an
 
 **Anything requiring an unverified capability.** `_capability_gate` refuses, and
 on the agent's own initiative even `available_unverified` is not enough.
+
+**Build anything.** No action places a wall, a floor, a stair or a barricade,
+and no goal kind asks for one. The crafting rung this build ships makes *items*
+from materials on the character and nothing else; placing structures is not
+started, not stubbed and not published.
+
+**Craft on the agent's own initiative.** `crafting.craft` is `P3` because it
+destroys what it spends, and `P4` whenever the recipe may need a surface or
+world-container materials — and `_p4_gate` has no autonomous path at all. No
+needs arbiter, no initiative table and no plan provider mints a craft: the
+`craft_item` goal is reached by an explicit user submission and by nothing else,
+because a provider planning a craft would be a model deciding which of the
+character's possessions to destroy. Nor does the mission go shopping for what is
+missing — a recipe short of materials ends the goal naming the shortfall, and
+whether to loot for it is the user's next sentence.
 
 **Write game statistics directly.** Setting `hunger = 0` always "succeeds",
 which is precisely why it is forbidden.
@@ -243,13 +258,26 @@ to interrupt and no queue entry to cancel, and a panic stop cannot reach them.
 water action as unconfirmed. A missing tool here is a capability answer, not an
 error, and `pz://capabilities` says which ones are withheld and why.
 
-**`world.inspect`, `container.inspect` and `inventory.search` carry no
-capability evidence at all.** They gate on the observation tier they read rather
-than on a probe, because everything they read is reached through Java accessors
-that never appear in the game's Lua — a probe over those names would report
-`unsupported` on a perfectly healthy install. So "the scan says nothing about
-these three" is by design, and it does mean they are the three actions whose
-availability rests on no runtime evidence.
+**`pz_action_craft` is absent from `list_tools` on every install this project
+can ship to.** Its `crafting` capability is `experimental` for two reasons at
+once. Build 42 rewrote crafting, so every recipe accessor the mod names — the
+known-recipe collection, the script-manager lookup, the ingredient and output
+readers, the craft action class itself — is an unconfirmed guess probed through
+a closed candidate list; the crafting rows in `docs/GAME_API_VERIFICATION.md`
+are jointly the least certain in that document. And a wrong guess is paid for
+differently here than anywhere else: a craft that goes wrong has already spent
+the materials by the time anyone finds out, and no observation returns them.
+Only a live run — the recipe's product observed in the inventory afterwards —
+promotes the capability. `pz_action_inspect_recipe` is deliberately *not*
+withheld with it, because reading a recipe spends nothing.
+
+**`world.inspect`, `container.inspect`, `inventory.search` and
+`crafting.inspect` carry no capability evidence at all.** They gate on the
+observation tier they read rather than on a probe, because everything they read
+is reached through Java accessors that never appear in the game's Lua — a probe
+over those names would report `unsupported` on a perfectly healthy install. So
+"the scan says nothing about these four" is by design, and it does mean they are
+the four actions whose availability rests on no runtime evidence.
 
 **`allow_windows` is not published.** The movement adapter refuses it with
 `POLICY_DENIED`, so offering it would advertise something policy forbids.
@@ -259,15 +287,18 @@ availability rests on no runtime evidence.
 ## Things mocks do not prove
 
 `tests/lua/` runs the mod's real modules under a plain Lua interpreter with
-mocked engine globals — 26 suites covering the command dispatcher, the action
+mocked engine globals — suites covering the command dispatcher, the action
 runtime, the safety layer, the observation model, ownership, sequence handling
-and all ten adapter files. The cross-language reference agreement is asserted
+and every adapter file. The cross-language reference agreement is asserted
 from the Python side, in `tests/unit/test_lua_observation_contract.py`, which
 runs the mod's own observation builder and puts its bytes through the schema and
 the dataclasses.
 
-It does **not** prove that `ISInventoryTransferAction`, `ISEatFoodAction` or
-`ISReadABook` behave as expected in Build 42.20. Only a live session does that.
+It does **not** prove that `ISInventoryTransferAction`, `ISEatFoodAction`,
+`ISReadABook` or `ISCraftRecipeAction` behave as expected in Build 42.20. Only a
+live session does that. The crafting readers are the sharpest case: a mocked
+`getKnownRecipes` answers because the mock was written to answer, and whether
+Build 42 spells it that way at all is exactly the open question.
 
 Two catalogues track those runs — `pz_agent_cli.livetest` (20 scenarios, which
 the release gate enforces) and `tests/game-smoke/` (15 plus an endurance run,

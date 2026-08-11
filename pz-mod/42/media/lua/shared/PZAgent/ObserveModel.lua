@@ -81,6 +81,39 @@ ObserveModel.MAX_HASH_INPUT_BYTES = 512
 --- The dot cannot appear in a Java accessor name, so no game stat collides.
 ObserveModel.LIMIT_PREFIX = "observe."
 
+--- Namespace for what the character can make, inside the same map.
+---
+--- `player.stats` is where this has to go. The schema is
+--- `additionalProperties: false` at every level except item and nearby
+--- entries, so a `crafting` block of its own would be a protocol change; the
+--- stats map is the one open scalar map that survives Observation.from_dict,
+--- which is why the observer's limits and the equipped weapon's wear already
+--- live there. The dot keeps the namespace clear of any game stat, exactly as
+--- LIMIT_PREFIX does.
+---
+--- Scalars are all this map can hold, so what travels is a count of what is
+--- known, a count of what is ready, and one boolean per published recipe --
+--- the recipe's own token as the key, "its materials are on the character" as
+--- the value. The requirement lists cannot travel here at all, which is why
+--- they ride the item tier instead (see `itemCrafting`); this map is the
+--- standing "what can this character make" a planner watches.
+ObserveModel.CRAFTING_PREFIX = "crafting."
+ObserveModel.RECIPE_PREFIX = ObserveModel.CRAFTING_PREFIX .. "recipe."
+
+--- Recipe keys one observation publishes. Well under MAX_STATS, because these
+--- keys sort ahead of most game stats and the character's own readings must
+--- not be the ones that fall off the end of the cap.
+ObserveModel.MAX_RECIPE_KEYS = 12
+
+--- Recipe entries one item may carry, and requirement lines one entry may
+--- name. The item tier is the other place the schema leaves open, and it is
+--- where a recipe's requirement list has to travel: it is a list of objects,
+--- and the stats map holds scalars only. Both bounds are the sidecar's
+--- (`pz_agent_core.policy.crafting`), mirrored here so a document this file
+--- produced is never one that side would truncate on arrival.
+ObserveModel.MAX_ITEM_RECIPES = 8
+ObserveModel.MAX_RECIPE_MATERIALS = 8
+
 --- Reported when the game exposed no readable save identity. A literal, not a
 --- hash: sixteen hex characters mean "this save", and inventing them for a save
 --- nobody identified would make two different saves compare equal.
@@ -402,6 +435,173 @@ function ObserveModel.applyLimits(stats, limits)
 end
 
 -- ---------------------------------------------------------------------------
+-- crafting
+-- ---------------------------------------------------------------------------
+
+--- One recipe's segment inside the crafting namespace, or nil when the
+--- engine's name cannot be carried as a token.
+---
+--- Spaces become underscores, exactly as `place` does it and for the same
+--- reason: this token is how a `crafting.craft` command names the recipe back,
+--- so both sides have to spell it the same way, and one substitution applied
+--- identically everywhere is a spelling rather than a guess. Any other byte
+--- outside the reference alphabet drops the entry -- a recipe the sidecar
+--- could not name back is one it must not be shown.
+function ObserveModel.recipeToken(name)
+  if type(name) ~= "string" or #name == 0 then
+    return nil
+  end
+  return ObserveModel.token((name:gsub(" ", "_")))
+end
+
+--- One requirement line, or nil when it cannot be carried whole.
+local function materialNeed(raw)
+  if type(raw) ~= "table" then
+    return nil
+  end
+  local fullType = ObserveModel.token(raw.full_type)
+  local count = ObserveModel.integer(raw.count)
+  if fullType == nil or count == nil or count < 1 then
+    return nil
+  end
+  return { full_type = fullType, count = count }
+end
+
+--- The crafting readout one item carries, shaped and bounded, or nil.
+---
+--- All-or-nothing per entry, matching the sidecar's own reader: an entry that
+--- cannot name what it makes has no postcondition, and one whose requirement
+--- list is only partly readable would understate what the craft is about to
+--- spend. Either failing drops that entry rather than trimming it.
+---
+--- Ordered by name so the same inventory always produces the same bytes, and
+--- deliberately NOT passed through `domain`: that function keeps scalars only,
+--- which is right for food and fluid and would silently discard the one field
+--- here that matters most.
+function ObserveModel.itemCrafting(raw)
+  if type(raw) ~= "table" or type(raw.recipes) ~= "table" then
+    return nil
+  end
+  local recipes = {}
+  local known = 0
+  for index = 1, #raw.recipes do
+    if #recipes >= ObserveModel.MAX_ITEM_RECIPES then
+      break
+    end
+    local entry = raw.recipes[index]
+    if type(entry) == "table" and type(entry.materials) == "table" then
+      local name = ObserveModel.recipeToken(entry.name)
+      local product = ObserveModel.token(entry.product)
+      local materials = {}
+      local whole = #entry.materials > 0 and #entry.materials <= ObserveModel.MAX_RECIPE_MATERIALS
+      for line = 1, #entry.materials do
+        local need = materialNeed(entry.materials[line])
+        if need == nil then
+          whole = false
+          break
+        end
+        materials[line] = need
+      end
+      if name ~= nil and product ~= nil and whole then
+        local recipe = {
+          name = name,
+          product = product,
+          display_name = ObserveModel.text(entry.display_name) or name,
+          materials = json().array(materials),
+        }
+        -- Tri-state on both flags: absent means the build did not say, and the
+        -- sidecar reads absence as the cautious answer rather than the
+        -- convenient one. A fabricated boolean here would spend that caution.
+        if type(entry.known) == "boolean" then
+          recipe.known = entry.known
+          if entry.known then
+            known = known + 1
+          end
+        end
+        if type(entry.needs_surface) == "boolean" then
+          recipe.needs_surface = entry.needs_surface
+        end
+        recipes[#recipes + 1] = recipe
+      end
+    end
+  end
+  if #recipes == 0 then
+    return nil
+  end
+  sort(recipes, function(left, right)
+    return left.name < right.name
+  end)
+  return {
+    recipes = json().array(recipes),
+    recipe_count = #recipes,
+    known_recipe_count = known,
+  }
+end
+
+--- Fold the crafting reading into `stats`, emitting only what was read.
+---
+--- The counts are derived here, from the entries that actually survived
+--- tokenising, rather than taken from the reader: two places counting the same
+--- list is how a document ends up saying it published four recipes beside three
+--- keys. Silence means the build said nothing about recipes at all -- it never
+--- means "this character can make nothing", which is why `crafting.known` is
+--- emitted whenever the count was read, including when it is zero.
+function ObserveModel.applyCrafting(stats, fields)
+  if type(stats) ~= "table" or type(fields) ~= "table" then
+    return stats
+  end
+  local prefix = ObserveModel.CRAFTING_PREFIX
+  local known = ObserveModel.integer(fields.known)
+  if known ~= nil and known >= 0 then
+    stats[prefix .. "known"] = known
+  end
+
+  local recipes = type(fields.recipes) == "table" and fields.recipes or {}
+  local entries = {}
+  local judged = 0
+  for index = 1, #recipes do
+    local entry = recipes[index]
+    if type(entry) == "table" then
+      local token = ObserveModel.recipeToken(entry.name)
+      -- A recipe whose materials could not be judged carries no key: the value
+      -- would have to be a boolean, and either boolean is a claim about
+      -- ingredients nobody read. The counts below say how many there were.
+      if token ~= nil and type(entry.ready) == "boolean" then
+        judged = judged + 1
+        entries[judged] = { key = ObserveModel.RECIPE_PREFIX .. token, ready = entry.ready }
+      end
+    end
+  end
+  sort(entries, function(left, right)
+    return left.key < right.key
+  end)
+
+  local listed, ready = 0, 0
+  for index = 1, judged do
+    if listed >= ObserveModel.MAX_RECIPE_KEYS then
+      break
+    end
+    listed = listed + 1
+    stats[entries[index].key] = entries[index].ready
+    if entries[index].ready then
+      ready = ready + 1
+    end
+  end
+  if listed > 0 then
+    stats[prefix .. "listed"] = listed
+    stats[prefix .. "ready"] = ready
+  elseif #recipes > 0 then
+    -- Recipes were named and not one of them could be judged. Saying so is what
+    -- keeps a planner from reading the silence as "nothing can be made".
+    stats[prefix .. "materials_unknown"] = true
+  end
+  if fields.truncated == true or judged > listed then
+    stats[prefix .. "truncated"] = true
+  end
+  return stats
+end
+
+-- ---------------------------------------------------------------------------
 -- player
 -- ---------------------------------------------------------------------------
 
@@ -672,6 +872,13 @@ function ObserveModel.player(sessionId, fields, limits)
   if #wounds > 0 then
     player.wounds = wounds
   end
+  -- After the stat map is shaped, not before, and for the reason LIMIT_PREFIX
+  -- is: these keys are the observer's own reporting rather than a reading off
+  -- the character, and they carry their own cap. Folded in beforehand they
+  -- would spend the MAX_STATS budget the character's real stats need -- the
+  -- crafting namespace sorts ahead of `endurance`, so a talkative recipe list
+  -- would be exactly what pushed hunger off the end of it.
+  ObserveModel.applyCrafting(player.stats, fields.crafting)
   return player
 end
 
@@ -823,6 +1030,12 @@ local function buildItem(sessionId, containerRef, containerTail, descriptor)
   item.food = ObserveModel.domain(descriptor.food)
   item.literature = ObserveModel.domain(descriptor.literature)
   item.fluid = ObserveModel.domain(descriptor.fluid)
+  -- The item tier is `additionalProperties: true` in the schema, and the
+  -- sidecar collects anything it does not type under `ItemView.extra`, which is
+  -- where its crafting policy reads this from. Absent unless the reader
+  -- actually produced entries -- an item with no recipes on it is an item the
+  -- crafting reading had nothing to say about.
+  item.crafting = ObserveModel.itemCrafting(descriptor.crafting)
   return item
 end
 

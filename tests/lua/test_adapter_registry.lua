@@ -40,6 +40,7 @@ local ADAPTER_FILES = {
   "Rest",
   "Sleep",
   "Combat",
+  "Crafting",
 }
 
 --- The game actions an adapter file is responsible for. The control plane --
@@ -71,6 +72,8 @@ local GAME_ACTIONS = {
   "combat.shove",
   "combat.engage",
   "combat.retreat",
+  "crafting.inspect",
+  "crafting.craft",
 }
 
 local CONTROL_ACTIONS = {
@@ -202,10 +205,17 @@ print("- the capabilities that carry an experimental ceiling are published as ex
 -- them. It is a different capability from `autonomous_attack`, whose ceiling
 -- stays "unsupported by design" and which no adapter declares -- the pin at
 -- the end of this file fails if one ever does.
+--
+-- `crafting` joins them on two reasons at once. Build 42 rewrote crafting and
+-- none of the recipe spellings in adapters/Crafting.lua has been seen
+-- answering in a live session; and a craft consumes materials that cannot be
+-- put back, so the tools stay withheld on every install until a live run
+-- observes one.
 local EXPERIMENTAL_CAPABILITIES = {
   survival_sleep = true,
   drink_world_source = true,
   combat_assist = true,
+  crafting = true,
 }
 
 local declared = {}

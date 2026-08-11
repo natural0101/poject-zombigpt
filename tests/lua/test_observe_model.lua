@@ -843,4 +843,218 @@ do
   equal(#zombies, 5, "the zombie itself is kept either way; only the claim it could not make is dropped")
 end
 
+Harness.group("a recipe is carried as a token or not at all")
+do
+  equal(Model.recipeToken("MakeCrate"), "MakeCrate", "an identifier-shaped name is its own token")
+  equal(Model.recipeToken("Make Bread Dough"), "Make_Bread_Dough", "spaces become underscores, as rooms do")
+  equal(Model.recipeToken("Base.MakeStew"), "Base.MakeStew", "a module-qualified name is already a segment")
+  isNil(Model.recipeToken("Ragù di manzo"), "a name outside the reference alphabet has no token")
+  isNil(Model.recipeToken(""), "and neither does an empty one")
+  isNil(Model.recipeToken(42), "nor anything that is not a string")
+end
+
+Harness.group("what the character can make travels in the one open scalar map")
+do
+  local stats = Model.applyCrafting({}, {
+    known = 3,
+    recipes = {
+      { name = "Make Chair", ready = false },
+      { name = "MakeCrate", ready = true },
+      { name = "MakeStew", ready = true },
+    },
+  })
+  equal(stats["crafting.known"], 3, "the count of what is known is published")
+  equal(stats["crafting.listed"], 3, "beside how many keys followed")
+  equal(stats["crafting.ready"], 2, "and how many of those can be made now")
+  equal(stats["crafting.recipe.MakeCrate"], true, "a ready recipe is a true under its own token")
+  equal(stats["crafting.recipe.Make_Chair"], false, "and an unready one is a false, never an omission")
+  isNil(stats["crafting.truncated"], "nothing was dropped, so nothing says it was")
+  isNil(stats["crafting.materials_unknown"], "and the materials were judged")
+
+  -- Zero known is a reading. Silence is not.
+  local none = Model.applyCrafting({}, { known = 0, recipes = {} })
+  equal(none["crafting.known"], 0, "a character who knows nothing says so")
+  isNil(none["crafting.listed"], "with no recipe keys at all")
+  local silent = Model.applyCrafting({}, {})
+  isNil(silent["crafting.known"], "while a build that read nothing publishes nothing")
+end
+
+Harness.group("a recipe nobody could judge is never published as a verdict")
+do
+  local stats = Model.applyCrafting({}, {
+    known = 2,
+    recipes = {
+      { name = "MakeCrate" },
+      { name = "MakeStew", ready = "yes" },
+    },
+  })
+  equal(stats["crafting.known"], 2, "the names were read")
+  isNil(stats["crafting.recipe.MakeCrate"], "a recipe with no verdict carries no key")
+  isNil(stats["crafting.recipe.MakeStew"], "and neither does one whose verdict is not a boolean")
+  equal(stats["crafting.materials_unknown"], true, "the silence is declared rather than left to look empty")
+  isNil(stats["crafting.ready"], "and no count claims a readiness nobody measured")
+
+  local unnameable = Model.applyCrafting({}, {
+    known = 1,
+    recipes = { { name = "Ragù di manzo", ready = true } },
+  })
+  isNil(unnameable["crafting.listed"], "a recipe the alphabet cannot carry is not published")
+  equal(unnameable["crafting.materials_unknown"], true, "and its absence is not mistaken for a full listing")
+end
+
+Harness.group("the recipe keys are bounded, ordered and self-consistent")
+do
+  local recipes = {}
+  for index = 1, Model.MAX_RECIPE_KEYS + 4 do
+    recipes[index] = { name = string.format("Recipe%03d", index), ready = index % 2 == 0 }
+  end
+  local stats = Model.applyCrafting({}, { known = #recipes, recipes = recipes })
+  equal(stats["crafting.listed"], Model.MAX_RECIPE_KEYS, "the keys stop at the declared cap")
+  equal(stats["crafting.truncated"], true, "and the document says the list was cut")
+  equal(stats["crafting.recipe.Recipe001"], false, "the kept entries are the first in token order")
+  isNil(
+    stats["crafting.recipe." .. string.format("Recipe%03d", Model.MAX_RECIPE_KEYS + 1)],
+    "so the ones past the cap are simply absent"
+  )
+
+  local counted = 0
+  local ready = 0
+  for name, value in pairs(stats) do
+    if name:sub(1, #Model.RECIPE_PREFIX) == Model.RECIPE_PREFIX then
+      counted = counted + 1
+      if value == true then
+        ready = ready + 1
+      end
+    end
+  end
+  equal(counted, stats["crafting.listed"], "the published count is the number of keys, not the reader's tally")
+  equal(ready, stats["crafting.ready"], "and the ready count is the number of true ones")
+
+  local readerTruncated = Model.applyCrafting({}, {
+    known = 40,
+    truncated = true,
+    recipes = { { name = "MakeCrate", ready = true } },
+  })
+  equal(readerTruncated["crafting.truncated"], true, "a reader that stopped short is believed about it")
+end
+
+Harness.group("an item's recipe readout is carried whole or not at all")
+do
+  --- One readout entry. `dropped` names the keys to leave out, because a nil in
+  --- an override table is a key that was never there -- which is exactly the
+  --- case these assertions are about.
+  local function entry(overrides, dropped)
+    local base = {
+      name = "MakeCrate",
+      product = "Base.WoodenCrate",
+      display_name = "Make a Crate",
+      known = true,
+      needs_surface = false,
+      materials = { { full_type = "Base.Plank", count = 2 } },
+    }
+    for key, value in pairs(overrides or {}) do
+      base[key] = value
+    end
+    for index = 1, #(dropped or {}) do
+      base[dropped[index]] = nil
+    end
+    return base
+  end
+
+  local block = Model.itemCrafting({ recipes = { entry() } })
+  ok(block ~= nil, "a readable entry produces a block")
+  equal(block.recipe_count, 1, "counting what it carries")
+  equal(block.known_recipe_count, 1, "and how many are known")
+  equal(block.recipes[1].name, "MakeCrate", "with the recipe's token")
+  equal(block.recipes[1].product, "Base.WoodenCrate", "what it produces")
+  equal(block.recipes[1].display_name, "Make a Crate", "its display name")
+  equal(block.recipes[1].needs_surface, false, "and the surface reading that was actually made")
+  equal(block.recipes[1].materials[1].count, 2, "beside the requirement line")
+
+  isNil(
+    Model.itemCrafting({ recipes = { entry(nil, { "product" }) } }),
+    "an entry that cannot name its product is dropped"
+  )
+  isNil(Model.itemCrafting({ recipes = { entry(nil, { "name" }) } }), "and so is one with no usable name")
+  isNil(
+    Model.itemCrafting({ recipes = { entry({ materials = { { full_type = "Base.Plank" }, { count = 2 } } }) } }),
+    "a requirement list that cannot be read whole drops the entry rather than understating it"
+  )
+  isNil(
+    Model.itemCrafting({ recipes = { entry({ materials = {} }) } }),
+    "a recipe that consumes nothing is not modelled"
+  )
+  isNil(Model.itemCrafting({ recipes = {} }), "and an empty readout is no readout")
+  isNil(Model.itemCrafting(nil), "as is nothing at all")
+
+  local silent = Model.itemCrafting({ recipes = { entry(nil, { "known", "needs_surface" }) } })
+  isNil(silent.recipes[1].known, "an unread `known` stays unread")
+  isNil(silent.recipes[1].needs_surface, "and so does an unread `needs_surface` -- the caution is the sidecar's")
+  equal(silent.known_recipe_count, 0, "so nothing is counted as known")
+
+  local many = {}
+  for index = 1, Model.MAX_ITEM_RECIPES + 3 do
+    many[index] = entry({ name = string.format("Recipe%03d", index) })
+  end
+  local bounded = Model.itemCrafting({ recipes = many })
+  equal(bounded.recipe_count, Model.MAX_ITEM_RECIPES, "one item carries at most the declared cap")
+  equal(bounded.recipes[1].name, "Recipe001", "and the entries are ordered by name")
+
+  local document = built({
+    inventory = {
+      {
+        kind = "player_main",
+        name = "Inventory",
+        items = {
+          {
+            runtime_id = 8,
+            full_type = "Base.Plank",
+            display_name = "Plank",
+            category = "Material",
+            weight = 1,
+            crafting = { recipes = { entry() } },
+          },
+        },
+      },
+    },
+  })
+  local item = document.inventory.items[1]
+  equal(item.crafting.recipes[1].name, "MakeCrate", "the readout survives into the item tier")
+  ok(Json.encode(item) ~= nil, "and encodes as part of the item it rides")
+end
+
+Harness.group("the crafting reading reaches the document through the player block")
+do
+  local document = built({
+    player = {
+      present = true,
+      alive = true,
+      position = { x = 1, y = 2, z = 0 },
+      stats = { hunger = 0.2 },
+      moodles = {},
+      crafting = { known = 1, recipes = { { name = "MakeCrate", ready = true } } },
+    },
+  })
+  equal(document.player.stats["crafting.known"], 1, "the crafting namespace rides player.stats")
+  equal(document.player.stats["crafting.recipe.MakeCrate"], true, "with one key per published recipe")
+  equal(document.player.stats.hunger, 0.2, "and the character's own stats are untouched")
+
+  -- The namespace is the observer's, exactly as the limit keys are: a game stat
+  -- may not be published inside it.
+  local spoofed = built({
+    player = {
+      present = true,
+      alive = true,
+      position = { x = 1, y = 2, z = 0 },
+      stats = { ["crafting.known"] = 99, hunger = 0.2 },
+      moodles = {},
+      crafting = { known = 1, recipes = {} },
+    },
+  })
+  equal(spoofed.player.stats["crafting.known"], 1, "the reading wins over anything the stat map carried")
+
+  local encoded = Json.encode(document)
+  ok(encoded:find('"crafting.known":1', 1, true) ~= nil, "and it survives encoding as a plain scalar")
+end
+
 Harness.finish("observe_model")

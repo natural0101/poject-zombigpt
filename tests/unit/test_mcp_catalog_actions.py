@@ -37,6 +37,7 @@ from pz_agent_core.actions.adapters.container import (
     MAX_LISTED_ITEMS,
     MIN_OPEN_RADIUS,
 )
+from pz_agent_core.actions.adapters.crafting import MAX_CRAFT_COUNT, MAX_RECIPE_NAME_LEN
 from pz_agent_core.actions.adapters.doors import DEFAULT_DOOR_RADIUS, MIN_DOOR_RADIUS
 from pz_agent_core.actions.adapters.equipment import HANDS, MAX_SLOT_NAME_LEN
 from pz_agent_core.actions.adapters.inventory import MAX_SEARCH_RESULTS, MAX_TYPE_FILTER_LEN
@@ -56,7 +57,7 @@ from pz_agent_core.actions.adapters.survival import (
     MIN_WAIT_MS,
 )
 from pz_agent_core.actions.adapters.world import MAX_INSPECT_RADIUS
-from pz_agent_core.capabilities.probes import COMBAT_ASSIST, SURVIVAL_SLEEP
+from pz_agent_core.capabilities.probes import COMBAT_ASSIST, CRAFTING, SURVIVAL_SLEEP
 from pz_agent_core.protocol import READ_ONLY_ACTIONS, ActionName, ReasonCode, RiskClass
 from pz_agent_mcp.catalog import (
     EXAMPLE_SESSION_ID,
@@ -76,11 +77,20 @@ from tests.fixtures.mcp_doubles import make_report
 #: The tools this file was written for: everything that submits an action.
 ACTION_TOOLS: Final[tuple[ToolSpec, ...]] = tuple(spec for spec in TOOLS if spec.action is not None)
 
-#: The three that only look. Written out rather than derived from the catalogue,
+#: The four that only look. Written out rather than derived from the catalogue,
 #: because deriving them from the field under test would make the check agree
 #: with itself.
 QUERY_TOOLS: Final[frozenset[str]] = frozenset(
-    {"pz_action_inspect_world", "pz_action_inspect_container", "pz_action_search_inventory"}
+    {
+        "pz_action_inspect_world",
+        "pz_action_inspect_container",
+        "pz_action_search_inventory",
+        # The fourth, added by the crafting rung and belonging here for
+        # exactly the other three's reason: reading a recipe spends
+        # nothing and moves nobody, and what it needs is an observation
+        # tier rather than a probe a healthy install would fail.
+        "pz_action_inspect_recipe",
+    }
 )
 
 #: Fields that are the command envelope rather than adapter arguments.
@@ -225,6 +235,17 @@ OVER_THE_LINE: Final[tuple[tuple[str, dict[str, Any]], ...]] = (
     # adapter's check_args refuses would fail the coverage seam.
     ("pz_action_shove", {"target_ref": "item:not-a-zombie"}),
     ("pz_action_engage", {"target_ref": "object:not-a-zombie"}),
+    # The crafting pair. The recipe name is an identifier, so a value
+    # carrying a space is a pattern nothing implements rather than a
+    # recipe that was not found, and it dies here rather than travelling
+    # to the mod as a lookup key. The count is the published bound of the
+    # whole rung: one command runs one recipe once, and a schema that let
+    # two through would advertise a batch neither half implements.
+    ("pz_action_inspect_recipe", {"recipe": "Make Spear"}),
+    ("pz_action_inspect_recipe", {"recipe": "x" * (MAX_RECIPE_NAME_LEN + 1)}),
+    ("pz_action_craft", {"recipe": "Make Spear"}),
+    ("pz_action_craft", {"count": MAX_CRAFT_COUNT + 1}),
+    ("pz_action_craft", {"count": 0}),
 )
 
 
@@ -466,6 +487,49 @@ def test_every_combat_tool_is_p4_write_and_rides_combat_assist_not_autonomous_at
     assert spec.risk is RiskClass.P4
     assert spec.required_capability == COMBAT_ASSIST
     assert spec.required_capability != "autonomous_attack"
+
+
+def test_the_craft_tool_is_withheld_until_a_live_craft_confirms_the_capability() -> None:
+    """``crafting`` resolves to experimental on a clean scan, like sleep.
+
+    The symbols its probe can require are the walk-and-queue set every timed
+    action needs; the recipe tables and the craft entry point are Java
+    accessors no Lua scan reaches. Offering the tool on that evidence would
+    advertise a craft nothing has proven — and unlike a failed walk, a craft
+    that goes wrong has already spent the materials by the time anyone finds
+    out. The reading half is deliberately *not* withheld with it: reading a
+    recipe spends nothing.
+    """
+    report = make_report(experimental=[CRAFTING])
+
+    published = {spec.name for spec in published_tools(report)}
+    assert "pz_action_craft" not in published
+    assert withheld_tools(report)["pz_action_craft"] == "EXPERIMENTAL_API"
+    assert "pz_action_inspect_recipe" in published
+    assert "pz_action_inspect_recipe" not in withheld_tools(report)
+
+
+def test_the_craft_publishes_its_adapters_base_tier_and_says_where_p4_comes_from() -> None:
+    """P3 is the floor a caller needs; the P4 escalation is per command.
+
+    The number itself is held against the adapter by the seam test. What is
+    pinned here is the half a caller reads: that the published tier is the
+    base one, that the escalation exists, and — the part easiest to over-read
+    — that no argument on this tool names a station or a world container, so
+    the summary must not imply a gate the schema does not have.
+    """
+    spec = TOOLS_BY_NAME["pz_action_craft"]
+    summary = spec.summary.lower()
+
+    assert spec.kind is ToolKind.WRITE
+    assert spec.requires_armed is True
+    assert spec.risk is RiskClass.P3
+    assert spec.required_capability == CRAFTING
+    assert "irreversible" in summary
+    assert "p4" in summary
+    assert "no station and no container to name" in summary
+    arguments = set(spec.input_schema["properties"]) - ENVELOPE
+    assert arguments == {"recipe", "count"}
 
 
 def test_the_engage_summary_states_the_bounded_window_contract() -> None:

@@ -7,6 +7,15 @@ the requirement the candidate failed — "Carpentry 3 needs level 0-2 and you ar
 4" is a product feature, not a debug aid. It is the sentence the voice
 companion says.
 
+One field here is tri-state and has to be, because the mod may or may not be
+able to read it: ``unread_recipes``. Absent is *unknown* — not zero and not
+some. Reading it as zero would say "it holds no recipe you have not already
+learned" about a magazine nobody looked inside, which is the fabricated fact
+this project treats as a defect; reading it as some would pick that magazine
+over one that is honestly known to teach something. So absence refuses, with
+its own sentence, and the recipe goal stays honest about what it could not see
+(:func:`_filter_recipes`).
+
 Blueprint: ``docs/blueprint/05_GAMEPLAY_SKILLS.md`` §5.4 and
 ``docs/blueprint/17_DECISION_TABLES.md`` §17.5.
 """
@@ -155,7 +164,11 @@ class LiteratureView:
     pages_total: int
     pages_read: int
     already_read: bool
-    unread_recipes: int
+    #: How many recipes in it the character has not learned, or ``None`` when
+    #: the mod did not report the fact at all. The three values mean three
+    #: different things and the policy keeps them apart; see the module
+    #: docstring.
+    unread_recipes: int | None
     boredom_change: float
     unhappy_change: float
     destroyed: bool
@@ -177,7 +190,7 @@ class LiteratureView:
             pages_total=pages_total,
             pages_read=min(pages_read, pages_total) if pages_total else pages_read,
             already_read=read_bool(payload, "already_read"),
-            unread_recipes=max(0, read_int(payload, "unread_recipes")),
+            unread_recipes=_read_unread_recipes(payload),
             boredom_change=read_float(payload, "boredom_change"),
             unhappy_change=read_float(payload, "unhappy_change"),
             destroyed=read_bool(payload, "destroyed"),
@@ -205,6 +218,22 @@ class LiteratureView:
 #: The game's skill ceiling, used as the default upper bound of a book whose
 #: payload gives none.
 _MAX_SKILL_LEVEL: Final = 10
+
+
+def _read_unread_recipes(payload: Mapping[str, object]) -> int | None:
+    """The unread-recipe count, or ``None`` when the mod did not report one.
+
+    Deliberately not :func:`~pz_agent_core.policy.selection.read_int`, whose
+    whole job is to substitute a default: a default here would turn "the
+    reader is missing on this build" into the confident claim that the
+    magazine teaches nothing. A value present but not a number is the same
+    fact — the count could not be read — so it lands on ``None`` too, and only
+    a real number is believed.
+    """
+    value = payload.get("unread_recipes")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return max(0, int(value))
 
 
 def _classify(item: ItemView, payload: Mapping[str, object]) -> LiteratureKind:
@@ -569,8 +598,33 @@ def _filter_requested_item(
 
 
 def _filter_recipes(item: ItemView, view: LiteratureView, context: _Context) -> Rejection | None:
+    """A recipe goal needs a magazine known to hold something new.
+
+    Three inputs, three answers. A positive count passes. A zero is a real
+    reading and refuses with the sentence it has always used. An *absent*
+    count — the case that made this filter reject every item in the world,
+    because nothing published the key — is the reader failing, not the
+    magazine being exhausted, and it refuses with a sentence that says which
+    of the two happened. Absence falling on the refusing side is the safe
+    reading and the deliberate one: the item is not a confident pick, and a
+    craft or a skill the character does not actually gain is a worse outcome
+    than a book left unopened.
+
+    Both refusals carry ``NO_UNREAD_RECIPES``. The shared vocabulary in
+    :mod:`pz_agent_core.policy.selection` has no token for "unreadable", and
+    adding one is a change to a module three policies share; until it exists
+    the *detail* is what tells the two apart, and the detail is the half a
+    user is read out loud.
+    """
     if context.goal.kind is not LiteratureGoalKind.LEARN_RECIPE:
         return None
+    if view.unread_recipes is None:
+        return _reject(
+            item,
+            RejectionReason.NO_UNREAD_RECIPES,
+            "this build does not report whether it still holds an unlearned recipe, "
+            "so it cannot be picked as one that does",
+        )
     if view.unread_recipes > 0:
         return None
     return _reject(
@@ -665,9 +719,21 @@ def _score(item: ItemView, view: LiteratureView, context: _Context) -> ScoreBrea
         ),
         ScoreFactor(
             name="recipes",
-            raw=min(1.0, view.unread_recipes / config.recipe_reference),
+            # An unreported count contributes nothing rather than a guess. It
+            # is not a penalty either: for a boredom goal a magazine nobody
+            # could look inside is still a magazine, and it should win or lose
+            # on the factors that *were* readable.
+            raw=(
+                0.0
+                if view.unread_recipes is None
+                else min(1.0, view.unread_recipes / config.recipe_reference)
+            ),
             weight=config.literature_weight_recipes,
-            detail=f"{view.unread_recipes} unread recipes",
+            detail=(
+                "unread recipes not reported"
+                if view.unread_recipes is None
+                else f"{view.unread_recipes} unread recipes"
+            ),
         ),
         ScoreFactor(
             name="level_fit",

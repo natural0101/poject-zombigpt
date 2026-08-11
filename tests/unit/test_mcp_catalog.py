@@ -17,6 +17,7 @@ from pz_agent_core.actions.adapters import register_game_adapters
 from pz_agent_core.actions.adapters.movement import MAX_ARRIVAL_RADIUS, MAX_MOVE_DISTANCE_SQUARES
 from pz_agent_core.capabilities.probes import (
     COMBAT_ASSIST,
+    CRAFTING,
     DOOR_TOGGLE,
     DRINK_CARRIED,
     DRINK_WORLD_SOURCE,
@@ -80,6 +81,10 @@ DOCUMENTED_TOOLS = {
     "pz_action_inspect_world",
     "pz_action_inspect_container",
     "pz_action_search_inventory",
+    # The crafting reading sits with the other looks, not with the craft:
+    # it spends nothing, needs no arming and names no capability, which is
+    # the whole reason a client is expected to call it first.
+    "pz_action_inspect_recipe",
     "pz_action_move_to",
     "pz_action_move_near",
     "pz_action_open_container",
@@ -103,6 +108,10 @@ DOCUMENTED_TOOLS = {
     "pz_action_shove",
     "pz_action_engage",
     "pz_action_retreat",
+    # The crafting rung's write half: P3 on the NEW crafting capability,
+    # which starts experimental, so this one is withheld on every install
+    # until a live craft promotes it.
+    "pz_action_craft",
     "pz_action_rest",
     "pz_action_sleep",
     "pz_action_wait",
@@ -142,6 +151,7 @@ ALL_CAPABILITIES = (
     SURVIVAL_REST,
     SURVIVAL_SLEEP,
     COMBAT_ASSIST,
+    CRAFTING,
 )
 
 
@@ -346,6 +356,12 @@ FULL_ACTION_PAYLOADS: dict[str, dict[str, Any]] = {
     "pz_action_shove": {"target_ref": ZOMBIE},
     "pz_action_engage": {"target_ref": ZOMBIE},
     "pz_action_retreat": {},
+    # The two crafting tools take a recipe name and, for the craft, the
+    # count that is on the wire so no default is guessed. The seam test
+    # drives both against the real adapters, where the empty-world refusal
+    # is RECIPE_UNKNOWN — the policy's own — never an unsupported argument.
+    "pz_action_inspect_recipe": {"recipe": "MakeSpear"},
+    "pz_action_craft": {"recipe": "MakeSpear", "count": 1},
     "pz_action_rest": {
         "target_endurance": 0.95,
         "seat_ref": SQUARE,

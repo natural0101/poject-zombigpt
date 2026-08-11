@@ -50,6 +50,8 @@ IMPLEMENTED = {
     ActionName.COMBAT_SHOVE,
     ActionName.COMBAT_ENGAGE,
     ActionName.COMBAT_RETREAT,
+    ActionName.CRAFTING_INSPECT,
+    ActionName.CRAFTING_CRAFT,
 }
 
 #: The four assisted-combat actions: the protocol's top tier, every one, and

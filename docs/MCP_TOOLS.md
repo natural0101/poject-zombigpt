@@ -23,7 +23,7 @@ Transport: stdio. The server registers itself as `pz-agent`.
 | `product_version` | `0.1.0` |
 | `protocol_version` | `1.1` |
 | `capability_gated` | `true` |
-| tools | 45 |
+| tools | 47 |
 | resources | 7 |
 
 `--describe` reports the **whole** catalogue. A running server publishes a
@@ -35,7 +35,7 @@ See *Capability gating* below.
 ## Semantics that apply to every tool
 
 **Every input schema is closed.** `additionalProperties` is `false` on all
-45 tools, so an argument this document does not list is rejected rather
+47 tools, so an argument this document does not list is rejected rather
 than ignored.
 
 **The advertised bound is the enforced bound.** `catalog.py` imports its numbers
@@ -53,8 +53,8 @@ the `write` tools and for nothing else:
 | Kind | Count | Arming | What it is |
 | --- | --- | --- | --- |
 | `read` | 11 | not required | Answered from state the sidecar already holds |
-| `query` | 3 | not required | Submits one of the protocol's `READ_ONLY_ACTIONS`; comes back with an action id, but the character neither moves nor touches anything |
-| `write` | 25 | **required** | Changes the world; refused with `NOT_ARMED` on a disarmed session |
+| `query` | 4 | not required | Submits one of the protocol's `READ_ONLY_ACTIONS`; comes back with an action id, but the character neither moves nor touches anything |
+| `write` | 26 | **required** | Changes the world; refused with `NOT_ARMED` on a disarmed session |
 | `control` | 6 | not required | Arm, disarm, cancel, stop and the goal verbs — how a disarmed or panicking session is driven |
 
 `pz_action_open_container` is a `write` tool, whatever its name suggests: it
@@ -75,14 +75,14 @@ transfer forms, `inventory.transfer` and `inventory.transfer_batch`, become
 tool name, so none of it is published.
 
 **Long-running tools return an action id.** `long_running` is `true` for
-27 tools. The call returns immediately with an `action_id`; you poll it with
+29 tools. The call returns immediately with an `action_id`; you poll it with
 `pz_action_status`, wait on it with `pz_action_await`, or call again with the
 same `idempotency_key`, which replays the call and refreshes it to the action's
 current state. It does not block the transport and it does not report success
 early.
 
 **Idempotency.** Every tool that submits a command takes a required
-`idempotency_key`; 31 tools do. Twenty-nine of them accept 1–120 characters with
+`idempotency_key`; 33 tools do. Thirty-one of them accept 1–120 characters with
 no further shape; the two goal verbs, `pz_goal_submit` and `pz_goal_cancel`,
 take 1–64 matching `^[A-Za-z0-9][A-Za-z0-9_.:\-]{0,63}$`, because the goal
 channel carries the key into its own record and a key is not a place to smuggle
@@ -90,7 +90,7 @@ text. Calling twice with the same key does not perform the action twice — the
 original result is replayed with `replayed: true`.
 
 **`timeout_ms`** is that one command's lease: integer, 100–300000 ms, default
-15000. Twenty-eight tools take it — every one that submits a single command.
+15000. Thirty-one tools take it — every one that submits a single command.
 `pz_plan_execute` does not, because a plan is bounded by
 `limits.max_real_seconds` instead, and publishing an argument no handler reads
 would be a lie shaped like an option. One tool reuses the name for a different
@@ -102,9 +102,22 @@ number.
 field in the whole surface a caller may write in their own words, and it comes
 back quarantined. Every other string argument is a ref matching a fixed pattern,
 an enum member, a lower-case token matching
-`^[a-z][a-z0-9_.\-]{0,63}$`, or — in exactly one place, `pz_goal_submit`'s
+`^[a-z][a-z0-9_.\-]{0,63}$`, a bounded *game identifier* — an item type, a body
+slot, a recipe name, a `craft_item` product — matching a fixed pattern over
+letters, digits, `.`, `_` and `-` and therefore carrying no space, quote,
+newline or control character, or — in exactly one place, `pz_goal_submit`'s
 `categories` — a comma-joined list of closed upper-case tokens whose pattern
 names every admissible spelling.
+
+The identifiers deserve a sentence of their own, because "not free text" is a
+weaker claim for them than for an enum. They are not checked against a closed
+list *here*, and they could not honestly be: what item types and recipes a build
+carries is the build's fact, and a vocabulary of them written into this surface
+would be a second, drifting copy of the game's. What makes them safe is that
+nothing on this side ever interprets one — they are compared for equality
+against strings the observation itself reported, so an identifier naming
+nothing is a refusal rather than an instruction, and their alphabet admits
+nothing a reader could mistake for a directive.
 
 ---
 
@@ -121,6 +134,7 @@ names every admissible spelling.
 | `pz_action_inspect_world` | query | P0 | no | yes | — |
 | `pz_action_inspect_container` | query | P0 | no | yes | — |
 | `pz_action_search_inventory` | query | P0 | no | yes | — |
+| `pz_action_inspect_recipe` | query | P0 | no | yes | — |
 | `pz_action_move_to` | write | P3 | yes | yes | `move_to_square` |
 | `pz_action_move_near` | write | P3 | yes | yes | `move_to_square` |
 | `pz_action_open_container` | write | P3 | yes | yes | `move_to_square` |
@@ -141,6 +155,7 @@ names every admissible spelling.
 | `pz_action_shove` | write | P4 | yes | yes | `combat_assist` |
 | `pz_action_engage` | write | P4 | yes | yes | `combat_assist` |
 | `pz_action_retreat` | write | P4 | yes | yes | `combat_assist` |
+| `pz_action_craft` | write | P3 | yes | yes | `crafting` |
 | `pz_action_rest` | write | P2 | yes | yes | `survival_rest` |
 | `pz_action_sleep` | write | P4 | yes | yes | `survival_sleep` |
 | `pz_action_wait` | write | P0 | yes | yes | — |
@@ -280,6 +295,24 @@ List what the character is carrying that matches a filter. Every reference retur
 | `limit` | no | `integer`; minimum 1; maximum 32; default `32` |
 | `idempotency_key` | yes | `string`; minLength 1; maxLength 120 |
 | `timeout_ms` | no | `integer`; minimum 100; maximum 300000; default `15000` |
+
+### `pz_action_inspect_recipe`
+
+Read one recipe: what it makes, what it consumes, whether the character has learned it, and whether it could run right now off the materials the observation reports. Nothing is spent and nothing moves — the answer comes off the crafting readout the observer already produces, so this is the call to make before `pz_action_craft` rather than after it. A recipe the character has not learned is a *finding* here, reported as `found: false` with the reading intact; it only becomes `RECIPE_UNKNOWN` on the craft, where it stops a command instead of answering one. An observation carrying no crafting readout at all is the failure, and it is reported as one.
+
+| Argument | Required | Schema |
+| --- | --- | --- |
+| `recipe` | yes | `string`; maxLength 64; pattern `^[A-Za-z0-9._\-]{1,64}$` |
+| `idempotency_key` | yes | `string`; minLength 1; maxLength 120 |
+| `timeout_ms` | no | `integer`; minimum 100; maximum 300000; default `15000` |
+
+This is a `query` tool and it names no capability, for the reason the other
+three do not: the recipe tables are behind Java accessors no scan of the
+install can see, so a probe over them would report `unsupported` on a perfectly
+healthy build. It gates on the observation tier it reads instead, and refuses —
+naming the reader — when the build produced none. The consequence is the honest
+one and the same as for the other three: this tool's availability rests on no
+runtime evidence.
 
 ### `pz_action_move_to`
 
@@ -545,6 +578,40 @@ One short bounded step away from the observed threats — the between-windows di
 | `idempotency_key` | yes | `string`; minLength 1; maxLength 120 |
 | `timeout_ms` | no | `integer`; minimum 100; maximum 300000; default `15000` |
 
+### `pz_action_craft`
+
+Run ONE known recipe ONCE, from materials the character is observed to hold. Irreversible: this is the first published action that destroys what it spends, which is why it is P3 rather than P2 even when nothing moves. There is no loop and no retry — a recipe that could run again is a report, and running it again is another call, through the policy, the permission gate and the safety stop a second time. The deterministic crafting policy is re-asked against a fresh observation before anything is sent: a recipe the character has not learned (or that the build will not say it has learned) is `RECIPE_UNKNOWN`, missing materials are `RECIPE_MATERIALS_MISSING` naming each shortfall, and materials short only because you reserved them are `RESOURCE_RESERVED` — a question you can answer, not a craft that breaks your kept axe. Verified only by the product being observed in the inventory afterwards; a craft that was queued and acknowledged proves nothing.
+
+| Argument | Required | Schema |
+| --- | --- | --- |
+| `recipe` | yes | `string`; maxLength 64; pattern `^[A-Za-z0-9._\-]{1,64}$` |
+| `count` | no | `integer`; minimum 1; maximum 1; default `1` |
+| `idempotency_key` | yes | `string`; minLength 1; maxLength 120 |
+| `timeout_ms` | no | `integer`; minimum 100; maximum 300000; default `15000` |
+
+**`count` has a published maximum of one, and that is the whole bound.** The
+argument exists so the number is on the wire rather than a default the mod
+picked; the mod's own `Crafting.MAX_COUNT` is the same one, and raising either
+is a visible change on both halves rather than a ceiling that quietly moved.
+
+**The published `P3` is the floor, not the worst case.** `crafting.craft`
+escalates itself to `P4` per command — which no autonomous initiative can ever
+reach — when the recipe may need a surface to run on, or when a material line
+is only afforded by counting items in a world container. Both mean the same
+thing to the permission ladder: travelling somewhere and touching something the
+character does not carry.
+
+Read that escalation exactly as written, because it is easy to over-read into a
+gate that does not exist. **There is no argument on this tool naming a station,
+a workbench or a world container, and none is withheld from you: this rung
+crafts from the character's own bags and nothing in the mod's adapter reads a
+crafting surface or a remote container at all.** What escalates a call is the
+*recipe* — read off the observation's crafting readout and re-assessed per
+command by `pz_agent_core.policy.crafting`. `needs_surface` is tri-state there,
+and absent falls to "assume it does", so on a build whose readout never answers
+that question **every** craft is a `P4` call. That costs one permission tier; the
+other reading would cost a craft queued where it cannot run.
+
 ### `pz_action_rest`
 
 Recover endurance up to a target. Verified by the endurance reading rising to it — or, on a build that reports no endurance, by the character being observed sitting, but only if sitting is what was asked for. A standing rest with no readable stat has nothing to show for itself and times out.
@@ -656,11 +723,11 @@ No arguments.
 
 ### `pz_goal_submit`
 
-Ask the typed goal channel for one of the things it carries. The kind set is closed and there is no free-text field at all: an invented kind is refused, never approximated. The channel admits the goal to a bounded backlog and answers with its id and state — 'pending' is the honest word for a goal nothing has started yet, and every goal carries a wall-clock, step and time-to-live budget so that it reaches a terminal state whether or not it is served. Which sandwich satisfies a hunger goal is never decided here. A 'loot_area' goal finishes on one provable criterion — every reachable container in scope was inspected or has a recorded skip reason — and its terminal answer reports the looted scope (the pinned room, building or sweep), the containers inspected, the containers skipped each with its reason, and the items taken per category and left per reason. An 'explore_area' goal finishes on the matching criterion — no frontier square remains in scope: every scope square is known to the local map or carries a recorded skip reason — and its report carries the pinned scope, the map growth (cells_discovered), the waypoints visited, and each skipped square with its reason (a locked or barricaded door named by reference, a proven no-route). A 'return_home' goal takes no parameters at all: the target is the save's remembered home point ('pz-agent remember home'), no home set is a typed PRECONDITION_FAILED whose detail is the remedy, and the goal succeeds only on the observed arrival. The care kinds are deterministic missions over the medical and survival adapters: 'treat_wounds' (no parameters — triage and dressing choice are policy, remade per observation) dresses every observed bleeding wound and finishes only when none bleeds, with dressings running out a typed partial failure naming the honest count; 'rest_until' sends one survival.rest to its required target_endurance, verified by the adapter from the observation; 'sleep_until_rested' sleeps on an observed bed for its optional hours (absent means the adapter's own night), and the sleep adapter's danger refusal reaches the goal typed and unchanged, never retried. 'satisfy_hunger' and 'satisfy_thirst' are served the same deterministic way now — food and water found in known containers, moved to the main inventory, unsafe candidates (rotten, burnt, poisonous, reserved) skipped with recorded reasons, and success only by the observed stat moving. An 'avoid_threat' goal (no parameters — where to retreat to is decided deterministically from the observed threat picture) walks threat-avoiding journeys to the nearest remembered user safe zone or to open ground away from the observed zombies, re-reading the picture every step; it succeeds only on the observed postcondition — nearest zombie at a safe distance, or standing in a safe zone with nothing chasing — and a retreat that cannot open the distance is a typed THREAT_INTERRUPTED naming the nearest observed threat distance. An 'engage_single_zombie' goal (no parameters — the mission serves the nearest observed zombie, because a queued target reference would outlive the observation that minted it) is the ASSISTED combat rung's mission form: the deterministic combat policy is re-assessed before every bounded attack window (group limit, endurance, panic, injury, weapon state), retreat on any deterioration between windows is mandatory, and the goal succeeds only on the re-observed zombie down or honestly gone. Only an explicit submission reaches it: no plan provider serves it, and no needs arbiter or initiative table ever mints it.
+Ask the typed goal channel for one of the things it carries. The kind set is closed and there is no free-text field at all: an invented kind is refused, never approximated. The channel admits the goal to a bounded backlog and answers with its id and state — 'pending' is the honest word for a goal nothing has started yet, and every goal carries a wall-clock, step and time-to-live budget so that it reaches a terminal state whether or not it is served. Which sandwich satisfies a hunger goal is never decided here. A 'loot_area' goal finishes on one provable criterion — every reachable container in scope was inspected or has a recorded skip reason — and its terminal answer reports the looted scope (the pinned room, building or sweep), the containers inspected, the containers skipped each with its reason, and the items taken per category and left per reason. An 'explore_area' goal finishes on the matching criterion — no frontier square remains in scope: every scope square is known to the local map or carries a recorded skip reason — and its report carries the pinned scope, the map growth (cells_discovered), the waypoints visited, and each skipped square with its reason (a locked or barricaded door named by reference, a proven no-route). A 'return_home' goal takes no parameters at all: the target is the save's remembered home point ('pz-agent remember home'), no home set is a typed PRECONDITION_FAILED whose detail is the remedy, and the goal succeeds only on the observed arrival. The care kinds are deterministic missions over the medical and survival adapters: 'treat_wounds' (no parameters — triage and dressing choice are policy, remade per observation) dresses every observed bleeding wound and finishes only when none bleeds, with dressings running out a typed partial failure naming the honest count; 'rest_until' sends one survival.rest to its required target_endurance, verified by the adapter from the observation; 'sleep_until_rested' sleeps on an observed bed for its optional hours (absent means the adapter's own night), and the sleep adapter's danger refusal reaches the goal typed and unchanged, never retried. 'satisfy_hunger' and 'satisfy_thirst' are served the same deterministic way now — food and water found in known containers, moved to the main inventory, unsafe candidates (rotten, burnt, poisonous, reserved) skipped with recorded reasons, and success only by the observed stat moving. An 'avoid_threat' goal (no parameters — where to retreat to is decided deterministically from the observed threat picture) walks threat-avoiding journeys to the nearest remembered user safe zone or to open ground away from the observed zombies, re-reading the picture every step; it succeeds only on the observed postcondition — nearest zombie at a safe distance, or standing in a safe zone with nothing chasing — and a retreat that cannot open the distance is a typed THREAT_INTERRUPTED naming the nearest observed threat distance. An 'engage_single_zombie' goal (no parameters — the mission serves the nearest observed zombie, because a queued target reference would outlive the observation that minted it) is the ASSISTED combat rung's mission form: the deterministic combat policy is re-assessed before every bounded attack window (group limit, endurance, panic, injury, weapon state), retreat on any deterioration between windows is mandatory, and the goal succeeds only on the re-observed zombie down or honestly gone. Only an explicit submission reaches it: no plan provider serves it, and no needs arbiter or initiative table ever mints it. A 'craft_item' goal names the 'product' it wants made and, optionally, how many ('count', absent means one) — never a recipe: which recipe spends which materials is the deterministic crafting policy's choice, re-made against a fresh observation before every run. It is the first kind whose work cannot be walked back, so one command crafts one item once and the mission issues one command per run, with the policy, the permission gate and the safety stop between them; a run that could happen again is a report, not a retry. The mission will not go and fetch what is missing — a known recipe short of materials ends the goal with RECIPE_MATERIALS_MISSING naming the shortfall, and whether to loot for it is your next submission. Success is the product observed in the inventory, never the craft being queued. Like the combat kind it is reachable only by explicit submission: no provider plans it, and nothing on the agent's own initiative decides which of the character's possessions to destroy.
 
 | Argument | Required | Schema |
 | --- | --- | --- |
-| `kind` | yes | one of `avoid_threat`, `engage_single_zombie`, `explore_area`, `learn_recipe`, `loot_area`, `navigate_to`, `read_for_boredom`, `rest_until`, `return_home`, `satisfy_hunger`, `satisfy_thirst`, `sleep_until_rested`, `train_skill`, `treat_wounds` |
+| `kind` | yes | one of `avoid_threat`, `craft_item`, `engage_single_zombie`, `explore_area`, `learn_recipe`, `loot_area`, `navigate_to`, `read_for_boredom`, `rest_until`, `return_home`, `satisfy_hunger`, `satisfy_thirst`, `sleep_until_rested`, `train_skill`, `treat_wounds` |
 | `skill` | no | one of `carpentry`, `cooking`, `electrical`, `farming`, `first_aid`, `fishing`, `foraging`, `mechanics`, `metalworking`, `tailoring`, `trapping` |
 | `target_level` | no | `integer`; minimum 1; maximum 10 |
 | `satisfy_to` | no | `number`; minimum 0.0; maximum 1.0 |
@@ -674,6 +741,8 @@ Ask the typed goal channel for one of the things it carries. The kind set is clo
 | `categories` | no | `string`; maxLength 128; comma-joined closed tokens, each of `CLOTHING`, `FOOD`, `LITERATURE`, `MATERIALS`, `MEDICAL`, `OTHER`, `TOOLS`, `WATER`, `WEAPONS` at most once |
 | `target_endurance` | for `rest_until` | `number`; minimum 0.05; maximum 1.0 — the rest adapter's own range |
 | `hours` | no | `integer`; minimum 1; maximum 12 — the sleep adapter's floor beside the channel's narrower "until rested" ceiling |
+| `product` | for `craft_item` | `string`; maxLength 64; pattern `^[A-Za-z0-9][A-Za-z0-9._\-]{0,63}$` — an item type as the build spells it, not a recipe name |
+| `count` | no | `integer`; minimum 1; maximum 4 — runs one submission may authorise, one command each |
 | `idempotency_key` | yes | `string`; minLength 1; maxLength 64; pattern `^[A-Za-z0-9][A-Za-z0-9_.:\-]{0,63}$` |
 
 `navigate_to` requires all three `target_*` coordinates and takes nothing
@@ -827,6 +896,34 @@ plan provider serves this kind, and no needs arbiter or initiative table
 ever mints it — combat is reached by an explicit user submission or tool
 call and by nothing else.
 
+`craft_item` requires `product` and takes an optional `count`, and the shape of
+those two arguments is the whole safety argument. It names the **product**, not
+a recipe: "make me a spear" is the sentence a user means, and which recipe
+spends which planks is `pz_agent_core.policy.crafting`'s deterministic answer,
+re-made against a fresh observation before every run — the same rule that keeps
+a model from picking the sandwich, applied to the materials it would destroy.
+`count` is bounded at 4 because a submission is the unit a user consents in:
+one command crafts one item once, the mission issues one command per run, and
+the policy, the permission gate and the safety stop each get their turn again
+between runs. A run that could happen again is a report, not a retry.
+
+What the mission will **not** do is go and fetch what is missing. A known
+recipe short of materials ends the goal with `RECIPE_MATERIALS_MISSING` naming
+each shortfall; materials short only because they are user-reserved end it with
+`RESOURCE_RESERVED`, which is a question you can answer rather than a decision
+taken over you. Whether to loot for the rest is your next submission, not this
+goal's private choice. Success is the product *observed* in the inventory
+afterwards — never the craft being accepted, and never the mod reporting it
+finished. The commands this goal issues ride the same `crafting` capability as
+`pz_action_craft`, so on every install this project can ship to, submitting it
+gets a goal that reaches the action engine's capability gate and ends with
+`CAPABILITY_UNAVAILABLE` — the goal channel accepts the submission because the
+kind exists, and the craft is refused because nothing has proven it. Only a
+live run promotes the capability. No plan provider serves the kind, and no
+needs arbiter or initiative table mints it, because a provider
+planning a craft would be a model deciding which of the character's possessions
+to destroy.
+
 ### `pz_goal_status`
 
 The goal channel: which goal is active, what is waiting behind it, and — when 'goal_id' names one — that goal's state, budget and how much of it is left. An id the channel has finished and forgotten is refused rather than answered as 'no such goal', because the two are not the same fact. Three additive keys, each null when there is nothing to say: 'progress' is the deterministic drive's phase (a journey's planning/moving/arrived/refused; a loot sweep's start/approach/open/inspect/transfer; an explore sweep's start/approach; a consume drive's check/fetch/consume/verify; a care drive's start/transfer/treat, start/rest or start/sleep; an avoid drive's start/approach; a combat drive's start/equip/shove/engage/retreat) plus detail-free counters, for the named goal or, with no id, the active one — a goal a plan provider serves has no deterministic phase and honestly answers null; 'paused' is the goal a manual takeover parked, visible until a fresh activation replaces it; 'report' is the named loot or explore goal's ledger, live while the mission runs and sealed after it ends. The phase is the progress-messaging primitive: tell the user about transitions, when the value changes — it moves exactly when the work does, so polling faster buys nothing worth relaying.
@@ -948,7 +1045,7 @@ Recent structured log records, redacted and bounded.
 
 ## Capability gating
 
-Twenty-two of the 45 tools name a capability. `published_tools()` offers a
+Twenty-three of the 47 tools name a capability. `published_tools()` offers a
 tool only when `CapabilityReport.usable()` is true for its capability, which
 means `verified` or `available_unverified`; `experimental`, `unsupported` and
 `disabled_by_policy` are all unusable. `withheld_tools()` returns the withheld
@@ -970,24 +1067,38 @@ tool is an answer rather than an error.
 | `survival_rest` | `pz_action_rest` |
 | `survival_sleep` | `pz_action_sleep` |
 | `combat_assist` | `pz_action_equip_best_weapon`, `pz_action_shove`, `pz_action_engage`, `pz_action_retreat` |
+| `crafting` | `pz_action_craft` |
 
-The other twenty-three tools name no capability at all. For the three query
+The other twenty-four tools name no capability at all. For the four query
 tools that is deliberate and documented in `capabilities/probes.py`: everything
-`world.inspect`, `container.inspect` and `inventory.search` read is reached
-through Java accessors that never appear in the game's Lua, so a probe over
-those names would report `unsupported` on a healthy install. They gate on the
-observation tier they need instead. It also means they are the three actions
-whose availability rests on no runtime evidence.
+`world.inspect`, `container.inspect`, `inventory.search` and `crafting.inspect`
+read is reached through Java accessors that never appear in the game's Lua, so
+a probe over those names would report `unsupported` on a healthy install. They
+gate on the observation tier they need instead. It also means they are the four
+actions whose availability rests on no runtime evidence.
 
-`survival_sleep`, `drink_world_source` and `combat_assist` resolve to
-`experimental` on a clean static scan, so on most installs `pz_action_sleep`,
-`pz_action_drink_source` and all four combat tools are **withheld**, with the
-reason, rather than offered. For `combat_assist` the reason is structural: the
-swing and shove entry points live behind Java accessors no Lua scan can see,
-so only a live shove's re-observed evidence can confirm the capability.
-`combat_assist` is a deliberately separate capability from `autonomous_attack`,
-whose probe keeps its hard `unsupported` ceiling — the assisted rung shipping
-does not move the autonomous one.
+`survival_sleep`, `drink_world_source`, `combat_assist` and `crafting` resolve
+to `experimental` on a clean static scan, so on most installs `pz_action_sleep`,
+`pz_action_drink_source`, all four combat tools and `pz_action_craft` are
+**withheld**, with the reason, rather than offered. For `combat_assist` the
+reason is structural: the swing and shove entry points live behind Java
+accessors no Lua scan can see, so only a live shove's re-observed evidence can
+confirm the capability. `combat_assist` is a deliberately separate capability
+from `autonomous_attack`, whose probe keeps its hard `unsupported` ceiling —
+the assisted rung shipping does not move the autonomous one.
+
+`crafting` is capped for the same structural reason and one more. The symbols
+its probe requires are the walk-and-queue set every timed action needs; the
+recipe tables, the "has this character learned it" test and the craft entry
+point itself are Java accessors no scan reaches, so a probe naming them would
+report `unsupported` on a healthy install and a probe that does not name them
+cannot confirm them. The extra reason is what a wrong guess costs: a craft that
+goes wrong has already spent the materials by the time anyone finds out, and
+nothing observes them back. So `pz_action_craft` is withheld on **every**
+install this project can ship to, and only a live run — the recipe's product
+observed in the inventory afterwards — promotes it. `pz_action_inspect_recipe`
+is not withheld with it: reading a recipe spends nothing, and a build that
+cannot answer says so per call.
 
 ---
 
@@ -1085,6 +1196,14 @@ have to maintain its own table of which failures are worth another attempt.
   "keep attacking until it is dead" is not expressible on this surface, and
   the `engage_single_zombie` goal that chains windows re-runs the
   deterministic combat policy before every one and retreats on deterioration.
+- Order a batch of crafting. `pz_action_craft` publishes `count` with a maximum
+  of one, and `pz_goal_submit`'s `craft_item` bounds its own `count` at four
+  runs of one command each; "keep making these until I say stop" is not
+  expressible on this surface, and every run passes the crafting policy, the
+  permission gate and the safety stop again. Nor can a caller choose *which
+  recipe* spends the materials: the goal names a product and the deterministic
+  crafting policy picks, which is the eat/drink/read rule applied to the
+  irreversible case.
 - Pass `allow_windows`. It is not published, because the movement adapter
   refuses it with `POLICY_DENIED`.
 - Name a destination for `pz_action_ensure_main`. The only container the adapter

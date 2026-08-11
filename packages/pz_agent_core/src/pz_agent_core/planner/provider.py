@@ -123,6 +123,16 @@ class GoalKind(StrEnum):
     to plan one would be a model deciding a fight is safe. Every provider
     refuses it by name; only an explicit user submission reaches it, and
     the autonomy initiative path never mints it (pinned by test).
+
+    ``CRAFT_ITEM`` sits in the column too, and it is the one whose refusal
+    cannot be walked back if it is ever dropped: a craft *destroys* what it
+    spends. Which recipe makes the named product, whether the character has
+    learned it, and whether the materials may be spent are
+    :mod:`pz_agent_core.policy.crafting`'s deterministic answers, re-asked
+    against a fresh observation before every run by the CLI's craft mission
+    (``pz_agent_cli.craft_mission``); a provider asked to plan one would be a
+    model choosing which of the character's possessions to destroy. The typed
+    refusal names the deterministic server, like the rest.
     """
 
     SATISFY_HUNGER = "satisfy_hunger"
@@ -139,6 +149,7 @@ class GoalKind(StrEnum):
     SLEEP_UNTIL_RESTED = "sleep_until_rested"
     AVOID_THREAT = "avoid_threat"
     ENGAGE_SINGLE_ZOMBIE = "engage_single_zombie"
+    CRAFT_ITEM = "craft_item"
 
 
 @dataclass(frozen=True, slots=True)
@@ -353,6 +364,18 @@ class NullProvider:
                 "engage_single_zombie is driven by the deterministic combat mission, "
                 "not planned by a provider; a sidecar without the navigating planner "
                 "wired cannot serve it.",
+            )
+        if request.goal.kind is GoalKind.CRAFT_ITEM:
+            # Refused by name like the rest of the column, and with the least
+            # room for argument of any of them: a craft spends materials that
+            # no later observation puts back, so which recipe runs is the
+            # crafting policy's deterministic answer re-asked before every
+            # run — never a plan a provider guessed once.
+            return PlanProposal.refusal(
+                ReasonCode.CAPABILITY_UNAVAILABLE,
+                "craft_item is driven by the deterministic craft mission, not planned "
+                "by a provider; a sidecar without the navigating planner wired cannot "
+                "serve it.",
             )
         if request.goal.kind is GoalKind.SLEEP_UNTIL_RESTED:
             # Sleep is the one P4 action; the reflex-guard refusal must reach

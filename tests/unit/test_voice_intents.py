@@ -95,6 +95,15 @@ KIND_VALUES = frozenset(
 #: one resolving to this kind swings a weapon at whatever the mission
 #: observes nearest, on the authority of words nobody said. The dedicated
 #: test below pins that argument, not just the membership.
+#: ``craft_item`` is the second entry of that sort and the last in this list.
+#: Its required ``product`` is an item type as the build spells it, which no
+#: closed vocabulary in this process may hold — what a build can craft is the
+#: build's fact — so there is nothing for a matcher to match against, and a
+#: small hand-written product set would be a guess at this install correct
+#: only for vanilla. What makes the decision easy rather than merely awkward
+#: is the cost of being wrong: a misheard craft *destroys* materials, and no
+#: later observation returns them. Its dedicated test below pins that
+#: argument too.
 UNSPEAKABLE_KIND_VALUES = frozenset(
     {
         "navigate_to",
@@ -103,6 +112,7 @@ UNSPEAKABLE_KIND_VALUES = frozenset(
         "rest_until",
         "sleep_until_rested",
         "engage_single_zombie",
+        "craft_item",
     }
 )
 
@@ -230,7 +240,21 @@ def test_navigation_is_deliberately_unspeakable() -> None:
     """
     assert {kind.value for kind in intent.UNSPEAKABLE_KINDS} == UNSPEAKABLE_KIND_VALUES
     assert (
-        frozenset({"target_x", "target_y", "target_z", "target_endurance", "hours"})
+        frozenset(
+            {
+                "target_x",
+                "target_y",
+                "target_z",
+                "target_endurance",
+                "hours",
+                # craft_item's two, both unspeakable: an item type has no
+                # spoken form this grammar could match, and a run count that
+                # a mishearing bound to the wrong parameter would authorise
+                # spending nobody asked for.
+                "product",
+                "count",
+            }
+        )
         | LOOT_PARAM_VALUES
         == intent.UNSPEAKABLE_PARAMS
     )
@@ -436,6 +460,51 @@ def test_combat_is_deliberately_unspeakable_because_it_is_a_kill_order() -> None
     # The neighbouring vocabularies keep their own meanings.
     assert resolve("отступай").kind is parse_kind("avoid_threat")
     assert resolve("стоп").intent is VoiceIntent.STOP
+
+
+def test_crafting_is_unspeakable_because_a_transcript_cannot_spell_a_product() -> None:
+    """The crafting decision, pinned with its argument rather than inherited.
+
+    Two independent reasons, and the test asserts both because either alone
+    could be argued away later. The mechanical one: the kind *requires*
+    ``product``, an item type as the build spells it, and this grammar's whole
+    parameter machinery is numbers-with-unit-words and skills — so the
+    partition check would refuse the kind as speakable even if somebody wanted
+    it, and no closed product vocabulary may be written here to change that,
+    because what a build can craft is the build's fact and a table of it in
+    this package would be a drifting copy of the game's.
+
+    The one that settles it: a misheard craft is not recoverable. «сделай
+    копьё» resolved against a hand-written product set would spend the wrong
+    planks on the authority of words nobody said, and unlike a wasted sandwich
+    or an unnecessary walk, nothing observes the materials back. So the kind
+    travels only through ``pz_goal_submit``, where the caller types the
+    product — and every craft-shaped sentence resolves to no goal at all,
+    while the neighbouring reading vocabulary keeps its own meaning: «выучи
+    рецепт» is still a book to read, not a thing to make.
+    """
+    craft = parse_kind("craft_item")
+    assert craft is not None
+    # The mechanical half: a required parameter this grammar cannot supply.
+    assert core_goals.GOAL_SPECS[craft].required == frozenset({"product"})
+    assert core_goals.GOAL_SPECS[craft].optional == frozenset({"count"})
+    assert {"product", "count"} <= intent.UNSPEAKABLE_PARAMS
+    # The declaration half, which is the decision.
+    assert craft in intent.UNSPEAKABLE_KINDS
+    assert craft not in intent.KIND_WORDS
+    assert craft not in intent.CAPABILITY_FOR_KIND
+    # No product word is a vocabulary entry anywhere in the grammar.
+    every_word = {word for words in intent.KIND_WORDS.values() for word in words}
+    every_word |= {word for words in intent.SKILL_WORDS.values() for word in words}
+    assert not every_word & {"сделай", "смастери", "скрафти", "craft", "копьё"}
+    # No craft-shaped sentence reaches a goal, spoken plainly or woken.
+    for transcript in ("сделай копьё", "агент, скрафти копьё", "смастери мне спальник", "craft"):
+        resolution = resolve(transcript)
+        assert resolution.kind is None, transcript
+        assert resolution.intent is not VoiceIntent.GOAL, transcript
+    # The neighbouring vocabulary keeps its meaning: learning a recipe from a
+    # book is a reading goal and stays speakable.
+    assert resolve("выучи рецепт").kind is parse_kind("learn_recipe")
 
 
 @pytest.mark.parametrize(

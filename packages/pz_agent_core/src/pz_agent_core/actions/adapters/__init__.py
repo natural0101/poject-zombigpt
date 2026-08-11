@@ -6,13 +6,13 @@ all. Most of what is here needs one, so most adapters in this package name a
 that capability is usable — an adapter that tried anyway would fail halfway
 through, with the world already half-changed and nothing to roll back to.
 
-The exceptions are the three read-only actions and the cancel. What a look, a
-container listing and a search need is not a Lua class but the observation tier
-they read; :mod:`pz_agent_core.capabilities.probes` resolves Lua symbols, and a
-probe over Java accessors it can never see would report ``unsupported`` on a
-healthy install. They gate on the tier instead, which is a fact this side can
-check. ``plan.cancel`` names none for a different reason: a stop that a missing
-scan could refuse is not a stop.
+The exceptions are the four read-only actions and the cancel. What a look, a
+container listing, a search and a recipe reading need is not a Lua class but the
+observation tier they read; :mod:`pz_agent_core.capabilities.probes` resolves Lua
+symbols, and a probe over Java accessors it can never see would report
+``unsupported`` on a healthy install. They gate on the tier instead, which is a
+fact this side can check. ``plan.cancel`` names none for a different reason: a
+stop that a missing scan could refuse is not a stop.
 
 Each adapter answers exactly one question that cannot be faked: *what observable
 change proves this happened?*
@@ -44,6 +44,8 @@ change proves this happened?*
 ``combat.shove``               the target re-reads down or further away
 ``combat.engage``              the target re-reads down, or is honestly gone
 ``combat.retreat``             the nearest observed zombie's distance grew
+``crafting.inspect``           the readout answers for the recipe that was named
+``crafting.craft``             one more of the recipe's product is in the inventory
 =============================  =========================================
 
 None of them selects anything. The item, the square, the book, the wound and the
@@ -68,6 +70,7 @@ from .common import (
 )
 from .consume import DrinkAdapter, DrinkSourceAdapter, EatAdapter, ensure_main_prerequisite
 from .container import ContainerInspectAdapter, ContainerOpenNearbyAdapter
+from .crafting import CraftingCraftAdapter, CraftingInspectAdapter
 from .doors import DoorCloseAdapter, DoorOpenAdapter, DoorUnlockAdapter
 from .equipment import EquipAdapter, UnequipAdapter
 from .inventory import (
@@ -95,6 +98,8 @@ __all__ = [
     "ContainerChain",
     "ContainerInspectAdapter",
     "ContainerOpenNearbyAdapter",
+    "CraftingCraftAdapter",
+    "CraftingInspectAdapter",
     "DoorCloseAdapter",
     "DoorOpenAdapter",
     "DoorUnlockAdapter",
@@ -160,6 +165,15 @@ def register_game_adapters(registry: AdapterRegistry) -> AdapterRegistry:
     registry.register(CombatShoveAdapter())
     registry.register(CombatEngageAdapter())
     registry.register(CombatRetreatAdapter())
+    # The crafting rung. The reading is P0 and gates on the observation tier;
+    # only the craft rides the ``crafting`` capability, which starts
+    # experimental and is withheld until a live run promotes it. The craft's
+    # base tier is P3 — spending materials is irreversible even when nothing
+    # moves — and it escalates itself to P4 per command when the recipe needs
+    # a surface or a world container, which is a fact about the arguments and
+    # therefore never visible from the action name.
+    registry.register(CraftingInspectAdapter())
+    registry.register(CraftingCraftAdapter())
     # The one deference in the file, and the only registration here that is
     # conditional. ``register_builtins`` publishes an API-free cancel, and a
     # session that has both must keep that one: stopping has to work before

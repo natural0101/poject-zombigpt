@@ -131,6 +131,7 @@ CHANNEL_KINDS: Final[frozenset[str]] = frozenset(
         "sleep_until_rested",
         "avoid_threat",
         "engage_single_zombie",
+        "craft_item",
     }
 )
 
@@ -159,6 +160,12 @@ CHANNEL_KINDS: Final[frozenset[str]] = frozenset(
 #: behind the per-window combat policy, and refused by name by every
 #: provider, because a model deciding a fight is safe is the proposal this
 #: whole architecture exists to make impossible.
+#: ``craft_item`` joins on the same terms, with the argument turned from
+#: safety to property: driven by the deterministic craft mission
+#: (``pz_agent_cli.craft_mission``) behind the crafting policy's per-run
+#: decision, and refused by name by every provider, because a craft
+#: *destroys* what it spends and a model choosing which of the character's
+#: possessions to destroy is a proposal no refusal could take back.
 EXECUTOR_KINDS: Final[frozenset[str]] = frozenset(
     {
         "navigate_to",
@@ -172,6 +179,7 @@ EXECUTOR_KINDS: Final[frozenset[str]] = frozenset(
         "sleep_until_rested",
         "avoid_threat",
         "engage_single_zombie",
+        "craft_item",
     }
 )
 
@@ -623,16 +631,16 @@ class TestNavigateToIsServedByTheExecutor:
     def test_every_channel_kind_is_owned_by_exactly_one_server(self) -> None:
         """Provider-served and executor-served partition the vocabulary.
 
-        The arithmetic is stated in full: fourteen kinds in the channel,
-        eleven of them deterministic (four navigation-and-mission kinds, the
-        two rerouted consume kinds, the three care kinds, the retreat kind,
-        the combat kind), three left to a plan provider. A kind added to one
-        census and not the other fails here.
+        The arithmetic is stated in full: fifteen kinds in the channel, twelve
+        of them deterministic (four navigation-and-mission kinds, the two
+        rerouted consume kinds, the three care kinds, the retreat kind, the
+        combat kind, the craft kind), three left to a plan provider. A kind
+        added to one census and not the other fails here.
         """
         assert EXECUTOR_KINDS <= CHANNEL_KINDS
         assert {kind.value for kind in GoalKind} == CHANNEL_KINDS
-        assert len(CHANNEL_KINDS) == 14
-        assert len(EXECUTOR_KINDS) == 11
+        assert len(CHANNEL_KINDS) == 15
+        assert len(EXECUTOR_KINDS) == 12
         assert {
             "read_for_boredom",
             "train_skill",
@@ -1247,6 +1255,158 @@ class TestEngageSingleZombieIsServedByTheMission:
         minted = {kind.value for kind in INITIATIVE_GOALS.values()}
         assert combat not in minted
         assert minted == {"satisfy_hunger", "satisfy_thirst", "read_for_boredom"}
+
+
+class TestCraftItemIsServedByTheMission:
+    """The fifteenth kind's half of the seam: the craft mission, no provider.
+
+    The same joins proven for the other deterministic kinds, over the one
+    action in the vocabulary that cannot be taken back: a real queue admits
+    and activates the goal *with its product parameter*, the real
+    ``to_planner_goal`` widens it, and the real :class:`NavigatingPlanner`
+    drives the crafting policy's chosen recipe into the loop's action channel
+    — one run, ``count`` on the wire — while the wrapped planner, a spy, is
+    never asked anything. And the shortfall pin: a recipe the character knows
+    and cannot afford ends the goal typed, without a single step going out to
+    look for the materials.
+    """
+
+    SPEAR: Final = "Base.SpearCrude"
+    BRANCH: Final = "Base.TreeBranch"
+    TWINE: Final = "Base.Twine"
+
+    def workshop(self, *, materials: list[dict[str, object]] | None = None) -> Observation:
+        """One branch, carrying the readout for a recipe that makes a spear.
+
+        The readout is the mod's, not this side's: every recipe fact the
+        policy reads — the name, the product, whether the character has
+        learned it, what one run consumes — rides on the observed item, which
+        is why a world with no readout can only ever refuse.
+        """
+        branch_ref = f"item:{DEFAULT_SESSION}:player-main:branch1:0"
+        branch = make_item(
+            branch_ref,
+            f"container:{DEFAULT_SESSION}:player-main",
+            full_type=self.BRANCH,
+            display_name="Tree Branch",
+            category="Item",
+            extra={
+                "crafting": {
+                    "recipe_count": 1,
+                    "known_recipe_count": 1,
+                    "recipes": [
+                        {
+                            "name": "MakeSpear",
+                            "product": self.SPEAR,
+                            "display_name": "Make Crude Spear",
+                            "known": True,
+                            "needs_surface": False,
+                            "materials": materials
+                            if materials is not None
+                            else [{"full_type": self.BRANCH, "count": 1}],
+                        }
+                    ],
+                }
+            },
+        )
+        return planner_observation(inventory=inventory(branch), player=make_player())
+
+    def craft_goal(self, queue: GoalQueue, *, key: str = "seam-craft") -> GoalRecord:
+        return activated(
+            queue,
+            GoalKind.CRAFT_ITEM,
+            params=GoalParams(product=self.SPEAR),
+            key=key,
+        )
+
+    def test_null_provider_refuses_craft_item_by_name(self) -> None:
+        """The deterministic provider's honest answer is a typed refusal.
+
+        The property that keeps a mis-assembled loop from spending the
+        character's possessions: a goal-capable planner with no navigating
+        wrapper refuses the kind and lets its budgets end it — it never
+        approximates a craft with a plan for something else.
+        """
+        record = self.craft_goal(channel())
+
+        proposal = proposed_for(record, world(pantry(), needy()))
+
+        assert proposal.refused
+        assert proposal.reason_code is ReasonCode.CAPABILITY_UNAVAILABLE
+        assert "craft mission" in proposal.detail
+
+    def test_the_wrapper_drives_the_mission_and_never_asks_the_planner(self) -> None:
+        queue = channel()
+        spy = SpyGoalPlanner()
+        wrapper = NavigatingPlanner(spy)
+        actions = ActionChannel(clock=FakeClock())
+        wrapper.bind(ExecutorHost(goals=queue, actions=actions))
+        record = self.craft_goal(queue)
+
+        value = wrapper.propose_for_goal(to_planner_goal(record), self.workshop())
+
+        # Every craft travels the action channel, never the goal seam: a
+        # queued craft is not a product in the bag, so no step's own success
+        # may end the goal.
+        assert value is None
+        assert actions.pending_count == 1
+        taken = actions.take_next()
+        assert taken is not None
+        _, request = taken
+        assert request.action is ActionName.CRAFTING_CRAFT
+        # The recipe is the policy's choice from the observed readout, and the
+        # count is on the wire so the mod never guesses a default.
+        assert request.args == {"recipe": "MakeSpear", "count": 1}
+        # Attribution, as everywhere in this file: the request is the goal's.
+        assert request.idempotency_key.startswith(f"craft:{record.goal_id}")
+        assert spy.goal_calls == [] and spy.propose_calls == 0, (
+            "craft_item must never reach a plan provider"
+        )
+        report = wrapper.craft_report(record.goal_id)
+        assert report is not None and report["recipes_tried"] == ["MakeSpear"]
+
+    def test_a_shortfall_ends_the_goal_typed_and_sends_nobody_looting(self) -> None:
+        """Materials missing is a report, not an errand.
+
+        The wave's own boundary: chaining a craft onto a loot is a decision
+        about the user's time and the character's safety, and this goal does
+        not make it. The channel stays empty — not one step goes out.
+        """
+        queue = channel()
+        spy = SpyGoalPlanner()
+        wrapper = NavigatingPlanner(spy)
+        actions = ActionChannel(clock=FakeClock())
+        wrapper.bind(ExecutorHost(goals=queue, actions=actions))
+        record = self.craft_goal(queue)
+        short = self.workshop(
+            materials=[
+                {"full_type": self.BRANCH, "count": 1},
+                {"full_type": self.TWINE, "count": 2},
+            ]
+        )
+
+        value = wrapper.propose_for_goal(to_planner_goal(record), short)
+
+        assert value is None
+        assert actions.pending_count == 0, "a shortfall must not send the character anywhere"
+        ended = queue.record(record.goal_id)
+        assert ended is not None
+        assert ended.state.value == "failed"
+        assert ended.reason_code is ReasonCode.RECIPE_MATERIALS_MISSING
+        assert self.TWINE in ended.detail
+        assert spy.goal_calls == [] and spy.propose_calls == 0
+
+    def test_neither_the_arbiter_nor_the_initiative_path_can_mint_the_kind(self) -> None:
+        """Only an explicit user submission reaches crafting — pinned by census.
+
+        The combat kind's pin, for the same reason one rung along: the two
+        tables by which the system mints a goal for itself must never name a
+        kind that spends the character's possessions. The provider refusal
+        above closes the third route.
+        """
+        craft = GoalKind.CRAFT_ITEM.value
+        assert craft not in {kind.value for kind in TRIGGER_KINDS.values()}
+        assert craft not in {kind.value for kind in INITIATIVE_GOALS.values()}
 
 
 class TestAKindThePlannerCannotServeIsRefusedAtSubmission:

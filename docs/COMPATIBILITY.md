@@ -8,7 +8,7 @@ against the build actually installed on this machine.
 
 This document describes the capability model in
 `packages/pz_agent_core/src/pz_agent_core/capabilities/` — four modules:
-`model.py` (the states, the evidence, the report), `probes.py` (the twelve
+`model.py` (the states, the evidence, the report), `probes.py` (the fifteen
 probes), `scanner.py` (the read-only symbol scan) and `report_io.py` (loading and
 saving). The generated result lives in `compat/generated_api_report.json`, which
 is gitignored — it describes *your* installation, not the project's.
@@ -100,11 +100,15 @@ fails on the first unusual file.
 
 ---
 
-## The twelve probes
+## The fifteen probes
 
-`PROBES` in `probes.py` holds exactly twelve `ProbeDefinition`s. Each names the
+`PROBES` in `probes.py` holds exactly fifteen `ProbeDefinition`s. Each names the
 symbols a static scan must find (an AND over all of them), the runtime
 confirmation that could raise it to `verified`, and a ceiling.
+
+This section and the tool table below had drifted: both said twelve and both
+were missing `door_toggle` and `combat_assist`, which shipped in earlier waves.
+They are restored here along with `crafting`, which is new.
 
 | Capability | Required symbols | Static ceiling | Confirmed by evidence keys |
 | --- | --- | --- | --- |
@@ -119,6 +123,9 @@ confirmation that could raise it to `verified`, and a ceiling.
 | `survival_rest` | `ISTimedActionQueue.add` | `available_unverified` | `endurance_before`, `endurance_after` |
 | `survival_sleep` | `ISWorldObjectContextMenu`, `.onSleep` | **`experimental`** (`EXPERIMENTAL_API`) | `fatigue_before`, `fatigue_after`, `elapsed_game_seconds` |
 | `drink_world_source` | `ISTakeWaterAction`, `.new` | **`experimental`** (`EXPERIMENTAL_API`) | `thirst_before`, `thirst_after`, `source_ref` |
+| `door_toggle` | `ISWalkToTimedAction`, `.new`, `ISTimedActionQueue.add` | `available_unverified` | `door_ref`, `open_before`, `open_after` |
+| `combat_assist` | `ISWalkToTimedAction`, `.new`, `ISTimedActionQueue.add` | **`experimental`** (`EXPERIMENTAL_API`) | `target_ref` |
+| `crafting` | `ISWalkToTimedAction`, `.new`, `ISTimedActionQueue.add` | **`experimental`** (`EXPERIMENTAL_API`) | `recipe`, `product` |
 | `autonomous_attack` | none | **`unsupported`**, hard ceiling (`NO_VERIFIED_API`) | none accepted |
 
 Three design decisions that are visible in that table and are worth reading as
@@ -139,16 +146,31 @@ available is reported by the mod, per attempt.
 `unsupported`, so `confirm()` cannot raise it even with a live ack. The decision
 not to drive autonomous combat is a design decision.
 
-Three actions have **no probe at all**: `world.inspect`, `container.inspect` and
-`inventory.search`. Everything they read is reached through Java accessors that
-never appear in the game's Lua, so a probe over those names would report
-`unsupported` on a perfectly healthy install. They gate on the observation tier
-they need instead. The consequence is honest and worth stating: those three are
-the actions whose availability rests on no runtime evidence.
+**`door_toggle`, `combat_assist` and `crafting` all require the same
+walk-and-queue set, and their ceilings still differ.** That is not an
+inconsistency: the required symbols are what a *scan* can see, and for all three
+the thing that actually matters — the door toggle, the swing and shove presses,
+the recipe tables and the craft entry point — lives behind Java accessors no
+scan of the install reaches. Naming those in `required_symbols` would report
+`unsupported` on a perfectly healthy build. So the difference between them is
+the ceiling, argued per capability: opening a door is reversible and reads
+`available_unverified`; a swing and a craft are not, and both cap at
+`experimental` until a live run's re-observed evidence confirms the entry
+points. For `crafting` the argument is sharper than for combat — a craft that
+goes wrong has already spent the materials by the time anyone finds out, and
+nothing observes them back.
+
+Four actions have **no probe at all**: `world.inspect`, `container.inspect`,
+`inventory.search` and `crafting.inspect`. Everything they read is reached
+through Java accessors that never appear in the game's Lua, so a probe over
+those names would report `unsupported` on a perfectly healthy install. They gate
+on the observation tier they need instead. The consequence is honest and worth
+stating: those four are the actions whose availability rests on no runtime
+evidence.
 
 ## Which tools each capability gates
 
-`pz_agent_mcp.catalog` names the capability on the tool. Eleven of the twelve
+`pz_agent_mcp.catalog` names the capability on the tool. Fourteen of the fifteen
 probes gate a tool; `autonomous_attack` gates nothing, because nothing was built
 on it.
 
@@ -165,18 +187,29 @@ on it.
 | `medical_bandage` | `pz_action_bandage` |
 | `survival_rest` | `pz_action_rest` |
 | `survival_sleep` | `pz_action_sleep` |
+| `door_toggle` | `pz_action_open_door`, `pz_action_close_door`, `pz_action_unlock_door` |
+| `combat_assist` | `pz_action_equip_best_weapon`, `pz_action_shove`, `pz_action_engage`, `pz_action_retreat` |
+| `crafting` | `pz_action_craft` |
 
 `pz_action_open_container` is gated on `move_to_square` and not on a container
 capability, because what it does is walk the character to within reach.
 
-**Two capabilities are experimental, not one.** `experimental` is upgradeable
-but not usable, so on a clean scan `pz_action_sleep` and
-`pz_action_drink_source` are both withheld — named, with their reason, in
-`pz://capabilities` and by `withheld_tools()`. `drink_world_source` is capped
+**Four capabilities are experimental.** `experimental` is upgradeable but not
+usable, so on a clean scan `pz_action_sleep`, `pz_action_drink_source`, the four
+combat tools and `pz_action_craft` are all withheld — named, with their reason,
+in `pz://capabilities` and by `withheld_tools()`. `drink_world_source` is capped
 because §12.4 lists the world water action as unconfirmed. `survival_sleep` is
 capped for a sharper reason: vanilla drives sleep from a context-menu callback,
 so once the character is asleep there is no timed action to interrupt and no
-queue entry to cancel, and a panic stop cannot reach them.
+queue entry to cancel, and a panic stop cannot reach them. `combat_assist` is
+capped because the swing and shove presses have never been called from this
+project. `crafting` is capped because Build 42 rewrote crafting and none of the
+recipe spellings has been seen answering — and because a wrong guess there is
+paid for in materials that no later observation returns.
+
+`crafting.inspect` is the counter-example worth naming: it is part of the same
+rung and it is *not* withheld, because reading a recipe spends nothing. A build
+that cannot answer says so per call.
 
 `eat_percentage` is a good example of why the state matters. If percentage
 eating is usable — `verified` or `available_unverified` from the scan — the food

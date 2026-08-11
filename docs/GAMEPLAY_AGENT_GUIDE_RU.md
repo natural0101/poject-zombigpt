@@ -1,7 +1,7 @@
 <!--
   GENERATED FILE - DO NOT EDIT BY HAND.
   Generator: pz_agent_core.knowledge.docgen.render_guide_ru
-  Corpus revision: 7e8169d348d5b434 (sha256/16 of the canonical corpus)
+  Corpus revision: d4258d6e19fc5d33 (sha256/16 of the canonical corpus)
   Edit knowledge/gameplay/*.yaml and regenerate; the drift test
   byte-compares this file against a fresh render.
 -->
@@ -31,7 +31,7 @@
 
 ## Сводка
 
-Правил всего: 50. Проверено кодом: 46, проверено в игре: 0, гипотез: 4.
+Правил всего: 63. Проверено кодом: 55, проверено в игре: 0, гипотез: 8.
 
 ## Контейнеры и лут (`containers_loot`)
 
@@ -49,6 +49,37 @@
 - `loot_completion_criterion` — **проверено кодом** (источник: код этого репозитория). A loot mission finishes on a provable criterion — every reachable container in scope was inspected or carries a recorded skip reason — and is bounded to 24 candidates per mission with a default radius scope of 10 squares.
   - `max_candidates_per_mission = 24 containers` — проверено кодом
   - `default_loot_radius = 10 squares` — проверено кодом
+
+## Крафт (`crafting`)
+
+Проверенные правила:
+
+- `crafting_recipe_is_chosen_deterministically` — **проверено кодом** (источник: код этого репозитория). A craft goal names a product, never a recipe: which recipe spends which materials is deterministic policy, ranked known-first, then no-surface-first, then the shorter requirement list, then the name — so two runs over one observation always weigh the same recipe first.
+  - `max_candidate_recipes = 8 recipes` — проверено кодом
+  - `max_recipes_per_item = 16 entries` — проверено кодом
+  - `max_materials_per_recipe = 8 lines` — проверено кодом
+- `crafting_unreadable_is_never_the_convenient_reading` — **проверено кодом** (источник: код этого репозитория). Both crafting flags are tri-state and neither absence is read as the convenient answer: an unreported 'known' refuses the recipe as unknown, and an unreported 'needs_surface' is treated as needing one — which costs a permission tier rather than a craft queued where it cannot run.
+- `crafting_reserved_materials_get_their_own_refusal` — **проверено кодом** (источник: код этого репозитория). A user-reserved item is never spent by a craft, and when reserves are the only reason a recipe is short the refusal says so with its own token — so the user answers 'release the reserve?' instead of being told the materials do not exist.
+  - `max_reported_shortfalls = 6 lines` — проверено кодом
+- `crafting_one_command_runs_one_recipe_once` — **проверено кодом** (источник: код этого репозитория). One crafting.craft command runs one recipe once. The count is on the wire rather than defaulted by the mod, both halves cap it at one, and there is no loop and no retry behind the command id: a recipe that could run again is a report, and running it again is another command.
+  - `max_craft_count = 1 runs` — проверено кодом
+  - `max_recipe_name_len = 64 characters` — проверено кодом
+  - `craft_timeout_ms = 60000 ms` — проверено кодом
+- `crafting_success_is_the_product_observed` — **проверено кодом** (источник: код этого репозитория). A craft succeeds only when the re-observed inventory holds more of the recipe's product than before; the mod requires the second half too — that something the recipe consumes is measurably gone — because a product that appeared while nothing was spent did not come out of this recipe.
+- `crafting_risk_escalates_from_the_arguments` — **проверено кодом** (источник: код этого репозитория). Spending what the character carries is P3 because it is irreversible; the same command becomes P4 — never automatic — when the named recipe may need a surface or is only afforded by items in a world container, which is the escalate-by-arguments rule move_to applies off-radius.
+- `crafting_reading_a_recipe_spends_nothing` — **проверено кодом** (источник: код этого репозитория). crafting.inspect is read-only in fact as well as in the protocol: the character does not move and touches nothing, the answer comes off the crafting readout the observer already produces, and a recipe that was not found is a finding rather than a failure.
+- `crafting_goal_bounds_what_one_submission_spends` — **проверено кодом** (источник: код этого репозитория). A craft_item goal names a product and at most four runs, one command each, and the mission will not go and fetch what is missing: a known recipe short of materials ends the goal naming the shortfall, and whether to loot for it is the user's next submission.
+  - `max_craft_goal_count = 4 runs` — проверено кодом
+  - `max_craft_attempts = 6 attempts` — проверено кодом
+  - `max_recipes_tried = 3 recipes` — проверено кодом
+- `crafting_capability_is_withheld_until_a_live_run` — **проверено кодом** (источник: код этого репозитория). The crafting capability declares itself experimental, so pz_action_craft is withheld on every install this project can ship to and only a live craft — the recipe's product observed in the inventory afterwards — promotes it; the recipe reading is not withheld with it, because reading spends nothing.
+
+Гипотезы (фон для проверенных отказов, не руководство к действию):
+
+- `crafting_build42_rewrote_the_system` — **не проверено (гипотеза)** (источник: официальные материалы). Build 42 replaced Build 41's crafting model with a new recipe and script system, so every recipe accessor this mod probes is a guess: none of the spellings has been seen answering in a live session, and each is probed through a short closed candidate list.
+- `crafting_recipes_are_learned_before_they_can_be_run` — **не проверено (гипотеза)** (источник: wiki). A character can only craft recipes it has learned — some known from the start or from an occupation, others taught by reading a magazine or skill book — and this repository has never observed how Build 42 reports that knowledge.
+- `crafting_some_recipes_need_a_surface_or_a_station` — **не проверено (гипотеза)** (источник: wiki). Some Project Zomboid recipes require the character to be at or near something — a workbench, a fire, a specific nearby item — rather than merely holding the materials, and how Build 42 expresses that requirement has not been observed from this repository.
+- `crafting_yield_and_skill_effects_are_unmeasured` — **не проверено (гипотеза)** (источник: wiki). How much a recipe yields, whether a craft can fail or produce a lower-quality result, and what a skill level changes about any of it are unmeasured here: no number about Project Zomboid's own crafting outcomes appears anywhere in this repository.
 
 ## Двери и окна (`doors_windows`)
 

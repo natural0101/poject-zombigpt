@@ -62,6 +62,34 @@ Observe.MAX_OBJECTS_SCANNED = 256
 Observe.MAX_WORN = 32
 Observe.MAX_BODY_PARTS = 24
 
+--- Known recipes read out of the engine per tick, and entries published from
+--- them. Both are deliberately small. The tick runs on the game thread four
+--- times a second, and the published entries ride `player.stats` -- the one
+--- open scalar map in schemas/observation.schema.json, which has no recipe
+--- tier at all -- so twelve of them must never crowd the character's real
+--- stats out of ObserveModel.MAX_STATS.
+Observe.MAX_RECIPE_SCAN = 24
+Observe.MAX_RECIPES = 12
+
+--- Ingredient entries read off one recipe, and recipes read off one book.
+Observe.MAX_RECIPE_INPUTS = 8
+Observe.MAX_TAUGHT_RECIPES = 32
+
+--- Recipe entries stamped onto one carried item. The readout rides the items
+--- it consumes -- see attachRecipes -- so this is what bounds one item's share
+--- of it.
+Observe.MAX_RECIPES_PER_ITEM = 8
+
+--- Entries walked when the known-recipe collection exposes no `contains`.
+--- Past this the set is not materialised at all and every question about it
+--- answers "could not tell" rather than a count off half a list.
+Observe.MAX_KNOWN_WALK = 256
+
+--- Items counted when tallying what the character carries for a recipe. The
+--- tally is built from the walk the tick already did, so this only guards
+--- against a malformed node tree, never against the engine.
+Observe.MAX_TALLY_ITEMS = 512
+
 --- Health scales the game reports out of 100.
 local PERCENT = 100
 
@@ -160,6 +188,22 @@ end
 --- Entry `index` of a Java collection, which is zero-based.
 local function listGet(list, index)
   return (invoke(list, "get", index))
+end
+
+--- The first of `names` that answers with something list-shaped, plus the name
+--- that worked.
+---
+--- `firstOf` cannot serve here: Kahlua hands a Java collection over as a value
+--- whose Lua `type` is not something this side should assert on, so "is it a
+--- list" is asked the only way that means anything -- by asking it its size.
+local function firstList(owner, names)
+  for index = 1, #names do
+    local value = invoke(owner, names[index])
+    if value ~= nil and listSize(value) ~= nil then
+      return value, names[index]
+    end
+  end
+  return nil
 end
 
 --- The name of an enum-like Java object, as a token.
@@ -483,6 +527,254 @@ function Observe.playerFields(player)
 end
 
 -- ---------------------------------------------------------------------------
+-- recipes
+--
+-- Every engine symbol in this section is UNVERIFIED against Build 42. The
+-- crafting system was rewritten for that build and none of these spellings has
+-- been seen answering in a live session, so each is probed through a short
+-- closed list, each call is guarded, and a reader that does not answer costs
+-- the field rather than producing a number. "This character knows no recipes"
+-- and "this build would not say" are opposite facts and only one of them is
+-- safe to plan against. The candidate spellings are:
+--
+--   IsoGameCharacter.getKnownRecipes   the character's known-recipe collection
+--   InventoryItem.getTeachedRecipes    what a book would teach
+--   CraftRecipe.getInputs / getSource  what a recipe consumes
+--   InputScript.getItems / getCount    one ingredient and how much of it
+--   getScriptManager().getCraftRecipe / getRecipe   name -> recipe
+--
+-- docs/GAME_API_VERIFICATION.md is where they belong as rows; nothing here
+-- claims any of them exists.
+-- ---------------------------------------------------------------------------
+
+--- A recipe's name, whether the collection held strings or recipe objects.
+local function recipeNameOf(entry)
+  if type(entry) == "string" then
+    return entry
+  end
+  return (readString(entry, { "getName", "getOriginalname" }))
+end
+
+Observe.recipeNameOf = recipeNameOf
+
+--- How to ask whether the character already knows a recipe, by name.
+---
+--- Returns a query `name -> true | false | nil`, or nil when this build exposes
+--- no known-recipe reader at all. The inner nil is the third state and it is
+--- load-bearing: a collection that answered neither `contains` nor a bounded
+--- walk cannot rule a recipe out, and reading that as "not known" would make
+--- every magazine in the game look unread.
+function Observe.knownRecipeQuery(player)
+  local known = invoke(player, "getKnownRecipes")
+  if known == nil then
+    return nil
+  end
+  if member(known, "contains") ~= nil then
+    return function(name)
+      local answer = invoke(known, "contains", name)
+      if type(answer) == "boolean" then
+        return answer
+      end
+      return nil
+    end
+  end
+  -- No membership test, so the set is materialised once -- bounded, and only
+  -- when the whole of it fits inside the bound. Half a set answers "not known"
+  -- for everything it did not reach, which is the fabrication this avoids.
+  local size = listSize(known)
+  if size == nil or size > Observe.MAX_KNOWN_WALK then
+    return nil
+  end
+  local names = {}
+  for index = 0, size - 1 do
+    local name = recipeNameOf(listGet(known, index))
+    if name ~= nil then
+      names[name] = true
+    end
+  end
+  return function(name)
+    return names[name] == true
+  end
+end
+
+--- The known recipe names, in engine order, plus how many the engine reported.
+---
+--- Returns nil when the collection could not be enumerated -- a `contains`-only
+--- collection can answer questions but cannot be listed, and listing it from
+--- nothing is not an option this file has.
+function Observe.knownRecipeNames(player)
+  local known = invoke(player, "getKnownRecipes")
+  local size = listSize(known)
+  if size == nil then
+    return nil
+  end
+  local scanned = math.min(size, Observe.MAX_RECIPE_SCAN)
+  local names = {}
+  local count = 0
+  for index = 0, scanned - 1 do
+    local entry = listGet(known, index)
+    local name = recipeNameOf(entry)
+    if name ~= nil then
+      count = count + 1
+      names[count] = { name = name, recipe = type(entry) ~= "string" and entry or nil }
+    end
+  end
+  return names, size, size > scanned
+end
+
+--- How many recipes this item would teach that the character does not know.
+---
+--- nil, never 0, whenever the count cannot be established: the taught list is
+--- unreadable, it runs past the bound, or the known-recipe query could not
+--- answer. `pz_agent_core.policy.literature` picks a recipe magazine on exactly
+--- this field -- a fabricated 0 refuses every magazine in the game, and a
+--- fabricated count sends the character off to read one it has already learned.
+local function unreadRecipes(item, isKnown)
+  if isKnown == nil then
+    return nil
+  end
+  local taught = firstList(item, { "getTeachedRecipes" })
+  local size = listSize(taught)
+  if size == nil or size > Observe.MAX_TAUGHT_RECIPES then
+    return nil
+  end
+  local unread = 0
+  for index = 0, size - 1 do
+    local name = recipeNameOf(listGet(taught, index))
+    if name == nil then
+      return nil
+    end
+    local known = isKnown(name)
+    if known == nil then
+      return nil
+    end
+    if not known then
+      unread = unread + 1
+    end
+  end
+  return unread
+end
+
+Observe.unreadRecipes = unreadRecipes
+
+--- The recipe object behind a known-recipe entry, or nil.
+---
+--- An entry that is already a recipe object is used as it stands; a name is
+--- looked up through the script manager, which is reached through `_G` rather
+--- than as a bare global because an unverified symbol must not become one this
+--- file depends on being present.
+local function recipeObject(entry)
+  if entry.recipe ~= nil then
+    return entry.recipe
+  end
+  local accessor = _G["getScriptManager"]
+  if type(accessor) ~= "function" then
+    return nil
+  end
+  local ok, manager = pcall(accessor)
+  if not ok or manager == nil then
+    return nil
+  end
+  for _, name in ipairs({ "getCraftRecipe", "getRecipe" }) do
+    local recipe = invoke(manager, name, entry.name)
+    if recipe ~= nil then
+      return recipe
+    end
+  end
+  return nil
+end
+
+--- What one recipe consumes: `{ { types = {...}, count = n }, ... }`, or nil
+--- when this build would not say.
+---
+--- A recipe whose ingredient list is only partly readable answers nil as a
+--- whole. A materials verdict computed from the ingredients that happened to
+--- answer would call a recipe ready on the strength of the requirements nobody
+--- read, which is the one answer that gets materials destroyed for nothing.
+local function recipeInputs(recipe)
+  local list = firstList(recipe, { "getInputs", "getSource" })
+  local size = listSize(list)
+  if size == nil then
+    return nil
+  end
+  local scanned = math.min(size, Observe.MAX_RECIPE_INPUTS)
+  if size > scanned then
+    return nil
+  end
+  local inputs = {}
+  for index = 0, scanned - 1 do
+    local entry = listGet(list, index)
+    local types = firstList(entry, { "getItems", "getItemTypes" })
+    local typeCount = listSize(types)
+    if typeCount == nil or typeCount == 0 then
+      return nil
+    end
+    local names = {}
+    for typeIndex = 0, math.min(typeCount, Observe.MAX_RECIPE_INPUTS) - 1 do
+      local name = listGet(types, typeIndex)
+      if type(name) ~= "string" then
+        name = readString(name, { "getFullType", "getName" })
+      end
+      if name == nil then
+        return nil
+      end
+      names[#names + 1] = name
+    end
+    inputs[#inputs + 1] = { types = names, count = readNumber(entry, { "getCount", "getAmount" }) or 1 }
+  end
+  return inputs
+end
+
+Observe.recipeInputs = recipeInputs
+
+--- Whether the recipe needs something the character has to stand at.
+---
+--- Tri-state, and the third state is the point: `false` is only ever returned
+--- when a reader actually answered that there is no such requirement. The
+--- sidecar escalates the permission tier on anything that is not a positive
+--- `false`, so an absent reader must stay absent -- it buys one tier of
+--- caution, while a fabricated `false` buys a craft queued where it cannot run.
+function Observe.recipeNeedsSurface(recipe)
+  if member(recipe, "getNearItem") == nil then
+    return nil
+  end
+  local near = invoke(recipe, "getNearItem")
+  if type(near) == "string" then
+    return #near > 0
+  end
+  if near == nil then
+    return false
+  end
+  return nil
+end
+
+--- What one recipe produces, as an item type, or nil when it cannot be read.
+function Observe.recipeProduct(recipe)
+  local outputs = firstList(recipe, { "getOutputs" })
+  local size = listSize(outputs)
+  if size ~= nil and size > 0 then
+    local first = listGet(outputs, 0)
+    local types = firstList(first, { "getItems", "getItemTypes" })
+    if listSize(types) ~= nil and listSize(types) > 0 then
+      local name = listGet(types, 0)
+      if type(name) == "string" then
+        return name
+      end
+      return (readString(name, { "getFullType", "getName" }))
+    end
+    local direct = readString(first, { "getFullType", "getName" })
+    if direct ~= nil then
+      return direct
+    end
+  end
+  local result = invoke(recipe, "getResult")
+  if result == nil then
+    return nil
+  end
+  return (readString(result, { "getFullType", "getType", "getName" }))
+end
+
+-- ---------------------------------------------------------------------------
 -- inventory
 -- ---------------------------------------------------------------------------
 
@@ -504,17 +796,35 @@ local function itemFood(item)
   }
 end
 
-local function itemLiterature(item)
+--- The literature payload, spelled the way the sidecar reads it.
+---
+--- The key names here are Python's, not the engine's, and that is deliberate:
+--- `pz_agent_core.policy.literature.LiteratureView.from_item` reads
+--- `pages_total`, `min_level` and `max_level`, while this reader emitted
+--- `pages`, `skill_level_min` and `skill_level_max` -- three keys that never
+--- met, so every level window on this side arrived as the Python default on
+--- that side. Worse, it never emitted `unread_recipes` at all, which is the one
+--- field the learn_recipe goal selects on, so that goal rejected every recipe
+--- magazine in the game and was dead end to end. Renaming here rather than
+--- there is what keeps one spelling on the wire; the drift is named in this
+--- comment so the next reader knows why the Lua keys are the Python ones.
+---
+--- `unread_recipes` stays absent whenever it could not be counted -- see
+--- unreadRecipes. Absent is not zero: the sidecar reads a missing count as
+--- "no unread recipes" and refuses the book, which is the safe direction to be
+--- wrong in, and a fabricated count is not.
+local function itemLiterature(item, isKnown)
   local pages = readNumber(item, { "getNumberOfPages" })
   if pages == nil then
     return nil
   end
   return {
-    pages = pages,
+    pages_total = pages,
     pages_read = readNumber(item, { "getAlreadyReadPages" }),
     skill = readString(item, { "getSkillTrained" }),
-    skill_level_min = readNumber(item, { "getLvlSkillTrained" }),
-    skill_level_max = readNumber(item, { "getMaxLevelTrained" }),
+    min_level = readNumber(item, { "getLvlSkillTrained" }),
+    max_level = readNumber(item, { "getMaxLevelTrained" }),
+    unread_recipes = unreadRecipes(item, isKnown),
   }
 end
 
@@ -531,7 +841,13 @@ local function itemFluid(item)
 end
 
 --- One item, as the descriptor ObserveModel consumes.
-local function itemFields(item, hands)
+---
+--- `context` carries what the walk needs but the item cannot answer for itself:
+--- which items are in the character's hands, and how to ask whether a recipe is
+--- already known. Both are read once per tick and shared, because asking the
+--- character the same question once per item is pure game-thread work.
+local function itemFields(item, context)
+  local hands = context.hands
   local descriptor = {
     runtime_id = readIdentity(item, { "getID" }),
     full_type = readString(item, { "getFullType" }),
@@ -541,7 +857,7 @@ local function itemFields(item, hands)
     favorite = readBoolean(item, { "isFavorite" }) == true,
     equipped = readBoolean(item, { "isEquipped" }) == true,
     food = itemFood(item),
-    literature = itemLiterature(item),
+    literature = itemLiterature(item, context.is_known),
     fluid = itemFluid(item),
   }
   if hands.primary ~= nil and rawequal(hands.primary, item) then
@@ -577,7 +893,7 @@ end
 --- `depth` is bounded here as well as in ObserveModel: the model refuses a node
 --- that is too deep, but the walk that produced it would already have run. The
 --- same reasoning is why `budget` exists -- see newWalkBudget.
-walkItemContainer = function(container, node, hands, depth, budget)
+walkItemContainer = function(container, node, context, depth, budget)
   local items = invoke(container, "getItems")
   local size = listSize(items)
   node.capacity = readNumber(container, { "getCapacity", "getMaxWeight" })
@@ -601,7 +917,7 @@ walkItemContainer = function(container, node, hands, depth, budget)
     local item = listGet(items, index)
     if item ~= nil then
       budget.items = budget.items - 1
-      local descriptor = itemFields(item, hands)
+      local descriptor = itemFields(item, context)
       count = count + 1
       node.items[count] = descriptor
       local nested = invoke(item, "getInventory")
@@ -617,7 +933,7 @@ walkItemContainer = function(container, node, hands, depth, budget)
             runtime_id = descriptor.runtime_id,
             name = descriptor.display_name,
             accessible = true,
-          }, hands, depth + 1, budget)
+          }, context, depth + 1, budget)
         end
       end
     end
@@ -642,9 +958,15 @@ end
 function Observe.inventoryRoots(player)
   local roots = { containers_dropped = 0 }
   local budget = newWalkBudget()
-  local hands = {
-    primary = invoke(player, "getPrimaryHandItem"),
-    secondary = invoke(player, "getSecondaryHandItem"),
+  -- Read once and shared across every item the walk visits: both questions
+  -- are about the character, not the item, and asking them per item is the
+  -- same answer bought several hundred times on the game thread.
+  local context = {
+    hands = {
+      primary = invoke(player, "getPrimaryHandItem"),
+      secondary = invoke(player, "getSecondaryHandItem"),
+    },
+    is_known = Observe.knownRecipeQuery(player),
   }
   local main = invoke(player, "getInventory")
   if main == nil then
@@ -655,7 +977,7 @@ function Observe.inventoryRoots(player)
     kind = model().CONTAINER_KIND.PLAYER_MAIN,
     name = "Inventory",
     accessible = true,
-  }, hands, 1, budget)
+  }, context, 1, budget)
 
   local worn = invoke(player, "getWornItems")
   local size = listSize(worn)
@@ -681,7 +1003,7 @@ function Observe.inventoryRoots(player)
             runtime_id = readIdentity(item, { "getID" }),
             name = readString(item, { "getName", "getDisplayName" }),
             accessible = true,
-          }, hands, 1, budget)
+          }, context, 1, budget)
         end
       end
     end
@@ -693,6 +1015,242 @@ function Observe.inventoryRoots(player)
   end
   roots.containers_dropped = budget.containers_dropped
   return roots
+end
+
+-- ---------------------------------------------------------------------------
+-- crafting
+-- ---------------------------------------------------------------------------
+
+--- What the character carries, tallied by item type.
+---
+--- Built from the container nodes this tick already walked rather than from a
+--- second pass over the engine: it costs no engine call at all, and it makes
+--- the materials verdict agree with the inventory the same document publishes.
+--- A recipe called ready against items the snapshot does not show would be
+--- unexplainable to anyone reading the two side by side.
+---
+--- Each type is counted under its full name and under the part after the last
+--- dot, because a recipe names an ingredient either way -- "Base.Nails" and
+--- "Nails" are the same nail -- and neither side of that is worth guessing at
+--- match time.
+local function carriedTally(roots)
+  local tally = {}
+  if type(roots) ~= "table" then
+    return nil
+  end
+  local budget = Observe.MAX_TALLY_ITEMS
+
+  local function count(name)
+    if type(name) ~= "string" or #name == 0 then
+      return
+    end
+    tally[name] = (tally[name] or 0) + 1
+    local tail = name:match("([^%.]+)$")
+    if tail ~= nil and tail ~= name then
+      tally[tail] = (tally[tail] or 0) + 1
+    end
+  end
+
+  local function walk(node)
+    if type(node) ~= "table" or type(node.items) ~= "table" then
+      return
+    end
+    for index = 1, #node.items do
+      if budget <= 0 then
+        return
+      end
+      budget = budget - 1
+      local descriptor = node.items[index]
+      count(descriptor.full_type)
+      walk(descriptor.container)
+    end
+  end
+
+  for index = 1, #roots do
+    walk(roots[index])
+  end
+  return tally
+end
+
+Observe.carriedTally = carriedTally
+
+--- Are every one of `inputs` on the character right now?
+---
+--- Returns true or false. The alternatives one ingredient lists are summed
+--- rather than tried one at a time: a recipe that accepts a plank or a log is
+--- satisfied by two planks, one log and one plank, or two logs, and asking
+--- each type on its own would refuse the mixed bag the game accepts.
+local function materialsReady(inputs, tally, multiplier)
+  for index = 1, #inputs do
+    local input = inputs[index]
+    local held = 0
+    for typeIndex = 1, #input.types do
+      held = held + (tally[input.types[typeIndex]] or 0)
+    end
+    if held < (input.count * multiplier) then
+      return false, input
+    end
+  end
+  return true
+end
+
+Observe.materialsReady = materialsReady
+
+--- What the character can make, as plain values, or nil when this build says
+--- nothing about recipes at all.
+---
+--- Three separate facts, kept separate: how many recipes the character knows,
+--- which of the published ones have their materials on the person right now,
+--- and whether the ingredient lists could be read at all. A build that names
+--- the recipes but not their ingredients publishes the names with no verdict
+--- rather than a verdict nobody measured -- crafting destroys materials, and
+--- "ready" is the word that spends them.
+---
+--- Materials are counted on the character only. A recipe that also needs a
+--- crafting surface or a world container is not something this reading can see,
+--- and the risk escalation for that lives in the sidecar's policy, per the
+--- arguments a command carries.
+function Observe.craftingFields(player, roots)
+  local names, known, truncated = Observe.knownRecipeNames(player)
+  if names == nil then
+    return nil
+  end
+  -- The first MAX_RECIPE_SCAN the engine listed, then ordered by name: the
+  -- second half is what makes the published set the same from one tick to the
+  -- next, and `truncated` is what stops the shorter list from reading as the
+  -- whole of what this character knows.
+  table.sort(names, function(left, right)
+    return left.name < right.name
+  end)
+  local tally = carriedTally(roots)
+  local fields = {
+    known = known,
+    truncated = truncated == true or #names > Observe.MAX_RECIPES,
+    recipes = {},
+  }
+  local listed = math.min(#names, Observe.MAX_RECIPES)
+  for index = 1, listed do
+    local entry = names[index]
+    local record = { name = entry.name }
+    local recipe = recipeObject(entry)
+    if recipe ~= nil then
+      record.product = Observe.recipeProduct(recipe)
+      record.needs_surface = Observe.recipeNeedsSurface(recipe)
+      local inputs = recipeInputs(recipe)
+      if inputs ~= nil then
+        record.inputs = inputs
+        if tally ~= nil then
+          -- `ready` is true, false, or absent, and the third one is a reading
+          -- of its own: the recipe is known and its ingredients could not be
+          -- read. What the document makes of that is applyCrafting's decision,
+          -- so the counting happens there rather than being decided twice.
+          record.ready = materialsReady(inputs, tally, 1)
+        end
+      end
+    end
+    fields.recipes[index] = record
+  end
+  return fields
+end
+
+--- Stamp the recipe readout onto the items that are its ingredients.
+---
+--- The sidecar's crafting policy reads recipes off the item tier, which is one
+--- of the two places schemas/observation.schema.json leaves open, and it
+--- deduplicates them by name across the whole inventory. So each recipe is
+--- stamped on the FIRST carried item of each type it consumes rather than on
+--- every one of them: a hundred planks each carrying the same entry would
+--- multiply a document that already carries the hundred planks, and the
+--- sidecar would throw ninety-nine of the copies away.
+---
+--- Pure, and bounded twice over: the recipes were already capped when they were
+--- read, and no item takes more than MAX_RECIPES_PER_ITEM of them. A recipe
+--- whose product or ingredient list could not be read is stamped nowhere -- an
+--- entry that cannot say what it makes has no postcondition, and one whose
+--- requirements are half-read would understate what the craft spends.
+function Observe.attachRecipes(roots, crafting)
+  if type(roots) ~= "table" or type(crafting) ~= "table" or type(crafting.recipes) ~= "table" then
+    return
+  end
+  local index = {}
+  local budget = Observe.MAX_TALLY_ITEMS
+
+  local function remember(descriptor)
+    local fullType = descriptor.full_type
+    if type(fullType) ~= "string" or #fullType == 0 then
+      return
+    end
+    if index[fullType] == nil then
+      index[fullType] = descriptor
+    end
+    local tail = fullType:match("([^%.]+)$")
+    if tail ~= nil and index[tail] == nil then
+      index[tail] = descriptor
+    end
+  end
+
+  local function walk(node)
+    if type(node) ~= "table" or type(node.items) ~= "table" then
+      return
+    end
+    for position = 1, #node.items do
+      if budget <= 0 then
+        return
+      end
+      budget = budget - 1
+      remember(node.items[position])
+      walk(node.items[position].container)
+    end
+  end
+
+  for position = 1, #roots do
+    walk(roots[position])
+  end
+
+  for position = 1, #crafting.recipes do
+    local record = crafting.recipes[position]
+    if record.product ~= nil and record.inputs ~= nil then
+      -- One type per requirement line, because that is the shape the sidecar's
+      -- crafting policy reads. An ingredient the recipe would accept several
+      -- types for is published under the first of them, which can only make
+      -- the requirement look harder to meet than it is: the sidecar refuses a
+      -- craft it could have run, rather than spending materials on one it
+      -- could not. The adapter's own check is the one that sums alternatives.
+      local materials = {}
+      for inputIndex = 1, #record.inputs do
+        local input = record.inputs[inputIndex]
+        materials[inputIndex] = { full_type = input.types[1], count = input.count }
+      end
+      local stamped = {}
+      for inputIndex = 1, #record.inputs do
+        for typeIndex = 1, #record.inputs[inputIndex].types do
+          local descriptor = index[record.inputs[inputIndex].types[typeIndex]]
+          if descriptor ~= nil and stamped[descriptor] == nil then
+            stamped[descriptor] = true
+            local block = descriptor.crafting
+            if block == nil then
+              block = { recipes = {} }
+              descriptor.crafting = block
+            end
+            if #block.recipes < Observe.MAX_RECIPES_PER_ITEM then
+              block.recipes[#block.recipes + 1] = {
+                name = record.name,
+                product = record.product,
+                display_name = record.name,
+                -- Everything published here came out of the character's own
+                -- known-recipe collection, so this is a reading rather than an
+                -- assumption; a recipe read any other way would carry no
+                -- `known` at all.
+                known = true,
+                needs_surface = record.needs_surface,
+                materials = materials,
+              }
+            end
+          end
+        end
+      end
+    end
+  end
 end
 
 -- ---------------------------------------------------------------------------
@@ -1043,6 +1601,23 @@ function Observe.context(agent, player, sessionId, seq, nowMs)
   if roots == nil and rootsError ~= nil then
     agent.safety.last_error = rootsError
   end
+  -- What the character can make, folded into `player.stats` by ObserveModel:
+  -- the observation schema has no recipe tier, and the stats map is the one
+  -- open scalar map in it -- the same place the observer already reports its
+  -- own limits and the equipped weapon's wear. Absent when this build says
+  -- nothing about recipes, never an empty reading.
+  --
+  -- Nothing is published about nearby crafting surfaces. Build 42 exposes no
+  -- reader this file could ask "is this object a station some recipe needs",
+  -- and naming one off an object's own display name would be a guess dressed
+  -- as an observation, so the field simply does not exist -- see
+  -- docs/GAME_API_VERIFICATION.md for the gap.
+  playerFields.crafting = Observe.craftingFields(player, roots)
+  -- The same reading, stamped on the items it consumes. The sidecar's crafting
+  -- policy reads its recipes off the item tier -- the other place the schema
+  -- leaves open -- because a requirement list is a list of objects and the
+  -- stats map holds scalars. Both come from one read of the engine.
+  Observe.attachRecipes(roots, playerFields.crafting)
   local nearby = Observe.nearbyFields(player, playerFields.position)
   -- The safety snapshot is taken *after* this, because until it was set here
   -- `danger_level` was written by nothing and read by three consumers: the

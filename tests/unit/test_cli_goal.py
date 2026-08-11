@@ -877,6 +877,10 @@ class TestTheRequestBuilder:
             GoalKind.TRAIN_SKILL: ["skill=carpentry"],
             GoalKind.NAVIGATE_TO: ["target_x=1200", "target_y=3400", "target_z=0"],
             GoalKind.REST_UNTIL: ["target_endurance=0.8"],
+            # The crafting kind is the first that cannot be submitted bare: a
+            # craft order with no product names nothing to make, so its
+            # required parameter is the one thing a caller must always type.
+            GoalKind.CRAFT_ITEM: ["product=Base.SpearCrude"],
         }
         for kind in GoalKind:
             request = build_request(kind.value, params=required.get(kind, []), minutes=None)
