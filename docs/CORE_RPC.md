@@ -146,6 +146,62 @@ to the real core and back, and `tests/contract/test_remote_actions_served.py`
 proves a submitted action is drained by the real loop to its own terminal
 result.
 
+## The goal channel's field set
+
+`goal.submit`, `goal.status` and `goal.cancel` are the three goal methods, and
+they are the whole of it. There is no `goal.pause` and no `goal.resume`, by
+design: manual input already outranks the agent — touching the controls is the
+pause, and the loop reports it as the `paused` marker below — and suspending one
+goal so another may run in front of it is the needs arbiter's decision, made
+from an observation rather than from a request. A pause method would be a second
+and slower way to do what the keyboard does instantly, and a resume method would
+be a caller asserting that the condition which caused a suspension has passed,
+which the caller cannot observe. `pz-agent goal cancel` is how a goal is
+stopped from outside.
+
+Two groups of fields were added to the codec after the link shipped. Both are
+additive and both decode from an **absent** key to the *declared default of the
+record being built* — never to a value the codec chose.
+
+A goal record carries its suspension bookkeeping. These four are written only
+when the goal has bookkeeping to report: `schemas/goal.schema.json` declares the
+record's fields with `additionalProperties: false`, and a goal that has never
+stepped aside therefore encodes exactly the document that schema declares. That
+is sound because absence and default say the same thing here — a goal with no
+marker, no suspensions and no accrued time is what a missing key restores.
+
+| Field | Meaning | Absent decodes to |
+| --- | --- | --- |
+| `suspended_by` | The goal this one stepped aside for while it waits at the front of the backlog. Only a pending goal may carry it. | `null` |
+| `suspensions` | How many times it has stepped aside, capped by the channel. | `0` |
+| `active_ms_before_suspend` | Active milliseconds spent in earlier activations; the current activation gets the remainder of the wall-clock budget. | `0` |
+| `front_rank` | Position class in the backlog: `0` ordinary, more negative is nearer the front. Minted by the queue, never positive. | `0` |
+
+A `goal.status` answer carries three tails describing the goal it is *about*
+rather than the channel. No schema declares that body, so these three are
+written on every encode, as an explicit `null` when there is nothing to report:
+
+| Field | Meaning | Absent decodes to |
+| --- | --- | --- |
+| `progress` | `{ "phase": <token>, "counters": { <token>: <non-negative integer> } }` from the deterministic drive serving the goal. An LLM-served goal has none. | `null` |
+| `paused` | The loop's takeover marker: `goal_id`, `kind`, `reason`, `paused_at_ms`. | `null` |
+| `report` | The loot or explore mission's ledger document, carried whole. | `null` |
+
+`goal.submit` also carries `target_endurance` and `hours` in `params`, which
+makes `rest_until` and `sleep_until_rested` submittable — the first *requires*
+its target, so a link that dropped the parameter could only ever refuse the
+kind.
+
+**Absent is not the same as false.** These keys are missing from a peer built
+before them, and the decoder restores the record's own defaults because that is
+what such a peer's channel actually held — a build with no preemption has
+suspended nothing and has no deterministic phase to report. It is not a licence
+to invent the positive claim: a `null` `paused` means "nothing was said about a
+takeover", not "there was none", and `pz-agent goal status` prints `unreported`
+for it rather than `no`. A present value is read strictly — a `suspensions` that
+is not an integer is refused exactly as `steps_used` would be, and the record's
+own invariant still decides whether the combination is one a goal may hold.
+
 ## Finding a running server
 
 `<state-dir>/runtime/core-rpc.json`:

@@ -333,6 +333,14 @@ GOLDEN_RESULTS: dict[str, JsonDict] = {
         "active": None,
         "pending": [GOLDEN_SEEDED_GOAL],
         "named": GOLDEN_SEEDED_GOAL,
+        # The channel status carries three tails a port may honestly be unable
+        # to answer. This double answers none of them, and the literal says so
+        # with nulls rather than by omitting the keys: "nothing was said" is a
+        # fact the body states, so a reader on the far side is never left to
+        # infer it from an absence.
+        "progress": None,
+        "paused": None,
+        "report": None,
     },
     Method.GOAL_CANCEL: {"goal": GOLDEN_SEEDED_GOAL, "requested": True},
 }

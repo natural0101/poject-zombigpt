@@ -299,8 +299,10 @@ class GoalChannelStatus:
 
     The three optional tails are additive and each defaults to the honest
     nothing, so a port that cannot answer them — a bundle without the
-    deterministic wrapper, a core link whose codec does not carry them yet —
-    answers ``None`` rather than an invented value:
+    deterministic wrapper, or a peer across the core link that predates the
+    keys, which :mod:`pz_agent_mcp.remote.codec.goals` now carries and decodes
+    back to this same ``None`` when they are absent — answers ``None`` rather
+    than an invented value:
 
     * ``progress`` describes the goal this answer is *about* — the named goal
       when an id was asked, the active one otherwise — and only while a live

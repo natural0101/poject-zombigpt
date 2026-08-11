@@ -57,14 +57,51 @@ agent went to eat.
 The full field set travels
 --------------------------
 
-:func:`encode_goal_record` writes every field of the record on every encode,
-including the three that may be absent (``started_at_ms``, ``finished_at_ms``,
-``reason_code``), which travel as an explicit ``null``. Nothing here defaults a
-field it did not receive: defaulting ``steps_used`` would report a goal that had
-spent its budget as one that had just started, and defaulting ``state`` would
-report a cancelled goal as pending. The decoder accepts either the null or the
-missing key for the three optional fields, because a peer that omits a null is
-saying the same thing.
+:func:`encode_goal_record` writes every long-standing field of the record on
+every encode, including the three that may be absent (``started_at_ms``,
+``finished_at_ms``, ``reason_code``), which travel as an explicit ``null``.
+Nothing here defaults a field it did not receive: defaulting ``steps_used``
+would report a goal that had spent its budget as one that had just started, and
+defaulting ``state`` would report a cancelled goal as pending. The decoder
+accepts either the null or the missing key for the three optional fields,
+because a peer that omits a null is saying the same thing.
+
+The additive tail, and the one place a default is honest
+--------------------------------------------------------
+
+Four keys on the record (``suspended_by``, ``suspensions``,
+``active_ms_before_suspend``, ``front_rank``) and three on the channel status
+(``progress``, ``paused``, ``report``) arrived after the link did. A peer built
+before them writes none of them, so they are the one group this module decodes
+from an absent key — and the value it decodes to is the *declared default of
+the object being built*, never a number, a marker or a phase chosen here.
+
+That is not the defaulting the paragraph above refuses, and the difference is
+worth stating rather than trusting to memory. ``steps_used`` absent means "a
+peer dropped a field it writes", and there is no honest value for it. These
+seven absent mean "there is no such field here", and a build with no preemption
+has suspended nothing, ranked nothing to the front and has no deterministic
+drive to report a phase from — which is exactly ``suspensions=0``,
+``front_rank=0``, ``suspended_by=None`` and three ``None`` tails. Absence
+restores what that peer's channel actually held; it never invents state, and it
+never manufactures the *positive* claim: a ``None`` progress is "nothing was
+reported", which is a different sentence from "the goal is not progressing",
+and :mod:`pz_agent_cli.goal_cli` prints it as the first.
+
+The record's four are written *sparsely* for a reason of its own, spelled out
+on :func:`encode_goal_record`: the wire schema declares the record's fields
+with ``additionalProperties: false`` and this module does not get to grow that
+set on the way past. A goal that has never been suspended therefore encodes the
+document the schema declares and nothing more, and one that has carries the
+bookkeeping — which is sound precisely because absence and default say the same
+thing here. The three status tails have no such schema and are written as an
+explicit ``null``, the way the rest of that body is.
+
+A present value is read strictly all the same. ``suspensions`` present and not
+an integer is refused exactly as ``steps_used`` would be, and the record's own
+constructor still decides whether the combination is one a goal may hold — a
+marker on a terminal record, or accrued active time with no recorded
+suspension, is refused here because it is refused there.
 
 :class:`~pz_agent_core.goals.GoalParams` is the one object encoded sparsely, and
 that is not a style choice: :meth:`~pz_agent_core.goals.GoalParams.present`
@@ -118,7 +155,13 @@ from pz_agent_core.goals import (
     parse_skill,
 )
 from pz_agent_core.protocol import JsonDict, ReasonCode
-from pz_agent_mcp.ports import GoalCancellation, GoalChannelStatus
+from pz_agent_mcp.ports import (
+    MAX_PROGRESS_COUNTERS,
+    GoalCancellation,
+    GoalChannelStatus,
+    GoalProgress,
+    PausedGoalRecord,
+)
 from pz_agent_mcp.remote.codec import (
     CodecError,
     optional_int,
@@ -140,20 +183,24 @@ __all__ = [
     "decode_goal_channel_status",
     "decode_goal_id",
     "decode_goal_params",
+    "decode_goal_progress",
     "decode_goal_query",
     "decode_goal_record",
     "decode_goal_refusal",
     "decode_goal_request",
+    "decode_paused_goal",
     "encode_goal_admission",
     "encode_goal_budget",
     "encode_goal_cancellation",
     "encode_goal_channel_status",
     "encode_goal_id",
     "encode_goal_params",
+    "encode_goal_progress",
     "encode_goal_query",
     "encode_goal_record",
     "encode_goal_refusal",
     "encode_goal_request",
+    "encode_paused_goal",
 ]
 
 _REQUEST: Final = "goal.request"
@@ -197,10 +244,25 @@ _DUPLICATE_FIELD: Final = "duplicate"
 #: value rather than as an error code.
 _REQUESTED_FIELD: Final = "requested"
 
-#: The three keys of a channel status.
+#: The three goal-carrying keys of a channel status.
 _ACTIVE_FIELD: Final = "active"
 _PENDING_FIELD: Final = "pending"
 _NAMED_FIELD: Final = "named"
+
+#: Its three additive tails, each of which decodes to the dataclass's own
+#: ``None`` when a peer does not carry it. They describe the goal the answer is
+#: *about* rather than the channel, which is why they sit beside the records
+#: instead of inside them: ``progress`` and ``report`` come from a
+#: deterministic drive and its ledger, and ``paused`` from the loop's takeover
+#: marker — three things a :class:`~pz_agent_core.goals.GoalRecord` has no
+#: field for and must not grow one for, since the queue does not own them.
+_PROGRESS_FIELD: Final = "progress"
+_PAUSED_FIELD: Final = "paused"
+_REPORT_FIELD: Final = "report"
+
+#: Where a progress answer and a takeover marker are refused from.
+_PROGRESS: Final = "goal progress"
+_PAUSED: Final = "goal paused marker"
 
 #: The one param of ``goal.status`` and of ``goal.cancel``. Named once, here,
 #: because both halves of the link read it from this module rather than
@@ -249,6 +311,24 @@ def _optional_bool(payload: Mapping[str, Any], field: str, *, where: str) -> boo
     if payload.get(field) is None:
         return None
     return require_bool(payload, field, where=where)
+
+
+def _defaulted_int(payload: Mapping[str, Any], field: str, *, default: int, where: str) -> int:
+    """Read an additive integer, or restore the default the record declares.
+
+    Absent and explicitly null are the same answer — "this peer has no such
+    field" — and the answer is *default*, which the caller takes from the
+    dataclass rather than choosing. Anything else present goes through
+    :func:`require_int`, so a string in a numeric field is refused here exactly
+    as it would be in a required one.
+
+    The one use is the suspension bookkeeping the module docstring sets apart:
+    a peer that predates preemption has suspended nothing, and zero is what its
+    channel held. This is not licence to default a field the peer does write.
+    """
+    if payload.get(field) is None:
+        return default
+    return require_int(payload, field, where=where)
 
 
 def _require_kind(payload: Mapping[str, Any], *, where: str) -> GoalKind:
@@ -384,6 +464,15 @@ def encode_goal_params(params: GoalParams) -> JsonDict:
         out["take_all"] = params.take_all
     if params.categories is not None:
         out["categories"] = params.categories
+    # The care parameters. Carried since the wave that gave ``rest_until`` and
+    # ``sleep_until_rested`` a terminal: the first is *required* by its kind, so
+    # an encoder that dropped it produced a request the decoder could only
+    # refuse, and the second is the difference between the night the caller
+    # asked for and the adapter's own default.
+    if params.target_endurance is not None:
+        out["target_endurance"] = params.target_endurance
+    if params.hours is not None:
+        out["hours"] = params.hours
     return out
 
 
@@ -410,6 +499,8 @@ def decode_goal_params(payload: Mapping[str, Any]) -> GoalParams:
     radius = optional_int(payload, "radius", where=_PARAMS)
     take_all = _optional_bool(payload, "take_all", where=_PARAMS)
     categories = optional_str(payload, "categories", where=_PARAMS)
+    target_endurance = _optional_float(payload, "target_endurance", where=_PARAMS)
+    hours = optional_int(payload, "hours", where=_PARAMS)
     try:
         return GoalParams(
             skill=skill,
@@ -423,6 +514,8 @@ def decode_goal_params(payload: Mapping[str, Any]) -> GoalParams:
             radius=radius,
             take_all=take_all,
             categories=categories,
+            target_endurance=target_endurance,
+            hours=hours,
         )
     except ValueError:
         # The constructor's message quotes the number it rejected, and for
@@ -531,16 +624,29 @@ def decode_goal_request(payload: Mapping[str, Any]) -> GoalRequest:
 def encode_goal_record(record: GoalRecord) -> JsonDict:
     """A goal as the object to put in an RPC result.
 
-    Every field, always. The three that may be absent are written as an explicit
-    ``null`` so the object always carries the full field set — a reader that met
-    a missing ``reason_code`` and a missing ``state`` would have no way to tell
-    "still running" from "the peer dropped two keys".
+    Every field the record has always had, always. The three that may be absent
+    are written as an explicit ``null`` so the object carries the whole of that
+    field set — a reader that met a missing ``reason_code`` and a missing
+    ``state`` would have no way to tell "still running" from "the peer dropped
+    two keys".
+
+    The suspension bookkeeping is the exception, and the reason is not style:
+    ``schemas/goal.schema.json`` declares the record's fields with
+    ``additionalProperties: false``, growing it is a protocol change with its
+    own version bump and sync test, and this module does not get to make one on
+    the way past. So the four keys are written only when the goal has
+    bookkeeping to report — a goal that has never stepped aside encodes exactly
+    the document the schema declares, byte for byte, and a goal that has says
+    who for and how often. Their absence and their default are the same
+    statement either way, which is what makes the sparse form honest:
+    :func:`decode_goal_record` restores the record's own defaults from a missing
+    key, and "nothing has been suspended" is what those defaults say.
 
     The raw idempotency key is not here because it is not on the record: the
     channel keeps only :attr:`~pz_agent_core.goals.GoalRecord.key_digest`, so no
     encoding of a goal can carry the caller's bytes back out.
     """
-    return {
+    out: JsonDict = {
         "goal_id": record.goal_id,
         "kind": record.kind.value,
         "params": encode_goal_params(record.params),
@@ -556,6 +662,15 @@ def encode_goal_record(record: GoalRecord) -> JsonDict:
         "evidence_keys": list(record.evidence_keys),
         "detail": record.detail,
     }
+    if record.suspended_by is not None:
+        out["suspended_by"] = record.suspended_by
+    if record.suspensions:
+        out["suspensions"] = record.suspensions
+    if record.active_ms_before_suspend:
+        out["active_ms_before_suspend"] = record.active_ms_before_suspend
+    if record.front_rank:
+        out["front_rank"] = record.front_rank
+    return out
 
 
 def decode_goal_record(payload: Mapping[str, Any]) -> GoalRecord:
@@ -568,6 +683,12 @@ def decode_goal_record(payload: Mapping[str, Any]) -> GoalRecord:
     steps exceed the budget it carries. Checking that here would be a second
     copy of the rule, and the copy that drifts is always the one on the side
     that reports success.
+
+    The suspension bookkeeping is the exception to "missing means missing", for
+    the reason the module docstring gives: a peer built before preemption never
+    writes those four keys, and their absence restores the record's own
+    defaults — which is what that peer's channel held, not a state invented
+    here. Present, they are read as strictly as everything else.
 
     Raises:
         CodecError: a field is missing or ill-typed, ``kind`` is not a goal this
@@ -589,6 +710,12 @@ def decode_goal_record(payload: Mapping[str, Any]) -> GoalRecord:
     reason_code = _optional_enum(payload, "reason_code", ReasonCode, where=_RECORD)
     evidence_keys = _decode_evidence_keys(payload, where=_RECORD)
     detail = require_str(payload, "detail", where=_RECORD)
+    suspended_by = optional_str(payload, "suspended_by", where=_RECORD)
+    suspensions = _defaulted_int(payload, "suspensions", default=0, where=_RECORD)
+    active_ms_before_suspend = _defaulted_int(
+        payload, "active_ms_before_suspend", default=0, where=_RECORD
+    )
+    front_rank = _defaulted_int(payload, "front_rank", default=0, where=_RECORD)
 
     try:
         return GoalRecord(
@@ -606,18 +733,25 @@ def decode_goal_record(payload: Mapping[str, Any]) -> GoalRecord:
             reason_code=reason_code,
             evidence_keys=evidence_keys,
             detail=detail,
+            suspended_by=suspended_by,
+            suspensions=suspensions,
+            active_ms_before_suspend=active_ms_before_suspend,
+            front_rank=front_rank,
         )
     except ValueError:
         # The record's message quotes the numbers it rejected; this one does
         # not, and states the whole rule instead so a reader can find which
         # part was broken without the payload being echoed.
         raise CodecError(
-            f"{_RECORD}: state, reason_code, evidence_keys, steps_used and the three "
-            f"timestamps are not a combination the channel permits — a succeeded goal "
-            f"requires POSTCONDITION_MET and observed evidence, a terminal goal must "
-            f"say why and when it ended, an open one must carry no reason code, an "
-            f"active one must record when it started, no clock may run backwards, and "
-            f"steps_used must lie within the budget the goal carries"
+            f"{_RECORD}: state, reason_code, evidence_keys, steps_used, the three "
+            f"timestamps and the suspension bookkeeping are not a combination the "
+            f"channel permits — a succeeded goal requires POSTCONDITION_MET and "
+            f"observed evidence, a terminal goal must say why and when it ended, an "
+            f"open one must carry no reason code, an active one must record when it "
+            f"started, no clock may run backwards, steps_used must lie within the "
+            f"budget the goal carries, only a pending goal may carry a suspension "
+            f"marker, a marker or accrued active time requires a recorded suspension, "
+            f"and front_rank is zero or negative because the queue mints it"
         ) from None
 
 
@@ -716,22 +850,124 @@ def _optional_record(payload: Mapping[str, Any], field: str, *, where: str) -> G
     return decode_goal_record(require_mapping(payload, field, where=where))
 
 
+def encode_goal_progress(progress: GoalProgress) -> JsonDict:
+    """One deterministic drive's phase and counters.
+
+    Both fields, always: an empty ``counters`` is a drive that counts nothing,
+    which is a different answer from a drive that was not asked. Neither is
+    re-checked on the way out — :class:`~pz_agent_mcp.ports.GoalProgress`
+    refuses a phase or a counter name that is not a closed token at
+    construction, and a second copy of that rule here is a second thing to
+    drift.
+    """
+    return {"phase": progress.phase, "counters": dict(progress.counters)}
+
+
+def decode_goal_progress(payload: Mapping[str, Any]) -> GoalProgress:
+    """Read a progress answer back, closed tokens and all.
+
+    The token rule and the counter cap belong to
+    :class:`~pz_agent_mcp.ports.GoalProgress` and are enforced by constructing
+    it. The cap is *also* checked here, before the map is copied, for the reason
+    :func:`_decode_evidence_keys` checks its own: a peer answering with ten
+    thousand counters would otherwise be materialised in full and then refused.
+
+    Raises:
+        CodecError: ``phase`` or ``counters`` is missing or ill-typed, there are
+            more counters than a progress answer carries, or the record refuses
+            the phase or a counter. The message names the constraint and not the
+            offending token — a phase is minted by a drive, but this string is
+            written before any redactor sees it, like every other in the file.
+    """
+    phase = require_str(payload, "phase", where=_PROGRESS)
+    raw = require_mapping(payload, "counters", where=_PROGRESS)
+    if len(raw) > MAX_PROGRESS_COUNTERS:
+        raise CodecError(
+            f"{_PROGRESS}: counters carries more than the {MAX_PROGRESS_COUNTERS} a "
+            f"progress answer holds"
+        )
+    try:
+        return GoalProgress(phase=phase, counters=dict(raw))
+    except ValueError:
+        raise CodecError(
+            f"{_PROGRESS}: phase and every counter name must be a short lower-case "
+            f"token, and every counter must be a non-negative whole number"
+        ) from None
+
+
+def encode_paused_goal(paused: PausedGoalRecord) -> JsonDict:
+    """The loop's takeover marker, as an object.
+
+    ``reason`` travels as the sentence it is. It is the loop's own text rather
+    than the game's, and quarantining it is
+    :class:`~pz_agent_mcp.router.ToolRouter`'s job on the way to a client — this
+    link carries it to a process that has the same rule, and scrubbing it twice
+    in two places is how the two come to scrub it differently.
+    """
+    return {
+        "goal_id": paused.goal_id,
+        "kind": paused.kind,
+        "reason": paused.reason,
+        "paused_at_ms": paused.paused_at_ms,
+    }
+
+
+def decode_paused_goal(payload: Mapping[str, Any]) -> PausedGoalRecord:
+    """Read a takeover marker back.
+
+    ``kind`` goes through :func:`~pz_agent_core.goals.parse_kind` although the
+    marker's own field is a plain string: it *is* a goal kind, and this link has
+    one string-to-enum door rather than one per field that happens to hold a
+    kind. What is stored is the member's own value, so a marker cannot name a
+    goal by a spelling the channel does not use, and an unknown token is refused
+    without being echoed — the same way the record beside it would be.
+
+    Raises:
+        CodecError: a field is missing or ill-typed, ``kind`` is not a goal this
+            build carries, or the marker names no goal.
+    """
+    goal_id = require_str(payload, "goal_id", where=_PAUSED)
+    kind = _require_kind(payload, where=_PAUSED)
+    reason = require_str(payload, "reason", where=_PAUSED)
+    paused_at_ms = require_int(payload, "paused_at_ms", where=_PAUSED)
+    try:
+        return PausedGoalRecord(
+            goal_id=goal_id, kind=kind.value, reason=reason, paused_at_ms=paused_at_ms
+        )
+    except ValueError:
+        raise CodecError(
+            f"{_PAUSED}: a paused marker must name the goal it parked, carry that "
+            f"goal's kind, and record a non-negative time it was parked at"
+        ) from None
+
+
 def encode_goal_channel_status(status: GoalChannelStatus) -> JsonDict:
     """The result body for ``goal.status``.
 
-    All three fields, always. ``active`` and ``named`` are written as an
-    explicit ``null`` when there is no such goal, and ``pending`` as an empty
-    array when the backlog is empty — an empty backlog is a fact about the
-    channel, and a missing key would decode as a body somebody truncated.
+    Every field, always. ``active``, ``named``, ``progress``, ``paused`` and
+    ``report`` are written as an explicit ``null`` when there is no such thing,
+    and ``pending`` as an empty array when the backlog is empty — an empty
+    backlog is a fact about the channel, and a missing key would decode as a
+    body somebody truncated.
 
     ``pending`` keeps the channel's order, oldest first by admission sequence.
     A codec that sorted it would silently repair a peer that had it wrong, and
     the repair would be indistinguishable from the peer being right.
+
+    ``report`` is the loot or explore mission's ledger document, carried as the
+    object it is. This module does not walk it: it is assembled by the mission
+    that owns it, its shape is that mission's to declare, and a codec that
+    restated it would be a second declaration to keep in step. What bounds it is
+    the transport's own response cap, which is checked on the bytes before
+    anything is parsed.
     """
     return {
         _ACTIVE_FIELD: None if status.active is None else encode_goal_record(status.active),
         _PENDING_FIELD: [encode_goal_record(record) for record in status.pending],
         _NAMED_FIELD: None if status.named is None else encode_goal_record(status.named),
+        _PROGRESS_FIELD: None if status.progress is None else encode_goal_progress(status.progress),
+        _PAUSED_FIELD: None if status.paused is None else encode_paused_goal(status.paused),
+        _REPORT_FIELD: None if status.report is None else dict(status.report),
     }
 
 
@@ -743,12 +979,31 @@ def decode_goal_channel_status(payload: Mapping[str, Any]) -> GoalChannelStatus:
     nothing". It cannot: only the caller knows whether it sent an id. The
     distinction is kept by :class:`~pz_agent_mcp.router.ToolRouter`, which does.
 
+    The three tails decode to the dataclass's own ``None`` when the peer did not
+    carry them, which is the honest nothing
+    :class:`~pz_agent_mcp.ports.GoalChannelStatus` documents for a port that
+    cannot answer them — never to a phase, a marker or a ledger this side made
+    up. A caller that must not report "not paused" from that ``None`` says
+    "unreported" instead; that reading belongs to the caller, and this function
+    only refuses to decide it here.
+
     Raises:
         CodecError: a field is missing or ill-typed, the backlog is longer than
-            :data:`MAX_GOALS_ON_THE_WIRE`, or one of the records is not one.
+            :data:`MAX_GOALS_ON_THE_WIRE`, one of the records is not one, or a
+            tail is present and is not the object it claims to be.
     """
     active = _optional_record(payload, _ACTIVE_FIELD, where=_CHANNEL)
     named = _optional_record(payload, _NAMED_FIELD, where=_CHANNEL)
+
+    progress: GoalProgress | None = None
+    if payload.get(_PROGRESS_FIELD) is not None:
+        progress = decode_goal_progress(require_mapping(payload, _PROGRESS_FIELD, where=_CHANNEL))
+    paused: PausedGoalRecord | None = None
+    if payload.get(_PAUSED_FIELD) is not None:
+        paused = decode_paused_goal(require_mapping(payload, _PAUSED_FIELD, where=_CHANNEL))
+    report: JsonDict | None = None
+    if payload.get(_REPORT_FIELD) is not None:
+        report = dict(require_mapping(payload, _REPORT_FIELD, where=_CHANNEL))
 
     raw_pending = require_sequence(payload, _PENDING_FIELD, where=_CHANNEL)
     if len(raw_pending) > MAX_GOALS_ON_THE_WIRE:
@@ -765,7 +1020,14 @@ def decode_goal_channel_status(payload: Mapping[str, Any]) -> GoalChannelStatus:
             raise CodecError(f"{where} must be an object")
         pending.append(decode_goal_record(raw_record))
 
-    return GoalChannelStatus(active=active, pending=tuple(pending), named=named)
+    return GoalChannelStatus(
+        active=active,
+        pending=tuple(pending),
+        named=named,
+        progress=progress,
+        paused=paused,
+        report=report,
+    )
 
 
 def encode_goal_cancellation(cancellation: GoalCancellation) -> JsonDict:

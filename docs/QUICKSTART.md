@@ -103,6 +103,19 @@ save is open — `pz-agent doctor` distinguishes those.
 `ASSISTED` executes what you ask and nothing on its own. This is the right mode
 for the first session.
 
+Once you have walked these steps by hand and trust them, the whole sequence from
+"nothing is running" to "armed assisted" is one command:
+
+```powershell
+.venv\Scripts\pz-agent play
+```
+
+It starts the sidecar if none is running, waits — bounded — for the game to
+attach, arms, and confirms each step from what the game itself reported;
+[`PLAYING.md`](PLAYING.md) walks through it and through every refusal it can
+print. From there `pz-agent status --watch` keeps a live view of the session and
+the goal queue, and `pz-agent goal status` says what the agent is working on.
+
 Now ask for something, through the MCP client you have configured:
 
 > "Eat something safe from my backpack."

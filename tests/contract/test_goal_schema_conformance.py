@@ -193,6 +193,39 @@ class TestOutbound:
         )
         record_schema.validate(encode_goal_record(record))
 
+    def test_a_suspended_record_validates_with_its_bookkeeping(
+        self, record_schema: Draft202012Validator
+    ) -> None:
+        """The four suspension keys are declared, not smuggled past a closed set.
+
+        They are written sparsely — an ordinary goal's document carries none of
+        them — and that is exactly what makes this test necessary rather than
+        redundant. A sparse encoding under ``additionalProperties: false`` keeps
+        the gate green for every goal that was never parked, so a schema that
+        never learned the four would fail only on the day a needs preemption
+        actually happened, on a user's machine, over a link that had passed
+        every test here.
+        """
+        record = GoalRecord(
+            goal_id=mint_goal_id(),
+            kind=GoalKind.SATISFY_HUNGER,
+            params=GoalParams(satisfy_to=0.7),
+            budget=GoalBudget(max_wall_ms=600_000, max_steps=12, pending_ttl_ms=60_000),
+            key_digest=key_digest("k-3"),
+            sequence=2,
+            state=GoalState.PENDING,
+            submitted_at_ms=1_000,
+            suspended_by=mint_goal_id(),
+            suspensions=1,
+            active_ms_before_suspend=120_000,
+            front_rank=-1,
+        )
+
+        encoded = encode_goal_record(record)
+
+        assert "suspended_by" in encoded, "the marker must survive the wire to be worth declaring"
+        record_schema.validate(encoded)
+
 
 class TestInbound:
     def test_a_schema_valid_request_decodes(self, schema: Draft202012Validator) -> None:

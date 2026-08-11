@@ -98,12 +98,17 @@ Then launch Project Zomboid, enable **PZ Agent Bridge** in the mod list, load
 your save, and:
 
 ```powershell
-.venv\Scripts\pz-agent start          # sidecar attaches, stays in OBSERVE
-.venv\Scripts\pz-agent status
+.venv\Scripts\pz-agent play           # start, wait for the game, arm assisted
+.venv\Scripts\pz-agent status --watch # live view: game, session, goal queue
+.venv\Scripts\pz-agent goal status    # what the agent is working on
 ```
 
-The agent observes and does nothing else until you arm it. Full walkthrough:
-[`docs/QUICKSTART.md`](docs/QUICKSTART.md).
+`play` is the one-command path: it starts the sidecar, waits for the game to
+connect, and arms ASSISTED — every step confirmed by what the game reported,
+every wait bounded. The explicit route is still there and is the better one to
+walk first: `pz-agent start` attaches in OBSERVE and does nothing at all until
+`pz-agent arm`. Full walkthrough: [`docs/QUICKSTART.md`](docs/QUICKSTART.md);
+the play loop end to end: [`docs/PLAYING.md`](docs/PLAYING.md).
 
 ---
 
@@ -127,6 +132,7 @@ binding on humans too.
 | Document | What it covers |
 | --- | --- |
 | [`docs/QUICKSTART.md`](docs/QUICKSTART.md) | Install, arm, first verified action |
+| [`docs/PLAYING.md`](docs/PLAYING.md) | The play loop: one command, watch, goals |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Package boundaries and data flow |
 | [`docs/PROTOCOL.md`](docs/PROTOCOL.md) | IPC files, sequences, refs, recovery |
 | [`docs/MCP_TOOLS.md`](docs/MCP_TOOLS.md) | Every tool and resource, with schemas |

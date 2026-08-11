@@ -37,6 +37,8 @@ import pytest
 
 from pz_agent_core.goals import (
     GOAL_SPECS,
+    MAX_SLEEP_GOAL_HOURS,
+    MAX_SUSPENSIONS_PER_GOAL,
     GoalAdmission,
     GoalBudget,
     GoalKind,
@@ -49,13 +51,20 @@ from pz_agent_core.goals import (
     parse_kind,
 )
 from pz_agent_core.protocol import JsonDict, ReasonCode
-from pz_agent_mcp.ports import GoalCancellation, GoalChannelStatus
+from pz_agent_mcp.ports import (
+    MAX_PROGRESS_COUNTERS,
+    GoalCancellation,
+    GoalChannelStatus,
+    GoalProgress,
+    PausedGoalRecord,
+)
 from pz_agent_mcp.remote.codec import CodecError
 from pz_agent_mcp.remote.codec.goals import (
     decode_goal_admission,
     decode_goal_cancellation,
     decode_goal_channel_status,
     decode_goal_id,
+    decode_goal_params,
     decode_goal_query,
     decode_goal_record,
     decode_goal_refusal,
@@ -104,10 +113,9 @@ REQUIRED_PARAMS: dict[GoalKind, GoalParams] = {
     # under the same not-on-the-wire carve-out the loot parameters carry.
     GoalKind.RETURN_HOME: GoalParams(),
     GoalKind.EXPLORE_AREA: GoalParams(),
-    # The care wave. treat_wounds and sleep_until_rested are admissible bare;
-    # rest_until's required target rides the carve-out pinned in
-    # TestTheCareKindsOnThisLink below — this codec does not carry it, so the
-    # kind cannot cross this link at all yet.
+    # The care wave. treat_wounds is admissible bare; rest_until's required
+    # target and sleep_until_rested's optional night are carried by this codec
+    # now, pinned in TestTheCareParametersCross below.
     GoalKind.TREAT_WOUNDS: GoalParams(),
     GoalKind.REST_UNTIL: GoalParams(target_endurance=0.8),
     GoalKind.SLEEP_UNTIL_RESTED: GoalParams(),
@@ -123,15 +131,6 @@ REQUIRED_PARAMS: dict[GoalKind, GoalParams] = {
     # change nobody makes by accident.
     GoalKind.ENGAGE_SINGLE_ZOMBIE: GoalParams(),
 }
-
-#: The one kind whose *minimal* request this codec cannot carry: rest_until
-#: requires ``target_endurance``, and this codec predates the parameter. The
-#: gap is loud rather than silent — pinned in TestTheCareKindsOnThisLink —
-#: and the wire schema refuses all three care kinds upstream of this codec
-#: (the conformance contract test's NOT_YET_ON_THE_WIRE), so growing the
-#: parameters here is part of the same protocol change that would put the
-#: kinds on the wire.
-NOT_CROSSING_YET = frozenset({GoalKind.REST_UNTIL})
 
 #: Tokens that are not goals. None of them resolves through ``parse_kind`` —
 #: asserted below rather than assumed — and each is a different way of being
@@ -237,6 +236,10 @@ def a_record(
     reason_code: ReasonCode | None = None,
     evidence_keys: tuple[str, ...] = (),
     detail: str = "",
+    suspended_by: str | None = None,
+    suspensions: int = 0,
+    active_ms_before_suspend: int = 0,
+    front_rank: int = 0,
 ) -> GoalRecord:
     return GoalRecord(
         goal_id=goal_id,
@@ -253,6 +256,27 @@ def a_record(
         reason_code=reason_code,
         evidence_keys=evidence_keys,
         detail=detail,
+        suspended_by=suspended_by,
+        suspensions=suspensions,
+        active_ms_before_suspend=active_ms_before_suspend,
+        front_rank=front_rank,
+    )
+
+
+def a_suspended_record(*, goal_id: str = "parked-goal") -> GoalRecord:
+    """A goal the arbiter parked at the front of the backlog for another.
+
+    Every one of the four suspension fields carries a value that is not its
+    default, so a codec that dropped any of them fails the round trip below
+    rather than passing on the three it happened to keep.
+    """
+    return a_record(
+        goal_id=goal_id,
+        state=GoalState.PENDING,
+        suspended_by="preempting-goal",
+        suspensions=1,
+        active_ms_before_suspend=7_000,
+        front_rank=-1,
     )
 
 
@@ -296,14 +320,16 @@ HAND_WRITTEN_RECORD: JsonDict = {
 
 
 class TestARequestSurvivesTheCrossing:
-    @pytest.mark.parametrize("kind", sorted(set(GoalKind) - NOT_CROSSING_YET))
+    @pytest.mark.parametrize("kind", sorted(GoalKind))
     def test_every_declared_kind_round_trips(self, kind: GoalKind) -> None:
         """Driven off the enum, so a new member cannot be added untested.
 
-        ``NOT_CROSSING_YET`` is subtracted with its own dedicated pin below:
-        a kind whose required parameter this codec does not carry must fail
-        the crossing loudly, and asserting a round trip of it would assert a
-        thing that cannot be true.
+        Every member, with nothing subtracted. ``rest_until`` used to be: its
+        required ``target_endurance`` was not carried, so the one request that
+        kind admits could not cross, and the gap was pinned rather than hidden.
+        The codec carries both care parameters now, and the whole enum is a
+        round trip again — which is the assertion that has to be true before
+        ``pz-agent goal submit`` can claim the fourteen kinds it lists.
         """
         request = a_request(kind=kind, budget=CHOSEN_BUDGET)
 
@@ -495,56 +521,50 @@ class TestARequestSurvivesTheCrossing:
             )
 
 
-class TestTheCareKindsOnThisLink:
-    """The care wave's carve-out on the RPC codec, pinned both ways.
+class TestTheCareParametersCross:
+    """``target_endurance`` and ``hours``, which this codec used to drop.
 
-    The wire schema already refuses all three care kinds at the gate (the
-    conformance contract test's ``NOT_YET_ON_THE_WIRE``), so no remote
-    submission of one legally reaches this codec. What these tests pin is
-    the codec's own half of the carve-out: the kind *tokens* cross — the
-    decoder resolves them through ``parse_kind`` like every other member —
-    but the care *parameters* are not carried, and the one kind that
-    requires one therefore cannot cross at all, loudly. Growing the
-    parameters here is part of the same protocol change that would put the
-    kinds on the schema; when that change lands, these assertions fail and
-    the carve-out is dismantled on purpose rather than lingering.
+    The gap they close was pinned here rather than hidden, and it was not
+    cosmetic: ``rest_until`` *requires* its target, so an encoder that dropped
+    it produced a body the decoder could only refuse, and the kind could not
+    cross this link at all. ``hours`` was the softer half of the same defect —
+    it decoded to a bare sleep goal, which is the adapter's own default night
+    rather than the night the caller asked for.
+
+    Both are carried now, and both are range-checked by ``GoalParams``, which
+    is what makes them safe to carry: the ranges are the adapters' own, so a
+    value this link admits is a value the action layer will take.
     """
 
-    def test_the_care_parameters_are_not_carried_by_this_codec(self) -> None:
-        # The pinned gap itself: an encoder that learns either parameter
-        # fails this line, which is the review trigger — the decode side and
-        # the wire schema must learn them in the same change.
-        assert encode_goal_params(GoalParams(target_endurance=0.8)) == {}
-        assert encode_goal_params(GoalParams(hours=6)) == {}
+    def test_the_care_parameters_are_written_under_their_own_names(self) -> None:
+        """The key names by hand, against the encoder's output.
 
-    def test_a_rest_until_request_cannot_cross_and_the_failure_is_loud(self) -> None:
-        """Refused at decode, never a widened goal.
-
-        The encoder drops the parameter it does not know, so what arrives is
-        a rest_until with no target — and the request type requires one, so
-        the decoder raises instead of admitting a goal the channel would
-        run with a target the caller never chose. A silent success here
-        would be the worse outcome this test exists to rule out.
+        A round trip cannot see a pair that agreed on the wrong spelling in
+        both halves; a peer built from the right one gets a rest goal with no
+        target and refuses it.
         """
+        assert encode_goal_params(GoalParams(target_endurance=0.8)) == {"target_endurance": 0.8}
+        assert encode_goal_params(GoalParams(hours=6)) == {"hours": 6}
+
+    def test_a_rest_until_request_crosses_with_the_target_it_names(self) -> None:
         request = a_request(kind=GoalKind.REST_UNTIL)
 
         body = encode_goal_request(request)
         assert body["kind"] == "rest_until"
-        assert body["params"] == {}
-        with pytest.raises(CodecError) as refused:
-            decode_goal_request(crossing(body))
-        # The refusal names the contract, not the caller's values.
-        assert "0.8" not in str(refused.value)
+        assert body["params"] == {"target_endurance": 0.8}
+        restored = decode_goal_request(crossing(body))
 
-    def test_a_smuggled_hours_value_does_not_reach_the_goal(self) -> None:
-        """The decoder ignores a parameter it does not carry.
+        assert restored == request
+        assert restored.params.target_endurance == 0.8
+        assert restored.params.present() == frozenset({"target_endurance"})
 
-        With the kind refused by the wire schema upstream, this branch is
-        defence in depth: a hand-built payload naming ``hours`` decodes to a
-        bare sleep goal — the adapter's own default night — never to a goal
-        carrying a number this codec cannot range-check. Pinned so the
-        behaviour is a decision; the honest fix, when sleep goes on the
-        wire, is a decoder that carries and checks the parameter.
+    def test_a_sleep_goal_carries_the_night_it_asked_for(self) -> None:
+        """The supplied value arrives as supplied, and absence stays absence.
+
+        Both halves matter: ``hours`` present is the caller's night, and
+        ``hours`` absent is the sleep adapter's own default — the mission
+        expresses that by omitting the argument, so a decoder that filled it in
+        would replace a decision nobody made with a number.
         """
         restored = decode_goal_request(
             {
@@ -554,9 +574,53 @@ class TestTheCareKindsOnThisLink:
             }
         )
 
-        assert restored.kind is GoalKind.SLEEP_UNTIL_RESTED
-        assert restored.params.hours is None
-        assert restored.params.present() == frozenset()
+        assert restored.params.hours == 6
+        assert restored.params.present() == frozenset({"hours"})
+
+        bare = decode_goal_request(
+            {
+                "kind": "sleep_until_rested",
+                "idempotency_key": "goal-1:attempt-1",
+                "params": {},
+            }
+        )
+
+        assert bare.params.hours is None
+        assert bare.params.present() == frozenset()
+
+    @pytest.mark.parametrize(
+        "params",
+        [{"target_endurance": 1.5}, {"target_endurance": 0.0}],
+        ids=["above-the-rest-adapter-s-ceiling", "below-its-floor"],
+    )
+    def test_a_target_outside_the_adapter_s_range_is_refused(self, params: JsonDict) -> None:
+        """Carried does not mean unchecked; the range is the rest adapter's own."""
+        with pytest.raises(CodecError):
+            decode_goal_request(
+                {
+                    "kind": "rest_until",
+                    "idempotency_key": "goal-1:attempt-1",
+                    "params": params,
+                }
+            )
+
+    def test_a_night_longer_than_the_channel_admits_is_refused(self) -> None:
+        """``MAX_SLEEP_GOAL_HOURS``, enforced by ``GoalParams`` rather than here."""
+        with pytest.raises(CodecError):
+            decode_goal_request(
+                {
+                    "kind": "sleep_until_rested",
+                    "idempotency_key": "goal-1:attempt-1",
+                    "params": {"hours": MAX_SLEEP_GOAL_HOURS + 1},
+                }
+            )
+
+    def test_a_care_parameter_of_the_wrong_type_is_refused(self) -> None:
+        """A string in a numeric field, refused rather than coerced."""
+        with pytest.raises(CodecError):
+            decode_goal_params({"target_endurance": "0.8"})
+        with pytest.raises(CodecError):
+            decode_goal_params({"hours": "6"})
 
 
 # ---------------------------------------------------------------------------
@@ -717,6 +781,14 @@ class TestTheRecordCrossesWithItsInvariant:
         assert restored.steps_used == 1
         assert restored.reason_code is None
         assert restored.evidence_keys == ()
+        # The body names none of the suspension fields — it is what a peer
+        # built before preemption writes — and the record's own defaults are
+        # what comes back. Pinned here as well as in the class below because
+        # this body is the one every other decode test starts from.
+        assert restored.suspended_by is None
+        assert restored.suspensions == 0
+        assert restored.active_ms_before_suspend == 0
+        assert restored.front_rank == 0
 
     def test_evidence_keys_arrive_as_a_tuple_in_order(self) -> None:
         """A list would make an ostensibly frozen record mutable through a field.
@@ -830,6 +902,173 @@ class TestTheRecordCrossesWithItsInvariant:
             )
 
 
+class TestTheSuspensionBookkeepingCrosses:
+    """The four fields a preempted goal carries, and what their absence means.
+
+    The queue parks a goal at the front of the backlog when the needs arbiter
+    lets another one in front of it, and everything about that parking lives on
+    the record: who it stepped aside for, how many times, how much of its
+    wall-clock budget it has already spent, and how near the front it now sits.
+    A codec that dropped them reported a goal that was paused mid-mission as one
+    merely waiting its turn, and reported a goal on its third suspension — the
+    last it is allowed — as one that has never been touched.
+
+    Absence is the other half, and there are two ways to reach it: a peer built
+    before preemption writes none of these keys, and this build writes them only
+    when a goal has bookkeeping to report — the record's field set is declared
+    in ``schemas/goal.schema.json`` with ``additionalProperties: false``, and
+    the encoder does not grow it for a goal that has nothing to say. Both roads
+    lead to the record's own defaults: no marker, nothing suspended, nothing
+    accrued, ordinary rank. That is what the sparse form makes true rather than
+    merely convenient, and it is why this is the *only* group in this file
+    allowed to decode from a missing key.
+    """
+
+    def test_a_suspended_goal_round_trips_with_all_four_fields(self) -> None:
+        record = a_suspended_record()
+
+        assert decode_goal_record(crossing(encode_goal_record(record))) == record
+
+    def test_each_field_is_written_under_the_name_spelled_here(self) -> None:
+        """By hand against the encoder, because a round trip cannot see this.
+
+        A pair that swapped ``suspensions`` and ``front_rank`` in both halves
+        reproduces every record exactly and hands a peer built from the other
+        spelling a goal that has been suspended minus one times.
+        """
+        body = encode_goal_record(a_suspended_record())
+
+        assert body["suspended_by"] == "preempting-goal"
+        assert body["suspensions"] == 1
+        assert body["active_ms_before_suspend"] == 7_000
+        assert body["front_rank"] == -1
+
+    def test_a_goal_that_has_never_stepped_aside_carries_none_of_them(self) -> None:
+        """The sparse half, and the schema is the reason for it.
+
+        The record's field set is declared with ``additionalProperties: false``,
+        so an ordinary goal must encode as exactly that set — growing it is a
+        protocol change with a version bump and a sync test, and not something a
+        codec does in passing. The round trip above is what makes this safe:
+        absent and default are the same statement, so nothing is lost by not
+        saying it.
+        """
+        body = encode_goal_record(a_record())
+
+        assert sorted(body) == sorted(HAND_WRITTEN_RECORD)
+
+    def test_a_body_carrying_none_of_them_decodes_to_an_unsuspended_goal(self) -> None:
+        """The absent half, against a whole record written by hand."""
+        restored = decode_goal_record(HAND_WRITTEN_RECORD)
+
+        assert (restored.suspended_by, restored.suspensions) == (None, 0)
+        assert (restored.active_ms_before_suspend, restored.front_rank) == (0, 0)
+
+    @pytest.mark.parametrize(
+        ("field", "value", "expected"),
+        [
+            ("suspensions", 2, "suspensions"),
+            ("front_rank", -3, "front_rank"),
+        ],
+    )
+    def test_one_field_present_leaves_the_others_at_their_defaults(
+        self, field: str, value: int, expected: str
+    ) -> None:
+        """A decoder that defaulted in a batch would fail this.
+
+        Each of these is legal on its own — the record's invariant couples the
+        *marker* to a recorded suspension, not the counters to each other — so
+        the assertion is that the other three come back at their defaults rather
+        than at whatever this one said.
+        """
+        restored = decode_goal_record({**HAND_WRITTEN_RECORD, "state": "pending", field: value})
+
+        assert getattr(restored, expected) == value
+        assert restored.suspended_by is None
+        assert restored.active_ms_before_suspend == 0
+
+    def test_a_suspended_body_missing_its_accrued_time_reads_it_as_none_accrued(self) -> None:
+        """The marker and the count survive; the field that was not sent does not.
+
+        This is the shape a peer that grew three of the four keys would send,
+        and the honest reading of it is "nothing was said about accrued active
+        time", which is what a goal that has spent none looks like.
+        """
+        body = dict(crossing(encode_goal_record(a_suspended_record())))
+        del body["active_ms_before_suspend"]
+
+        restored = decode_goal_record(body)
+
+        assert restored.suspended_by == "preempting-goal"
+        assert restored.suspensions == 1
+        assert restored.active_ms_before_suspend == 0
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("suspensions", "1"),
+            ("suspensions", True),
+            ("active_ms_before_suspend", 7.5),
+            ("front_rank", "-1"),
+            ("suspended_by", 7),
+        ],
+        ids=["string-count", "boolean-count", "fractional-ms", "string-rank", "numeric-marker"],
+    )
+    def test_a_present_field_of_the_wrong_type_is_refused(self, field: str, value: object) -> None:
+        """Tolerating absence is not tolerating nonsense.
+
+        ``True`` is in the list on purpose: ``bool`` is an ``int`` in Python, so
+        a reader without the explicit check would record a goal as having been
+        suspended once because a peer sent a flag.
+        """
+        with pytest.raises(CodecError):
+            decode_goal_record({**HAND_WRITTEN_RECORD, field: value})
+
+    def test_a_marker_on_a_goal_that_is_not_pending_is_refused(self) -> None:
+        """The record's rule, enforced by building the record.
+
+        Activation consumes the marker and termination clears it, so a marker on
+        an active goal was not written by the queue — most likely an edited file
+        trying to smuggle state — and the honest answer is that the payload
+        could not be read.
+        """
+        with pytest.raises(CodecError):
+            decode_goal_record(
+                {**HAND_WRITTEN_RECORD, "suspended_by": "preempting-goal", "suspensions": 1}
+            )
+
+    def test_bookkeeping_without_a_recorded_suspension_is_refused(self) -> None:
+        """Accrued active time with no suspension behind it is not a goal."""
+        with pytest.raises(CodecError):
+            decode_goal_record(
+                {**HAND_WRITTEN_RECORD, "state": "pending", "active_ms_before_suspend": 5_000}
+            )
+
+    def test_more_suspensions_than_the_channel_allows_is_refused(self) -> None:
+        """``MAX_SUSPENSIONS_PER_GOAL`` is what stops preemption ping-ponging."""
+        with pytest.raises(CodecError):
+            decode_goal_record(
+                {
+                    **HAND_WRITTEN_RECORD,
+                    "state": "pending",
+                    "suspensions": MAX_SUSPENSIONS_PER_GOAL + 1,
+                }
+            )
+
+    def test_a_front_rank_the_queue_could_not_have_minted_is_refused(self) -> None:
+        """Zero or negative; positive is a peer inventing a place in the queue."""
+        with pytest.raises(CodecError):
+            decode_goal_record({**HAND_WRITTEN_RECORD, "front_rank": 1})
+
+    def test_the_refusal_names_the_rule_and_not_the_value(self) -> None:
+        """The file's standing rule, held by the widened invariant message too."""
+        with pytest.raises(CodecError) as refused:
+            decode_goal_record({**HAND_WRITTEN_RECORD, "suspended_by": SECRET, "suspensions": 1})
+
+        assert SECRET not in str(refused.value)
+        assert "suspension" in str(refused.value)
+
+
 # ---------------------------------------------------------------------------
 # the three answers
 # ---------------------------------------------------------------------------
@@ -917,7 +1156,14 @@ class TestTheChannelStatus:
 
         body = encode_goal_channel_status(status)
 
-        assert body == {"active": None, "pending": [], "named": None}
+        assert body == {
+            "active": None,
+            "pending": [],
+            "named": None,
+            "progress": None,
+            "paused": None,
+            "report": None,
+        }
         assert decode_goal_channel_status(crossing(body)) == status
 
     def test_the_three_slots_stay_in_their_own_slots(self) -> None:
@@ -955,7 +1201,7 @@ class TestTheChannelStatus:
 
         body = encode_goal_channel_status(status)
 
-        assert sorted(body) == ["active", "named", "pending"]
+        assert sorted(body) == ["active", "named", "paused", "pending", "progress", "report"]
         assert body["active"]["goal_id"] == "active-goal"
         assert body["named"]["goal_id"] == "named-goal"
         assert [record["goal_id"] for record in body["pending"]] == ["waiting-goal"]
@@ -1007,6 +1253,191 @@ class TestTheChannelStatus:
     def test_a_dropped_backlog_is_refused_rather_than_emptied(self) -> None:
         with pytest.raises(CodecError):
             decode_goal_channel_status({"active": None, "named": None})
+
+
+#: A channel status body written out by hand, carrying none of the three tails.
+#: This is what a peer that predates them answers, and what the "unreported"
+#: rendering downstream is built to read.
+OLD_PEER_STATUS: JsonDict = {"active": None, "named": None, "pending": []}
+
+
+def a_progress() -> GoalProgress:
+    return GoalProgress(phase="approach", counters={"legs": 3, "containers": 1})
+
+
+def a_paused_marker() -> PausedGoalRecord:
+    return PausedGoalRecord(
+        goal_id="parked-goal",
+        kind="loot_area",
+        reason="manual takeover",
+        paused_at_ms=4_000,
+    )
+
+
+class TestTheChannelStatusTails:
+    """``progress``, ``paused`` and ``report``: carried, or honestly absent.
+
+    All three describe the goal the answer is *about* rather than the channel,
+    and all three are things a port may legitimately be unable to answer — a
+    bundle assembled without the deterministic wrapper has no phase to report,
+    and a peer built before these keys writes none of them. So the decode of an
+    absent key is ``None``, and ``None`` is the honest nothing the dataclass
+    documents: never a fabricated phase, never "not paused", never an empty
+    report standing in for a mission that never wrote one.
+
+    The distinction matters most for ``paused``. ``False`` is not available as a
+    value here precisely because it would be a claim — "the user has not taken
+    over" — made by a decoder that was told nothing at all.
+    """
+
+    def test_the_three_tails_round_trip(self) -> None:
+        status = GoalChannelStatus(
+            active=a_record(goal_id="active-goal", state=GoalState.ACTIVE, started_at_ms=1_200),
+            progress=a_progress(),
+            paused=a_paused_marker(),
+            report={"containers": 2, "items": ["axe"], "sealed": True},
+        )
+
+        assert decode_goal_channel_status(crossing(encode_goal_channel_status(status))) == status
+
+    def test_each_tail_is_written_under_the_name_spelled_here(self) -> None:
+        body = encode_goal_channel_status(
+            GoalChannelStatus(
+                progress=a_progress(), paused=a_paused_marker(), report={"containers": 2}
+            )
+        )
+
+        assert body["progress"] == {"phase": "approach", "counters": {"legs": 3, "containers": 1}}
+        assert body["paused"] == {
+            "goal_id": "parked-goal",
+            "kind": "loot_area",
+            "reason": "manual takeover",
+            "paused_at_ms": 4_000,
+        }
+        assert body["report"] == {"containers": 2}
+
+    def test_an_answer_carrying_none_of_them_decodes_to_three_nothings(self) -> None:
+        """The old peer's body, and the reading a caller must not improve on."""
+        restored = decode_goal_channel_status(OLD_PEER_STATUS)
+
+        assert restored.progress is None
+        assert restored.paused is None
+        assert restored.report is None
+
+    @pytest.mark.parametrize("field", ["progress", "paused", "report"])
+    def test_an_explicit_null_says_the_same_thing_as_an_absent_key(self, field: str) -> None:
+        restored = decode_goal_channel_status({**OLD_PEER_STATUS, field: None})
+
+        assert getattr(restored, field) is None
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [("progress", "approach"), ("paused", 7), ("report", ["containers"])],
+        ids=["progress-as-a-string", "paused-as-a-number", "report-as-an-array"],
+    )
+    def test_a_tail_that_is_not_an_object_is_refused(self, field: str, value: object) -> None:
+        """Present and unreadable is not the same as absent, and never decodes to it."""
+        with pytest.raises(CodecError):
+            decode_goal_channel_status({**OLD_PEER_STATUS, field: value})
+
+    def test_a_progress_phase_that_is_not_a_closed_token_is_refused(self) -> None:
+        """The ports' own rule, enforced by building the record rather than here."""
+        with pytest.raises(CodecError):
+            decode_goal_channel_status(
+                {**OLD_PEER_STATUS, "progress": {"phase": CYRILLIC, "counters": {}}}
+            )
+
+    @pytest.mark.parametrize(
+        "counters",
+        [{"legs": "3"}, {"legs": -1}, {"legs": True}, {"Legs walked": 3}],
+        ids=["string-count", "negative-count", "boolean-count", "sentence-name"],
+    )
+    def test_a_counter_that_is_not_a_detail_free_number_is_refused(
+        self, counters: dict[str, Any]
+    ) -> None:
+        """Numbers and closed tokens only: a counter is where a sentence would hide."""
+        with pytest.raises(CodecError):
+            decode_goal_channel_status(
+                {**OLD_PEER_STATUS, "progress": {"phase": "approach", "counters": counters}}
+            )
+
+    def test_more_counters_than_a_progress_answer_holds_is_refused(self) -> None:
+        """Refused by the cap, and the message names it rather than a counter."""
+        counters = {f"c{index}": index for index in range(MAX_PROGRESS_COUNTERS + 1)}
+
+        with pytest.raises(CodecError) as refused:
+            decode_goal_channel_status(
+                {**OLD_PEER_STATUS, "progress": {"phase": "approach", "counters": counters}}
+            )
+
+        assert str(MAX_PROGRESS_COUNTERS) in str(refused.value)
+
+    def test_a_paused_marker_naming_no_goal_is_refused(self) -> None:
+        with pytest.raises(CodecError):
+            decode_goal_channel_status(
+                {
+                    **OLD_PEER_STATUS,
+                    "paused": {
+                        "goal_id": "",
+                        "kind": "loot_area",
+                        "reason": "manual takeover",
+                        "paused_at_ms": 4_000,
+                    },
+                }
+            )
+
+    @pytest.mark.parametrize("token", INVENTED_KINDS)
+    def test_a_paused_marker_naming_an_invented_kind_is_refused(self, token: str) -> None:
+        """The marker's kind takes the same door every other kind on this link takes.
+
+        The field is a plain string on the record, which is exactly why it is
+        worth checking: a token that reached it unresolved would be the one
+        place a goal kind crosses without ``parse_kind``, and the refusal would
+        not be able to name the four goals this build carries. The token is not
+        echoed either — it is on the same link as the rest.
+        """
+        with pytest.raises(CodecError) as refused:
+            decode_goal_channel_status(
+                {
+                    **OLD_PEER_STATUS,
+                    "paused": {
+                        "goal_id": "parked-goal",
+                        "kind": token,
+                        "reason": "manual takeover",
+                        "paused_at_ms": 4_000,
+                    },
+                }
+            )
+
+        assert token not in str(refused.value) or token == ""
+
+    def test_a_report_crosses_as_the_document_the_mission_wrote(self) -> None:
+        """Nested, whole, and not walked: the ledger's shape is the mission's.
+
+        The codec carries it rather than restating it, so a mission that grows a
+        field does not need a protocol change to report it — and what bounds it
+        is the transport's response cap, checked on the bytes.
+        """
+        report: JsonDict = {
+            "goal_id": "loot-1",
+            "containers": [{"ref": "c1", "taken": 3}, {"ref": "c2", "taken": 0}],
+            "sealed": True,
+        }
+
+        restored = decode_goal_channel_status(
+            crossing(encode_goal_channel_status(GoalChannelStatus(report=report)))
+        )
+
+        assert restored.report == report
+
+    def test_the_tails_are_plain_json(self) -> None:
+        assert_plain_json(
+            encode_goal_channel_status(
+                GoalChannelStatus(
+                    progress=a_progress(), paused=a_paused_marker(), report={"sealed": True}
+                )
+            )
+        )
 
 
 class TestTheCancellation:
