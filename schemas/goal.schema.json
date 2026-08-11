@@ -87,7 +87,28 @@
           "maxItems": 8,
           "items": { "type": "string", "pattern": "^[a-z][a-z0-9_.]{0,39}$" }
         },
-        "detail": { "type": "string", "maxLength": 200 }
+        "detail": { "type": "string", "maxLength": 200 },
+        "suspended_by": {
+          "description": "The goal this one stepped aside for, while it is parked at the front of the backlog. Optional, and written only when there is a suspension to describe: an ordinary goal's document carries none of these four keys, so absence and the model's defaults are the same statement. Null is not used — a goal that was never suspended omits the key.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "suspensions": {
+          "description": "How many times this goal has been parked. Bounded by MAX_SUSPENSIONS_PER_GOAL so preemption cannot ping-pong a goal forever; the fourth attempt is a typed refusal rather than a larger number here.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3
+        },
+        "active_ms_before_suspend": {
+          "description": "Wall-clock milliseconds this goal had already burned when it was parked, banked so resumption continues on the remaining budget rather than a fresh one. Bounded above by the goal's own budget, which is a cross-field rule the model enforces.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "front_rank": {
+          "description": "Zero or negative; the queue mints it and the backlog orders by (front_rank, sequence). A suspended goal carries a negative rank so it returns to the front, ahead of goals submitted while it was parked.",
+          "type": "integer",
+          "maximum": 0
+        }
       }
     }
   }

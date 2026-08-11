@@ -64,6 +64,7 @@ from .context import (
 )
 from .core_services import serve_core_rpc
 from .doctor import check_capabilities, run_checks
+from .goal_cli import add_goal_parser, run_goal
 from .latency import run_latency
 from .livetest import add_live_test_parser, run_live_test
 from .memory import SidecarMemory, add_remember_parser, build_sidecar_memory, run_remember
@@ -76,6 +77,7 @@ from .modinstall import (
 )
 from .navigation_planner import NavigatingPlanner, unwrap_planner
 from .output import Printer
+from .play import add_play_parser, run_play
 from .runtime import (
     CAPABILITY_FILE_NAME,
     DEFAULT_LIMITS,
@@ -87,7 +89,7 @@ from .runtime import (
 )
 from .saves import run_backup_save, run_restore_save
 from .smoke import default_scenario_dir, run_smoke
-from .status import game_liveness, run_status
+from .status import game_liveness, run_status, run_status_watch
 from .supervisor import GameRunningProbe, SidecarSupervisor, SupervisorState, probe_game_running
 from .support import _LOG_STEM, DEFAULT_LOG_LINES, DEFAULT_REPLAY_LIMIT, run_logs, run_replay
 from .voice import add_voice_parser, run_voice
@@ -106,9 +108,11 @@ COMMANDS: Final[tuple[str, ...]] = (
     "uninstall-mod",
     "status",
     "start",
+    "play",
     "stop",
     "arm",
     "disarm",
+    "goal",
     "backup-save",
     "restore-save",
     "remember",
@@ -189,8 +193,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     uninstall.add_argument("--json", action="store_true")
 
-    status = subparsers.add_parser("status", help="what the exchange directory reports now")
-    status.add_argument("--json", action="store_true")
+    _add_status_parser(subparsers)
 
     start = subparsers.add_parser("start", help="run the sidecar; it attaches in OBSERVE")
     start.add_argument(
@@ -207,6 +210,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     start.add_argument("--json", action="store_true")
 
+    add_play_parser(subparsers)
+
     stop = subparsers.add_parser("stop", help="ask a running sidecar to shut down")
     stop.add_argument("--json", action="store_true")
 
@@ -222,6 +227,7 @@ def build_parser() -> argparse.ArgumentParser:
     disarm = subparsers.add_parser("disarm", help="return a running sidecar to OBSERVE")
     disarm.add_argument("--json", action="store_true")
 
+    add_goal_parser(subparsers)
     _add_save_parsers(subparsers)
     add_remember_parser(subparsers)
     add_voice_parser(subparsers)
@@ -257,6 +263,29 @@ def build_parser() -> argparse.ArgumentParser:
     add_live_test_parser(subparsers)
 
     return parser
+
+
+def _add_status_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """``status``, split out to keep ``build_parser`` readable.
+
+    ``--watch`` is a flag on ``status`` rather than a command of its own because
+    it answers the same question; what differs is only whether the answer is
+    asked for once or kept on the screen.
+    """
+    status = subparsers.add_parser("status", help="what the exchange directory reports now")
+    status.add_argument("--json", action="store_true")
+    status.add_argument(
+        "--watch",
+        action="store_true",
+        help="redraw the report until interrupted, with the goal queue when reachable",
+    )
+    status.add_argument(
+        "--interval",
+        type=float,
+        default=2.0,
+        metavar="SECONDS",
+        help="seconds between --watch redraws (default: 2.0)",
+    )
 
 
 def _add_save_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -1093,9 +1122,13 @@ def dispatch(ctx: CliContext, args: argparse.Namespace) -> int:
     if command == "uninstall-mod":
         return run_uninstall_mod(ctx, as_json=args.json)
     if command == "status":
+        if args.watch:
+            return run_status_watch(ctx, interval=args.interval, as_json=args.json)
         return run_status(ctx, as_json=args.json)
     if command == "start":
         return run_start(ctx, foreground=args.foreground, ticks=args.ticks, as_json=args.json)
+    if command == "play":
+        return run_play(ctx, args)
     if command == "stop":
         return run_stop(ctx, as_json=args.json)
     if command == "arm":
@@ -1112,6 +1145,8 @@ def dispatch(ctx: CliContext, args: argparse.Namespace) -> int:
         )
     if command == "restore-save":
         return run_restore_save(ctx, backup_id=args.backup_id, as_json=args.json)
+    if command == "goal":
+        return run_goal(ctx, args)
     if command == "remember":
         return run_remember(ctx, args)
     if command == "voice":

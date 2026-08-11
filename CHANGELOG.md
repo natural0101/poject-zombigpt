@@ -12,6 +12,42 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Added
 
+- **A terminal is enough to play** (`epic/ux-one-command-play`, wave 1). The
+  agent had a goal channel with two ways in — an MCP tool call, which needs a
+  language model on a stdio pipe, and a Russian phrase, which needs a
+  microphone — and a user with a keyboard could arm it and then had no way to
+  tell it anything. Three commands close that: `pz-agent play` runs the whole
+  cold-start sequence (validate, start the sidecar, wait for the game, arm) as
+  one command, where every wait is bounded twice — a deadline *and* a poll
+  count, so a stopped clock cannot hang it — and arming is granted only when
+  the game's own heartbeat reports it in the mode that was asked for; a wait
+  that runs out is a failure carrying what the heartbeat actually said, never a
+  success in a quieter tone. It refuses in front of a panic latch with the arm
+  path's remedy and never clears one, and it never touches the game process:
+  launching Zomboid stays the user's, which is why the wait comes with
+  instructions rather than a spawn. `pz-agent goal submit/status/cancel` sends
+  the same typed `GoalRequest` over the same Core RPC link the MCP server and
+  the voice companion use — the terminal is not a privileged caller, it meets
+  the same 14 kinds, the same parameter ranges and the same refusals, with the
+  valid values printed by the command that refused. There are deliberately no
+  `pause`/`resume` verbs: touching the controls *is* the pause, and parking a
+  goal so another may run belongs to the arbiter, which decides from an
+  observation rather than from a command line. `pz-agent status --watch` keeps
+  a compact HUD on screen — ANSI on a terminal, separators into a pipe, never
+  an escape byte down a redirect.
+- **The goal wire caught up with the goal model.** The remote codec now carries
+  the suspension bookkeeping (`suspended_by`, `suspensions`,
+  `active_ms_before_suspend`, `front_rank`), the two care parameters
+  (`target_endurance`, `hours` — so `rest_until` and `sleep_until_rested` are
+  submittable over the link for the first time), and the channel status tails
+  (`progress`, `paused`, `report`). All of it decodes absence to the model's own
+  defaults rather than inventing state, and every surface that renders it prints
+  `unreported` for what the wire did not say — never `no` and never `0`, because
+  "the agent is not paused" and "this build could not tell me" are different
+  sentences and only one is safe to act on. `schemas/goal.schema.json` declares
+  the four suspension keys it was closed against, with a conformance test on a
+  record that actually carries them.
+
 - **The character can defend itself — assisted, bounded, and never on its own
   initiative** (`epic/p4-assisted-combat`, wave 1). Four new protocol actions
   (`combat.equip_best`, `combat.shove`, `combat.engage`, `combat.retreat` —

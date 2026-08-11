@@ -22,7 +22,7 @@ The handover point between work sessions: read it first, update it last.
 > | `P4-assisted-combat` — bounded defensive combat under `combat_assist` | **done here, awaits live** — 4 actions (`equip_best`/`shove`/`engage`/`retreat`), one bounded engage window (≤3 swings, 4s wall), sidecar `CombatPolicy` refusals (group/endurance/panic/health/weapon), parameterless `engage_single_zombie` (14th kind, ≤4 windows), zombie tri-state + weapon condition observed; `combat_assist` EXPERIMENTAL until a live shove, `autonomous_attack` untouched and pinned unsupported; arbiter/initiative pinned to never mint combat |
 > | `P4-autonomous-combat-live-gated` | todo — not to be built without live certification of `combat_assist` first |
 > | `P5-crafting-building` | todo |
-> | `UX-one-command-play-and-docs` — one-command launch, goal CLI | todo |
+> | `UX-one-command-play-and-docs` — one-command launch, goal CLI | **wave 1 done here, awaits live** — `pz-agent play` (validate → start → bounded wait for the game → arm confirmed by the game's own heartbeat, refuses in front of a panic latch, never touches the game process), `goal submit/status/cancel` over the same Core RPC link the MCP server and voice use (no `pause`/`resume` by design), `status --watch` HUD with the goal queue and an honest `unreachable`; the RPC codec tail is closed (suspension fields, `target_endurance`/`hours`, `progress`/`paused`/`report`) and `schemas/goal.schema.json` declares the four suspension keys; open: `goal submit` in a user-facing walkthrough, voice speakability of the newly wired kinds |
 
 > **2026-08-08, the today-finalization push.** The integration branch of
 > record is `rescue/today-finalization`; `docs/control/TODAY_SWARM.yaml`,

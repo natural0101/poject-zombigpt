@@ -30,6 +30,15 @@ process over the Core RPC link, so "something is listening" and "a goal it hears
 can land" are two facts and not one, and a record left by the build that had no
 goal route at all is still reported as what it was.
 
+``--watch`` is the same reading on a timer, printed short. It adds exactly one
+fact the one-shot report cannot carry — what the goal channel holds — and it
+adds it over the Core RPC link, which is a *second process* answering rather
+than a file being read. That makes the goal block three-state for the reason
+every other block here is: no answer at all, an answer, and the middle case of
+a channel this process could not reach. "Unreachable" is never rendered as "no
+goals", because a user watching an empty queue that is actually a dead link
+would be watching an agent they think is idle and is in fact unreachable.
+
 The backup line is read rather than recorded, because unlike the other two it is
 a fact about *now*: which backups exist, and whether one of them names the save
 the mod is reporting this second. It is three states and never two — no backup
@@ -44,9 +53,12 @@ belongs to the sidecar that is about to rely on it and to the restore itself.
 from __future__ import annotations
 
 import json
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Final, TextIO
 
+from pz_agent_core.goals import GoalRecord
 from pz_agent_core.ipc.atomic import DocumentError, read_json_document
 from pz_agent_core.ipc.layout import IpcLayout
 from pz_agent_core.platform.backup import attributed_to
@@ -54,6 +66,8 @@ from pz_agent_core.protocol import JsonDict
 from pz_agent_core.session.handshake import SessionDescriptor, SessionError
 from pz_agent_core.session.heartbeat import Heartbeat, HeartbeatMonitor, Peer, PeerLiveness
 from pz_agent_core.session.lock import LockError, LockInfo
+from pz_agent_mcp.ports import GoalChannelStatus
+from pz_agent_mcp.remote.client import CoreLink, RemoteCoreError, RemoteGoalPort
 
 from .autonomy import (
     PLANNER_FILE_NAME,
@@ -62,12 +76,49 @@ from .autonomy import (
     read_planner_record,
     workspace_backups,
 )
-from .context import EXIT_FAILURE, EXIT_OK, CliContext, Workspace, resolve_workspace
+from .context import EXIT_FAILURE, EXIT_OK, EXIT_USAGE, CliContext, Workspace, resolve_workspace
 from .doctor import environment_facts
 from .memory import MEMORY_RECORD_NAME, MemoryRecord, read_memory_record
 from .output import Printer
 from .runtime import CAPABILITY_FILE_NAME, CapabilityRecord, read_capability_record
 from .voice import VoiceStatus, collect_voice_status
+
+#: The fastest ``--watch`` will redraw, whatever the user asked for. Every frame
+#: stats and reads the whole exchange directory, and the mod publishes its
+#: heartbeat on a cadence measured in seconds — so a tighter loop buys no fresher
+#: fact and spends the disk to find that out.
+WATCH_MIN_INTERVAL: Final = 0.5
+
+#: How many frames one invocation will draw before it stops on its own. A watch
+#: ends when the user interrupts it, and this is the bound for the case where
+#: nobody ever does: a terminal left open over a weekend. At the floor interval
+#: it is most of a day, so it never truncates a watch anybody is looking at, and
+#: it says why it stopped so the ending is never mistaken for a crash.
+MAX_WATCH_FRAMES: Final = 100_000
+
+#: How long one frame will wait on the goal channel. Bounded well under the
+#: floor interval: a frame that blocked longer than the redraw period would make
+#: the HUD's own clock a function of a link that is not answering.
+GOAL_QUEUE_PROBE_SECONDS: Final = 2.0
+
+#: How many waiting goals one frame names. The backlog is another process's
+#: answer and is bounded by the queue rather than by this display, so the
+#: display bounds what it prints and says how many it left out.
+MAX_PENDING_SHOWN: Final = 3
+
+#: What a field prints when the answer carried ``None``. Never "no" and never
+#: "0": an older peer's codec that cannot carry progress or a takeover marker
+#: answers the same ``None`` as a channel that has nothing to report, and only
+#: one of those means the agent is not paused.
+UNREPORTED: Final = "unreported"
+
+#: Clear the screen, then put the cursor at the top left. Written to a terminal
+#: and to nothing else — a pipe gets a separator line instead, because escape
+#: bytes in a file somebody later greps are corruption with a redraw's excuse.
+CLEAR_SCREEN: Final = "\x1b[2J\x1b[H"
+
+#: What separates two frames when the destination is not a terminal.
+FRAME_SEPARATOR: Final = "=" * 60
 
 
 @dataclass(frozen=True, slots=True)
@@ -595,3 +646,248 @@ def run_status(ctx: CliContext, *, as_json: bool) -> int:
     # with no Zomboid directory at all — where there was nothing to inspect —
     # is a failure, and doctor is the command that explains that one.
     return EXIT_OK if workspace.ipc_root is not None else EXIT_FAILURE
+
+
+def probe_goal_queue(
+    workspace: Workspace, *, deadline: float = GOAL_QUEUE_PROBE_SECONDS
+) -> GoalChannelStatus | None:
+    """What the running sidecar's goal channel holds, or ``None`` for no channel.
+
+    One read-only ``goal.status`` call over the Core RPC link, dialled exactly
+    the way :func:`~pz_agent_cli.voice.probe_goal_channel` dials it and for the
+    same reason: a descriptor on disk and a live pid both report a routed
+    channel about a sidecar that has stopped answering, and the only reading
+    that does not is the answer itself. It submits nothing and cancels nothing,
+    so it is safe against a live armed session.
+
+    ``None`` is every way of not having an answer — no descriptor, nothing
+    listening, a refusal, a reply this build cannot read — and the caller
+    renders all of them as unreachable rather than as an empty queue.
+    """
+    port = RemoteGoalPort(CoreLink(state_dir=workspace.state_dir, deadline=deadline))
+    try:
+        return port.status()
+    except RemoteCoreError:
+        # The link's own sentence — which names the file and 'pz-agent start' —
+        # is discarded here on purpose: a HUD line has no room for it and a
+        # watch that stopped to print it would end the display over a sidecar
+        # the user is watching *for*. The diagnosis is one command away in
+        # 'pz-agent goal status', which prints that sentence in full; what is
+        # lost is a detail, and what is kept is the running watch.
+        return None
+
+
+def _writes_to_a_terminal(stream: TextIO) -> bool:
+    """Whether *stream* is a terminal, with "it would not say" meaning no.
+
+    Guessing "terminal" about a pipe puts escape bytes into a file; guessing
+    "pipe" about a terminal costs a redraw that scrolls instead of repainting.
+    Only one of those two is a corrupted artefact, so a stream that raises when
+    asked — a detached or closed one — is treated as a pipe.
+    """
+    try:
+        return stream.isatty()
+    except (AttributeError, ValueError, OSError):
+        return False
+
+
+def _suspension_marker(record: GoalRecord) -> str:
+    """What a waiting goal stepped aside for, or nothing at all.
+
+    Printed only when the record carries it. "Suspended: no" would be a claim
+    assembled from a default the wire may never have carried, and this display
+    does not make those.
+    """
+    return "" if record.suspended_by is None else f" (stepped aside for {record.suspended_by})"
+
+
+def _progress_line(status: GoalChannelStatus) -> str:
+    """The deterministic drive's phase and counters, or the word for silence."""
+    progress = status.progress
+    if progress is None:
+        return UNREPORTED
+    counters = " ".join(f"{name}={value}" for name, value in sorted(progress.counters.items()))
+    return f"{progress.phase} {counters}".strip()
+
+
+def _paused_line(status: GoalChannelStatus, workspace: Workspace) -> str:
+    """The takeover marker, redacted, or the word — never "no"."""
+    paused = status.paused
+    if paused is None:
+        return UNREPORTED
+    return (
+        f"{paused.kind} {paused.goal_id} parked at {paused.paused_at_ms}ms "
+        f"({workspace.redactor.text(paused.reason)})"
+    )
+
+
+def render_goal_block(
+    status: GoalChannelStatus | None, printer: Printer, workspace: Workspace
+) -> None:
+    """The queue as the sidecar answered it, or the fact that it did not.
+
+    Three states and never two. An unreachable channel is said to be
+    unreachable, because a HUD that printed "no goals" about a link nothing
+    answered would show an idle agent to a user whose agent is unreachable —
+    and those two look identical only from here.
+    """
+    if status is None:
+        printer.field("goals", "unreachable — the sidecar is not serving RPC")
+        return
+    active = status.active
+    if active is None:
+        printer.field("goals", "no goal is active")
+    else:
+        printer.field("goals", f"{active.kind.value} {active.goal_id}{_suspension_marker(active)}")
+        printer.field("progress", _progress_line(status))
+    printer.field("paused", _paused_line(status, workspace))
+    pending = status.pending
+    if not pending:
+        printer.field("waiting", "nothing is waiting")
+        return
+    shown = ", ".join(
+        f"{record.kind.value}{_suspension_marker(record)}" for record in pending[:MAX_PENDING_SHOWN]
+    )
+    unshown = len(pending) - MAX_PENDING_SHOWN
+    tail = f", +{unshown} more" if unshown > 0 else ""
+    printer.field("waiting", f"{len(pending)} — {shown}{tail}")
+
+
+def render_watch_frame(
+    report: StatusReport,
+    goals: GoalChannelStatus | None,
+    printer: Printer,
+    workspace: Workspace,
+    *,
+    frame: int,
+) -> None:
+    """One frame: the few facts that move, and the queue behind them.
+
+    Deliberately not :func:`render_status`. The full report is a page, and a
+    page redrawn every two seconds is one a user cannot read a change out of;
+    what moves while somebody watches is the liveness of the two peers, the
+    arming, the session and the goals. Everything the full report prints that
+    is a *setting* — the capability, planner, memory, backup and voice records —
+    stays in the one-shot command, where it is read once and thought about.
+    """
+    printer.heading(f"pz-agent status — frame {frame}")
+    game = report.game
+    if game is not None and game.heartbeat is not None:
+        beat = game.heartbeat
+        mode = beat.mode.value if beat.mode is not None else "unknown"
+        printer.field(
+            "game",
+            f"{'live' if game.alive else 'stale'} — build {beat.build or 'unknown'}, "
+            f"armed {'yes' if beat.armed else 'no'}, mode {mode}",
+        )
+    else:
+        printer.field("game", game.detail if game is not None else "no heartbeat")
+    sidecar = report.sidecar
+    printer.field("sidecar", sidecar.detail if sidecar is not None else "no heartbeat")
+    if report.session is not None:
+        save = report.session.save_id or "no save recorded"
+        printer.field("session", f"{report.session.session_id} — {save}")
+    elif report.session_problem:
+        printer.field("session", report.session_problem)
+    else:
+        printer.field("session", "none")
+    # Only when it is there: a line reading "panic stop: no" on every frame is a
+    # line a watching user stops seeing, and this is the one they must not.
+    if report.panic_stop:
+        printer.field("panic stop", "a panic-stop sentinel is present")
+    render_goal_block(goals, printer, workspace)
+
+
+def _frames(count: int) -> str:
+    return "1 frame" if count == 1 else f"{count} frames"
+
+
+def run_status_watch(
+    ctx: CliContext,
+    *,
+    interval: float,
+    as_json: bool,
+    max_frames: int | None = None,
+    sleeper: Callable[[float], None] = time.sleep,
+    goal_source: Callable[[Workspace], GoalChannelStatus | None] | None = None,
+) -> int:
+    """Handler for ``pz-agent status --watch``.
+
+    A live display, and three refusals before it starts. ``--json`` is refused
+    rather than served per frame: a stream of documents separated by nothing is
+    not a format anything parses, and a machine reader that wants this is asking
+    for a poll loop it should own — its interval, its back-off and its own idea
+    of when to stop. An interval of zero or less is refused because it names no
+    schedule, and one under :data:`WATCH_MIN_INTERVAL` is raised to the floor
+    with the note said out loud, since silently doing something other than what
+    was asked is how a user concludes the flag does nothing.
+
+    ``max_frames``, ``sleeper`` and ``goal_source`` are seams for the tests, and
+    only for them: the shipped invocation passes none of the three, so what a
+    test drives is this function with the real reader, the real link and the
+    real loop. The bound the tests inject is *inside*
+    :data:`MAX_WATCH_FRAMES`, which applies whether or not they do.
+
+    The note and every refusal go to stderr. On a terminal the first frame
+    erases the screen, so a note printed to stdout would be visible for exactly
+    one interval and then gone.
+    """
+    printer = Printer(ctx.stdout, ctx.stderr)
+    if as_json:
+        printer.error(
+            "--watch does not emit JSON: a redrawn screen is not a document, and a stream "
+            "of them is not one either. Poll 'pz-agent status --json' on your own schedule."
+        )
+        return EXIT_USAGE
+    if interval <= 0:
+        printer.error(f"--interval must be greater than zero seconds, got {interval}")
+        return EXIT_USAGE
+    delay = interval
+    if delay < WATCH_MIN_INTERVAL:
+        delay = WATCH_MIN_INTERVAL
+        printer.error(
+            f"note: --interval {interval} raised to {WATCH_MIN_INTERVAL} s — a tighter loop "
+            "re-reads the exchange directory without the game having published anything new"
+        )
+    workspace = resolve_workspace(ctx)
+    if workspace.ipc_root is None:
+        # The same verdict the one-shot command reports on this machine, taken
+        # before the loop rather than redrawn by it: there is no directory here
+        # for anything to appear in, so no amount of waiting changes the answer.
+        printer.error(
+            "there is no Zomboid directory here, so there is no exchange directory to watch; "
+            "run 'pz-agent doctor'"
+        )
+        return EXIT_FAILURE
+    source = probe_goal_queue if goal_source is None else goal_source
+    budget = MAX_WATCH_FRAMES if max_frames is None else min(max_frames, MAX_WATCH_FRAMES)
+    terminal = _writes_to_a_terminal(ctx.stdout)
+    frames = 0
+    try:
+        while frames < budget:
+            if terminal:
+                # Straight to the stream rather than through the printer, which
+                # only writes whole lines: a newline after the home sequence
+                # would start every frame one row down from the one it painted
+                # over, and the display would crawl down the screen.
+                print(CLEAR_SCREEN, end="", file=ctx.stdout)
+            elif frames:
+                printer.line(FRAME_SEPARATOR)
+            report = collect_status(ctx, workspace)
+            render_watch_frame(report, source(workspace), printer, workspace, frame=frames + 1)
+            frames += 1
+            if frames < budget:
+                sleeper(delay)
+    except KeyboardInterrupt:
+        # Ctrl-C is how this command is meant to end, so it is an ending and not
+        # a failure: the closing line says how much was shown and the exit code
+        # says the command did what it was asked.
+        printer.line(f"watch ended after {_frames(frames)}")
+        return EXIT_OK
+    closing = f"watch ended after {_frames(frames)}"
+    if max_frames is None:
+        # Nothing interrupted it and no test bounded it, so this is the ceiling
+        # above, and an ending nobody asked for has to say that it was one.
+        closing = f"{closing} — the watch ceiling; run it again to keep watching"
+    printer.line(closing)
+    return EXIT_OK

@@ -136,6 +136,10 @@ MOD_INFO_MEMBER: Final = "mod/mod.info"
 #: is what keeps that from happening again.
 DOC_NAMES: Final[tuple[str, ...]] = (
     "QUICKSTART.md",
+    # QUICKSTART hands off to PLAYING for the one-command loop, and the archive's
+    # README opens with it: an operator who installs from the ZIP and types
+    # `pz-agent play` reads this to learn what each of its refusals means.
+    "PLAYING.md",
     "TROUBLESHOOTING.md",
     "SAFETY.md",
     "LIMITATIONS.md",
