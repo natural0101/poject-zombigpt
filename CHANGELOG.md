@@ -164,6 +164,34 @@ drift out of sync with `pz_agent_core.version`.
   without ending the goal. It fired in no test, and reproducing it needs a
   concurrency the queue does not currently produce.
 
+  **One finding is reproduced, unfixed, and larger than a stabilization fix: the
+  agent cannot walk.** `movement.move_to`, `movement.move_near`, `world.inspect`
+  and the local map all locate the destination square by scanning
+  `nearby.objects` for an entry whose `kind` is `square`, reading `loaded` /
+  `blocked` / `closed_window` / `drop` from its semantics. The mod has no code
+  path that emits one. `Observe.nearbyObjects` sets each entry's `kind` from the
+  container type, from `getObjectName` lowercased, or to the literal `corpse`;
+  `Refs.KIND.SQUARE` appears only where reference *strings* are minted and
+  parsed; `nearbyFields` exports `objects` and `zombies` and no square tier; and
+  the strings `"loaded"`, `"blocked"` and `"closed_window"` occur nowhere in the
+  mod's Lua at all. Driven against a document assembled the way
+  `Observe.nearbyObjects` assembles it, a one-square walk east and a walk up to a
+  container the mod *did* report both refuse with `TARGET_NOT_LOADED` — "no
+  loaded square was reported at (1201, 3400, 0)". Every navigation leg goes
+  through this, so it is a total functional outage of movement, and it was
+  invisible because the sidecar's fixtures mint the square objects
+  (`tests/fixtures/adapter_worlds.py:a_square`) that the mod never sends: the
+  same green-that-does-not-cover shape as the dead test group above, this time
+  across a contract boundary. It is **not** fixed here. The sidecar side must not
+  be relaxed — that is the forbidden direction, and it would walk the character
+  onto squares nothing assessed. The mod side means building the half of the
+  interface that was never built: a square record per scanned square, with a
+  solidity read behind `blocked`, since emitting `loaded` alone would assert
+  passability nobody measured. That is a scope decision, not a minimal edit, and
+  it is written down for the owner rather than taken unilaterally.
+  `TROUBLESHOOTING.md` carries the symptom so a live tester does not spend the
+  session hunting their install.
+
   Two more are recorded with their reasoning rather than closed. The first is a
   **decision**, not a stabilisation fix: the age check above refuses a *stale*
   floor but accepts a floor that was **never** measured, because

@@ -229,6 +229,44 @@ stale references.
 Re-observe and rebuild. This is not retryable, and retrying is why the code
 refuses to.
 
+## "TARGET_NOT_LOADED" on every move — known, unfixed
+
+If `movement.move_to` refuses with `no loaded square was reported at (x, y, z)`
+for **every** destination, including the square next to the character, this is a
+known gap and not a fault of your install, your position, or the loaded cell.
+
+`movement.move_to`, `movement.move_near`, `world.inspect` and the local map all
+look for the destination square in `nearby.objects`, matching entries whose
+`kind` is `square` and reading `loaded` / `blocked` / `closed_window` / `drop`
+from their semantics. **The mod has no code path that emits such an entry.**
+`Observe.nearbyObjects` sets each entry's `kind` from the container type, from
+`getObjectName`, or to the literal `corpse`; `Refs.KIND.SQUARE` exists only to
+mint and parse *reference strings*. `nearby` carries `objects` and `zombies` and
+no square tier at all.
+
+So the sidecar's half of this interface is built and the mod's half is not. The
+character cannot be walked anywhere by the agent until one of them changes.
+Reproduced against a document assembled exactly as `Observe.nearbyObjects`
+assembles it:
+
+```
+- the character walks in the world the mod actually describes
+  FAIL a one-square walk east is accepted
+         reason: TARGET_NOT_LOADED
+         detail: no loaded square was reported at (1201, 3400, 0)
+  FAIL walking up to a container the mod reported is accepted
+         reason: TARGET_NOT_LOADED
+
+  object kinds in the document: ['corpse', 'counter', 'door']
+  entries with kind 'square':   0
+```
+
+There is no workaround, and none should be improvised: the refusal is the
+adapter's precondition doing its job, and relaxing it would let the agent walk
+into squares nothing has assessed. `world.inspect` is affected the same way — it
+reports `squares_described: 0` — and the local map never learns that any square
+is blocked, so it records obstacles only where a door, window or tree was seen.
+
 ## "LEASE_EXPIRED"
 
 The command's TTL ran out before it could execute — usually because it queued
