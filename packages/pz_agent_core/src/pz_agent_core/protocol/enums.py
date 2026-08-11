@@ -49,6 +49,8 @@ class ActionName(StrEnum):
     COMBAT_RETREAT = "combat.retreat"
     CRAFTING_INSPECT = "crafting.inspect"
     CRAFTING_CRAFT = "crafting.craft"
+    BUILDING_INSPECT = "building.inspect"
+    BUILDING_BUILD = "building.build"
 
 
 #: Actions that only read state. They are permitted in OBSERVE mode and do not
@@ -68,6 +70,12 @@ READ_ONLY_ACTIONS: frozenset[ActionName] = frozenset(
         # materials already on the character, and the character does not move or
         # touch anything to answer it.
         ActionName.CRAFTING_INSPECT,
+        # ``building.inspect`` answers "what could stand on this square, and
+        # what would that cost" by reading the square and the materials
+        # carried. Nothing is placed and nobody walks: the question is exactly
+        # the one a user needs answered *before* granting the authority to
+        # place something permanent.
+        ActionName.BUILDING_INSPECT,
     }
 )
 

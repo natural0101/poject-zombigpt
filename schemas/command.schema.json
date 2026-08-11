@@ -85,7 +85,9 @@
         "combat.engage",
         "combat.retreat",
         "crafting.inspect",
-        "crafting.craft"
+        "crafting.craft",
+        "building.inspect",
+        "building.build"
       ]
     },
     "args": {

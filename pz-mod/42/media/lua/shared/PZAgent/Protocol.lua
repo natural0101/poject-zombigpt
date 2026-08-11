@@ -60,6 +60,8 @@ Protocol.ACTION_NAMES = {
   "combat.retreat",
   "crafting.inspect",
   "crafting.craft",
+  "building.inspect",
+  "building.build",
 }
 
 local function toSet(list)
@@ -79,6 +81,7 @@ Protocol.READ_ONLY_ACTIONS = toSet({
   "inventory.search",
   "action.wait",
   "crafting.inspect",
+  "building.inspect",
 })
 
 --- Actions that bypass the arming check entirely -- stopping must always work.
@@ -202,6 +205,8 @@ Protocol.REASON = {
   RESOURCE_RESERVED = "RESOURCE_RESERVED",
   RECIPE_UNKNOWN = "RECIPE_UNKNOWN",
   RECIPE_MATERIALS_MISSING = "RECIPE_MATERIALS_MISSING",
+  SQUARE_OCCUPIED = "SQUARE_OCCUPIED",
+  WOULD_TRAP_PLAYER = "WOULD_TRAP_PLAYER",
 
   INTERNAL_ERROR = "INTERNAL_ERROR",
 }

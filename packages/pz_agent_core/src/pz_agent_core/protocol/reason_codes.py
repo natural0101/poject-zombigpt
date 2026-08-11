@@ -68,6 +68,8 @@ class ReasonCode(StrEnum):
     RESOURCE_RESERVED = "RESOURCE_RESERVED"
     RECIPE_UNKNOWN = "RECIPE_UNKNOWN"
     RECIPE_MATERIALS_MISSING = "RECIPE_MATERIALS_MISSING"
+    SQUARE_OCCUPIED = "SQUARE_OCCUPIED"
+    WOULD_TRAP_PLAYER = "WOULD_TRAP_PLAYER"
 
     # --- catch-all ---------------------------------------------------------
     INTERNAL_ERROR = "INTERNAL_ERROR"
