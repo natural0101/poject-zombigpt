@@ -228,6 +228,74 @@ do
   )
 end
 
+Harness.group("a danger floor is a reading only while something keeps taking it")
+do
+  -- The floor is written in one place, at the end of a successful observation.
+  -- Nothing else writes it, so a mod whose observation starts failing keeps
+  -- showing this gate the last level it managed to measure -- and the level a
+  -- state starts at is `none`. The gate therefore reads the age as well as the
+  -- level. test_observe drives the whole failure; this group is the arithmetic.
+  local state = liveState()
+  Safety.arm(state, "AUTONOMOUS", NOW, context())
+  ok(Safety.setDanger(state, Protocol.DANGER.NONE, NOW), "a measured floor carries the moment it was measured")
+  equal(state.danger_seen_ms, NOW, "which is the clock the observation ran on")
+  equal(Safety.dangerAgeMs(state, NOW + 250), 250, "so its age can be asked for")
+
+  -- The sidecar keeps beating throughout: this is the mod that stopped
+  -- observing, not the sidecar that went away, and those are separate refusals.
+  local edge = NOW + Safety.DANGER_MAX_AGE_MS
+  Safety.noteSidecarHeartbeat(state, edge)
+  ok(Safety.mayStart(state, "consume.eat", edge, context()), "a reading inside the allowance still permits work")
+  Safety.noteSidecarHeartbeat(state, edge + 1)
+  local allowed, reason, detail = Safety.mayStart(state, "consume.eat", edge + 1, context())
+  ok(not allowed, "one measured further back than the allowance does not")
+  equal(reason, REASON.PRECONDITION_FAILED, "and the refusal names a missing precondition")
+  Harness.contains(detail, "measured", "saying what is missing")
+  equal(
+    state.danger_level,
+    Protocol.DANGER.NONE,
+    "while the stale level itself is left alone, not raised to invent a threat"
+  )
+
+  ok(Safety.mayStart(state, "safety.stop", edge + 1, context()), "stopping is unaffected, as it is by everything else")
+  ok(
+    Safety.mayStart(state, "world.inspect", edge + 1, context()),
+    "and so is the read that takes the next measurement, so the refusal cannot lock itself in"
+  )
+
+  Safety.setDanger(state, Protocol.DANGER.NONE, edge + 1)
+  ok(Safety.mayStart(state, "consume.eat", edge + 1, context()), "one fresh reading ends the refusal")
+
+  local staleHigh = liveState()
+  Safety.arm(staleHigh, "AUTONOMOUS", NOW, context())
+  Safety.setDanger(staleHigh, Protocol.DANGER.HIGH, NOW)
+  Safety.noteSidecarHeartbeat(staleHigh, edge + 1)
+  equal(
+    select(2, Safety.mayStart(staleHigh, "consume.eat", edge + 1, context())),
+    REASON.PRECONDITION_FAILED,
+    "a level nobody re-measured is no more evidence of a threat than of calm, so the age is what it is refused on"
+  )
+  Safety.setDanger(staleHigh, Protocol.DANGER.HIGH, edge + 1)
+  equal(
+    select(2, Safety.mayStart(staleHigh, "consume.eat", edge + 1, context())),
+    REASON.THREAT_INTERRUPTED,
+    "and measured again it is the threat it says it is"
+  )
+
+  local unmeasured = liveState()
+  Safety.arm(unmeasured, "AUTONOMOUS", NOW, context())
+  isNil(unmeasured.danger_seen_ms, "a state that has never observed has no measurement behind its none")
+  isNil(Safety.dangerAgeMs(unmeasured, NOW), "so there is no age to judge it by")
+  Safety.setDanger(unmeasured, Protocol.DANGER.LOW)
+  isNil(unmeasured.danger_seen_ms, "and a level set with no clock is not dated to now on its behalf")
+
+  equal(
+    Safety.DANGER_MAX_AGE_MS,
+    6 * Safety.SIDECAR_MAX_AGE_MS,
+    "the allowance is the observation cadence: six heartbeats to a snapshot (PZAgent_Main), six times the heartbeat's"
+  )
+end
+
 Harness.group("stop and cancel bypass everything")
 do
   -- The whole point of the always-allowed set: it must survive every condition

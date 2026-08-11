@@ -12,7 +12,7 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
-- **Twenty-eight defects of one family: evidence read without checking whose it
+- **Thirty defects of one family: evidence read without checking whose it
   was, or when it was written** (`stabilize/arm-session-confirmation`). A static
   audit along the P0 causal chain — mod visibility, session identity, heartbeat
   freshness, the two-phase arm, terminality, pointer and sequence recovery, one
@@ -20,7 +20,7 @@ drift out of sync with `pz_agent_core.version`.
   generalising its shape across the sidecar, and then running the same three
   families against the mod, which is where every one of the 2026-08-08 live
   findings had lived, and finally against the tri-state rule itself. Thirteen on
-  the sidecar, fifteen on the mod. Every fix was
+  the sidecar, seventeen on the mod. Every fix was
   watched red first; a hypothesis that could not be turned red was reported as a
   hypothesis and left alone.
 
@@ -125,6 +125,34 @@ drift out of sync with `pz_agent_core.version`.
   absence promotes the capability in the very document the sidecar gates its
   write tools on.
 
+  *A floor nobody has measured recently is not calm.* Closing the zombie-scan
+  gap left its neighbour standing, and the neighbour turned out to be reachable.
+  `Safety.setDanger` is called from exactly one place — the end of
+  `Observe.context` — so every tick that fails *before* that point leaves the
+  previous reading in `agent.safety.danger_level` while the mod keeps
+  heartbeating and keeps accepting commands. It was reproduced end to end: arm an
+  agent, observe once against a calm street (floor `none`), then remove `getCore`
+  so `Heartbeat.detectBuild` fails, and tick twelve more times across sixty
+  seconds with the sidecar heartbeat renewed and two chasing zombies now present.
+  `Safety.mayStart(safety, "consume.eat", …)` answered **`POSTCONDITION_MET`** —
+  cleared to act, on a reading a minute old, taken before the horde arrived. The
+  floor now carries the clock that measured it (`danger_seen_ms`), and `mayStart`
+  refuses a mutating action whose floor has not been re-measured within
+  `DANGER_MAX_AGE_MS` (30 s, six sidecar heartbeat windows) with
+  `PRECONDITION_FAILED` naming the missing *measurement* rather than a threat
+  nobody saw. The refusal sits after the always-allowed and read-only returns, so
+  `world.inspect` is never blocked and the state clears itself the moment one
+  observation succeeds.
+
+  *A test that never ran.* An earlier hand-merge in this same pass appended the
+  zombie-scan group to `tests/lua/test_observe.lua` **after** `Harness.finish`,
+  which calls `os.exit`. Eighty-eight assertions — the ones covering the
+  safety-critical fix above — were present, readable, named in the ledger and
+  executed never; the suite reported 146 passing and exited before reaching them.
+  This is the pass's own defect family turned on its evidence: a green count that
+  did not cover what it appeared to cover. `finish` now sits at the end of the
+  file and the suite runs 234.
+
   Two flattenings were examined and deliberately left: `player.alive` is false
   for both a corpse and a build without `isDead`, but every consumer refuses or
   stops on it and none acts, so the cost is a wrong sentence rather than a wrong
@@ -135,6 +163,24 @@ drift out of sync with `pz_agent_core.version`.
   the mission-cap eviction path marks a drive abandoned and banks its report
   without ending the goal. It fired in no test, and reproducing it needs a
   concurrency the queue does not currently produce.
+
+  Two more are recorded with their reasoning rather than closed. The first is a
+  **decision**, not a stabilisation fix: the age check above refuses a *stale*
+  floor but accepts a floor that was **never** measured, because
+  `Safety.newState` starts at `DANGER.NONE` with no timestamp and three suites
+  arm without observing at all (`tests/lua/support/command_support.lua:201`,
+  `test_action_runtime.lua`, `test_movement_runtime.lua`). Deleting one clause —
+  `dangerAge ~= nil and` — closes it and breaks those three, which is a contract
+  change about whether arming requires an observation. The options are (a) refuse
+  a nil age like a stale one, (b) gate *arming* on a successful observation
+  instead of the gate, or (c) accept it on the record; nobody has picked one, so
+  it is written down here rather than chosen unilaterally. The second is a
+  **wart** with its trace, so it need not be re-investigated: `nearbyObjects`
+  fails the same silent way the zombie scan did, but all six sidecar consumers of
+  `nearby.objects` abstain on an empty list rather than concluding from it —
+  there is no local map that banks a scan as knowledge, and no explore or loot
+  goal completes on the absence of a frontier or a container. The honest end has
+  no listener, so declaring the gap would fix nothing today.
 
 ### Added
 

@@ -1102,9 +1102,14 @@ function Observe.context(agent, player, sessionId, seq, nowMs)
   -- and the compact view the planner sees. All three were told the situation
   -- was calm during a horde. The floor is deliberately coarser than
   -- `pz_agent_core.safety.threat`, which stays authoritative for policy.
+  -- The timestamp travels with the level because this is the only place that
+  -- writes it: an observation that fails before reaching this line leaves the
+  -- previous reading behind, and without its age the gate cannot tell that
+  -- reading from one taken this tick.
   PZAgent.Safety.setDanger(
     agent.safety,
-    PZAgent.ObserveModel.dangerFloor(nearby, playerFields.position)
+    PZAgent.ObserveModel.dangerFloor(nearby, playerFields.position),
+    nowMs
   )
   return {
     session_id = sessionId,

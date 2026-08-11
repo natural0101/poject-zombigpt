@@ -1014,7 +1014,104 @@ do
   equal(document.player.stats.weapon_condition_max, 10, "beside its maximum")
 end
 
-Harness.finish("observe")
+Harness.group("a floor nobody has measured recently is not calm")
+do
+  -- The tick that publishes a snapshot is the only thing that writes the danger
+  -- floor, and it writes it last -- after the player, the build and the nearby
+  -- scan. Everything that fails before that point leaves the previous reading
+  -- standing while the mod keeps heartbeating and keeps taking commands, so the
+  -- question this group asks is what the mod's own gate does with a `none` that
+  -- nothing has re-measured.
+  local removeCore = installCore("42.20")
+  local removeWorld = Support.installWorld("Muldraugh, KY/survivor")
+  local removeTime = Support.installGameTime({ speed = 1, paused = false })
+  local removeCell = Support.installCell({}, {})
+
+  local REASON = PZ.Protocol.REASON
+  local agent = newAgent()
+  agent.player = furnishedPlayer()
+  agent.queue_description = PZ.Ownership.describe({}, SESSION)
+  PZ.Safety.noteSidecarHeartbeat(agent.safety, NOW)
+  ok(
+    PZ.Safety.arm(agent.safety, "AUTONOMOUS", NOW, { sessionId = SESSION, playerPresent = true }),
+    "the agent arms: live sidecar, open session, a character to act with"
+  )
+
+  --- The gate the sidecar's mutating commands pass through, with everything
+  --- except the danger floor in order.
+  local function mayEat(nowMs)
+    return PZ.Safety.mayStart(agent.safety, "consume.eat", nowMs, {
+      sessionId = SESSION,
+      playerPresent = true,
+      playerAlive = true,
+      queue = PZ.Ownership.describe({}, SESSION),
+    })
+  end
+
+  ok(Observe.tick(agent, NOW) ~= nil, "the first observation publishes")
+  equal(agent.safety.danger_level, PZ.Protocol.DANGER.NONE, "and measures an empty street as no danger")
+  ok(mayEat(NOW), "on that reading a mutating action may start")
+
+  -- Now the build probe stops answering, which is the whole of the change: the
+  -- character is still there and alive, the session is still open, and the
+  -- sidecar keeps beating below. Meanwhile the street fills up.
+  removeCore()
+  removeCell()
+  removeCell = Support.installCell({}, {
+    Support.zombie({ id = 1, x = 100, y = 200, has_target = true, target = agent.player }),
+    Support.zombie({ id = 2, x = 101, y = 201, has_target = true, target = agent.player }),
+  })
+
+  local last = NOW
+  local failures = 0
+  for step = 1, 12 do
+    last = NOW + step * 5000
+    PZ.Safety.noteSidecarHeartbeat(agent.safety, last)
+    local document, reason = Observe.tick(agent, last)
+    if document == nil and reason ~= nil then
+      failures = failures + 1
+    end
+  end
+  equal(failures, 12, "a minute of ticks, every one of them failing to observe")
+  Harness.contains(agent.safety.last_error, "getCore", "and saying so on the HUD")
+  ok(not PZ.Safety.sidecarStale(agent.safety, last), "while the sidecar is as live as it ever was")
+  equal(agent.safety.danger_level, PZ.Protocol.DANGER.NONE, "the floor still carries the reading from a minute ago")
+
+  local allowed, reason, detail = mayEat(last)
+  ok(not allowed, "a mutating action may not start on a floor nothing has measured since")
+  equal(reason, REASON.PRECONDITION_FAILED, "the refusal names the missing precondition")
+  Harness.contains(detail, "measured", "and says what is missing: a measurement, not a threat")
+  equal(
+    agent.safety.danger_level,
+    PZ.Protocol.DANGER.NONE,
+    "and the stale level is left as it was rather than raised to a danger nobody observed"
+  )
+
+  ok(PZ.Safety.mayStart(agent.safety, "safety.stop", last, {}), "stopping still works, as it does under everything")
+  ok(
+    PZ.Safety.mayStart(agent.safety, "world.inspect", last, {
+      sessionId = SESSION,
+      playerPresent = true,
+      playerAlive = true,
+      queue = PZ.Ownership.describe({}, SESSION),
+    }),
+    "and the read that would take a new measurement is not what gets blocked"
+  )
+
+  -- world.inspect is that read: it drives this very tick. One that gets through
+  -- ends the refusal, and on what the scan actually finds.
+  removeCore = installCore("42.20")
+  ok(Observe.tick(agent, last) ~= nil, "the observation recovers")
+  equal(agent.safety.danger_level, PZ.Protocol.DANGER.HIGH, "measuring the horde that arrived meanwhile")
+  local afterRecovery, recoveryReason = mayEat(last)
+  ok(not afterRecovery, "which is its own reason to refuse")
+  equal(recoveryReason, REASON.THREAT_INTERRUPTED, "now named as the threat it is")
+
+  removeCell()
+  removeTime()
+  removeWorld()
+  removeCore()
+end
 
 Harness.group("a zombie scan that could not run is not an empty street")
 do
@@ -1094,3 +1191,5 @@ do
   )
   removeCell()
 end
+
+Harness.finish("observe")
