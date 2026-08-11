@@ -410,6 +410,40 @@ def test_disarming_is_never_refused_even_with_no_game(tmp_path: Path) -> None:
         assert outcome.mode is SessionMode.OBSERVE
 
 
+def test_a_disarm_that_supersedes_a_pending_arm_countermands_it_at_the_game(
+    tmp_path: Path,
+) -> None:
+    """The superseded arm is still with the mod, and the mod still honours it.
+
+    ``session.arm`` is on the command journal and live for its whole lease. A
+    disarm that lands while it waits ends it *locally* — which grants the mod
+    nothing and revokes nothing either: the mod's arm gate refuses only a stale
+    sidecar heartbeat, and this sidecar is beating. So it arms the character in
+    a mode the loop has just abandoned, the loop keeps publishing
+    ``armed=false``, and nothing reconciles the two. That is the same hole the
+    deadline path already closes with a countermanding ``session.disarm``; a
+    disarm that supersedes an arm has exactly as much to countermand.
+    """
+    with attached_world(tmp_path) as world:
+        mod = ScriptedMod(world)
+        assert world.loop.arm(SessionMode.ASSISTED).pending
+        assert mod.commands(ActionName.SESSION_ARM), "the arm reached the mod"
+
+        world.loop.disarm(reason="user asked")
+
+        assert world.loop.pending_arm is None
+        assert world.loop.armed is False
+        assert mod.commands(ActionName.SESSION_DISARM), (
+            "an abandoned arm the mod may still grant must be countermanded"
+        )
+
+        # And the mod granting it late arms nothing here: the countermand is
+        # what makes the game agree with the sidecar's own disarmed state.
+        mod.confirm_arm(SessionMode.ASSISTED)
+        world.loop.tick()
+        assert world.loop.armed is False
+
+
 # ---------------------------------------------------------------------------
 # restart
 # ---------------------------------------------------------------------------
@@ -454,6 +488,41 @@ def test_an_arm_request_older_than_the_ceiling_is_ignored(tmp_path: Path) -> Non
 
         assert world.loop.armed is False
         assert world.control.pending() is False
+
+
+def test_an_arm_request_stamped_ahead_of_now_is_refused_not_consumed(tmp_path: Path) -> None:
+    """The max-age guard must bound the request in both directions.
+
+    Both staleness tests above compare ``now - issued_at_ms`` against the
+    ceiling, and both are defeated by the same fact: the stamp is wall-clock
+    time from another process. A previous run wrote its ``arm`` while the
+    machine's clock was ahead — NTP had not corrected it yet, or the user set
+    it by hand — and the clock has since stepped backwards. The file that
+    survives carries a timestamp *later* than this run's attach, so the
+    pre-attach refusal reads it as "issued after we came up", and the age
+    subtraction goes negative, so the ceiling reads it as "fresh". A request
+    from a run that no longer exists then arms this one, which is exactly what
+    those two guards exist to prevent.
+    """
+    with attached_world(tmp_path) as world:
+        ahead = ControlChannel(
+            world.state_dir / "sidecar.control.json",
+            clock=lambda: world.clock.now + CONTROL_MAX_AGE_MS * 4,
+        )
+        request = ahead.write(ControlKind.ARM, mode=SessionMode.ASSISTED)
+        world.beat_game()
+        world.observe()
+
+        world.loop.tick()
+
+        assert world.loop.pending_arm is None, "a request from the future armed nothing"
+        assert ScriptedMod(world).commands(ActionName.SESSION_ARM) == []
+        assert world.loop.armed is False
+        assert world.control.pending() is False
+        decision = world.loop.control_decision
+        assert decision is not None and decision.nonce == request.nonce
+        assert decision.applied is False
+        assert "clock" in decision.detail
 
 
 def test_a_fresh_arm_request_is_applied(tmp_path: Path) -> None:

@@ -106,6 +106,16 @@ class SnapshotReader:
     document older than one already accepted is reported and refused, because
     acting on stale inventory is worse than having no snapshot this tick.
 
+    That comparison is *within one session*. §3.4 makes sequence numbers
+    session-scoped and the mod restarts them from zero every time it accepts a
+    new session, so the first snapshot of the next game — seq 0 — is numerically
+    older than everything the previous session published. Ordering the two
+    against each other refused the live world for as long as it took the new
+    session to climb past the dead one's last number, which on the snapshot
+    channel is the *only* observation channel there is: the sidecar sat blind
+    with a diagnostic that read like corruption. A document from a different
+    session is therefore not comparable, and re-anchors the reader instead.
+
     A file locked by another process (the Windows read-side contention
     :mod:`.atomic` reports as :class:`SharingViolationError`) is a third
     outcome, distinct from both a tear and a rewind: the document behind the
@@ -115,6 +125,7 @@ class SnapshotReader:
 
     layout: IpcLayout
     _last_seq: int | None = field(default=None, init=False)
+    _last_session: str | None = field(default=None, init=False)
 
     @property
     def last_seq(self) -> int | None:
@@ -175,13 +186,26 @@ class SnapshotReader:
             return SnapshotMiss(diagnostics=tuple(diagnostics))
 
         chosen = max(candidates, key=lambda read: read.seq)
-        if self._last_seq is not None and chosen.seq < self._last_seq:
+        session = _document_session(chosen.document)
+        if session != self._last_session:
+            # Numbers from two sessions cannot be ordered, so the rewind guard
+            # has nothing to say here. Said out loud rather than passed over:
+            # the world the caller is about to be handed belongs to a different
+            # session than the one it was tracking.
+            if self._last_session is not None:
+                diagnostics.append(
+                    f"slot {chosen.slot.value} holds session {session}, "
+                    f"not the {self._last_session} seen so far; sequence numbers "
+                    "restart per session, so this one is not a rewind"
+                )
+        elif self._last_seq is not None and chosen.seq < self._last_seq:
             diagnostics.append(
                 f"slot {chosen.slot.value} holds seq {chosen.seq}, "
                 f"older than the accepted {self._last_seq}; refused"
             )
             return SnapshotMiss(diagnostics=tuple(diagnostics))
         self._last_seq = chosen.seq
+        self._last_session = session
         return SnapshotRead(
             slot=chosen.slot,
             seq=chosen.seq,
@@ -189,6 +213,18 @@ class SnapshotReader:
             from_pointer=chosen.from_pointer,
             diagnostics=tuple(diagnostics),
         )
+
+
+def _document_session(document: Mapping[str, Any]) -> str | None:
+    """The session a snapshot document names, or None when it names none.
+
+    None is a value like any other here: a document without a session id is
+    compared against other documents without one, which is what keeps the
+    rewind guard working for the callers that publish bare ``{"seq": …}``
+    documents.
+    """
+    session = document.get("session_id")
+    return session if isinstance(session, str) else None
 
 
 def _read_pointer(path: Path) -> tuple[SnapshotSlot, int] | None:

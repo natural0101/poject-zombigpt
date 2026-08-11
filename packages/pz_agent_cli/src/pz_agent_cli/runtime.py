@@ -2256,9 +2256,10 @@ class SidecarLoop:
         takes effect *first* and unconditionally, because refusing to drop
         authority is never right, and the game's answer is then watched the
         same bounded way and reported on :attr:`disarm_notice` rather than
-        allowed to un-disarm anything. A disarm that revoked nothing sends
-        nothing: the panic level calls this every tick it holds, and a
-        command per tick would be the unbounded stream this project forbids.
+        allowed to un-disarm anything. A disarm that revoked nothing *and*
+        superseded no pending arm sends nothing: the panic level calls this
+        every tick it holds, and a command per tick would be the unbounded
+        stream this project forbids.
         """
         changed = self._armed or self._mode is not SessionMode.OBSERVE
         pending_arm = self._pending_arm
@@ -2285,10 +2286,26 @@ class SidecarLoop:
                 message=f"the sidecar disarmed while this submission waited: {reason}",
             )
         if self._attached is not None:
-            if changed:
+            if changed or pending_arm is not None:
+                # The superseded arm is the second thing worth countermanding.
+                # It is still on the command journal and still inside its lease,
+                # and the mod's arm gate refuses only a stale sidecar heartbeat
+                # — which this beating sidecar does not have — so it may yet
+                # grant a mode this loop has just abandoned, exactly as a late
+                # ack does past the confirmation deadline (_watch_pending_arm
+                # countermands that one for the same reason). Bounded: the
+                # pending arm is resolved above, so the tick-by-tick disarm a
+                # held panic sentinel performs sends this once, not per tick.
                 self._submit_session_disarm(
                     self._attached,
-                    detail=f"session.disarm sent after disarming locally ({reason})",
+                    detail=(
+                        f"session.disarm sent after disarming locally ({reason})"
+                        if changed
+                        else (
+                            "session.disarm sent to countermand the arm this disarm "
+                            f"superseded, which the game may still grant ({reason})"
+                        )
+                    ),
                     watch=True,
                 )
             self._publish_heartbeat()
@@ -2666,7 +2683,9 @@ class SidecarLoop:
         """Take at most one pending request, refusing the ones that prove nothing.
 
         An **arm** issued before this process attached is refused outright, and
-        so is one that has gone stale. That is the mechanism behind "never
+        so is one that has gone stale — or one stamped so far ahead of this tick
+        that it cannot have been written against this clock. That is the
+        mechanism behind "never
         re-arms itself": after a crash, the ``arm`` file the user wrote for the
         *previous* session is still on disk, and consuming it would hand
         authority to a loop that has just come up knowing nothing about the
@@ -2713,6 +2732,29 @@ class SidecarLoop:
                 detail=(
                     "the arm request was issued before this sidecar attached, so it is "
                     "refused; a request left behind by a previous run proves nothing — ask again"
+                ),
+            )
+            return None
+        if request.issued_at_ms - now_ms > CONTROL_MAX_AGE_MS:
+            # The other end of the same bound, and it is not symmetry for its own
+            # sake: both tests above subtract two *wall*-clock readings taken in
+            # different processes, so a run that wrote its request while the
+            # machine's clock was ahead — before NTP corrected it, or after the
+            # user set it by hand — leaves a file the attach test reads as
+            # "issued after we came up" and the age test reads as "negative, so
+            # fresh". That is a previous run's arm arming this one. A request
+            # stamped a little ahead is ordinary (this tick's ``now_ms`` was read
+            # before the request was written, and the writer is another process),
+            # so the tolerance is the same ceiling rather than zero; past it the
+            # stamp is not a measurement of anything this loop can compare with.
+            self._decide(
+                request,
+                applied=False,
+                detail=(
+                    f"the arm request is stamped more than {CONTROL_MAX_AGE_MS} ms ahead "
+                    "of this tick, so it was written against a different clock and its "
+                    "age cannot be measured; it proves nothing about what the user wants "
+                    "now — check the system clock and ask again"
                 ),
             )
             return None

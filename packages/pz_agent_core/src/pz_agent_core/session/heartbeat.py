@@ -32,6 +32,14 @@ from ..version import PROTOCOL_VERSION
 #: pause or a GC hitch cannot look like a crash.
 DEFAULT_TIMEOUT_MS: Final = 5_000
 
+#: How far ahead of the reader's clock a heartbeat may be stamped and still be
+#: read as evidence about now. Beyond it the two clocks disagree, and since
+#: :meth:`Heartbeat.age_ms` clamps a future stamp to zero, a heartbeat stamped
+#: further ahead than this would read "fresh" for the whole of the skew — long
+#: after the peer that wrote it stopped writing. Same tolerance and same reason
+#: as the handshake's ``DEFAULT_CLOCK_SKEW_MS``.
+DEFAULT_FUTURE_SKEW_MS: Final = 5_000
+
 #: Nonces are 128 bits of CSPRNG output: they must be unguessable *and* unequal
 #: across restarts, because §3.3 uses "the nonce changed" as the signal that a
 #: peer is new rather than replayed.
@@ -216,6 +224,7 @@ class HeartbeatMonitor:
     clock: Clock = system_clock_ms
     game_timeout_ms: int = DEFAULT_TIMEOUT_MS
     sidecar_timeout_ms: int = DEFAULT_TIMEOUT_MS
+    future_skew_ms: int = DEFAULT_FUTURE_SKEW_MS
     _seq: dict[Peer, int] = field(default_factory=dict, init=False)
 
     def path_for(self, peer: Peer) -> Path:
@@ -290,6 +299,23 @@ class HeartbeatMonitor:
         heartbeat, detail = self._probe(peer)
         if heartbeat is None:
             return PeerLiveness(peer, None, alive=False, detail=detail)
+        ahead_ms = heartbeat.timestamp_ms - moment
+        if ahead_ms > self.future_skew_ms:
+            # Not a fresher heartbeat: two clocks that disagree. ``age_ms``
+            # clamps a future stamp to zero, so left alone this file would read
+            # "fresh" for the whole of the skew — including every second after
+            # the peer stopped writing it. Refusing it keeps a stall visible,
+            # which is the same call the snapshot reader makes on its own
+            # documents.
+            return PeerLiveness(
+                peer,
+                heartbeat,
+                alive=False,
+                detail=(
+                    f"stamped {ahead_ms} ms in the future, beyond {self.future_skew_ms} ms "
+                    "of clock skew; it describes no moment on this clock"
+                ),
+            )
         timeout = self.timeout_for(peer)
         if heartbeat.is_stale(moment, timeout):
             return PeerLiveness(

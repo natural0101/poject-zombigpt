@@ -334,6 +334,41 @@ class TestEndings:
         assert drive.ended == ENDED_THREATENED
         assert drive.report["ended"] == ENDED_THREATENED
 
+    def test_a_missing_nearby_tier_is_not_a_safe_picture(self) -> None:
+        """No nearby tier is "nothing can be observed", never "nothing is
+        there". Reading it as safety turns the one tick the mod failed to
+        describe the world into a completed retreat — the combat mission
+        refuses that same blindness typed, and so must this one."""
+        drive = mission(zones=no_zones())
+        blind = make_observation(
+            seq=1,
+            player=make_player(position=Position(x=0.0, y=0.0, z=0, direction="S")),
+            nearby=None,
+        )
+
+        value = drive.next_step(blind)
+
+        assert isinstance(value, MissionRefused), f"blindness is not safety: {value!r}"
+        assert value.reason_code is ReasonCode.CAPABILITY_UNAVAILABLE
+        assert drive.ended != ENDED_COMPLETE
+
+    def test_a_missing_nearby_tier_mid_retreat_does_not_complete_the_goal(self) -> None:
+        """The same gap one leg in: a retreat under way must not be reported
+        complete because the tier that proves the distance went missing."""
+        drive = mission(zones=no_zones())
+        request = expect_step(drive.next_step(observed(1, zombies=(a_zombie(4, 1, distance=4.0),))))
+        drive.note_result(succeeded_move(request))
+        blind = make_observation(
+            seq=2,
+            player=make_player(position=Position(x=0.0, y=0.0, z=0, direction="S")),
+            nearby=None,
+        )
+
+        value = drive.next_step(blind)
+
+        assert not isinstance(value, MissionComplete), "a blind tick is not an opened distance"
+        assert drive.ended != ENDED_COMPLETE
+
     def test_a_finished_mission_replays_its_terminal_value(self) -> None:
         drive = mission(zones=no_zones())
         first = drive.next_step(

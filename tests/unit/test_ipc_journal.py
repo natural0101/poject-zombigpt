@@ -267,6 +267,43 @@ def test_a_far_future_header_serial_costs_bounded_work(tmp_path: Path) -> None:
     assert read.serial == 20_000_000
 
 
+def test_a_journal_recreated_at_an_earlier_serial_reports_the_loss(tmp_path: Path) -> None:
+    """A serial that goes *backwards* is a recreated stream, not a quiet poll.
+
+    Serials only climb, so a live file numbered below the generation the reader
+    is on cannot be the same stream: it was truncated and started again. The
+    mod does exactly that when it cannot read back the header a previous game
+    session left — ``journalState`` falls back to serial 0 and the next append
+    rewrites the file from byte zero — and everything this reader had not yet
+    consumed goes with it. Before this was recognised the poll delivered the new
+    file's records with ``rotations == 0`` and no lost serials at all, which is
+    the silent loss the rotation machinery exists to prevent, one branch over.
+    """
+    layout = make_layout(tmp_path)
+    writer = JournalWriter(layout, layout.command_ack, keep=0)
+    reader = JournalReader(layout, layout.command_ack, keep=0)
+    writer.append({"n": 0})
+    writer.rotate()
+    writer.append({"n": 1})
+    assert [r.payload for r in reader.read().records] == [{"n": 1}]
+    assert reader.serial == 1
+    writer.append({"never_read": True})
+    writer.close()
+
+    header = json.dumps({"type": "journal.header", "serial": 0, "created_at_ms": 1}) + "\n"
+    layout.command_ack.write_text(header + json.dumps({"n": 2}) + "\n", encoding="utf-8")
+
+    read = reader.read()
+
+    assert read.lost_records, "a recreated stream loses whatever was not read yet"
+    assert read.lost_serials == (1,)
+    assert any("backwards" in diagnostic.detail for diagnostic in read.diagnostics)
+    # The new generation is still delivered whole: the loss is reported, not
+    # turned into a refusal to read the file that is actually there.
+    assert [r.payload for r in read.records] == [{"n": 2}]
+    assert read.serial == 0
+
+
 def test_rotation_keeps_a_bounded_number_of_files(tmp_path: Path) -> None:
     layout = make_layout(tmp_path)
     writer = JournalWriter(layout, layout.command_ack, keep=2)

@@ -1206,6 +1206,48 @@ class TestT009SuspendAndResume:
         assert ended.suspensions == 1, "the count is history and survives the end"
         assert_nothing_in_flight(queue, [running.goal_id])
 
+    def test_a_disarm_ends_a_suspended_goal_rather_than_stranding_it(self) -> None:
+        """:meth:`GoalQueue.disarm` promises "a goal nobody comes back for
+        still expires on its time to live". A suspended goal is the one goal
+        that cannot: :meth:`tick` exempts it from the pending TTL *because*
+        ordinary activation resumes it, and a disarmed channel refuses to
+        activate anything. Left alone the two rules meet in a goal that is
+        open for ever — no timer can reach it, it holds one of the four
+        ``max_open`` slots, and nothing but a cancel or a panic stop clears
+        it. Disarm already ends the goal that was running; a goal that was
+        running and stepped aside ends with it.
+        """
+        clock = ManualClock()
+        queue = GoalQueue(clock=clock, max_open=2)
+        running = start_one(queue, hunger("preempted", budget=SHORT))
+        suspend_ok(queue, running.goal_id, now_ms=clock.now)
+
+        transitions = queue.disarm()
+
+        assert [(t.goal_id, t.previous, t.state) for t in transitions] == [
+            (running.goal_id, GoalState.PENDING, GoalState.CANCELLED)
+        ]
+        assert transitions[0].reason_code is ReasonCode.NOT_ARMED
+        # Far past the time to live it was exempt from, and past any wall
+        # clock: nothing is left for a later tick to find.
+        clock.set(1_000_000)
+        assert_nothing_in_flight(queue, [running.goal_id])
+
+    def test_a_disarm_still_keeps_the_never_started_backlog(self) -> None:
+        """The other half, unchanged: a goal that never started is an intention
+        the user stated and nothing ran, so it survives to be re-armed into —
+        and expires on its own time to live if nobody comes back."""
+        clock = ManualClock()
+        queue = GoalQueue(clock=clock, max_open=2)
+        start_one(queue, hunger("running", budget=PATIENT))
+        waiting = admit(queue, hunger("waiting", budget=PATIENT))
+
+        queue.disarm()
+
+        assert [r.goal_id for r in queue.pending] == [waiting.goal_id]
+        queue.arm()
+        assert activate(queue).goal_id == waiting.goal_id
+
     def test_a_panic_stop_clears_a_suspended_goal_like_any_open_goal(self) -> None:
         clock = ManualClock()
         queue = GoalQueue(clock=clock)

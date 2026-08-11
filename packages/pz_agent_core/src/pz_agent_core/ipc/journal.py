@@ -509,10 +509,7 @@ class JournalReader:
         segments, lost = self._plan(header)
         records: list[JournalRecord] = []
         diagnostics: list[JournalDiagnostic] = [
-            JournalDiagnostic(
-                offset=self._offset,
-                detail=f"records from journal serial {serial} were pruned before being read",
-            )
+            JournalDiagnostic(offset=self._offset, detail=_loss_detail(serial, header.serial))
             for serial in lost
         ]
 
@@ -548,6 +545,21 @@ class JournalReader:
         if self._serial is None or self._serial == header.serial:
             start = max(self._offset, header.end_offset)
             return [_Segment(self.path, start, header.serial, live=True)], []
+
+        if self._serial > header.serial:
+            # The live file carries an *earlier* generation than the one this
+            # reader was consuming. Serials only climb, so this is not a
+            # rotation: the file was recreated under the reader — the mod
+            # restarts its journal at serial 0 whenever it cannot read back the
+            # header a previous game session left, which truncates whatever it
+            # had not yet been read. Draining the new file as if nothing had
+            # happened reported a clean poll for a stream that had just lost
+            # its tail, so the generation we were owed is reported lost and the
+            # caller can resynchronise instead of assuming continuity.
+            return (
+                [_Segment(self.path, header.end_offset, header.serial, live=True)],
+                [self._serial],
+            )
 
         # The live file is a later generation than the one we were reading, so
         # one or more rotations happened while we were away.
@@ -586,6 +598,17 @@ class JournalReader:
             )
         segments.append(_Segment(self.path, header.end_offset, header.serial, live=True))
         return segments, lost
+
+
+def _loss_detail(serial: int, live_serial: int) -> str:
+    """Why the records of *serial* are gone, in the caller's terms."""
+    if serial > live_serial:
+        return (
+            f"journal serial went backwards from {serial} to {live_serial}: the stream "
+            "was recreated, so records of the older generation that had not been read "
+            "are gone"
+        )
+    return f"records from journal serial {serial} were pruned before being read"
 
 
 def _consume(

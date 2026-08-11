@@ -161,6 +161,46 @@ def test_liveness_reports_the_silence_it_measured(tmp_path: Path) -> None:
     assert liveness.heartbeat is not None
 
 
+def test_a_peer_whose_clock_runs_ahead_cannot_look_alive_after_it_stops(tmp_path: Path) -> None:
+    """A heartbeat stamped in the future is not evidence about the present.
+
+    Each peer stamps its own clock. When the game's runs an hour ahead, every
+    reading of its last heartbeat clamps to an age of zero — so the file a
+    stopped game left behind reads "fresh" for as long as the skew lasts, which
+    is exactly what the liveness window exists to refuse. The snapshot reader
+    already refuses a document stamped past its window into the future; this is
+    the same rule one file over.
+    """
+    layout = make_layout(tmp_path)
+    clock = FakeClock()
+    ahead = FakeClock(now=clock.now + 3_600_000)
+    HeartbeatMonitor(layout, clock=ahead).publish(
+        Peer.GAME, session_id=IPC_SESSION_ID, nonce="g", version="0.1.0"
+    )
+    monitor = HeartbeatMonitor(layout, clock=clock, game_timeout_ms=1_000)
+
+    clock.advance(60_000)
+    liveness = monitor.liveness(Peer.GAME)
+
+    assert not liveness.alive
+    assert "future" in liveness.detail
+    # The evidence still travels with the verdict: whoever has to diagnose this
+    # needs the document that disagrees with their clock, not its absence.
+    assert liveness.heartbeat is not None
+
+
+def test_ordinary_clock_skew_is_tolerated(tmp_path: Path) -> None:
+    """A second or two ahead is two machines' clocks, not a stopped peer."""
+    layout = make_layout(tmp_path)
+    clock = FakeClock()
+    ahead = FakeClock(now=clock.now + 1_000)
+    HeartbeatMonitor(layout, clock=ahead).publish(
+        Peer.GAME, session_id=IPC_SESSION_ID, nonce="g", version="0.1.0"
+    )
+
+    assert HeartbeatMonitor(layout, clock=clock).liveness(Peer.GAME).alive
+
+
 def test_peers_are_each_other_s_other() -> None:
     assert Peer.GAME.other is Peer.SIDECAR
     assert Peer.SIDECAR.other is Peer.GAME

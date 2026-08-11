@@ -44,7 +44,7 @@ from pz_agent_core.diagnostics import Redactor
 from pz_agent_core.ipc.layout import IpcLayout
 from pz_agent_core.protocol import CapabilityState, JsonDict
 from pz_agent_core.session.handshake import SessionDescriptor, SessionError
-from pz_agent_core.session.heartbeat import HeartbeatMonitor, Peer
+from pz_agent_core.session.heartbeat import DEFAULT_FUTURE_SKEW_MS, HeartbeatMonitor, Peer
 from pz_agent_core.version import (
     MOD_VERSION,
     PRODUCT_VERSION,
@@ -440,7 +440,10 @@ def check_heartbeat(ctx: CliContext, workspace: Workspace) -> CheckResult:
             "the mod to write a heartbeat",
         )
     monitor = HeartbeatMonitor(IpcLayout(workspace.ipc_root), clock=ctx.clock_ms)
-    liveness = monitor.liveness(Peer.GAME)
+    # One reading of the clock for the verdict, the age and the skew below. Three
+    # readings would let the age this reports disagree with the age it judged.
+    now_ms = ctx.clock_ms()
+    liveness = monitor.liveness(Peer.GAME, now_ms)
     beat = liveness.heartbeat
     facts: JsonDict = {"detail": liveness.detail, "alive": liveness.alive}
     if beat is not None:
@@ -450,7 +453,7 @@ def check_heartbeat(ctx: CliContext, workspace: Workspace) -> CheckResult:
                 "armed": beat.armed,
                 "mode": None if beat.mode is None else beat.mode.value,
                 "player_present": beat.player_present,
-                "age_ms": beat.age_ms(ctx.clock_ms()),
+                "age_ms": beat.age_ms(now_ms),
             }
         )
     if liveness.alive and beat is not None:
@@ -459,7 +462,25 @@ def check_heartbeat(ctx: CliContext, workspace: Workspace) -> CheckResult:
             name="game_heartbeat",
             title="Game heartbeat",
             status=CheckStatus.PASS,
-            detail=f"live, {beat.age_ms(ctx.clock_ms())} ms old, build {beat.build or 'unknown'}",
+            detail=f"live, {beat.age_ms(now_ms)} ms old, build {beat.build or 'unknown'}",
+            facts=facts,
+        )
+    if beat is not None and beat.timestamp_ms - now_ms > DEFAULT_FUTURE_SKEW_MS:
+        # A fourth cause, and none of the three below fits it: the file is there
+        # and readable, and it was written against a clock this machine does not
+        # share. Sending that user to the Mods menu is the wrong remedy, which is
+        # the failure this check exists to prevent.
+        return CheckResult(
+            code="PZD006",
+            name="game_heartbeat",
+            title="Game heartbeat",
+            status=CheckStatus.WARN,
+            detail=liveness.detail,
+            remediation=(
+                "the mod is writing, but against a clock ahead of this one, so nothing "
+                "here can tell a running game from a stopped one. Check this machine's "
+                "system clock and time synchronisation, then run doctor again."
+            ),
             facts=facts,
         )
     return CheckResult(
@@ -733,21 +754,43 @@ def check_active_session(ctx: CliContext, workspace: Workspace) -> CheckResult:
             ),
         )
     monitor = HeartbeatMonitor(layout, clock=ctx.clock_ms)
-    beat = monitor.read(Peer.GAME)
+    # Liveness rather than a bare read: the heartbeat of a game that crashed an
+    # hour ago still names the session that was open when it died, so a match on
+    # the id alone reports "attached" about a game nobody is playing. This check
+    # answers a question in the present tense and needs evidence written in it.
+    liveness = monitor.liveness(Peer.GAME)
+    beat = liveness.heartbeat
     facts: JsonDict = {
         "session_id": descriptor.session_id,
         "mode": descriptor.mode.value,
         "generation": descriptor.generation,
         "save_id": workspace.redactor.text(descriptor.save_id or ""),
         "heartbeat_session": "" if beat is None else beat.session_id,
+        "heartbeat_alive": liveness.alive,
     }
-    if beat is not None and beat.session_id == descriptor.session_id:
+    if liveness.alive and beat is not None and beat.session_id == descriptor.session_id:
         return CheckResult(
             code="PZD010",
             name="active_session",
             title="Active session",
             status=CheckStatus.PASS,
             detail=f"session {descriptor.session_id} in {descriptor.mode.value}",
+            facts=facts,
+        )
+    if beat is not None and beat.session_id == descriptor.session_id:
+        return CheckResult(
+            code="PZD010",
+            name="active_session",
+            title="Active session",
+            status=CheckStatus.WARN,
+            detail=(
+                "a session file exists and the game's last heartbeat names it, but that "
+                f"heartbeat is not current ({liveness.detail})"
+            ),
+            remediation=(
+                "the game is closed, or this file is from a previous run. Neither side "
+                "re-arms itself on recovery: start the sidecar again and arm deliberately."
+            ),
             facts=facts,
         )
     return CheckResult(

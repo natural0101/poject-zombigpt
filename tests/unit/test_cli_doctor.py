@@ -279,6 +279,27 @@ def test_a_live_heartbeat_passes_and_reports_the_build(tmp_path: Path) -> None:
     assert check["facts"]["armed"] is False
 
 
+def test_a_heartbeat_stamped_in_the_future_names_the_clock_not_the_mods_menu(
+    tmp_path: Path,
+) -> None:
+    """A file written against another clock is a third cause, with a third remedy.
+
+    The liveness window refuses it — an age that clamps to zero would read fresh
+    for the whole of the skew — and the three causes PZD006 usually names (the
+    mod is not enabled, no save is loaded, the game crashed) are all wrong for
+    it. Sending that user to the Mods menu is the wrong-remedy failure this
+    check exists to avoid.
+    """
+    world = make_world(tmp_path)
+    _publish_heartbeat(world, ahead_ms=3_600_000)
+
+    check = _check(_report(world), "PZD006")
+
+    assert check["status"] == "warn"
+    assert "clock" in check["remediation"]
+    assert "future" in check["detail"]
+
+
 def test_the_exchange_directory_is_created_and_reported_as_writable(tmp_path: Path) -> None:
     world = make_world(tmp_path)
 
@@ -398,6 +419,11 @@ def test_a_session_without_a_matching_heartbeat_warns(tmp_path: Path) -> None:
 
 def test_a_session_matching_the_live_heartbeat_passes(tmp_path: Path) -> None:
     world = make_world(tmp_path)
+    # The world's clock steps a second on every read, and PZD010 now measures the
+    # heartbeat's age as well as its session id — ten checks' worth of reads would
+    # age a heartbeat published here past the liveness window on the harness clock
+    # alone. Frozen, "live" in this test means what it means in a running game.
+    world.clock.freeze()
     session = _write_session(world)
     _publish_heartbeat(world, session_id=session.session_id)
 
@@ -405,6 +431,24 @@ def test_a_session_matching_the_live_heartbeat_passes(tmp_path: Path) -> None:
 
     assert check["status"] == "pass"
     assert check["facts"]["mode"] == SessionMode.OBSERVE.value
+
+
+def test_a_session_whose_heartbeat_went_silent_is_not_reported_as_active(tmp_path: Path) -> None:
+    """A crashed game leaves its last heartbeat behind, session id and all.
+
+    PZD010 answers "is a session attached *now*", so the file's session id
+    matching is not enough: read without a freshness bound, the leftovers of a
+    game that died an hour ago report the same pass as a game that is running.
+    """
+    world = make_world(tmp_path)
+    session = _write_session(world)
+    _publish_heartbeat(world, session_id=session.session_id)
+    world.clock.advance(3_600_000)
+
+    check = _check(_report(world), "PZD010")
+
+    assert check["status"] == "warn"
+    assert "re-arms itself" in check["remediation"]
 
 
 def test_an_unreadable_session_file_warns_with_how_to_clear_it(tmp_path: Path) -> None:
@@ -435,13 +479,16 @@ def _with_user_dir(world: CliWorld, path: Path) -> Workspace:
     return replace(workspace, discovery=discovery)
 
 
-def _publish_heartbeat(world: CliWorld, session_id: str | None = None) -> None:
+def _publish_heartbeat(
+    world: CliWorld, session_id: str | None = None, *, ahead_ms: int = 0
+) -> None:
     assert world.ipc_root is not None
     layout = IpcLayout(world.ipc_root)
     layout.ensure()
     # The monitor's own clock is the world's, so the heartbeat it writes is
-    # fresh against the clock the doctor reads it with.
-    HeartbeatMonitor(layout, clock=lambda: world.clock.now_ms).publish(
+    # fresh against the clock the doctor reads it with. *ahead_ms* is the game
+    # writing against a clock that is not this one.
+    HeartbeatMonitor(layout, clock=lambda: world.clock.now_ms + ahead_ms).publish(
         Peer.GAME,
         session_id=session_id or "00000000-0000-0000-0000-0000005e5510",
         nonce="nonce-1",
