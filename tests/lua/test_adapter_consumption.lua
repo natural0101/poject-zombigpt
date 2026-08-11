@@ -225,6 +225,42 @@ do
   equal(proof.item_consumed, true, "and the evidence says so plainly")
 end
 
+Harness.group("an inventory that stopped answering is not an item eaten to nothing")
+do
+  -- The mirror of the group above. "The item left the inventory" is read off
+  -- the after snapshot as an absence, and an absence is only evidence when the
+  -- walk that would have found it was actually made. A character whose
+  -- inventory stopped answering mid-command has eaten nothing, and an ack that
+  -- says otherwise is what mints `verified` for eat on a build that never ate.
+  local s = scene({ no_stats = true })
+  local args = { item_ref = APPLE, fraction = 1.0 }
+  ok(Eat:validate(args, s.ctx), "the command validates")
+  ok(Eat:begin(args, s.ctx), "and starts")
+  local before = Toolkit.observe(s.player)
+  ok(before.items[1] ~= nil, "the apple was on the character when the eat began")
+
+  Support.drainQueue(s.queue)
+  s.player.getInventory = function()
+    error("kahlua gap", 0)
+  end
+  local after = Toolkit.observe(s.player)
+  isNil(after.items[1], "the apple is absent from a snapshot that walked nothing")
+  local evidence, code, detail = Eat:verify(before, after, args, s.ctx)
+  isNil(evidence, "which is not the apple having been eaten")
+  equal(code, REASON.CAPABILITY_UNAVAILABLE, "the gap is a capability, not a consumed portion")
+  contains(detail, "getInventory", "naming the accessor that stopped answering")
+
+  local drinker = scene({ no_stats = true })
+  local drinkArgs = { item_ref = BOTTLE, fraction = 0.5 }
+  ok(Drink:validate(drinkArgs, drinker.ctx), "the same for a drink")
+  ok(Drink:begin(drinkArgs, drinker.ctx), "which starts")
+  local wasFull = Toolkit.observe(drinker.player)
+  Support.drainQueue(drinker.queue)
+  drinker.player.getInventory = nil
+  local _, drinkCode = Drink:verify(wasFull, Toolkit.observe(drinker.player), drinkArgs, drinker.ctx)
+  equal(drinkCode, REASON.CAPABILITY_UNAVAILABLE, "a container nobody could look at was not drained")
+end
+
 Harness.group("eat stops for the player and for a horde")
 do
   local taken = scene({ safety = Support.takenOver() })

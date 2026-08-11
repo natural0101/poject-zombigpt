@@ -256,9 +256,19 @@ local function searchDone(_, args)
 end
 
 local function searchVerify(_, _, after, args, ctx)
+  local Toolkit = toolkit()
   local filter, code, detail = searchSpec(args)
   if filter == nil then
     return nil, code, detail
+  end
+  local unread = Toolkit.unread(after, "items")
+  if unread ~= nil then
+    -- The postcondition is that the walk happened, so a walk that could not be
+    -- made has none. Reporting the empty result instead would answer the
+    -- planner's question -- "am I carrying a bandage" -- with a no that nobody
+    -- observed, and a succeeded ack is also what mints `verified` for an action
+    -- this build was never seen to perform.
+    return Toolkit.unavailable(unread)
   end
   local results = Inventory.search(ctx, filter, after)
   local matches = {}

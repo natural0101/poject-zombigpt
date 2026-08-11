@@ -277,6 +277,14 @@ local function eatVerify(_, before, after, args, ctx)
       return observed
     end
   end
+  local unread = Toolkit.unread(after, "items")
+  if unread ~= nil then
+    -- itemShrank reads "the item left the inventory" off its absence from the
+    -- after snapshot, and an absence from a walk nobody made is not a portion
+    -- eaten. Refused here rather than inside itemShrank so a hunger reading
+    -- that did move still carries the command on its own.
+    return Toolkit.unavailable(unread)
+  end
   local shrank, evidence = itemShrank(before, after, spec.identity)
   if shrank then
     observed.kind = "portion_consumed"
@@ -556,6 +564,12 @@ local function drinkVerify(_, before, after, args, ctx, fromSource)
     return nil,
       Toolkit.reasons().POSTCONDITION_FAILED,
       "a refilled container proves nothing about drinking, and thirst did not fall"
+  end
+  local unread = Toolkit.unread(after, "items")
+  if unread ~= nil then
+    -- Same as eatVerify: a container that is absent from a walk that could not
+    -- be made was not drained.
+    return Toolkit.unavailable(unread)
   end
   local shrank, evidence = itemShrank(before, after, spec.identity)
   if shrank then

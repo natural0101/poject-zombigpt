@@ -765,7 +765,10 @@ do
   equal(objects.truncated, true, "with no cell every square around the player went unread, and it says so")
   equal(objects.dropped, squares, "counting every one of them")
   local zeds = Observe.nearbyZombies(player, position)
-  equal(zeds.truncated, true, "and the zombie list is declared unread rather than reported empty")
+  -- `unscanned`, not `truncated`: nothing was counted at all, which is a
+  -- different fact from "there were more of them than I counted", and it is the
+  -- one the danger floor reads to refuse rather than report calm.
+  equal(zeds.unscanned, true, "and the zombie list is declared unread rather than reported empty")
 
   local fields, reason = Observe.nearbyFields(player, position)
   isNil(fields, "a world nobody could look at produces no nearby section")
@@ -796,7 +799,7 @@ do
   local mute, muteReason = Observe.nearbyFields(player, position)
   ok(mute ~= nil, "a cell that answers is still a nearby section: " .. tostring(muteReason))
   equal(#mute.objects, 1, "with the objects it could read")
-  equal(mute.zombies_truncated, true, "and the unreadable zombie list declared, not published as an empty horde")
+  equal(mute.zombies_unscanned, true, "and the unreadable zombie list declared, not published as an empty horde")
 
   local partial = Model.build({
     session_id = SESSION,
@@ -807,7 +810,7 @@ do
     nearby = mute,
   })
   equal(
-    partial.player.stats[Model.LIMIT_PREFIX .. "zombies_truncated"],
+    partial.player.stats[Model.LIMIT_PREFIX .. "zombies_unknown"],
     true,
     "which reaches the document as the limit the sidecar can read"
   )
@@ -1012,3 +1015,82 @@ do
 end
 
 Harness.finish("observe")
+
+Harness.group("a zombie scan that could not run is not an empty street")
+do
+  local player = furnishedPlayer()
+  local position = { x = 100, y = 200, z = 0 }
+
+  -- A build that answers for squares but exposes no zombie list at all.
+  local blindCell = {
+    getGridSquare = function()
+      return nil
+    end,
+  }
+  getCell = function()
+    return blindCell
+  end
+
+  local scan = Observe.nearbyZombies(player, position)
+  equal(#scan.zombies, 0, "a build with no zombie list yields no zombies")
+  equal(scan.unscanned, true, "and the reader says the scan never ran")
+
+  local fields = Observe.nearbyFields(player, position)
+  equal(fields.zombies_unscanned, true, "which travels with the nearby fields")
+  equal(
+    Model.dangerFloor(fields, position),
+    PZ.Protocol.DANGER.HIGH,
+    "so the floor is the reading that stops the agent, not the calm of an empty street"
+  )
+
+  -- What that costs when it reads NONE: the deterministic gate, with no model
+  -- anywhere in the loop, lets mutating work start on a scan that never ran.
+  local state = PZ.Safety.newState()
+  PZ.Safety.noteSidecarHeartbeat(state, NOW)
+  PZ.Safety.arm(state, "AUTONOMOUS", NOW, { sessionId = SESSION })
+  PZ.Safety.setDanger(state, Model.dangerFloor(fields, position))
+  local gate = {
+    sessionId = SESSION,
+    playerPresent = true,
+    playerAlive = true,
+    queue = PZ.Ownership.describe({}, SESSION),
+  }
+  local allowed, reason = PZ.Safety.mayStart(state, "consume.eat", NOW, gate)
+  ok(not allowed, "so the mod's own gate refuses to start mutating work while it is blind")
+  equal(reason, PZ.Protocol.REASON.THREAT_INTERRUPTED, "naming the threat it cannot rule out")
+
+  -- And the document says the floor was not measured, the way an unread
+  -- `paused` or `speed` already does, so nobody reads HIGH as an observation.
+  local document = Model.build({
+    session_id = SESSION,
+    seq = 3,
+    timestamp_ms = NOW,
+    game = { build = "42.20" },
+    player = Observe.playerFields(player),
+    nearby = fields,
+  })
+  equal(
+    document.player.stats[Model.LIMIT_PREFIX .. "zombies_unknown"],
+    true,
+    "the snapshot declares that nobody counted, rather than implying a count of zero"
+  )
+
+  -- A scan that did run and found nothing keeps saying so.
+  local removeCell = Support.installCell({}, {})
+  local empty = Observe.nearbyFields(player, position)
+  isNil(empty.zombies_unscanned, "a scan that ran makes no such claim")
+  equal(Model.dangerFloor(empty, position), PZ.Protocol.DANGER.NONE, "and an empty street is still calm")
+  local calm = Model.build({
+    session_id = SESSION,
+    seq = 4,
+    timestamp_ms = NOW,
+    game = { build = "42.20" },
+    player = Observe.playerFields(player),
+    nearby = empty,
+  })
+  isNil(
+    calm.player.stats[Model.LIMIT_PREFIX .. "zombies_unknown"],
+    "and the counter stays silent, so it means what it says when it appears"
+  )
+  removeCell()
+end

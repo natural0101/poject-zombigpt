@@ -333,6 +333,14 @@ local function bandageVerify(_, before, after, args, ctx)
   -- is what separates the two, and without a reading from before there is
   -- nothing to separate them with, so nothing is claimed.
   if now.bandaged ~= true then
+    if now.bleeding == nil then
+      -- No dressing was seen either, so the only postcondition left is "the
+      -- wound stopped", and this build will not answer that question. Refusing
+      -- names the gap; the sentence below would state as observed that the part
+      -- is still bleeding, which is the same fabricated reading one negation
+      -- away.
+      return Toolkit.unavailable("BodyPart.isBleeding")
+    end
     return nil,
       reasons.POSTCONDITION_FAILED,
       string.format("%s is still bleeding and still reports no dressing", partName)

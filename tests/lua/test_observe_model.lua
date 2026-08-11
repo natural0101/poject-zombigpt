@@ -537,6 +537,22 @@ do
     empty.player.stats[Model.LIMIT_PREFIX .. "zombies_truncated"],
     "and carries no truncation flag, which is what separates 'none' from 'we stopped counting'"
   )
+  isNil(
+    empty.player.stats[Model.LIMIT_PREFIX .. "zombies_unknown"],
+    "nor an unknown flag, since this scan did run"
+  )
+
+  -- The list is empty in both cases and the schema has no way to leave it out
+  -- meaningfully -- the sidecar reads an absent `zombies` as an empty one -- so
+  -- the counter is what carries "nobody counted", beside a danger floor that
+  -- has fallen back to the rung that stops the agent.
+  local blind = built({ nearby = { objects = {}, zombies = {}, zombies_unscanned = true } })
+  equal(#blind.nearby.zombies, 0, "a scan that never ran also emits an empty list")
+  equal(
+    blind.player.stats[Model.LIMIT_PREFIX .. "zombies_unknown"],
+    true,
+    "so the document declares that nobody looked, rather than implying a count of zero"
+  )
   Harness.contains(Json.encode(empty.nearby), "\"zombies\":[]", "an empty list encodes as an array, not an object")
 end
 
@@ -846,11 +862,28 @@ do
     "a zombie chasing on the storey above is present but not closing"
   )
 
-  equal(Model.dangerFloor(nil, here), Protocol.DANGER.NONE, "no nearby table is not danger")
+  -- These three used to answer NONE, which is the one reading the floor may
+  -- never give: it is the level Safety.mayStart, the action engine's threshold
+  -- and the reflex guard's max() all act on with no model in the loop, so
+  -- "nobody scanned" answered as "calm" is a blinded guard reporting quiet.
+  -- The schema requires `safety.danger_level` and its enum has no "unknown", so
+  -- the floor falls back to the rung that stops the agent instead, and
+  -- `observe.zombies_unknown` says beside it that nothing was measured.
+  equal(Model.dangerFloor(nil, here), Protocol.DANGER.HIGH, "no nearby table at all is not a calm street")
   equal(
     Model.dangerFloor({ zombies = "not a list" }, here),
+    Protocol.DANGER.HIGH,
+    "nor is a nearby table whose zombie list cannot be read"
+  )
+  equal(
+    Model.dangerFloor({ zombies = {}, zombies_unscanned = true }, here),
+    Protocol.DANGER.HIGH,
+    "nor an empty list the reader has declared it never filled"
+  )
+  equal(
+    Model.dangerFloor({ zombies = {} }, here),
     Protocol.DANGER.NONE,
-    "a malformed nearby table is not danger"
+    "while a list that was filled and came back empty still reads as calm"
   )
   equal(
     Model.dangerFloor({ zombies = { { distance = 1 } } }, nil),

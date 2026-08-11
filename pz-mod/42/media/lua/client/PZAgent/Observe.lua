@@ -974,19 +974,25 @@ end
 --- `chasing` comes from the zombie's own target, not from its distance: a
 --- distant zombie that has noticed the player is a live interrupt and a close
 --- one that has not may be safely read past.
+---
+--- `unscanned` marks the returns where no zombie was looked at at all -- no
+--- cell, or a cell with no readable zombie list. The list is empty in that case
+--- exactly as it is on an empty street, and the two must not read alike:
+--- ObserveModel.dangerFloor turns this table into the danger level the mod's own
+--- gate acts on, and "nobody looked" is not "nothing is there".
 function Observe.nearbyZombies(player, playerPosition)
   local result = { zombies = {}, truncated = false, dropped = 0 }
   local cell = currentCell()
   if cell == nil then
     -- Nobody counted. An empty list here would be read as "no zombies", and
-    -- the sidecar's threat assessment turns that into DangerLevel.NONE.
-    result.truncated = true
+    -- the floor would turn that into DANGER.NONE -- calm the scan never saw.
+    result.unscanned = true
     return result
   end
   local list = invoke(cell, "getZombieList")
   local size = listSize(list)
   if size == nil then
-    result.truncated = true
+    result.unscanned = true
     return result
   end
   local scanned = math.min(size, Observe.MAX_ZOMBIE_SCAN)
@@ -1054,6 +1060,7 @@ function Observe.nearbyFields(player, playerPosition)
     zombies = zombies.zombies,
     zombies_truncated = zombies.truncated,
     zombies_dropped = zombies.dropped,
+    zombies_unscanned = zombies.unscanned,
   }
 end
 

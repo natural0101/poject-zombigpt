@@ -354,6 +354,7 @@ local function newLimits()
     objects_omitted = 0,
     zombies_truncated = false,
     zombies_omitted = 0,
+    zombies_unknown = false,
     wounds_truncated = false,
     wounds_omitted = 0,
     wounds_unknown = false,
@@ -377,6 +378,7 @@ local LIMIT_KEYS = {
   "objects_omitted",
   "zombies_truncated",
   "zombies_omitted",
+  "zombies_unknown",
   "wounds_truncated",
   "wounds_omitted",
   "wounds_unknown",
@@ -1141,6 +1143,13 @@ function ObserveModel.nearby(sessionId, fields, limits)
       limits.zombies_truncated = true
       limits.zombies_omitted = limits.zombies_omitted + (ObserveModel.integer(fields.zombies_dropped) or 1)
     end
+    if fields.zombies_unscanned == true then
+      -- The reader looked at no zombie at all. The emitted list is empty either
+      -- way, so this counter is the only thing that keeps a document produced
+      -- while blind from reading like a document produced on an empty street --
+      -- and it is what says the danger floor beside it was not measured.
+      limits.zombies_unknown = true
+    end
   end
   return {
     objects = boundedNearby(objects, ObserveModel.MAX_OBJECTS, "objects_truncated", "objects_omitted", limits),
@@ -1334,8 +1343,23 @@ ObserveModel.DANGER_CROWD = 3
 --- a horde one storey up is a reason to be wary, not to abort.
 function ObserveModel.dangerFloor(nearby, playerPosition)
   local levels = protocol().DANGER
-  if type(nearby) ~= "table" or type(nearby.zombies) ~= "table" then
-    return levels.NONE
+  if
+    type(nearby) ~= "table"
+    or type(nearby.zombies) ~= "table"
+    or nearby.zombies_unscanned == true
+  then
+    -- Nobody scanned. `safety.danger_level` is required by the schema and its
+    -- vocabulary has no "unknown", so this cannot be left absent the way an
+    -- unread stat is -- and NONE would be a fabricated reading of the one field
+    -- three deterministic consumers act on with no model in the loop
+    -- (Safety.mayStart, the action engine's threshold, the reflex guard's
+    -- max()). So it falls back to the reading that stops the agent, exactly as
+    -- an unread `paused` falls back to "not running", and the observation
+    -- carries `observe.zombies_unknown` beside it so the level is never mistaken
+    -- for something that was seen. HIGH rather than CRITICAL: it is the lowest
+    -- rung that reaches Safety.DANGER_BLOCK_RANK, so it starts nothing new
+    -- without also claiming the character has to flee something nobody saw.
+    return levels.HIGH
   end
 
   local playerFloor = nil

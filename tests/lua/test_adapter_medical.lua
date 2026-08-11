@@ -276,6 +276,48 @@ do
   equal(other.bleeding, true, "the wound nobody asked about is untouched")
 end
 
+Harness.group("a wound whose bleeding cannot be read is not a wound that stopped")
+do
+  -- The whole postcondition is `bleeding == false`, so a bleeding flag that is
+  -- absent rather than false decides the command. A part the engine would not
+  -- answer for must read as nothing at all: flattened to false it is the exact
+  -- shape of the ack this adapter exists to refuse -- "wound_dressed,
+  -- bleeding_after=false" over a character who is still losing blood, and the
+  -- one ack that mints `verified` for medical_bandage.
+  local s = scene()
+  local args = {}
+  ok(Bandage:validate(args, s.ctx), "the command validates")
+  ok(Bandage:prepare(args, s.ctx), "and prepares")
+  local before = Toolkit.observe(s.player)
+  ok(Bandage:begin(args, s.ctx), "and starts")
+
+  -- The dressing was never applied; the accessor simply stops answering.
+  Support.drainQueue(s.queue)
+  s.parts[2].isBleeding = function()
+    error("kahlua gap", 0)
+  end
+  local after = Toolkit.observe(s.player)
+  isNil(after.body["ForeArm_L"].bleeding, "an unread flag is nothing, not false")
+  local evidence, code, detail = Bandage:verify(before, after, args, s.ctx)
+  isNil(evidence, "so the wound was never observed to stop bleeding")
+  equal(code, REASON.CAPABILITY_UNAVAILABLE, "the gap is a capability, not a dressed wound")
+  contains(detail, "isBleeding", "naming the reading that was not available")
+
+  -- A dressing the part does report is still a postcondition on its own: the
+  -- refusal above is about the absent reading, not about being strict twice.
+  local dressed = scene()
+  ok(Bandage:validate(args, dressed.ctx), "a second command validates")
+  ok(Bandage:prepare(args, dressed.ctx), "and prepares")
+  local was = Toolkit.observe(dressed.player)
+  ok(Bandage:begin(args, dressed.ctx), "and starts")
+  dressed.bandage.actions[1]:perform()
+  dressed.parts[2].isBleeding = nil
+  local proof = Bandage:verify(was, Toolkit.observe(dressed.player), args, dressed.ctx)
+  ok(proof ~= nil, "a part that reports a dressing was dressed")
+  equal(proof.bandaged_after, true, "which is the reading that carried it")
+  isNil(proof.bleeding_after, "with no invented bleeding reading")
+end
+
 Harness.group("bandage stops for the player and for a horde")
 do
   local taken = scene({ safety = Support.takenOver() })
