@@ -329,7 +329,19 @@ local function restVerify(_, before, after, args, ctx)
   if now == nil then
     return Toolkit.unavailable("PlayerStats.getEndurance")
   end
-  if was ~= nil and now <= was then
+  if was == nil then
+    -- The two halves of this postcondition are "higher than it was" and "at the
+    -- target"; without a departure reading only the second can be observed, and
+    -- an absent reading is not a low one. Nothing else would catch it either:
+    -- the bag would carry `endurance_after` with no `endurance_before` to pair
+    -- it with, so ActionRuntime's own unchanged-readings check counts no pair
+    -- and refuses nothing. survival.sleep spells the same guard out for
+    -- fatigue; endurance is no different.
+    return nil,
+      reasons.POSTCONDITION_FAILED,
+      "there is no endurance reading from before the rest to compare against"
+  end
+  if now <= was then
     return nil,
       reasons.POSTCONDITION_FAILED,
       string.format("endurance went from %.3f to %.3f, so nothing was recovered", was, now)

@@ -436,6 +436,48 @@ do
   isNil(Model.wound(SESSION, { part = "not a segment", bleeding = true }), "and a part with no usable name is refused")
 end
 
+Harness.group("an unread body and an unhurt one are two different documents")
+do
+  -- The sidecar's PlayerState.wounds defaults to the empty list, so an omitted
+  -- key and an explicit [] both read as "no wounds" there. The distinction the
+  -- mod can still publish is the limit counter: silence about the counter means
+  -- a reader answered, and TreatWoundsMission's bleeding_observed == 0 is only
+  -- a postcondition when one did.
+  local unread = built({
+    player = {
+      present = true,
+      alive = true,
+      position = { x = 1, y = 2, z = 0 },
+      stats = {},
+      moodles = {},
+    },
+  })
+  isNil(unread.player.wounds, "a body that was never read publishes no wound list")
+  equal(
+    unread.player.stats[Model.LIMIT_PREFIX .. "wounds_unknown"],
+    true,
+    "and declares that nobody counted, so an empty list is not read as an observation"
+  )
+
+  local unhurt = built({
+    player = {
+      present = true,
+      alive = true,
+      position = { x = 1, y = 2, z = 0 },
+      stats = {},
+      moodles = {},
+      wounds = { { part = "Torso", severity = 0 } },
+    },
+  })
+  ok(unhurt.player.wounds ~= nil, "a body that was read and found whole publishes the list it read")
+  equal(#unhurt.player.wounds, 0, "which is empty, because nothing was wrong with it")
+  isNil(
+    unhurt.player.stats[Model.LIMIT_PREFIX .. "wounds_unknown"],
+    "and claims no gap, because there was none"
+  )
+  Harness.contains(Json.encode(unhurt), '"wounds":[]', "the empty list is on the wire as an empty array")
+end
+
 Harness.group("nearby reports what was seen, nearest first, and what it could not tell")
 do
   local document = built({

@@ -232,6 +232,32 @@ do
   contains(shortDetail, "short of", "with a detail that says how far")
 end
 
+Harness.group("a reading that never answered before the rest is not a reading that rose")
+do
+  local s = scene()
+  local args = {}
+  ok(Adapter:validate(args, s.ctx), "the command validates")
+  ok(Adapter:prepare(args, s.ctx), "and prepares")
+
+  -- The accessor does not answer for the "before" half, which is a different
+  -- fact from endurance having been low: with nothing to compare against, "the
+  -- character recovered" is a claim nobody took the reading for. The evidence
+  -- bag would carry an `endurance_after` with no partner, so ActionRuntime's
+  -- own before/after check sees no pair either and refuses nothing.
+  local reader = s.stats.getEndurance
+  s.stats.getEndurance = nil
+  local before = Toolkit.observe(s.player)
+  s.stats.getEndurance = reader
+  isNil(Toolkit.stat(before, "endurance"), "the departure reading really is absent")
+
+  ok(Adapter:begin(args, s.ctx), "and the command starts")
+  s.stats.state.endurance = 0.95
+  local evidence, code, detail = Adapter:verify(before, Toolkit.observe(s.player), args, s.ctx)
+  isNil(evidence, "endurance at the target proves nothing without the reading it rose from")
+  equal(code, REASON.POSTCONDITION_FAILED, "so the command failed its postcondition")
+  contains(detail, "before", "and the detail says which half was never read")
+end
+
 Harness.group("endurance both higher and at the target is the evidence")
 do
   local s = scene()

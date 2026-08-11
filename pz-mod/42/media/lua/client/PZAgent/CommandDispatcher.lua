@@ -134,6 +134,25 @@ local function checkArgSpec(action, name, spec)
         "%s: ref-list argument %q declares no accepted ref kinds", action, name)
     end
   end
+  -- A bound is only ever used in a comparison against the value that arrived
+  -- (`#value > max_bytes`, `value < min`). One that is not a number does not
+  -- refuse that value: it raises, inside PZAgent.ActionRuntime's admission
+  -- path, on every command this action ever receives. That is a malformed
+  -- declaration -- a bug in the mod -- so it is caught here at load, which is
+  -- what the rest of this function is for.
+  local bounds = { "min", "max", "max_bytes" }
+  for index = 1, #bounds do
+    local field = bounds[index]
+    if spec[field] ~= nil and type(spec[field]) ~= "number" then
+      return nil, string.format(
+        "%s: argument %q declares %s as %s, which cannot be compared with a value",
+        action,
+        name,
+        field,
+        type(spec[field])
+      )
+    end
+  end
   return true
 end
 

@@ -135,6 +135,26 @@ ActionRuntime.MAX_PENDING = 1
 --- for a command whose lease is long.
 ActionRuntime.DEFAULT_TIMEOUT_MS = 60 * 1000
 
+--- Consecutive polls a command may take while the clock stands still.
+---
+--- The second bound on a running command, and the one that does not depend on
+--- the thing that broke. Both other bounds are readings of the same clock: the
+--- lease is `issued_at_ms + lease_ms` against now, the adapter timeout is
+--- `now - started_at_ms`. PZAgent_Main reads that clock from getTimestampMs and
+--- answers a constant when the build does not expose it, so a clock that never
+--- advances is not a thought experiment here -- and against one, neither of
+--- those two can ever fire. An adapter that keeps answering "not yet" would then
+--- be polled forever, holding the single in-flight slot, with the sidecar
+--- waiting on a terminal ack that never comes.
+---
+--- Only *consecutive* polls at a clock that did not move count, and any advance
+--- resets the count, so this can never shorten the window of a command whose
+--- clock is working: that would take 600 polls inside one millisecond, and the
+--- runtime is stepped once per game tick. When it does fire it fires as
+--- ACTION_TIMEOUT with the stopped clock named in the detail -- the failure the
+--- build actually has, said out loud, rather than a command that hangs.
+ActionRuntime.MAX_STALLED_POLLS = 600
+
 --- Smallest advance worth another progress ack. Without it a poll that reports
 --- a slightly different fraction every tick would write the ack journal full.
 ActionRuntime.PROGRESS_STEP = 0.25
@@ -191,6 +211,7 @@ function ActionRuntime.new(options)
     maxWorkPerTick = options.maxWorkPerTick or ActionRuntime.MAX_WORK_PER_TICK,
     maxPending = options.maxPending or ActionRuntime.MAX_PENDING,
     defaultTimeoutMs = options.defaultTimeoutMs or ActionRuntime.DEFAULT_TIMEOUT_MS,
+    maxStalledPolls = options.maxStalledPolls or ActionRuntime.MAX_STALLED_POLLS,
     pending = {},
     inflight = nil,
     acks = 0,
@@ -302,6 +323,14 @@ end
 --- under a new command id matches acks by that id, so replaying the original's
 --- would leave its retry unanswered forever; the original id stays visible in
 --- the message.
+---
+--- The session is not one of those fields, and this is only ever called for a
+--- redelivery inside the session that produced the stored result. `tick`
+--- enforces that before calling: a result minted by a session that has since
+--- closed is refused there rather than replayed here, because rewriting its
+--- session id would turn another run's observation into this run's
+--- postcondition, and leaving it would address the ack at a session nobody is
+--- listening on.
 function Handle:replay(agent, command, stored, nowMs)
   local seq, seqError = agent.sequence:next("ack")
   if seq == nil then
@@ -801,6 +830,17 @@ function Handle:interruptionFor(agent, work, nowMs)
     return reasons.ACTION_TIMEOUT,
       string.format("no result within %s ms", tostring(timeout))
   end
+  -- The bound that does not read the clock. Everything above this line does,
+  -- so a clock that stands still disables all of it at once; this counts the
+  -- polls that happened while it stood still and ends the command on them.
+  if (work.stalled_polls or 0) >= (self.maxStalledPolls or ActionRuntime.MAX_STALLED_POLLS) then
+    return reasons.ACTION_TIMEOUT,
+      string.format(
+        "the clock did not advance past %s ms across %s polls, so nothing can time this command",
+        tostring(work.polled_at_ms),
+        tostring(work.stalled_polls)
+      )
+  end
   return nil
 end
 
@@ -823,6 +863,15 @@ function Handle:step(agent, nowMs)
     end
     return self:finish(agent, work, phase, reasonCode, nowMs, { detail = detail })
   end
+  -- Counted before the poll, against the reading the previous poll saw: a
+  -- clock that moved at all clears the count, so only a genuinely stopped one
+  -- accumulates towards the bound in interruptionFor.
+  if work.polled_at_ms ~= nil and nowMs <= work.polled_at_ms then
+    work.stalled_polls = (work.stalled_polls or 0) + 1
+  else
+    work.stalled_polls = 0
+  end
+  work.polled_at_ms = nowMs
   local context = contextFor(self, agent, work, nowMs)
   local ok, first, second, third = pcall(work.adapter.poll, context, work.args)
   if not ok then
@@ -1050,18 +1099,61 @@ function Handle:tick(agent, nowMs)
   for index = 1, #entries do
     local entry = entries[index]
     if entry.kind == KIND.COMMAND then
-      self:admit(agent, entry.command, nowMs)
+      -- Under pcall for the reason every adapter call already is, and for one
+      -- more: admission crosses the registry, the capability report and the
+      -- safety gate, none of which is an adapter and any of which can raise on
+      -- a Kahlua gap or a malformed declaration. A raise there took the tick
+      -- with it and left the command with no ack at all -- and the reader has
+      -- already remembered it, so its redelivery answers "the original has not
+      -- reached a terminal state yet" forever. Every ack write inside `admit`
+      -- is itself protected and none of them runs before the parts that can
+      -- raise, so the rejection below cannot be a second ack for this command.
+      local admitted, admitError = pcall(Handle.admit, self, agent, entry.command, nowMs)
+      if not admitted then
+        local detail = "admitting the command raised: " .. truncate(admitError)
+        agent.safety.last_error = detail
+        refuse(self, agent, entry.command, sessionId, PZAgent.Protocol.REASON.INTERNAL_ERROR, detail, nowMs)
+      end
       summary.admitted = summary.admitted + 1
     elseif entry.kind == KIND.REPLAY then
-      -- Under pcall for the same reason every other ack write is: a replay
-      -- crosses the same encode-and-append path, and a raise there must cost
-      -- one replayed ack, not the whole tick.
-      local replayOk, record, replayError = pcall(Handle.replay, self, agent, entry.command, entry.ack, nowMs)
-      if not replayOk then
-        record, replayError = nil, "the replay ack raised: " .. truncate(record)
-      end
-      if record == nil then
-        agent.safety.last_error = replayError
+      if entry.ack.session_id ~= entry.command.session_id then
+        -- The remembered result was minted by a session that has since closed:
+        -- the reader's cache outlives a session, so a sidecar that restarts and
+        -- reissues an idempotency key it used before meets its predecessor's
+        -- answer. Replaying it would claim a postcondition nothing observed in
+        -- this session, on evidence about objects whose runtime ids no longer
+        -- denote the same things -- and it would carry the closed session's id,
+        -- which the live sidecar drops as an ack for a foreign session, leaving
+        -- the command unanswered on top of everything else. Refused, terminally,
+        -- addressed to the session that is actually waiting.
+        refuse(
+          self,
+          agent,
+          entry.command,
+          entry.command.session_id,
+          PZAgent.Protocol.REASON.STALE_SESSION,
+          -- Session first: the detail is bounded at MAX_DETAIL_BYTES and an
+          -- idempotency key may be 128 of them, so the id that explains the
+          -- refusal must not be the part that gets truncated away.
+          string.format(
+            "session %s already answered idempotency_key %s and has since closed;"
+              .. " that result is not evidence about this one",
+            tostring(entry.ack.session_id),
+            tostring(entry.command.idempotency_key)
+          ),
+          nowMs
+        )
+      else
+        -- Under pcall for the same reason every other ack write is: a replay
+        -- crosses the same encode-and-append path, and a raise there must cost
+        -- one replayed ack, not the whole tick.
+        local replayOk, record, replayError = pcall(Handle.replay, self, agent, entry.command, entry.ack, nowMs)
+        if not replayOk then
+          record, replayError = nil, "the replay ack raised: " .. truncate(record)
+        end
+        if record == nil then
+          agent.safety.last_error = replayError
+        end
       end
       summary.replayed = summary.replayed + 1
     elseif entry.kind == KIND.REJECTED then

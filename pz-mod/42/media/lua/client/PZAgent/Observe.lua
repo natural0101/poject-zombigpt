@@ -434,7 +434,12 @@ local function bodyPartFields(part, index)
   }
 end
 
---- Every injured body part, bounded.
+--- Every body part, bounded, or nil plus a reason when none could be read.
+---
+--- The nil is the point: an empty list means "every part was inspected and none
+--- of them is hurt", which is a reading the sidecar acts on -- it is what makes
+--- `bleeding_observed == 0` a postcondition. A build that exposes no body
+--- damage at all must not produce that same empty list, so it produces no list.
 function Observe.playerWounds(player)
   local wounds = {}
   local count = 0
@@ -442,7 +447,7 @@ function Observe.playerWounds(player)
   local parts = invoke(body, "getBodyParts")
   local size = listSize(parts)
   if size == nil then
-    return wounds
+    return nil, "the character's body parts could not be read"
   end
   local scanned = math.min(size, Observe.MAX_BODY_PARTS)
   for index = 0, scanned - 1 do
@@ -764,6 +769,27 @@ local function objectFields(object, objectIndex, position, distance)
   return fields
 end
 
+--- The cell, or nil plus the reason it could not be reached.
+---
+--- Separated from the two scans below because "the world could not be looked
+--- at" is a different fact from "the world holds nothing", and only this
+--- function can tell them apart.
+local function currentCell()
+  if type(getCell) ~= "function" then
+    return nil, "getCell is not available in this build"
+  end
+  local ok, cell = pcall(getCell)
+  if not ok then
+    return nil, string.format("getCell() failed: %s", tostring(cell))
+  end
+  if cell == nil then
+    return nil, "getCell() returned no cell"
+  end
+  return cell
+end
+
+Observe.cell = currentCell
+
 --- One dead body as a corpse descriptor, or nil when it holds no container.
 ---
 --- A corpse is observed for its loot, so a body that answers no ItemContainer
@@ -905,29 +931,30 @@ end
 --- exactly the end ObserveModel's nearest-first sort cuts off.
 function Observe.nearbyObjects(playerPosition)
   local result = { objects = {}, truncated = false, dropped = 0 }
-  if type(getCell) ~= "function" then
-    return result
-  end
-  local ok, cell = pcall(getCell)
-  if not ok or cell == nil then
-    return result
-  end
   local radius = Observe.RADIUS
-  local originX = math.floor(playerPosition.x)
-  local originY = math.floor(playerPosition.y)
-  local budget = { squares = Observe.MAX_SQUARES, objects = Observe.MAX_OBJECTS_SCANNED, count = 0 }
   local visited = 0
-  for ring = 0, radius do
-    if budget.squares <= 0 or budget.objects <= 0 then
-      break
-    end
-    for dx = -ring, ring do
-      for dy = -ring, ring do
-        local onRing = dx == -ring or dx == ring or dy == -ring or dy == ring
-        if onRing and budget.squares > 0 and budget.objects > 0 then
-          budget.squares = budget.squares - 1
-          visited = visited + 1
-          scanSquare(cell, playerPosition, originX + dx, originY + dy, result, budget)
+  -- A cell that cannot be reached, or one whose squares cannot be asked for,
+  -- leaves `visited` at zero, and the accounting at the end of this function
+  -- then reports every square as unread. Returning early instead -- which is
+  -- what this did -- published `truncated = false, dropped = 0`: a complete
+  -- scan of an empty world, produced without reading one square of it.
+  local cell = currentCell()
+  if cell ~= nil and member(cell, "getGridSquare") ~= nil then
+    local originX = math.floor(playerPosition.x)
+    local originY = math.floor(playerPosition.y)
+    local budget = { squares = Observe.MAX_SQUARES, objects = Observe.MAX_OBJECTS_SCANNED, count = 0 }
+    for ring = 0, radius do
+      if budget.squares <= 0 or budget.objects <= 0 then
+        break
+      end
+      for dx = -ring, ring do
+        for dy = -ring, ring do
+          local onRing = dx == -ring or dx == ring or dy == -ring or dy == ring
+          if onRing and budget.squares > 0 and budget.objects > 0 then
+            budget.squares = budget.squares - 1
+            visited = visited + 1
+            scanSquare(cell, playerPosition, originX + dx, originY + dy, result, budget)
+          end
         end
       end
     end
@@ -949,16 +976,17 @@ end
 --- one that has not may be safely read past.
 function Observe.nearbyZombies(player, playerPosition)
   local result = { zombies = {}, truncated = false, dropped = 0 }
-  if type(getCell) ~= "function" then
-    return result
-  end
-  local ok, cell = pcall(getCell)
-  if not ok or cell == nil then
+  local cell = currentCell()
+  if cell == nil then
+    -- Nobody counted. An empty list here would be read as "no zombies", and
+    -- the sidecar's threat assessment turns that into DangerLevel.NONE.
+    result.truncated = true
     return result
   end
   local list = invoke(cell, "getZombieList")
   local size = listSize(list)
   if size == nil then
+    result.truncated = true
     return result
   end
   local scanned = math.min(size, Observe.MAX_ZOMBIE_SCAN)
@@ -1005,8 +1033,18 @@ function Observe.nearbyZombies(player, playerPosition)
   return result
 end
 
---- The nearby block's plain values.
+--- The nearby block's plain values, or nil plus the reason there is no block.
+---
+--- Nil when the world itself could not be reached: ObserveModel then leaves the
+--- section out, and the sidecar reads an absent `nearby` as "not walked"
+--- (`available: false`) instead of as an observation of an empty world. A cell
+--- that answered but could not be read in full is a section that exists and
+--- declares its own gaps -- the objects it did read are still worth having.
 function Observe.nearbyFields(player, playerPosition)
+  local cell, cellError = currentCell()
+  if cell == nil then
+    return nil, cellError
+  end
   local objects = Observe.nearbyObjects(playerPosition)
   local zombies = Observe.nearbyZombies(player, playerPosition)
   return {
@@ -1043,7 +1081,14 @@ function Observe.context(agent, player, sessionId, seq, nowMs)
   if roots == nil and rootsError ~= nil then
     agent.safety.last_error = rootsError
   end
-  local nearby = Observe.nearbyFields(player, playerFields.position)
+  -- Same asymmetry as the inventory above, and for the sharper reason: an
+  -- unreachable world costs the section rather than filling it with an empty
+  -- one, because an empty `nearby` is an observation -- the sidecar's threat
+  -- assessment reads it as no zombies at all.
+  local nearby, nearbyError = Observe.nearbyFields(player, playerFields.position)
+  if nearby == nil and nearbyError ~= nil then
+    agent.safety.last_error = nearbyError
+  end
   -- The safety snapshot is taken *after* this, because until it was set here
   -- `danger_level` was written by nothing and read by three consumers: the
   -- mod's own gate in Safety.mayStart, the action engine's threat threshold,

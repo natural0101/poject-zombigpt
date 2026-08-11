@@ -77,6 +77,54 @@ do
   end
 end
 
+Harness.group("a bound that cannot be compared is refused at registration, not at dispatch")
+do
+  -- The bounds a declaration carries are only ever used in a comparison against
+  -- the value that arrived: `#value > spec.max_bytes`, `value < spec.min`. One
+  -- that is not a number raises there -- inside PZAgent.ActionRuntime's
+  -- admission path, on the first command of the session, for every command of
+  -- that action afterwards. This file's contract is that a malformed
+  -- declaration is caught at load, so the registration is what has to refuse.
+  local cases = {
+    {
+      args = { mode = { type = ARG.STRING, max_bytes = "sixty" } },
+      value = "walk",
+      needle = "max_bytes",
+    },
+    {
+      args = { radius = { type = ARG.NUMBER, min = "one" } },
+      value = 4,
+      needle = "min",
+    },
+    {
+      args = { radius = { type = ARG.NUMBER, max = {} } },
+      value = 4,
+      needle = "max",
+    },
+  }
+  for index = 1, #cases do
+    local registry = Dispatcher.new()
+    local spy = Support.spyAdapter("movement.move_to", { args = cases[index].args })
+    local registered, reason = registry:register(spy)
+    isNil(registered, "declaration " .. index .. " is refused at registration")
+    contains(reason, cases[index].needle, "and the reason names the bound that cannot be compared")
+    equal(spy.starts, 0, "no adapter was reached")
+  end
+
+  -- And the numeric bounds every shipped adapter actually declares still pass.
+  local registry = Dispatcher.new()
+  local sound = Support.spyAdapter("movement.move_to", {
+    args = {
+      radius = { type = ARG.NUMBER, min = 0.1, max = 32 },
+      mode = { type = ARG.STRING, max_bytes = 16 },
+    },
+  })
+  ok(registry:register(sound), "a declaration whose bounds are numbers still registers")
+  local adapter, args = registry:resolve({ action = "movement.move_to", args = { radius = 4, mode = "walk" } }, SESSION)
+  ok(adapter ~= nil, "and it resolves a command")
+  equal(type(args) == "table" and args.radius or nil, 4, "with the value it declared bounds for")
+end
+
 Harness.group("an action may only be claimed once")
 do
   local registry = Dispatcher.new()

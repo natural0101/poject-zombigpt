@@ -14,6 +14,14 @@ in a directory the player can edit and any local process can write; re-presentin
 yesterday's document with yesterday's session id would otherwise resurrect a
 session whose references point at objects that no longer exist.
 
+That check is against every session this run has accepted, not only the last
+one. A one-deep memory is defeated by a single intervening session -- after A
+and then B, A's own document is neither the open session nor the remembered
+previous one -- and A is dead: the sidecar has moved on, so reopening it would
+have the mod executing commands and resolving references stamped with a session
+nobody is running. The memory is bounded, like everything else here; an evicted
+identity is one whose document is far past MAX_AGE_MS anyway.
+
 `evaluate` is pure -- no globals, no file access -- so every rejection branch is
 testable outside the game.
 ]]
@@ -37,6 +45,11 @@ Session.MAX_SKEW_MS = 5 * 1000
 Session.MIN_OBSERVATION_HZ = 1
 Session.MAX_OBSERVATION_HZ = 10
 Session.DEFAULT_OBSERVATION_HZ = 4
+
+--- Session identities one holder remembers as spent. Oldest first eviction: a
+--- run that opened this many sessions is minutes past the age window that would
+--- let the oldest document be re-presented at all.
+Session.MAX_REMEMBERED_SESSIONS = 64
 
 local UUID_PATTERN = "^%x%x%x%x%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%x%x%x%x%x%x%x%x$"
 local NONCE_PATTERN = "^[A-Za-z0-9_%.%-]+$"
@@ -147,6 +160,18 @@ function Session.evaluate(request, previous, nowMs, options)
     end
   end
 
+  -- Everything this run has already spent. The `previous` checks above see one
+  -- session back; these see every one, which is what a replay separated by an
+  -- intervening handshake walks past.
+  local seenNonces = options.seenNonces
+  if type(seenNonces) == "table" and seenNonces[request.nonce] then
+    return reject(reasons.STALE_SESSION, "this nonce was already used by a session this run")
+  end
+  local seenIds = options.seenSessionIds
+  if type(seenIds) == "table" and seenIds[request.session_id] then
+    return reject(reasons.STALE_SESSION, "this session id was already used by a session this run")
+  end
+
   if options.sidecarFresh == false then
     return reject(reasons.STALE_SESSION, "no live sidecar heartbeat")
   end
@@ -188,7 +213,29 @@ end
 
 --- Create the session holder the rest of the mod reads from.
 function Session.new()
-  return setmetatable({ session = nil, previous = nil, generation = 0, nonceCounter = 0 }, Handle)
+  return setmetatable({
+    session = nil,
+    previous = nil,
+    generation = 0,
+    nonceCounter = 0,
+    -- Identities this holder has spent, as lookup tables plus the insertion
+    -- order the bound evicts in.
+    seenNonces = {},
+    seenSessionIds = {},
+    spent = {},
+  }, Handle)
+end
+
+--- Record an accepted identity as spent, evicting the oldest past the bound.
+local function spend(self, sessionId, nonce)
+  self.spent[#self.spent + 1] = { session_id = sessionId, nonce = nonce }
+  self.seenSessionIds[sessionId] = true
+  self.seenNonces[nonce] = true
+  while #self.spent > Session.MAX_REMEMBERED_SESSIONS do
+    local dropped = table.remove(self.spent, 1)
+    self.seenSessionIds[dropped.session_id] = nil
+    self.seenNonces[dropped.nonce] = nil
+  end
 end
 
 --- The open session, or nil.
@@ -205,7 +252,17 @@ end
 --- the new one becomes current; on rejection nothing changes.
 function Handle:offer(request, nowMs, options)
   local baseline = self.session or self.previous
-  local decision = Session.evaluate(request, baseline, nowMs, options)
+  -- The caller's options are copied rather than written through: the holder's
+  -- own memory of spent identities is not a caller's to supply or to suppress.
+  local scoped = {}
+  if type(options) == "table" then
+    for key, value in pairs(options) do
+      scoped[key] = value
+    end
+  end
+  scoped.seenNonces = self.seenNonces
+  scoped.seenSessionIds = self.seenSessionIds
+  local decision = Session.evaluate(request, baseline, nowMs, scoped)
   if not decision.accepted then
     return decision
   end
@@ -216,7 +273,8 @@ function Handle:offer(request, nowMs, options)
   self.generation = self.generation + 1
   self.nonceCounter = self.nonceCounter + 1
   decision.session.generation = self.generation
-  decision.session.game_nonce = Session.makeNonce(nowMs, self.nonceCounter, options and options.randomFn)
+  decision.session.game_nonce = Session.makeNonce(nowMs, self.nonceCounter, scoped.randomFn)
+  spend(self, decision.session.session_id, decision.session.nonce)
   self.session = decision.session
   return decision
 end

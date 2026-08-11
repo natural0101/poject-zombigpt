@@ -116,7 +116,9 @@ do
 
   same(Observe.playerStats({}), {}, "a character with no stats object contributes no stats")
   same(Observe.playerMoodles({}), {}, "and no moodles")
-  same(Observe.playerWounds({}), {}, "and no wounds")
+  -- Not an empty list: an unread body is a different fact from an unhurt one,
+  -- and the group below is about keeping them apart.
+  isNil(Observe.playerWounds({}), "and no wound list at all")
 
   local roots, rootsReason = Observe.inventoryRoots({})
   isNil(roots, "a character with no inventory yields no container roots")
@@ -124,7 +126,9 @@ do
 
   local nearby = Observe.nearbyObjects({ x = 0, y = 0, z = 0 })
   same(nearby.objects, {}, "with no cell there is nothing nearby")
-  equal(nearby.truncated, false, "and nothing was cut short either")
+  -- Not "nothing was cut short": nothing was read. The group below is about
+  -- keeping a scan that read nothing apart from a scan that found nothing.
+  equal(nearby.truncated, true, "and the scan says it read nothing rather than that it found nothing")
 end
 
 Harness.group("the game block reports what the engine actually answered")
@@ -244,6 +248,34 @@ do
     body = Support.bodyDamage({ Support.bodyPart({ health = 10 }) }),
   }))
   equal(unnamed[1].part, "part-0", "a part whose type cannot be read is identified by position, not by a guess")
+end
+
+Harness.group("a body nobody could read is not a body with nothing wrong with it")
+do
+  -- TreatWoundsMission finishes on bleeding_observed == 0, so "the reader
+  -- answered: no injuries" and "no reader answered" must not leave the same
+  -- trace. The reader is the only layer that can still tell them apart.
+  local unread, reason = Observe.playerWounds(Support.player({}))
+  isNil(unread, "a character whose body damage this build does not expose yields no wound list")
+  Harness.contains(reason, "body", "and the reason names what could not be read")
+
+  local unlistable = Observe.playerWounds(Support.player({ body = { getBodyParts = function() return nil end } }))
+  isNil(unlistable, "and neither does one whose body parts are not a readable collection")
+
+  local healthy = Observe.playerWounds(Support.player({
+    body = Support.bodyDamage({
+      Support.bodyPart({ part = "Torso", health = 100 }),
+      Support.bodyPart({ part = "Left_Arm", health = 100 }),
+    }, 100),
+  }))
+  equal(#healthy, 2, "a body that was read describes every part, whether or not it is hurt")
+
+  local mute = Observe.playerFields(Support.player({}))
+  isNil(mute.wounds, "the player block carries no wound list when the body could not be read")
+  local whole = Observe.playerFields(Support.player({
+    body = Support.bodyDamage({ Support.bodyPart({ part = "Torso", health = 100 }) }, 100),
+  }))
+  equal(#whole.wounds, 1, "and carries the descriptors when it could")
 end
 
 Harness.group("the inventory walk nests, names its slots and finds the hands")
@@ -715,6 +747,71 @@ do
   })
   equal(#document.nearby.objects, Model.MAX_OBJECTS, "and the document is still filled to its cap")
   removeCell()
+end
+
+Harness.group("a world the reader could not reach is not a world with nothing in it")
+do
+  -- assess_threat on the sidecar reads an empty zombie list as DangerLevel.NONE
+  -- and compact_for_planner reports `available: true`. So a scan that read
+  -- nothing must not arrive looking like a scan that found nothing: the section
+  -- is left out when the cell could not be reached at all, and declared
+  -- incomplete when the cell answered but an accessor did not.
+  local player = furnishedPlayer()
+  local position = { x = 100, y = 200, z = 0 }
+  local squares = (2 * Observe.RADIUS + 1) ^ 2
+
+  getCell = nil
+  local objects = Observe.nearbyObjects(position)
+  equal(objects.truncated, true, "with no cell every square around the player went unread, and it says so")
+  equal(objects.dropped, squares, "counting every one of them")
+  local zeds = Observe.nearbyZombies(player, position)
+  equal(zeds.truncated, true, "and the zombie list is declared unread rather than reported empty")
+
+  local fields, reason = Observe.nearbyFields(player, position)
+  isNil(fields, "a world nobody could look at produces no nearby section")
+  Harness.contains(reason, "getCell", "and the reason names the probe that was missing")
+
+  local document = Model.build({
+    session_id = SESSION,
+    seq = 3,
+    timestamp_ms = NOW,
+    game = { build = "42.20" },
+    player = Observe.playerFields(player),
+    nearby = fields,
+  })
+  isNil(document.nearby, "so the document carries no nearby block at all, which the sidecar reads as unavailable")
+
+  -- A cell that is there but cannot list its zombies is a different case: the
+  -- world was looked at, and what could be read is worth publishing.
+  getCell = function()
+    return {
+      getGridSquare = function(_, x, y, z)
+        if x == 101 and y == 200 and z == 0 then
+          return Support.square({ Support.worldObject({ name = "Door" }) })
+        end
+        return nil
+      end,
+    }
+  end
+  local mute, muteReason = Observe.nearbyFields(player, position)
+  ok(mute ~= nil, "a cell that answers is still a nearby section: " .. tostring(muteReason))
+  equal(#mute.objects, 1, "with the objects it could read")
+  equal(mute.zombies_truncated, true, "and the unreadable zombie list declared, not published as an empty horde")
+
+  local partial = Model.build({
+    session_id = SESSION,
+    seq = 4,
+    timestamp_ms = NOW,
+    game = { build = "42.20" },
+    player = Observe.playerFields(player),
+    nearby = mute,
+  })
+  equal(
+    partial.player.stats[Model.LIMIT_PREFIX .. "zombies_truncated"],
+    true,
+    "which reaches the document as the limit the sidecar can read"
+  )
+  getCell = nil
 end
 
 Harness.group("a tick publishes a snapshot, or says why it did not")

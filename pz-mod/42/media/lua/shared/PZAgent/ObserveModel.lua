@@ -356,6 +356,7 @@ local function newLimits()
     zombies_omitted = 0,
     wounds_truncated = false,
     wounds_omitted = 0,
+    wounds_unknown = false,
     moodles_truncated = false,
     moodles_omitted = 0,
     chasing_unknown = false,
@@ -378,6 +379,7 @@ local LIMIT_KEYS = {
   "zombies_omitted",
   "wounds_truncated",
   "wounds_omitted",
+  "wounds_unknown",
   "moodles_truncated",
   "moodles_omitted",
   "chasing_unknown",
@@ -668,9 +670,17 @@ function ObserveModel.player(sessionId, fields, limits)
   if building ~= nil then
     player.building = building
   end
-  local wounds = ObserveModel.wounds(sessionId, fields.wounds, limits)
-  if #wounds > 0 then
-    player.wounds = wounds
+  -- Tri-state, like `chasing` on a zombie and for the same reason. A body the
+  -- reader walked publishes its list even when the list is empty, because an
+  -- empty list is the observation "nothing is bleeding"; a body the reader
+  -- could not walk publishes no list at all and says so through the limit
+  -- counter, because the sidecar's PlayerState.wounds defaults to the empty
+  -- list and a completion criterion of bleeding_observed == 0 would otherwise
+  -- be met by a character nobody examined.
+  if type(fields.wounds) == "table" then
+    player.wounds = ObserveModel.wounds(sessionId, fields.wounds, limits)
+  else
+    limits.wounds_unknown = true
   end
   return player
 end

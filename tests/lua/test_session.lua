@@ -195,6 +195,42 @@ do
   ok(not holder:terminate(), "terminating twice reports that there was nothing to close")
 end
 
+Harness.group("a session this run already closed cannot be reopened by its own document")
+do
+  -- The one-deep `previous` memory is defeated by a single intervening
+  -- session: after A, B, the file on disk can be rewritten with A's document
+  -- and A is neither the open session nor the remembered previous one. A is
+  -- dead -- the sidecar moved on -- and reopening it would make the mod accept
+  -- commands and resolve references stamped with a session nobody is running.
+  local SECOND = "11111111-2222-3333-4444-555555555555"
+  local holder = Session.new()
+  local a = request({ nonce = "nonce-one" })
+  ok(holder:offer(a, NOW).accepted, "the first session opens")
+  ok(holder:offer(request({ session_id = SECOND, nonce = "nonce-two" }), NOW).accepted, "the second replaces it")
+
+  local replay = holder:offer(request({ nonce = "nonce-one" }), NOW)
+  ok(not replay.accepted, "re-presenting the first session's document is refused")
+  equal(replay.reason_code, REASON.STALE_SESSION, "as a stale session")
+  equal(holder:id(), SECOND, "and the open session is untouched")
+
+  local recycled = holder:offer(request({ nonce = "nonce-three" }), NOW)
+  ok(not recycled.accepted, "a session id this run already used is refused even under a fresh nonce")
+  equal(recycled.reason_code, REASON.STALE_SESSION, "as a stale session")
+
+  local reNonced = holder:offer(
+    request({ session_id = "99999999-8888-7777-6666-555555555555", nonce = "nonce-two" }),
+    NOW
+  )
+  ok(not reNonced.accepted, "and a nonce this run already accepted is refused under a fresh session id")
+  equal(holder:id(), SECOND, "the open session survives every one of them")
+
+  local third = holder:offer(
+    request({ session_id = "99999999-8888-7777-6666-555555555555", nonce = "nonce-four" }),
+    NOW
+  )
+  ok(third.accepted, "a genuinely new session is still accepted")
+end
+
 Harness.group("mod nonces are deterministic given their inputs")
 do
   local a = Session.makeNonce(NOW, 1, function() return 7 end)

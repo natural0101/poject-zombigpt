@@ -208,6 +208,51 @@ do
   contains(detail, "ForeArm_L", "and the detail names the wound that was not treated")
 end
 
+Harness.group("a dressing the wound already carried is not one this command applied")
+do
+  local s = scene()
+  -- A soaked bandage over a wound that is still losing blood. The part reads
+  -- `bandaged` before the command starts, so "bandaged is true afterwards" is a
+  -- fact that holds whether ISApplyBandage landed or never ran at all -- and an
+  -- adapter that accepts it has verified something the action did not do.
+  s.parts[2].state.bandaged = true
+  local args = { body_part = "ForeArm_L" }
+  ok(Bandage:validate(args, s.ctx), "a bleeding part may be dressed again")
+  ok(Bandage:prepare(args, s.ctx), "and prepares")
+  local before = Toolkit.observe(s.player)
+  ok(Bandage:begin(args, s.ctx), "and starts")
+
+  Support.drainQueue(s.queue)
+  local evidence, code, detail = Bandage:verify(before, Toolkit.observe(s.player), args, s.ctx)
+  isNil(evidence, "the dressing the part already carried proves nothing about this command")
+  equal(code, REASON.POSTCONDITION_FAILED, "so the command failed its postcondition")
+  contains(detail, "already", "and the detail says the dressing predates the command")
+
+  -- The wound stopping is still the postcondition, dressing or no dressing.
+  s.bandage.actions[1]:perform()
+  local proof = Bandage:verify(before, Toolkit.observe(s.player), args, s.ctx)
+  ok(proof ~= nil, "a part that has stopped bleeding is the evidence")
+  equal(proof.bleeding_after, false, "carrying the reading that settled it")
+end
+
+Harness.group("a dressing that was not there before is what proves one landed")
+do
+  local s = scene()
+  local args = { body_part = "ForeArm_L" }
+  ok(Bandage:validate(args, s.ctx), "the command validates")
+  ok(Bandage:prepare(args, s.ctx), "and prepares")
+  local before = Toolkit.observe(s.player)
+  ok(Bandage:begin(args, s.ctx), "and starts")
+
+  -- A dressing that landed on a wound that keeps bleeding: the part was not
+  -- bandaged before and is now, which is this command's own effect.
+  s.parts[2].state.bandaged = true
+  local proof = Bandage:verify(before, Toolkit.observe(s.player), args, s.ctx)
+  ok(proof ~= nil, "a dressing that was not there before is an observation of this command")
+  equal(proof.bandaged_after, true, "carrying the dressing the part now reports")
+  equal(proof.bleeding_after, true, "and stating plainly that the wound is still bleeding")
+end
+
 Harness.group("the wound is read back off the body part it was aimed at")
 do
   local s = scene()
