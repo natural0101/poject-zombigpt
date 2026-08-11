@@ -56,7 +56,7 @@ from pz_agent_core.actions.adapters.survival import (
     MIN_WAIT_MS,
 )
 from pz_agent_core.actions.adapters.world import MAX_INSPECT_RADIUS
-from pz_agent_core.capabilities.probes import SURVIVAL_SLEEP
+from pz_agent_core.capabilities.probes import COMBAT_ASSIST, SURVIVAL_SLEEP
 from pz_agent_core.protocol import READ_ONLY_ACTIONS, ActionName, ReasonCode, RiskClass
 from pz_agent_mcp.catalog import (
     EXAMPLE_SESSION_ID,
@@ -217,6 +217,14 @@ OVER_THE_LINE: Final[tuple[tuple[str, dict[str, Any]], ...]] = (
     ("pz_action_transfer_batch", {"item_refs": _TWICE_THE_SAME_ITEM}),
     ("pz_action_transfer_batch", {"item_refs": ["container:not-an-item"]}),
     ("pz_action_transfer_batch", {"item_refs": []}),
+    # The two targeted combat tools take exactly one bounded argument — a
+    # zombie reference — and a reference of any other kind dies at the schema.
+    # There is deliberately no max_swings and no distance to overshoot: the
+    # mod's Combat adapter bounds both with its own declared defaults, the
+    # Python adapters' build_args never send them, and a schema field the
+    # adapter's check_args refuses would fail the coverage seam.
+    ("pz_action_shove", {"target_ref": "item:not-a-zombie"}),
+    ("pz_action_engage", {"target_ref": "object:not-a-zombie"}),
 )
 
 
@@ -391,10 +399,89 @@ def test_sleep_is_withheld_on_a_build_where_its_capability_is_only_experimental(
     assert withheld_tools(report)["pz_action_sleep"] == "EXPERIMENTAL_API"
 
 
-def test_sleep_is_the_only_p4_tool_and_says_why_in_its_own_description() -> None:
+#: The whole P4 tier, written out. Sleep was the only member until the assisted
+#: combat wave; the four combat tools joined it because an attack is the top of
+#: the protocol's risk ladder however it is gated. A fifth name appearing here
+#: has to be a deliberate edit, argued in review, never an inheritance.
+P4_TOOLS: Final[frozenset[str]] = frozenset(
+    {
+        "pz_action_sleep",
+        "pz_action_equip_best_weapon",
+        "pz_action_shove",
+        "pz_action_engage",
+        "pz_action_retreat",
+    }
+)
+
+
+def test_the_p4_tier_is_sleep_plus_the_four_combat_tools() -> None:
     p4 = {spec.name for spec in TOOLS if spec.risk is RiskClass.P4}
     summary = TOOLS_BY_NAME["pz_action_sleep"].summary.lower()
 
-    assert p4 == {"pz_action_sleep"}
+    assert p4 == P4_TOOLS
     assert "cannot wake" in summary
     assert "cancel" in summary
+
+
+COMBAT_TOOLS: Final[tuple[str, ...]] = (
+    "pz_action_equip_best_weapon",
+    "pz_action_shove",
+    "pz_action_engage",
+    "pz_action_retreat",
+)
+
+
+@pytest.mark.parametrize("tool", COMBAT_TOOLS)
+def test_a_combat_tool_is_withheld_until_a_live_shove_confirms_the_capability(
+    tool: str,
+) -> None:
+    """combat_assist resolves to experimental on a clean scan, like sleep.
+
+    The symbols a static probe can see are only the walk-and-queue half; the
+    swing and the shove are Java entry points no Lua scan reaches. Until a
+    live shove's re-observed evidence confirms them, offering these tools
+    would advertise an attack nothing has proven, so they are withheld with
+    the reason instead.
+    """
+    report = make_report(experimental=[COMBAT_ASSIST])
+
+    assert tool not in {spec.name for spec in published_tools(report)}
+    assert withheld_tools(report)[tool] == "EXPERIMENTAL_API"
+
+
+@pytest.mark.parametrize("tool", COMBAT_TOOLS)
+def test_every_combat_tool_is_p4_write_and_rides_combat_assist_not_autonomous_attack(
+    tool: str,
+) -> None:
+    """The epic's pin: assisted combat is a NEW capability beside the old ceiling.
+
+    ``autonomous_attack`` keeps its unsupported-by-design probe untouched; a
+    combat tool naming it would put the assisted rung behind a capability that
+    can never become usable — or worse, argue for raising that ceiling.
+    """
+    spec = TOOLS_BY_NAME[tool]
+
+    assert spec.kind is ToolKind.WRITE
+    assert spec.requires_armed is True
+    assert spec.risk is RiskClass.P4
+    assert spec.required_capability == COMBAT_ASSIST
+    assert spec.required_capability != "autonomous_attack"
+
+
+def test_the_engage_summary_states_the_bounded_window_contract() -> None:
+    """One bounded window, interruptible between windows, postcondition observed.
+
+    The summary is what a client author reads before the first call; the
+    safety contract has to be *in* it, not only in the adapter's docstring.
+    """
+    summary = TOOLS_BY_NAME["pz_action_engage"].summary.lower()
+
+    assert "one bounded attack window" in summary
+    assert "until dead" in summary  # named in order to be denied
+    assert "between windows" in summary
+    assert "re-observed" in summary
+    # The deterministic policy's refusals travel with both gated tools: a
+    # caller must learn about the group limit from the description, not from
+    # the first POLICY_DENIED.
+    assert "group limit" in summary
+    assert "group" in TOOLS_BY_NAME["pz_action_shove"].summary.lower()

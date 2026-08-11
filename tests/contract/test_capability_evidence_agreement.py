@@ -47,6 +47,7 @@ from pz_agent_core.actions.adapters import register_game_adapters
 from pz_agent_core.capabilities.model import REASON_NO_VERIFIED_API
 from pz_agent_core.capabilities.probes import (
     AUTONOMOUS_ATTACK,
+    COMBAT_ASSIST,
     DOOR_TOGGLE,
     DRINK_CARRIED,
     DRINK_WORLD_SOURCE,
@@ -72,6 +73,8 @@ from pz_agent_core.protocol import (
     Command,
     Hands,
     InventoryView,
+    NearbyView,
+    NearbyZombie,
     Observation,
     Position,
     ReasonCode,
@@ -273,6 +276,34 @@ def _survival_sleep() -> Exercise:
     )
 
 
+def _combat_assist() -> Exercise:
+    """The shove case: the least-assumptive combat action confirms the probe.
+
+    ``target_ref`` is the key the confirmation demands, and the re-observed
+    zombie — standing before, prone after — is the only proof the adapter
+    accepts; a shove needs no weapon, which is exactly why the probe rides
+    it and not the swing.
+    """
+    target_ref = f"zombie:{DEFAULT_SESSION}:z1:0"
+
+    def zombie(state: str) -> NearbyZombie:
+        return NearbyZombie(
+            ref=target_ref,
+            distance=1.5,
+            visible=True,
+            chasing=False,
+            position=Position(x=float(HOME_X) + 1.5, y=float(HOME_Y), z=0),
+            state=state,
+        )
+
+    return Exercise(
+        capability=COMBAT_ASSIST,
+        command=a_command(ActionName.COMBAT_SHOVE, {"target_ref": target_ref}),
+        before=a_world(nearby=NearbyView(zombies=[zombie("standing")])),
+        after=a_world(seq=2, nearby=NearbyView(zombies=[zombie("prone")])),
+    )
+
+
 def _door_toggle() -> Exercise:
     door_ref = f"object:{DEFAULT_SESSION}:{HOME_X + 2}:{HOME_Y}:0:1"
     closed = a_world_object(
@@ -321,6 +352,7 @@ EXERCISES: Final[tuple[Exercise, ...]] = (
     _medical_bandage(),
     _survival_rest(),
     _survival_sleep(),
+    _combat_assist(),
 )
 
 #: The probes no run above can reach, and why. Named rather than skipped: an

@@ -49,6 +49,8 @@ from typing import Final
 
 import pytest
 
+from pz_agent_cli.arbiter import TRIGGER_KINDS
+from pz_agent_cli.autonomy import _GOALS as INITIATIVE_GOALS
 from pz_agent_cli.navigation_planner import NavigatingPlanner
 from pz_agent_cli.runtime import ActionChannel
 from pz_agent_core.actions import ActionEngine, AdapterRegistry, register_builtins
@@ -72,6 +74,7 @@ from pz_agent_core.planner.executor import PlanExecutor, PlanOutcome
 from pz_agent_core.protocol import (
     ActionName,
     ActionStatus,
+    Hands,
     InventoryView,
     ItemView,
     NearbyObject,
@@ -127,6 +130,7 @@ CHANNEL_KINDS: Final[frozenset[str]] = frozenset(
         "rest_until",
         "sleep_until_rested",
         "avoid_threat",
+        "engage_single_zombie",
     }
 )
 
@@ -150,6 +154,11 @@ CHANNEL_KINDS: Final[frozenset[str]] = frozenset(
 #: the deterministic avoid mission (``pz_agent_cli.avoid_mission``) — and
 #: most emphatically: a model choosing where to run from zombies is the one
 #: proposal no provider may ever be allowed to make.
+#: ``engage_single_zombie`` joins with that argument taken past its limit:
+#: driven by the deterministic combat mission (``pz_agent_cli.combat_mission``)
+#: behind the per-window combat policy, and refused by name by every
+#: provider, because a model deciding a fight is safe is the proposal this
+#: whole architecture exists to make impossible.
 EXECUTOR_KINDS: Final[frozenset[str]] = frozenset(
     {
         "navigate_to",
@@ -162,6 +171,7 @@ EXECUTOR_KINDS: Final[frozenset[str]] = frozenset(
         "rest_until",
         "sleep_until_rested",
         "avoid_threat",
+        "engage_single_zombie",
     }
 )
 
@@ -613,16 +623,16 @@ class TestNavigateToIsServedByTheExecutor:
     def test_every_channel_kind_is_owned_by_exactly_one_server(self) -> None:
         """Provider-served and executor-served partition the vocabulary.
 
-        The arithmetic is stated in full: thirteen kinds in the channel, ten
-        of them deterministic (four navigation-and-mission kinds, the two
-        rerouted consume kinds, the three care kinds, the retreat kind),
-        three left to a plan provider. A kind added to one census and not
-        the other fails here.
+        The arithmetic is stated in full: fourteen kinds in the channel,
+        eleven of them deterministic (four navigation-and-mission kinds, the
+        two rerouted consume kinds, the three care kinds, the retreat kind,
+        the combat kind), three left to a plan provider. A kind added to one
+        census and not the other fails here.
         """
         assert EXECUTOR_KINDS <= CHANNEL_KINDS
         assert {kind.value for kind in GoalKind} == CHANNEL_KINDS
-        assert len(CHANNEL_KINDS) == 13
-        assert len(EXECUTOR_KINDS) == 10
+        assert len(CHANNEL_KINDS) == 14
+        assert len(EXECUTOR_KINDS) == 11
         assert {
             "read_for_boredom",
             "train_skill",
@@ -1093,6 +1103,150 @@ class TestAvoidThreatIsServedByTheMission:
         assert value.idempotency_key.startswith(f"avoid:{record.goal_id}")
         assert value.args["max_distance"] == 1
         assert spy.goal_calls == [] and spy.propose_calls == 0
+
+
+class TestEngageSingleZombieIsServedByTheMission:
+    """The fourteenth kind's half of the seam: the combat mission, no provider.
+
+    The same joins proven for the other deterministic kinds, at the highest
+    stakes in the vocabulary: a real queue admits and activates it, the real
+    ``to_planner_goal`` widens it, and the real :class:`NavigatingPlanner`
+    drives the mission's first policy-approved step — a ``combat.shove``
+    against the standing zombie at contact range — into the loop's action
+    channel, while the wrapped planner, a spy, is never asked anything at
+    all. And the initiative pins: no provider, no arbiter trigger and no
+    autonomy needs-table row can ever mint the kind.
+    """
+
+    def armed_world(self) -> Observation:
+        """One standing zombie at contact range, one sound weapon in hand.
+
+        Deliberately not chasing: the picture the loop may act in sits below
+        the reflex guard's block band, and the policy's own gates are what
+        this class exercises. Vitals at the fixture's healthy defaults, the
+        weapon's condition readable and sound, so the deterministic decision
+        is ``shove_first`` — the standing target gets knocked over before it
+        gets swung at.
+        """
+        bat_ref = f"item:{DEFAULT_SESSION}:player-main:bat1:0"
+        bat = make_item(
+            bat_ref,
+            f"container:{DEFAULT_SESSION}:player-main",
+            full_type="Base.BaseballBat",
+            display_name="Baseball Bat",
+            category="Weapon",
+            extra={"weapon": {"condition": 9, "condition_max": 10}},
+        )
+        stocked = inventory(bat)
+        return planner_observation(
+            inventory=stocked,
+            player=make_player(hands=Hands(primary=bat_ref)),
+            nearby=NearbyView(
+                zombies=[
+                    NearbyZombie(
+                        ref=f"zombie:{DEFAULT_SESSION}:z1:0",
+                        distance=1.5,
+                        visible=True,
+                        chasing=False,
+                        position=Position(x=1201.5, y=3400.0, z=0),
+                        state="standing",
+                    )
+                ]
+            ),
+        )
+
+    def test_null_provider_refuses_engage_single_zombie_by_name(self) -> None:
+        """The deterministic provider's honest answer is a typed refusal.
+
+        The property that keeps a mis-assembled loop safe, at its absolute
+        limit: a model must never be the thing that decides a fight is safe,
+        so a goal-capable planner with no navigating wrapper refuses the
+        kind and lets its budgets end it — it never approximates a fight
+        with a plan for anything else.
+        """
+        record = activated(channel(), GoalKind.ENGAGE_SINGLE_ZOMBIE)
+
+        proposal = proposed_for(record, world(pantry(), needy()))
+
+        assert proposal.refused
+        assert proposal.reason_code is ReasonCode.CAPABILITY_UNAVAILABLE
+        assert "combat mission" in proposal.detail
+
+    def test_the_wrapper_drives_the_mission_and_never_asks_the_planner(self) -> None:
+        queue = channel()
+        spy = SpyGoalPlanner()
+        wrapper = NavigatingPlanner(spy)
+        actions = ActionChannel(clock=FakeClock())
+        wrapper.bind(ExecutorHost(goals=queue, actions=actions))
+        record = activated(queue, GoalKind.ENGAGE_SINGLE_ZOMBIE)
+
+        value = wrapper.propose_for_goal(to_planner_goal(record), self.armed_world())
+
+        # Every combat step travels the action channel, never the goal seam:
+        # a landed shove is not a downed target, so no step's own success
+        # may end the goal.
+        assert value is None
+        assert actions.pending_count == 1
+        taken = actions.take_next()
+        assert taken is not None
+        _, request = taken
+        assert request.action is ActionName.COMBAT_SHOVE
+        assert request.args == {"target_ref": f"zombie:{DEFAULT_SESSION}:z1:0"}
+        # Attribution, as everywhere in this file: the request is the goal's.
+        assert request.idempotency_key.startswith(f"combat:{record.goal_id}")
+        assert spy.goal_calls == [] and spy.propose_calls == 0, (
+            "engage_single_zombie must never reach a plan provider"
+        )
+        report = wrapper.combat_report(record.goal_id)
+        assert report is not None and report["shoves"] == 1
+
+    def test_no_zombie_observed_is_a_typed_refusal_not_a_vacuous_success(self) -> None:
+        """A kill order with nothing observed to kill is refused, loudly.
+
+        The one deterministic kind whose no-work case must NOT complete:
+        "gone before I looked" and "put down" are different claims, and the
+        avoid mission's calm-world probe precedent deliberately does not
+        apply to an order to fight.
+        """
+        queue = channel()
+        spy = SpyGoalPlanner()
+        wrapper = NavigatingPlanner(spy)
+        wrapper.bind(ExecutorHost(goals=queue, actions=ActionChannel(clock=FakeClock())))
+        record = activated(queue, GoalKind.ENGAGE_SINGLE_ZOMBIE)
+
+        value = wrapper.propose_for_goal(to_planner_goal(record), world(pantry()))
+
+        assert value is None
+        ended = queue.record(record.goal_id)
+        assert ended is not None
+        assert ended.state.value == "failed"
+        assert ended.reason_code is ReasonCode.PRECONDITION_FAILED
+        assert "no zombie is observed" in ended.detail
+        assert spy.goal_calls == [] and spy.propose_calls == 0
+
+    def test_neither_the_arbiter_nor_the_initiative_path_can_mint_the_kind(self) -> None:
+        """Only an explicit user submission reaches combat — pinned by census.
+
+        Three tables own every route by which the system mints a goal for
+        itself: the needs arbiter's trigger table (preemption), the autonomy
+        planner's needs table (idle initiative), and the plan providers
+        (refusal by name, asserted above). The combat kind must be absent
+        from the first two forever; the arbiter's whole vocabulary is
+        restated so a new trigger that reached for combat fails this census
+        by name.
+        """
+        combat = GoalKind.ENGAGE_SINGLE_ZOMBIE.value
+        triggered = {kind.value for kind in TRIGGER_KINDS.values()}
+        assert combat not in triggered
+        assert triggered == {
+            "treat_wounds",
+            "avoid_threat",
+            "satisfy_thirst",
+            "satisfy_hunger",
+        }
+        minted = {kind.value for kind in INITIATIVE_GOALS.values()}
+        assert combat not in minted
+        assert minted == {"satisfy_hunger", "satisfy_thirst", "read_for_boredom"}
 
 
 class TestAKindThePlannerCannotServeIsRefusedAtSubmission:

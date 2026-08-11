@@ -454,6 +454,7 @@ _QUARANTINE: Final = "untrusted_text"
 #: Every capability any tool names. A report that marks all of them usable is
 #: what makes the running server publish the whole catalogue.
 _ALL_CAPABILITIES: Final[tuple[str, ...]] = (
+    "combat_assist",
     "door_toggle",
     "drink_carried",
     "drink_world_source",
@@ -494,6 +495,13 @@ _EVERY_TOOL: Final[tuple[str, ...]] = (
     "pz_action_equip",
     "pz_action_unequip",
     "pz_action_bandage",
+    # The assisted-combat four, in the catalogue's own order: after the
+    # medical action, before the survival pair, exactly where a client's
+    # picker shows them.
+    "pz_action_equip_best_weapon",
+    "pz_action_shove",
+    "pz_action_engage",
+    "pz_action_retreat",
     "pz_action_rest",
     "pz_action_sleep",
     "pz_action_wait",

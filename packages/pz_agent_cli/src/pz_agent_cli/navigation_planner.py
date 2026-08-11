@@ -28,18 +28,22 @@ carried to the goal typed and unchanged. The threat wave adds the tenth:
 deterministic retreat mission in :mod:`pz_agent_cli.avoid_mission`, one
 threat-avoiding journey at a time, with the observed threat picture re-read
 every step and the remembered user safe zones answered through the same
-memory-port walk the home point takes. The loop serves every goal through
+memory-port walk the home point takes. The combat wave adds the eleventh:
+:attr:`~pz_agent_core.goals.GoalKind.ENGAGE_SINGLE_ZOMBIE` is driven by the
+deterministic combat mission in :mod:`pz_agent_cli.combat_mission`, one
+policy-gated bounded window at a time — user-submitted only, never minted
+by the arbiter or the initiative path. The loop serves every goal through
 one seam — :meth:`~pz_agent_cli.runtime.GoalPlanner.propose_for_goal` — so
-this module puts all ten deterministic servers *behind that seam*:
+this module puts all eleven deterministic servers *behind that seam*:
 :class:`NavigatingPlanner` wraps whatever planner the app assembled (or
 nothing at all), owns one :class:`~pz_agent_core.navigation.LocalMap` per
 session, one :class:`~pz_agent_core.navigation.Journey` per navigation or
-homeward goal and one mission per loot, explore, consume, care or avoid
-goal, answers all ten kinds itself, and hands every other kind to the
-wrapped planner untouched. A loop assembled with no LLM planner still
+homeward goal and one mission per loot, explore, consume, care, avoid or
+combat goal, answers all eleven kinds itself, and hands every other kind to
+the wrapped planner untouched. A loop assembled with no LLM planner still
 navigates, loots, explores, comes home, eats, drinks, dresses wounds,
-rests, sleeps and retreats, because the wrapper is a complete
-:class:`~pz_agent_cli.runtime.GoalPlanner` on its own.
+rests, sleeps, retreats and fights on order, because the wrapper is a
+complete :class:`~pz_agent_cli.runtime.GoalPlanner` on its own.
 
 The needs arbiter (:mod:`pz_agent_cli.arbiter`) lives behind this same seam:
 every observation the wrapper is handed passes through it first, and in
@@ -169,6 +173,10 @@ from .care_mission import (
     SleepMission,
     TreatWoundsMission,
 )
+from .combat_mission import (
+    CombatMissionLimits,
+    EngageZombieMission,
+)
 from .consume_mission import (
     HUNGER,
     THIRST,
@@ -200,11 +208,13 @@ __all__ = [
     "HOME_ARRIVAL_RADIUS",
     "MAX_KEPT_AVOID_REPORTS",
     "MAX_KEPT_CARE_REPORTS",
+    "MAX_KEPT_COMBAT_REPORTS",
     "MAX_KEPT_CONSUME_REPORTS",
     "MAX_KEPT_EXPLORE_REPORTS",
     "MAX_KEPT_LOOT_REPORTS",
     "MAX_TRACKED_AVOIDS",
     "MAX_TRACKED_CARES",
+    "MAX_TRACKED_COMBATS",
     "MAX_TRACKED_CONSUMES",
     "MAX_TRACKED_EXPLORES",
     "MAX_TRACKED_JOURNEYS",
@@ -260,6 +270,9 @@ MAX_TRACKED_CARES: Final = 4
 #: Avoid missions remembered at once, same shape, same reason.
 MAX_TRACKED_AVOIDS: Final = 4
 
+#: Combat missions remembered at once, same shape, same reason.
+MAX_TRACKED_COMBATS: Final = 4
+
 #: Finished loot reports kept for reading back. A report is the mission's
 #: deliverable and outlives the mission — the goal record can only carry a
 #: one-line summary and the evidence key names — but it does not outlive the
@@ -285,6 +298,11 @@ MAX_KEPT_CARE_REPORTS: Final = 8
 #: explore ring's reason; a retreat report's before/after distances are what
 #: "did it actually work" reads back.
 MAX_KEPT_AVOID_REPORTS: Final = 8
+
+#: Finished combat reports kept for reading back, in their own ring for the
+#: same reason; a combat report's windows/shoves/ended token is the honest
+#: ledger of a fight somebody ordered, and it must survive the goal.
+MAX_KEPT_COMBAT_REPORTS: Final = 8
 
 #: How close counts as "home". Tighter than a waypoint's radius — the user
 #: stood on this exact square when they said "remember home" — but not a
@@ -446,6 +464,24 @@ class _AvoidDrive:
         self.last_success: ActionResult | None = None
 
 
+class _CombatDrive:
+    """One combat mission plus the wrapper's bookkeeping around it.
+
+    Field for field the loot drive's shape, so the shared pending-collection
+    helper can serve all six mission drives without a protocol.
+    """
+
+    __slots__ = ("last_success", "mission", "pending_action_id")
+
+    def __init__(self, mission: EngageZombieMission) -> None:
+        self.mission = mission
+        #: The channel submission whose terminal result the mission is owed.
+        self.pending_action_id: str | None = None
+        #: The most recent succeeded engine result a channel step produced —
+        #: the evidence a completed mission hands to ``GoalQueue.succeed``.
+        self.last_success: ActionResult | None = None
+
+
 class NavigatingPlanner:
     """The always-on planner wrapper that walks ``navigate_to`` goals itself.
 
@@ -471,6 +507,7 @@ class NavigatingPlanner:
         consume_limits: ConsumeMissionLimits | None = None,
         care_limits: CareMissionLimits | None = None,
         avoid_limits: AvoidMissionLimits | None = None,
+        combat_limits: CombatMissionLimits | None = None,
         loot_memory: object | None = None,
     ) -> None:
         self._inner = inner
@@ -484,6 +521,7 @@ class NavigatingPlanner:
         )
         self._care_limits = care_limits if care_limits is not None else CareMissionLimits()
         self._avoid_limits = avoid_limits if avoid_limits is not None else AvoidMissionLimits()
+        self._combat_limits = combat_limits if combat_limits is not None else CombatMissionLimits()
         #: An explicit memory for the loot ports and the home point, for
         #: assemblies and tests that hold one; when None the wrapper walks
         #: the wrapped planner chain for the ``memory`` the shipped assembly
@@ -497,11 +535,13 @@ class NavigatingPlanner:
         self._consumes: OrderedDict[str, _ConsumeDrive] = OrderedDict()
         self._cares: OrderedDict[str, _CareDrive] = OrderedDict()
         self._avoids: OrderedDict[str, _AvoidDrive] = OrderedDict()
+        self._combats: OrderedDict[str, _CombatDrive] = OrderedDict()
         self._loot_reports: OrderedDict[str, JsonDict] = OrderedDict()
         self._explore_reports: OrderedDict[str, JsonDict] = OrderedDict()
         self._consume_reports: OrderedDict[str, JsonDict] = OrderedDict()
         self._care_reports: OrderedDict[str, JsonDict] = OrderedDict()
         self._avoid_reports: OrderedDict[str, JsonDict] = OrderedDict()
+        self._combat_reports: OrderedDict[str, JsonDict] = OrderedDict()
         #: The needs arbiter: interrupt, satisfy, resume (see
         #: :mod:`pz_agent_cli.arbiter`). It reads the critical thresholds
         #: through the same per-call policy walk the consume and care
@@ -554,6 +594,10 @@ class NavigatingPlanner:
     def tracked_avoids(self) -> int:
         return len(self._avoids)
 
+    @property
+    def tracked_combats(self) -> int:
+        return len(self._combats)
+
     def loot_report(self, goal_id: str) -> JsonDict | None:
         """The loot report for *goal_id*: live while it runs, kept when it ends.
 
@@ -599,6 +643,18 @@ class NavigatingPlanner:
         if drive is not None:
             return drive.mission.report
         return self._avoid_reports.get(goal_id)
+
+    def combat_report(self, goal_id: str) -> JsonDict | None:
+        """The combat report for *goal_id*, on the loot report's exact terms.
+
+        The fight's honest ledger — windows fought, shoves, the refusal
+        token, the ended token — live while the mission runs, sealed when
+        the goal ends however it ends.
+        """
+        drive = self._combats.get(goal_id)
+        if drive is not None:
+            return drive.mission.report
+        return self._combat_reports.get(goal_id)
 
     @property
     def arbiter_log(self) -> tuple[JsonDict, ...]:
@@ -695,6 +751,20 @@ class NavigatingPlanner:
                     "legs_started": legs if isinstance(legs, int) else 0,
                 },
             )
+        combat = self._combats.get(goal_id)
+        if combat is not None:
+            report = combat.mission.report
+            windows = report["windows_fought"]
+            shoves = report["shoves"]
+            return GoalProgress(
+                phase=combat.mission.phase,
+                counters={
+                    # Same re-narrowing as the avoid branch; the refusal and
+                    # ended tokens stay in the report — counters carry counts.
+                    "windows_fought": windows if isinstance(windows, int) else 0,
+                    "shoves": shoves if isinstance(shoves, int) else 0,
+                },
+            )
         return None
 
     # -- the Planner half ----------------------------------------------------
@@ -742,6 +812,8 @@ class NavigatingPlanner:
             return self._care(goal.goal_id, observation)
         if goal.kind is PlannerGoalKind.AVOID_THREAT:
             return self._avoid(goal.goal_id, observation)
+        if goal.kind is PlannerGoalKind.ENGAGE_SINGLE_ZOMBIE:
+            return self._combat(goal.goal_id, observation)
         self._map.observe(observation)
         self._prune()
         inner = self._inner
@@ -1184,7 +1256,7 @@ class NavigatingPlanner:
 
     def _collect_mission_pending(
         self,
-        drive: _LootDrive | _ExploreDrive | _ConsumeDrive | _CareDrive | _AvoidDrive,
+        drive: _LootDrive | _ExploreDrive | _ConsumeDrive | _CareDrive | _AvoidDrive | _CombatDrive,
         channel: ActionChannel | None,
     ) -> bool:
         """Fold a finished channel step into the mission. True while one runs."""
@@ -2001,6 +2073,136 @@ class NavigatingPlanner:
             self._avoid_reports.popitem(last=False)
         self._avoids.pop(goal_id, None)
 
+    # -- combat --------------------------------------------------------------
+
+    def _combat(self, goal_id: str, observation: Observation) -> ActionRequest | None:
+        """Drive one combat mission, mirroring :meth:`_avoid` join for join.
+
+        Every equip, shove, window and retreat travels the loop's action
+        channel — served through the same gates and the same engine as
+        everything else, which is precisely what lets the reflex guard and
+        the stop levers interrupt between windows: each window is one
+        ordinary channel command, and between commands nothing is running.
+        """
+        host = self._host
+        if host is None or host.goals is None:
+            # Unbound, or a loop that cannot activate goals at all: learn from
+            # the observation and decline — ending goals is the queue's
+            # privilege, and there is no queue.
+            self._map.observe(observation)
+            return None
+        queue = host.goals
+        self._prune()
+        with host.goal_lock:
+            record = queue.record(goal_id)
+        if record is None or record.state is not GoalState.ACTIVE:
+            self._map.observe(observation)
+            if not _drive_lives(record):
+                self._combats.pop(goal_id, None)
+            return None
+
+        drive = self._combats.get(goal_id)
+        if drive is None:
+            drive = _CombatDrive(EngageZombieMission(goal_id, limits=self._combat_limits))
+            self._combats[goal_id] = drive
+            self._enforce_cap()
+
+        channel = host.actions
+        waiting = self._collect_mission_pending(drive, channel)
+        if waiting:
+            self._map.observe(observation)
+            return None
+        if (
+            channel is not None
+            and drive.pending_action_id is None
+            and channel.pending_count >= channel.max_pending
+        ):
+            # Asking the mission for a step it could not submit would burn a
+            # bound for nothing; learn from the observation and wait.
+            self._map.observe(observation)
+            return None
+
+        value = drive.mission.next_step(observation)
+        if value is None:
+            return None
+        if isinstance(value, MissionStep):
+            self._submit_combat_step(host, goal_id, drive, value.request)
+            return None
+        if isinstance(value, MissionProbe):
+            # The one goal-seam request a mission emits: its observed success
+            # is what the loop settles the goal with, because no channel
+            # result exists for a mission that never needed to act.
+            return value.request
+        if isinstance(value, MissionComplete):
+            self._finish_combat_complete(host, goal_id, drive)
+            return None
+        self._finish_combat_refused(host, goal_id, drive, value)
+        return None
+
+    def _submit_combat_step(
+        self, host: NavigationHost, goal_id: str, drive: _CombatDrive, request: ActionRequest
+    ) -> None:
+        channel = host.actions
+        if channel is None:
+            # Same reasoning as the journey path: a wrapper with no conveyor
+            # for intermediate work cannot fight honestly — and a fight is
+            # the last place to improvise a second dispatch route.
+            drive.mission.mark_abandoned()
+            self._finish_combat_refused(
+                host,
+                goal_id,
+                drive,
+                MissionRefused(
+                    reason_code=ReasonCode.CAPABILITY_UNAVAILABLE,
+                    detail="the loop holds no action channel for the mission's steps",
+                ),
+            )
+            return
+        try:
+            admitted = channel.submit(request)
+        except LoopError:
+            # Admission refused: the queue filled between the capacity check
+            # and now, or a restart made the key ambiguous. The step is
+            # dropped and the mission decides again from the next
+            # observation; its own bounds cap how often this can repeat.
+            return
+        drive.pending_action_id = admitted.action_id
+
+    def _finish_combat_complete(
+        self, host: NavigationHost, goal_id: str, drive: _CombatDrive
+    ) -> None:
+        """End a completed mission's goal on evidence something observed."""
+        queue = host.goals
+        assert queue is not None  # _combat returned before this without one
+        last = drive.last_success
+        if last is None:
+            # Unreachable by construction — the mission answers Complete only
+            # after a succeeded result — but a lie would be worse than a wait:
+            # leave the goal to its budgets rather than fabricate evidence.
+            return
+        with host.goal_lock:
+            queue.succeed(goal_id, last)
+        self._seal_combat_report(goal_id, drive)
+
+    def _finish_combat_refused(
+        self, host: NavigationHost, goal_id: str, drive: _CombatDrive, refused: MissionRefused
+    ) -> None:
+        """End the goal with the mission's typed reason and summary line."""
+        queue = host.goals
+        if queue is None:
+            return
+        with host.goal_lock:
+            queue.fail(goal_id, refused.reason_code, refused.detail)
+        self._seal_combat_report(goal_id, drive)
+
+    def _seal_combat_report(self, goal_id: str, drive: _CombatDrive) -> None:
+        """Move the mission's report into the bounded ledger and drop the drive."""
+        self._combat_reports[goal_id] = drive.mission.report
+        self._combat_reports.move_to_end(goal_id)
+        while len(self._combat_reports) > MAX_KEPT_COMBAT_REPORTS:
+            self._combat_reports.popitem(last=False)
+        self._combats.pop(goal_id, None)
+
     def _target_of(self, record: GoalRecord) -> NavigationTarget | None:
         params = record.params
         if params.target_x is None or params.target_y is None or params.target_z is None:
@@ -2039,6 +2241,8 @@ class NavigatingPlanner:
                 self._abandon_care(goal_id)
             for goal_id in list(self._avoids):
                 self._abandon_avoid(goal_id)
+            for goal_id in list(self._combats):
+                self._abandon_combat(goal_id)
             return
         queue = host.goals
         with host.goal_lock:
@@ -2063,6 +2267,9 @@ class NavigatingPlanner:
             dead_avoids = [
                 goal_id for goal_id in self._avoids if not _drive_lives(queue.record(goal_id))
             ]
+            dead_combats = [
+                goal_id for goal_id in self._combats if not _drive_lives(queue.record(goal_id))
+            ]
         for goal_id in dead:
             del self._journeys[goal_id]
         for goal_id in dead_returns:
@@ -2077,6 +2284,8 @@ class NavigatingPlanner:
             self._abandon_care(goal_id)
         for goal_id in dead_avoids:
             self._abandon_avoid(goal_id)
+        for goal_id in dead_combats:
+            self._abandon_combat(goal_id)
         self._enforce_cap()
 
     def _abandon_mission(self, goal_id: str) -> None:
@@ -2113,6 +2322,13 @@ class NavigatingPlanner:
             return
         drive.mission.mark_abandoned()
         self._seal_avoid_report(goal_id, drive)
+
+    def _abandon_combat(self, goal_id: str) -> None:
+        drive = self._combats.get(goal_id)
+        if drive is None:
+            return
+        drive.mission.mark_abandoned()
+        self._seal_combat_report(goal_id, drive)
 
     def _enforce_cap(self) -> None:
         while len(self._journeys) > MAX_TRACKED_JOURNEYS:
@@ -2159,6 +2375,14 @@ class NavigatingPlanner:
             self._avoid_reports.move_to_end(goal_id)
             while len(self._avoid_reports) > MAX_KEPT_AVOID_REPORTS:
                 self._avoid_reports.popitem(last=False)
+        while len(self._combats) > MAX_TRACKED_COMBATS:
+            goal_id, fought = self._combats.popitem(last=False)
+            # Evicted, not finished: the report is still owed to the ledger.
+            fought.mission.mark_abandoned()
+            self._combat_reports[goal_id] = fought.mission.report
+            self._combat_reports.move_to_end(goal_id)
+            while len(self._combat_reports) > MAX_KEPT_COMBAT_REPORTS:
+                self._combat_reports.popitem(last=False)
 
 
 def _drive_lives(record: GoalRecord | None) -> bool:

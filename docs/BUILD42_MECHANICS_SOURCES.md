@@ -1,7 +1,7 @@
 <!--
   GENERATED FILE - DO NOT EDIT BY HAND.
   Generator: pz_agent_core.knowledge.docgen.render_sources
-  Corpus revision: 49494ec57fe7ded0 (sha256/16 of the canonical corpus)
+  Corpus revision: 7e8169d348d5b434 (sha256/16 of the canonical corpus)
   Edit knowledge/gameplay/*.yaml and regenerate; the drift test
   byte-compares this file against a fresh render.
 -->
@@ -20,7 +20,7 @@ paths; a `verified_live` row's proofs include a live evidence pointer; an
 | Rule | Build | Source | Source detail | Status | Proven by |
 | --- | --- | --- | --- | --- | --- |
 | `avoid_retreat_criteria` | 42 | `code` | `packages/pz_agent_cli/src/pz_agent_cli/avoid_mission.py::SAFE_DISTANCE` | `verified_script` | `tests/unit/test_avoid_mission.py` |
-| `combat_not_implemented` | 42 | `code` | `packages/pz_agent_core/src/pz_agent_core/protocol/enums.py::ActionName` | `unverified` | — |
+| `combat_assisted_unverified` | 42 | `code` | `packages/pz_agent_core/src/pz_agent_core/combat/policy.py::assess_engagement` | `unverified` | — |
 | `doors_already_in_state` | 42 | `code` | `packages/pz_agent_core/src/pz_agent_core/actions/adapters/doors.py::DoorOpenAdapter` | `verified_script` | `tests/unit/test_adapters_doors.py` |
 | `doors_locked_vs_barricaded` | 42 | `code` | `packages/pz_agent_core/src/pz_agent_core/protocol/reason_codes.py::ReasonCode` | `verified_script` | `tests/unit/test_navigation_executor.py`, `tests/unit/test_adapters_doors.py` |
 | `doors_postcondition_observed` | 42 | `code` | `packages/pz_agent_core/src/pz_agent_core/actions/adapters/doors.py::DoorOpenAdapter.verify` | `verified_script` | `tests/unit/test_adapters_doors.py` |

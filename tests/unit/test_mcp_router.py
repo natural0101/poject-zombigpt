@@ -13,6 +13,7 @@ import pytest
 
 from pz_agent_core.actions import PreconditionFailed
 from pz_agent_core.capabilities.probes import (
+    COMBAT_ASSIST,
     DOOR_TOGGLE,
     DRINK_CARRIED,
     DRINK_WORLD_SOURCE,
@@ -80,6 +81,7 @@ ALL_CAPABILITIES = (
     MEDICAL_BANDAGE,
     SURVIVAL_REST,
     SURVIVAL_SLEEP,
+    COMBAT_ASSIST,
 )
 
 #: A username that cannot occur by accident inside another word.
@@ -94,6 +96,7 @@ MAIN_REF = main_container_ref()
 CRATE_REF = f"container:{DEFAULT_SESSION}:world:1200:3400:0:crate:0"
 SQUARE_REF = f"square:{DEFAULT_SESSION}:1200:3400:0"
 DOOR_REF = f"object:{DEFAULT_SESSION}:1200:3401:0:2"
+ZOMBIE_REF = f"zombie:{DEFAULT_SESSION}:31:0"
 
 #: Windows drive paths, UNC paths and POSIX system paths — §3.13 forbids all of
 #: them from crossing this boundary in any field.
@@ -1003,6 +1006,13 @@ def every_payload(router: ToolRouter) -> Iterator[tuple[str, Any]]:
             "pz_action_bandage",
             {"body_part": "ForeArm_L", "item_ref": BEAN_REF, "idempotency_key": "bd1"},
         ),
+        # The assisted-combat four ride the sweep like every other write: the
+        # fake port accepts the submission, so the leak checks see the same
+        # successful payload shape a real accepted attack would produce.
+        ("pz_action_equip_best_weapon", {"idempotency_key": "cb1"}),
+        ("pz_action_shove", {"target_ref": ZOMBIE_REF, "idempotency_key": "cb2"}),
+        ("pz_action_engage", {"target_ref": ZOMBIE_REF, "idempotency_key": "cb3"}),
+        ("pz_action_retreat", {"idempotency_key": "cb4"}),
         ("pz_action_rest", {"target_endurance": 0.95, "idempotency_key": "rs1"}),
         ("pz_action_sleep", {"bed_ref": SQUARE_REF, "idempotency_key": "sl1"}),
         ("pz_action_wait", {"game_seconds": 10, "idempotency_key": "w1"}),

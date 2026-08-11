@@ -65,6 +65,17 @@ ENVELOPE: Final[frozenset[str]] = frozenset({"idempotency_key", "timeout_ms"})
 #: disarming are session lifecycle rather than commands the engine runs — they
 #: have no adapter — so they are not in this list either; what would go here is
 #: an action with a real adapter that this surface deliberately does not offer.
+#:
+#: The four combat actions sat here for one wave, unpublished while only their
+#: adapters existed. That was the interim state, and this is the reviewed
+#: decision that ends it: the raw primitives are published as four P4 tools on
+#: the ``combat_assist`` capability — withheld on a clean scan until a live
+#: shove confirms the entry points, gated on arming, and refused by the same
+#: deterministic policy the ``engage_single_zombie`` mission re-runs per
+#: window. The mission form stays the recommended route (mandatory retreat on
+#: deterioration lives there, not in a single command); the tools exist so a
+#: user driving one bounded window at a time is not forced through a goal
+#: queue to do it.
 UNPUBLISHED_ACTIONS: Final[dict[ActionName, str]] = {}
 
 #: Actions whose argument check cannot be driven from a published example, with

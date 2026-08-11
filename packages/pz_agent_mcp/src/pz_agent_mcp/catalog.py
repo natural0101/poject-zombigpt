@@ -106,6 +106,7 @@ from pz_agent_core.actions.builtin import MAX_WAIT_GAME_SECONDS
 from pz_agent_core.actions.engine import DEFAULT_LEASE_MS
 from pz_agent_core.capabilities.model import CapabilityReport
 from pz_agent_core.capabilities.probes import (
+    COMBAT_ASSIST,
     DOOR_TOGGLE,
     DRINK_CARRIED,
     DRINK_WORLD_SOURCE,
@@ -223,6 +224,11 @@ _EXAMPLE_SQUARE: Final = f"square:{EXAMPLE_SESSION_ID}:1200:3400:0"
 #: that square's object list. The ``object`` kind carries no runtime id — a
 #: door is furniture, not an entity — which is why the reference is positional.
 _EXAMPLE_DOOR: Final = f"object:{EXAMPLE_SESSION_ID}:1200:3401:0:2"
+
+#: A zombie as the observer mints one: runtime id plus generation. The refs the
+#: two combat tools take are the observation's own — a caller copies one out of
+#: pz_observe_nearby, never invents one.
+_EXAMPLE_ZOMBIE: Final = f"zombie:{EXAMPLE_SESSION_ID}:31:0"
 
 #: A goal id the way :func:`~pz_agent_core.goals.mint_goal_id` spells one. Not
 #: derived from :data:`EXAMPLE_SESSION_ID`: a goal id is minted by the channel
@@ -1314,6 +1320,107 @@ TOOLS: Final[tuple[ToolSpec, ...]] = (
             "idempotency_key": "goal-1:step-1:attempt-1",
         },
     ),
+    # --- assisted combat ---------------------------------------------------
+    # The four combat actions, published raw. All four are P4 on the NEW
+    # combat_assist capability — the ASSISTED rung, one explicit call per
+    # command, never the agent's own initiative — and all four resolve to
+    # 'experimental' on a clean scan, so on most installs they are withheld
+    # until a live shove confirms the entry points. autonomous_attack is a
+    # different capability with an unsupported-by-design ceiling and no tool
+    # here rides it. The engage_single_zombie goal is the mission form (policy
+    # re-run per window, mandatory retreat on deterioration); these tools are
+    # the same primitives one command at a time, behind the same deterministic
+    # policy gates, for a caller the user is driving directly.
+    ToolSpec(
+        name="pz_action_equip_best_weapon",
+        kind=ToolKind.WRITE,
+        risk=RiskClass.P4,
+        summary=(
+            "Draw the best usable melee weapon the character carries — which "
+            "weapon is 'best' is the mod's deterministic choice over the real "
+            "inventory objects, never a caller's or a model's. Part of the "
+            "ASSISTED combat rung: P4, an armed session and one explicit call "
+            "per draw, never taken on the agent's own initiative. Refused when "
+            "a weapon is already held, because an unchanged hand could not be "
+            "told apart from a failed draw. Verified by the primary hand "
+            "changing to something the observation itself calls a weapon."
+        ),
+        required_capability=COMBAT_ASSIST,
+        action=ActionName.COMBAT_EQUIP_BEST,
+        long_running=True,
+        input_schema=_mutating({}, required=()),
+        example={"idempotency_key": "goal-1:step-1:attempt-1"},
+    ),
+    ToolSpec(
+        name="pz_action_shove",
+        kind=ToolKind.WRITE,
+        risk=RiskClass.P4,
+        summary=(
+            "Push one named zombie back: the least-assumptive combat action — "
+            "no weapon, no damage claim. ASSISTED rung, P4: an armed session "
+            "and one explicit call per shove. The deterministic combat policy "
+            "gates it before anything is sent: a group above the configured "
+            "limit (default 1, ceiling 3), critical endurance or panic, or "
+            "heavy injury is a typed refusal, not an attempt — a shove skips "
+            "only the weapon gate. Verified solely by the re-observed target: "
+            "down, or strictly further away than before."
+        ),
+        required_capability=COMBAT_ASSIST,
+        action=ActionName.COMBAT_SHOVE,
+        long_running=True,
+        input_schema=_mutating(
+            {"target_ref": _ref_schema(RefKind.ZOMBIE, "The zombie to shove.")},
+            required=("target_ref",),
+        ),
+        example={"target_ref": _EXAMPLE_ZOMBIE, "idempotency_key": "goal-1:step-1:attempt-1"},
+    ),
+    ToolSpec(
+        name="pz_action_engage",
+        kind=ToolKind.WRITE,
+        risk=RiskClass.P4,
+        summary=(
+            "ONE bounded attack window against one named zombie: a handful of "
+            "swings at most, inside the mod's own declared swing and "
+            "millisecond ceilings, terminal when the window closes. There is "
+            "no 'attack until dead' — a fight that needs a second window needs "
+            "a second call, which is what keeps pz_safety_stop and the reflex "
+            "guard able to interrupt between windows. ASSISTED rung, P4, "
+            "policy-gated like the shove (group limit default 1, critical "
+            "endurance or panic, heavy injury) plus the weapon gate: a broken "
+            "or absent weapon is a refusal, not an attempt. Verified only by "
+            "the re-observed target reading down — or honestly gone under the "
+            "adapter's documented absence rule — never by the swing."
+        ),
+        required_capability=COMBAT_ASSIST,
+        action=ActionName.COMBAT_ENGAGE,
+        long_running=True,
+        input_schema=_mutating(
+            {"target_ref": _ref_schema(RefKind.ZOMBIE, "The zombie to attack.")},
+            required=("target_ref",),
+        ),
+        example={"target_ref": _EXAMPLE_ZOMBIE, "idempotency_key": "goal-1:step-1:attempt-1"},
+    ),
+    ToolSpec(
+        name="pz_action_retreat",
+        kind=ToolKind.WRITE,
+        risk=RiskClass.P4,
+        summary=(
+            "One short bounded step away from the observed threats — the "
+            "between-windows disengage, deliberately not a journey: the "
+            "avoid_threat goal owns real retreats with routing and safe "
+            "zones. ASSISTED rung, P4, one explicit call. Refused when no "
+            "zombie is observed, because nothing to retreat from means no "
+            "distance whose growth could prove the retreat. Verified by the "
+            "nearest observed zombie reading strictly further in the "
+            "following observation — or by nothing being observed at all any "
+            "more."
+        ),
+        required_capability=COMBAT_ASSIST,
+        action=ActionName.COMBAT_RETREAT,
+        long_running=True,
+        input_schema=_mutating({}, required=()),
+        example={"idempotency_key": "goal-1:step-2:attempt-1"},
+    ),
     ToolSpec(
         name="pz_action_rest",
         kind=ToolKind.WRITE,
@@ -1644,7 +1751,16 @@ TOOLS: Final[tuple[ToolSpec, ...]] = (
             "a safe distance, or standing in a safe zone with nothing "
             "chasing — and a retreat that cannot open the distance is a "
             "typed THREAT_INTERRUPTED naming the nearest observed threat "
-            "distance."
+            "distance. An 'engage_single_zombie' goal (no parameters — the "
+            "mission serves the nearest observed zombie, because a queued "
+            "target reference would outlive the observation that minted it) "
+            "is the ASSISTED combat rung's mission form: the deterministic "
+            "combat policy is re-assessed before every bounded attack window "
+            "(group limit, endurance, panic, injury, weapon state), retreat "
+            "on any deterioration between windows is mandatory, and the goal "
+            "succeeds only on the re-observed zombie down or honestly gone. "
+            "Only an explicit submission reaches it: no plan provider serves "
+            "it, and no needs arbiter or initiative table ever mints it."
         ),
         input_schema=_goal_channel(
             {
@@ -1800,7 +1916,8 @@ TOOLS: Final[tuple[ToolSpec, ...]] = (
             "start/approach/open/inspect/transfer; an explore sweep's "
             "start/approach; a consume drive's check/fetch/consume/verify; a "
             "care drive's start/transfer/treat, start/rest or start/sleep; "
-            "an avoid drive's start/approach) "
+            "an avoid drive's start/approach; a combat drive's "
+            "start/equip/shove/engage/retreat) "
             "plus detail-free counters, for the named goal or, "
             "with no id, the active one — a goal a plan provider serves has no "
             "deterministic phase and honestly answers null; 'paused' is the goal "

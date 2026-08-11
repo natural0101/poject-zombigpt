@@ -54,6 +54,10 @@ Protocol.ACTION_NAMES = {
   "door.close",
   "door.unlock",
   "inventory.transfer_batch",
+  "combat.equip_best",
+  "combat.shove",
+  "combat.engage",
+  "combat.retreat",
 }
 
 local function toSet(list)

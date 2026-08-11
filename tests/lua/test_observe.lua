@@ -790,4 +790,128 @@ do
   removeCore()
 end
 
+Harness.group("a zombie's body state is a tri-state reading, and absent never reads as standing")
+do
+  -- Doubles built inline because each grants exactly the readers its case is
+  -- about: withholding all of them is how "this build reports no body state"
+  -- is expressed, and the assertion that matters most is that the field then
+  -- stays absent -- a defaulted "standing" would turn "could not be read"
+  -- into "the shove did nothing".
+  local player = furnishedPlayer()
+  local position = { x = 100, y = 200, z = 0 }
+  local function zombieAt(id, x, readers)
+    local zombie = {
+      getX = function()
+        return x
+      end,
+      getY = function()
+        return 200
+      end,
+      getZ = function()
+        return 0
+      end,
+      getID = function()
+        return id
+      end,
+    }
+    for name, value in pairs(readers or {}) do
+      zombie[name] = function()
+        return value
+      end
+    end
+    return zombie
+  end
+  local removeCell = Support.installCell({}, {
+    zombieAt(80, 101, { isOnFloor = true, isCrawling = false }),
+    zombieAt(81, 102, { isCrawling = true }),
+    zombieAt(82, 103, { isOnFloor = false, isCrawling = false }),
+    zombieAt(83, 104, {}),
+    zombieAt(84, 105, { isProne = true }),
+  })
+
+  local zombies = Observe.nearbyZombies(player, position).zombies
+  equal(zombies[1].state, "prone", "a floor reader answering true is prone")
+  equal(zombies[2].state, "crawling", "the crawl reader answering true is crawling")
+  equal(zombies[3].state, "standing", "readers that answered with nothing positive are standing")
+  isNil(zombies[4].state, "all readers absent means NO state field -- absent never reads as standing")
+  equal(zombies[5].state, "prone", "the isProne spelling answers the same reading")
+
+  -- Crawling outranked by the floor: a crawler knocked down reads prone.
+  Support.installCell({}, { zombieAt(86, 101, { isOnFloor = true, isCrawling = true }) })
+  equal(Observe.nearbyZombies(player, position).zombies[1].state, "prone", "a downed crawler is prone first")
+  Support.installCell({}, {
+    zombieAt(80, 101, { isOnFloor = true, isCrawling = false }),
+    zombieAt(83, 104, {}),
+  })
+
+  local document = Model.build({
+    session_id = SESSION,
+    seq = 11,
+    timestamp_ms = NOW,
+    game = { build = "42.20" },
+    player = Observe.playerFields(player),
+    nearby = Observe.nearbyFields(player, position),
+  })
+  equal(document.nearby.zombies[1].state, "prone", "the token survives into the document")
+  isNil(document.nearby.zombies[2].state, "and the honest absence survives with it")
+  removeCell()
+end
+
+Harness.group("the equipped weapon's wear reaches the stats map, absent-honest")
+do
+  local sword = {
+    getID = function()
+      return 7
+    end,
+    getCondition = function()
+      return 7
+    end,
+    getConditionMax = function()
+      return 10
+    end,
+  }
+  local armed = Observe.playerStats(Support.player({ primary = sword, stats = Support.stats({ hunger = 0.1 }) }))
+  equal(armed.weapon_condition, 7, "the primary weapon's condition is read")
+  equal(armed.weapon_condition_max, 10, "with its maximum")
+
+  local bare = {
+    getID = function()
+      return 8
+    end,
+  }
+  local blind = Observe.playerStats(Support.player({ primary = bare }))
+  isNil(blind.weapon_condition, "a build with no condition reader leaves the field absent, never zero")
+  isNil(blind.weapon_condition_max, "and its maximum with it")
+
+  local empty = Support.player({})
+  empty.getPrimaryHandItem = function()
+    return nil
+  end
+  isNil(Observe.playerStats(empty).weapon_condition, "an empty hand claims no weapon at all")
+
+  local halved = {
+    getID = function()
+      return 9
+    end,
+    getCondition = function()
+      return 4
+    end,
+  }
+  local partial = Observe.playerStats(Support.player({ primary = halved }))
+  equal(partial.weapon_condition, 4, "a readable condition is carried")
+  isNil(partial.weapon_condition_max, "while its unreadable maximum stays out, never invented")
+
+  -- Through the document: player.stats is the one open scalar map, so the two
+  -- keys ride it without a schema change.
+  local document = Model.build({
+    session_id = SESSION,
+    seq = 12,
+    timestamp_ms = NOW,
+    game = { build = "42.20" },
+    player = Observe.playerFields(Support.player({ primary = sword })),
+  })
+  equal(document.player.stats.weapon_condition, 7, "the condition reaches the document's stats")
+  equal(document.player.stats.weapon_condition_max, 10, "beside its maximum")
+end
+
 Harness.finish("observe")

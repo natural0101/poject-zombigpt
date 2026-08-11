@@ -47,6 +47,7 @@ from pz_agent_core.protocol import (
     ActionName,
     ActionStatus,
     ContainerKind,
+    Hands,
     InventoryView,
     NearbyObject,
     NearbyView,
@@ -1139,6 +1140,130 @@ class TestAvoidGoalsAreServedByTheMission:
             assert served.steps_used == 1
             report = wrapper.avoid_report(record.goal_id)
             assert report is not None and report["threats_at_start"] == 0
+
+
+# --------------------------------------------------------------------------
+# the combat kind: engage_single_zombie in the loop
+# --------------------------------------------------------------------------
+
+
+def a_standing_zombie(distance: float = 3.0) -> NearbyZombie:
+    """Three tiles out, seen, not chasing — engageable, below the guard's
+    block rung (a visible non-chaser inside the reaction band assesses LOW),
+    so the loop is allowed to begin the user-ordered work."""
+    return NearbyZombie(
+        ref=f"zombie:{DEFAULT_SESSION}:z1:0",
+        distance=distance,
+        visible=True,
+        chasing=False,
+        position=Position(x=1200.0 + distance, y=3400.0, z=0),
+        state="standing",
+    )
+
+
+def an_armed_player() -> tuple[object, InventoryView]:
+    """A healthy player holding a sound bat the observation can read."""
+    bat_ref = f"item:{DEFAULT_SESSION}:player-main:bat1:0"
+    bat = make_item(
+        bat_ref,
+        main_container_ref(),
+        full_type="Base.BaseballBat",
+        display_name="Baseball Bat",
+        category="Weapon",
+        extra={"weapon": {"condition": 9, "condition_max": 10}},
+    )
+    inventory = InventoryView(
+        containers=[make_container(main_container_ref(), ContainerKind.PLAYER_MAIN)],
+        items=[bat],
+    )
+    return make_player(hands=Hands(primary=bat_ref)), inventory
+
+
+class TestCombatGoalsAreServedByTheMission:
+    """The fourteenth kind end to end through the loop, spy planner never asked.
+
+    The avoid class's idiom: a real loop over a real exchange directory, the
+    wrapper standing where the shipped assembly puts it, the mod faked at
+    the files. The registry carries no combat adapter, so the engine's own
+    refusal is still the proof that the mission's window reached the engine
+    with no planner involved — and the safety half of the pin: because each
+    window is one channel command drained per tick *after* the guard runs,
+    the stop levers get their turn between windows structurally.
+    """
+
+    def test_a_combat_step_reaches_the_engine_without_asking_the_planner(
+        self, tmp_path: Path
+    ) -> None:
+        spy = RecordingGoalPlanner()
+        world, wrapper = navigating_world(tmp_path, spy)
+        with world:
+            armed_autonomous(world)
+            record = submit(
+                world,
+                GoalRequest(kind=GoalKind.ENGAGE_SINGLE_ZOMBIE, idempotency_key="combat-key"),
+            )
+            player, inventory = an_armed_player()
+            world.observe(
+                player=player,
+                inventory=inventory,
+                nearby=NearbyView(zombies=[a_standing_zombie()]),
+            )
+            world.loop.tick()
+
+            # Tick one: the mission's first window — engage, because the
+            # target stands past contact range — was submitted into the
+            # loop's action channel, never out the goal seam: a swing's own
+            # success is not the goal's postcondition.
+            channel = world.loop.actions
+            assert channel is not None and channel.pending_count == 1
+            assert wrapper.tracked_combats == 1
+            assert spy.goal_calls == [], "engage_single_zombie must never reach the wrapped planner"
+            assert spy.propose_calls == 0, "the goal outranks the planner's own initiative"
+
+            world.beat_game()
+            world.observe(
+                player=player,
+                inventory=inventory,
+                nearby=NearbyView(zombies=[a_standing_zombie()]),
+            )
+            outcome = world.loop.tick()
+
+            # Tick two: the loop drained the submission through the same
+            # engine every action takes; the refusal for the adapter this
+            # registry does not carry is still proof of the join, and the
+            # goal stays active while the mission's own budgets decide.
+            assert "combat.engage" in [result.action for result in outcome.results]
+            assert spy.goal_calls == []
+            assert record_of(world, record.goal_id).state is GoalState.ACTIVE
+            report = wrapper.combat_report(record.goal_id)
+            # Tick two both drained window one (the engine's refusal) and —
+            # the picture still approved — aimed window two into the channel:
+            # one window per command, re-decided between them, never a loop.
+            assert report is not None and report["windows_fought"] == 2
+
+    def test_a_calm_world_fails_the_kill_order_typed(self, tmp_path: Path) -> None:
+        """No zombie observed: the goal ends FAILED with the mission's
+        reason — never a vacuous success, never a planner consulted."""
+        spy = RecordingGoalPlanner()
+        world, wrapper = navigating_world(tmp_path, spy)
+        with world:
+            armed_autonomous(world)
+            record = submit(
+                world,
+                GoalRequest(kind=GoalKind.ENGAGE_SINGLE_ZOMBIE, idempotency_key="calm-kill"),
+            )
+            world.observe()
+
+            world.loop.tick()
+
+            ended = record_of(world, record.goal_id)
+            assert ended.state is GoalState.FAILED
+            assert ended.reason_code is ReasonCode.PRECONDITION_FAILED
+            assert "no zombie is observed" in ended.detail
+            assert spy.goal_calls == [] and spy.propose_calls == 0
+            report = wrapper.combat_report(record.goal_id)
+            assert report is not None and report["ended"] == "no_target"
+            assert wrapper.tracked_combats == 0, "the mission dies with its goal"
 
 
 # --------------------------------------------------------------------------

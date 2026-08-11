@@ -99,7 +99,7 @@ one.
 
 ## What the server publishes
 
-Forty-one tools, in seven groups. The names are stable and the schemas are served
+Forty-five tools, in eight groups. The names are stable and the schemas are served
 with them:
 
 - **session** — `pz_session_status`, `pz_session_arm`, `pz_session_disarm`
@@ -128,6 +128,22 @@ with them:
   and the two reads over submitted work: `pz_action_status`, which answers a
   known record or an honest `known: false` for an id this sidecar no longer
   holds, and `pz_action_await`, a bounded wait for a terminal record
+- **assisted combat** — `pz_action_equip_best_weapon`, `pz_action_shove`,
+  `pz_action_engage`, `pz_action_retreat`. All four are P4 on the
+  `combat_assist` capability: an armed session and one explicit call per
+  command, never the agent's own initiative. `pz_action_engage` is ONE bounded
+  attack window — a handful of swings, terminal when it closes; a fight that
+  needs another window needs another call, which is what keeps
+  `pz_safety_stop` and the reflex guard able to interrupt between windows.
+  The deterministic combat policy refuses a group above the configured limit
+  (default 1), critical endurance or panic, heavy injury, and — for the
+  engage — a broken or absent weapon, before anything is sent. Success is
+  only the re-observed zombie (down, pushed back, or further away), never the
+  swing. Like `pz_action_sleep`, these resolve to `experimental` on a clean
+  scan and are withheld until a live shove confirms the entry points. The
+  `engage_single_zombie` goal is the mission form of the same primitives,
+  with the policy re-run before every window and retreat on deterioration
+  mandatory.
 - **plan** — `pz_plan_execute`, `pz_plan_status`
 - **goal** — `pz_goal_submit`, `pz_goal_status`, `pz_goal_cancel`. The typed
   goal channel: a closed set of kinds with per-kind typed, range-checked
@@ -142,7 +158,10 @@ with them:
 `pz_action_sleep` will usually be absent from `list_tools`. Its capability
 resolves to `experimental` on a clean scan, and the reason is not caution for
 its own sake: once the character is asleep there is no timed action to interrupt
-and no queue entry to cancel, so a panic stop cannot reach them.
+and no queue entry to cancel, so a panic stop cannot reach them. The four
+combat tools will usually be absent for the matching reason: the attack entry
+points live behind Java accessors no static Lua scan can see, so `combat_assist`
+is `experimental` until a live shove's re-observed evidence confirms them.
 
 Seven resources are published beside them: `pz://session/current`,
 `pz://observation/latest`, `pz://inventory/current`, `pz://capabilities`,

@@ -23,7 +23,7 @@ Transport: stdio. The server registers itself as `pz-agent`.
 | `product_version` | `0.1.0` |
 | `protocol_version` | `1.1` |
 | `capability_gated` | `true` |
-| tools | 41 |
+| tools | 45 |
 | resources | 7 |
 
 `--describe` reports the **whole** catalogue. A running server publishes a
@@ -35,7 +35,7 @@ See *Capability gating* below.
 ## Semantics that apply to every tool
 
 **Every input schema is closed.** `additionalProperties` is `false` on all
-41 tools, so an argument this document does not list is rejected rather
+45 tools, so an argument this document does not list is rejected rather
 than ignored.
 
 **The advertised bound is the enforced bound.** `catalog.py` imports its numbers
@@ -54,7 +54,7 @@ the `write` tools and for nothing else:
 | --- | --- | --- | --- |
 | `read` | 11 | not required | Answered from state the sidecar already holds |
 | `query` | 3 | not required | Submits one of the protocol's `READ_ONLY_ACTIONS`; comes back with an action id, but the character neither moves nor touches anything |
-| `write` | 21 | **required** | Changes the world; refused with `NOT_ARMED` on a disarmed session |
+| `write` | 25 | **required** | Changes the world; refused with `NOT_ARMED` on a disarmed session |
 | `control` | 6 | not required | Arm, disarm, cancel, stop and the goal verbs — how a disarmed or panicking session is driven |
 
 `pz_action_open_container` is a `write` tool, whatever its name suggests: it
@@ -75,14 +75,14 @@ transfer forms, `inventory.transfer` and `inventory.transfer_batch`, become
 tool name, so none of it is published.
 
 **Long-running tools return an action id.** `long_running` is `true` for
-23 tools. The call returns immediately with an `action_id`; you poll it with
+27 tools. The call returns immediately with an `action_id`; you poll it with
 `pz_action_status`, wait on it with `pz_action_await`, or call again with the
 same `idempotency_key`, which replays the call and refreshes it to the action's
 current state. It does not block the transport and it does not report success
 early.
 
 **Idempotency.** Every tool that submits a command takes a required
-`idempotency_key`; 27 tools do. Twenty-five of them accept 1–120 characters with
+`idempotency_key`; 31 tools do. Twenty-nine of them accept 1–120 characters with
 no further shape; the two goal verbs, `pz_goal_submit` and `pz_goal_cancel`,
 take 1–64 matching `^[A-Za-z0-9][A-Za-z0-9_.:\-]{0,63}$`, because the goal
 channel carries the key into its own record and a key is not a place to smuggle
@@ -90,7 +90,7 @@ text. Calling twice with the same key does not perform the action twice — the
 original result is replayed with `replayed: true`.
 
 **`timeout_ms`** is that one command's lease: integer, 100–300000 ms, default
-15000. Twenty-four tools take it — every one that submits a single command.
+15000. Twenty-eight tools take it — every one that submits a single command.
 `pz_plan_execute` does not, because a plan is bounded by
 `limits.max_real_seconds` instead, and publishing an argument no handler reads
 would be a lie shaped like an option. One tool reuses the name for a different
@@ -137,6 +137,10 @@ names every admissible spelling.
 | `pz_action_equip` | write | P2 | yes | yes | `equipment_equip` |
 | `pz_action_unequip` | write | P2 | yes | yes | `equipment_unequip` |
 | `pz_action_bandage` | write | P2 | yes | yes | `medical_bandage` |
+| `pz_action_equip_best_weapon` | write | P4 | yes | yes | `combat_assist` |
+| `pz_action_shove` | write | P4 | yes | yes | `combat_assist` |
+| `pz_action_engage` | write | P4 | yes | yes | `combat_assist` |
+| `pz_action_retreat` | write | P4 | yes | yes | `combat_assist` |
 | `pz_action_rest` | write | P2 | yes | yes | `survival_rest` |
 | `pz_action_sleep` | write | P4 | yes | yes | `survival_sleep` |
 | `pz_action_wait` | write | P0 | yes | yes | — |
@@ -495,6 +499,52 @@ Dress one bleeding wound with one carried dressing. Verified by the named body p
 | `idempotency_key` | yes | `string`; minLength 1; maxLength 120 |
 | `timeout_ms` | no | `integer`; minimum 100; maximum 300000; default `15000` |
 
+### `pz_action_equip_best_weapon`
+
+Draw the best usable melee weapon the character carries — which weapon is 'best' is the mod's deterministic choice over the real inventory objects, never a caller's or a model's. Part of the ASSISTED combat rung: P4, an armed session and one explicit call per draw, never taken on the agent's own initiative. Refused when a weapon is already held, because an unchanged hand could not be told apart from a failed draw. Verified by the primary hand changing to something the observation itself calls a weapon.
+
+| Argument | Required | Schema |
+| --- | --- | --- |
+| `idempotency_key` | yes | `string`; minLength 1; maxLength 120 |
+| `timeout_ms` | no | `integer`; minimum 100; maximum 300000; default `15000` |
+
+### `pz_action_shove`
+
+Push one named zombie back: the least-assumptive combat action — no weapon, no damage claim. ASSISTED rung, P4: an armed session and one explicit call per shove. The deterministic combat policy gates it before anything is sent: a group above the configured limit (default 1, ceiling 3), critical endurance or panic, or heavy injury is a typed refusal, not an attempt — a shove skips only the weapon gate. Verified solely by the re-observed target: down, or strictly further away than before.
+
+| Argument | Required | Schema |
+| --- | --- | --- |
+| `target_ref` | yes | `string`; maxLength 220; pattern `^zombie:[A-Za-z0-9:_.\-]{1,200}$` |
+| `idempotency_key` | yes | `string`; minLength 1; maxLength 120 |
+| `timeout_ms` | no | `integer`; minimum 100; maximum 300000; default `15000` |
+
+### `pz_action_engage`
+
+ONE bounded attack window against one named zombie: a handful of swings at most, inside the mod's own declared swing and millisecond ceilings, terminal when the window closes. There is no 'attack until dead' — a fight that needs a second window needs a second call, which is what keeps `pz_safety_stop` and the reflex guard able to interrupt between windows. ASSISTED rung, P4, policy-gated like the shove (group limit default 1, critical endurance or panic, heavy injury) plus the weapon gate: a broken or absent weapon is a refusal, not an attempt. Verified only by the re-observed target reading down — or honestly gone under the adapter's documented absence rule — never by the swing.
+
+| Argument | Required | Schema |
+| --- | --- | --- |
+| `target_ref` | yes | `string`; maxLength 220; pattern `^zombie:[A-Za-z0-9:_.\-]{1,200}$` |
+| `idempotency_key` | yes | `string`; minLength 1; maxLength 120 |
+| `timeout_ms` | no | `integer`; minimum 100; maximum 300000; default `15000` |
+
+There is deliberately no `max_swings` and no per-call ceiling to raise: the
+window's swing count and millisecond budget are the mod's own declared
+constants, the same on every call, and a field here would be an invitation to
+widen exactly the bound the design fixes. A caller that wants a longer fight
+issues more windows and passes every gate again each time — or submits the
+`engage_single_zombie` goal, whose mission re-runs the policy between windows
+and retreats on any deterioration.
+
+### `pz_action_retreat`
+
+One short bounded step away from the observed threats — the between-windows disengage, deliberately not a journey: the avoid_threat goal owns real retreats with routing and safe zones. ASSISTED rung, P4, one explicit call. Refused when no zombie is observed, because nothing to retreat from means no distance whose growth could prove the retreat. Verified by the nearest observed zombie reading strictly further in the following observation — or by nothing being observed at all any more.
+
+| Argument | Required | Schema |
+| --- | --- | --- |
+| `idempotency_key` | yes | `string`; minLength 1; maxLength 120 |
+| `timeout_ms` | no | `integer`; minimum 100; maximum 300000; default `15000` |
+
 ### `pz_action_rest`
 
 Recover endurance up to a target. Verified by the endurance reading rising to it — or, on a build that reports no endurance, by the character being observed sitting, but only if sitting is what was asked for. A standing rest with no readable stat has nothing to show for itself and times out.
@@ -606,11 +656,11 @@ No arguments.
 
 ### `pz_goal_submit`
 
-Ask the typed goal channel for one of the things it carries. The kind set is closed and there is no free-text field at all: an invented kind is refused, never approximated. The channel admits the goal to a bounded backlog and answers with its id and state — 'pending' is the honest word for a goal nothing has started yet, and every goal carries a wall-clock, step and time-to-live budget so that it reaches a terminal state whether or not it is served. Which sandwich satisfies a hunger goal is never decided here. A 'loot_area' goal finishes on one provable criterion — every reachable container in scope was inspected or has a recorded skip reason — and its terminal answer reports the looted scope (the pinned room, building or sweep), the containers inspected, the containers skipped each with its reason, and the items taken per category and left per reason. An 'explore_area' goal finishes on the matching criterion — no frontier square remains in scope: every scope square is known to the local map or carries a recorded skip reason — and its report carries the pinned scope, the map growth (cells_discovered), the waypoints visited, and each skipped square with its reason (a locked or barricaded door named by reference, a proven no-route). A 'return_home' goal takes no parameters at all: the target is the save's remembered home point ('pz-agent remember home'), no home set is a typed PRECONDITION_FAILED whose detail is the remedy, and the goal succeeds only on the observed arrival. The care kinds are deterministic missions over the medical and survival adapters: 'treat_wounds' (no parameters — triage and dressing choice are policy, remade per observation) dresses every observed bleeding wound and finishes only when none bleeds, with dressings running out a typed partial failure naming the honest count; 'rest_until' sends one survival.rest to its required target_endurance, verified by the adapter from the observation; 'sleep_until_rested' sleeps on an observed bed for its optional hours (absent means the adapter's own night), and the sleep adapter's danger refusal reaches the goal typed and unchanged, never retried. 'satisfy_hunger' and 'satisfy_thirst' are served the same deterministic way now — food and water found in known containers, moved to the main inventory, unsafe candidates (rotten, burnt, poisonous, reserved) skipped with recorded reasons, and success only by the observed stat moving. An 'avoid_threat' goal (no parameters — where to retreat to is decided deterministically from the observed threat picture) walks threat-avoiding journeys to the nearest remembered user safe zone or to open ground away from the observed zombies, re-reading the picture every step; it succeeds only on the observed postcondition — nearest zombie at a safe distance, or standing in a safe zone with nothing chasing — and a retreat that cannot open the distance is a typed THREAT_INTERRUPTED naming the nearest observed threat distance.
+Ask the typed goal channel for one of the things it carries. The kind set is closed and there is no free-text field at all: an invented kind is refused, never approximated. The channel admits the goal to a bounded backlog and answers with its id and state — 'pending' is the honest word for a goal nothing has started yet, and every goal carries a wall-clock, step and time-to-live budget so that it reaches a terminal state whether or not it is served. Which sandwich satisfies a hunger goal is never decided here. A 'loot_area' goal finishes on one provable criterion — every reachable container in scope was inspected or has a recorded skip reason — and its terminal answer reports the looted scope (the pinned room, building or sweep), the containers inspected, the containers skipped each with its reason, and the items taken per category and left per reason. An 'explore_area' goal finishes on the matching criterion — no frontier square remains in scope: every scope square is known to the local map or carries a recorded skip reason — and its report carries the pinned scope, the map growth (cells_discovered), the waypoints visited, and each skipped square with its reason (a locked or barricaded door named by reference, a proven no-route). A 'return_home' goal takes no parameters at all: the target is the save's remembered home point ('pz-agent remember home'), no home set is a typed PRECONDITION_FAILED whose detail is the remedy, and the goal succeeds only on the observed arrival. The care kinds are deterministic missions over the medical and survival adapters: 'treat_wounds' (no parameters — triage and dressing choice are policy, remade per observation) dresses every observed bleeding wound and finishes only when none bleeds, with dressings running out a typed partial failure naming the honest count; 'rest_until' sends one survival.rest to its required target_endurance, verified by the adapter from the observation; 'sleep_until_rested' sleeps on an observed bed for its optional hours (absent means the adapter's own night), and the sleep adapter's danger refusal reaches the goal typed and unchanged, never retried. 'satisfy_hunger' and 'satisfy_thirst' are served the same deterministic way now — food and water found in known containers, moved to the main inventory, unsafe candidates (rotten, burnt, poisonous, reserved) skipped with recorded reasons, and success only by the observed stat moving. An 'avoid_threat' goal (no parameters — where to retreat to is decided deterministically from the observed threat picture) walks threat-avoiding journeys to the nearest remembered user safe zone or to open ground away from the observed zombies, re-reading the picture every step; it succeeds only on the observed postcondition — nearest zombie at a safe distance, or standing in a safe zone with nothing chasing — and a retreat that cannot open the distance is a typed THREAT_INTERRUPTED naming the nearest observed threat distance. An 'engage_single_zombie' goal (no parameters — the mission serves the nearest observed zombie, because a queued target reference would outlive the observation that minted it) is the ASSISTED combat rung's mission form: the deterministic combat policy is re-assessed before every bounded attack window (group limit, endurance, panic, injury, weapon state), retreat on any deterioration between windows is mandatory, and the goal succeeds only on the re-observed zombie down or honestly gone. Only an explicit submission reaches it: no plan provider serves it, and no needs arbiter or initiative table ever mints it.
 
 | Argument | Required | Schema |
 | --- | --- | --- |
-| `kind` | yes | one of `avoid_threat`, `explore_area`, `learn_recipe`, `loot_area`, `navigate_to`, `read_for_boredom`, `rest_until`, `return_home`, `satisfy_hunger`, `satisfy_thirst`, `sleep_until_rested`, `train_skill`, `treat_wounds` |
+| `kind` | yes | one of `avoid_threat`, `engage_single_zombie`, `explore_area`, `learn_recipe`, `loot_area`, `navigate_to`, `read_for_boredom`, `rest_until`, `return_home`, `satisfy_hunger`, `satisfy_thirst`, `sleep_until_rested`, `train_skill`, `treat_wounds` |
 | `skill` | no | one of `carpentry`, `cooking`, `electrical`, `farming`, `first_aid`, `fishing`, `foraging`, `mechanics`, `metalworking`, `tailoring`, `trapping` |
 | `target_level` | no | `integer`; minimum 1; maximum 10 |
 | `satisfy_to` | no | `number`; minimum 0.0; maximum 1.0 |
@@ -754,9 +804,32 @@ unroutable, or out of its bounded retreat legs — is a typed
 report (threats at start, nearest before/after, target kind, how it ended)
 survives the goal in the sidecar's bounded ledger.
 
+`engage_single_zombie` takes no parameters at all, and the absence of a
+target parameter is the design, not a gap: a goal waits in a queue, a zombie
+does not, so a target reference submitted here would outlive the observation
+that minted it and become a stale kill order. The sidecar's deterministic
+combat mission serves it on the ASSISTED rung only: it pins the nearest
+observed zombie, equips through `combat.equip_best` when policy asks for a
+weapon, and drives one bounded attack window at a time — the deterministic
+combat policy (group size against the configured limit, endurance, panic,
+injury, weapon condition) is re-assessed from a fresh observation before
+*every* window, and any deterioration between windows — endurance, panic,
+injury, the group growing — switches the mission to its mandatory retreat.
+Each window is its own command, which is what keeps `pz_safety_stop` and
+the reflex guard able to interrupt between windows. Success is only the
+re-observed zombie down or honestly gone under the engage adapter's absence
+rule; a policy refusal reaches the goal typed (`POLICY_DENIED`, or the
+engage adapter's own precondition codes), and the mission's report —
+windows fought, shoves, how it ended — survives the goal in the sidecar's
+bounded ledger. This kind rides the same `combat_assist` capability as the
+four combat tools; `autonomous_attack` remains `unsupported` by design, no
+plan provider serves this kind, and no needs arbiter or initiative table
+ever mints it — combat is reached by an explicit user submission or tool
+call and by nothing else.
+
 ### `pz_goal_status`
 
-The goal channel: which goal is active, what is waiting behind it, and — when 'goal_id' names one — that goal's state, budget and how much of it is left. An id the channel has finished and forgotten is refused rather than answered as 'no such goal', because the two are not the same fact. Three additive keys, each null when there is nothing to say: 'progress' is the deterministic drive's phase (a journey's planning/moving/arrived/refused; a loot sweep's start/approach/open/inspect/transfer; an explore sweep's start/approach; a consume drive's check/fetch/consume/verify; a care drive's start/transfer/treat, start/rest or start/sleep; an avoid drive's start/approach) plus detail-free counters, for the named goal or, with no id, the active one — a goal a plan provider serves has no deterministic phase and honestly answers null; 'paused' is the goal a manual takeover parked, visible until a fresh activation replaces it; 'report' is the named loot or explore goal's ledger, live while the mission runs and sealed after it ends. The phase is the progress-messaging primitive: tell the user about transitions, when the value changes — it moves exactly when the work does, so polling faster buys nothing worth relaying.
+The goal channel: which goal is active, what is waiting behind it, and — when 'goal_id' names one — that goal's state, budget and how much of it is left. An id the channel has finished and forgotten is refused rather than answered as 'no such goal', because the two are not the same fact. Three additive keys, each null when there is nothing to say: 'progress' is the deterministic drive's phase (a journey's planning/moving/arrived/refused; a loot sweep's start/approach/open/inspect/transfer; an explore sweep's start/approach; a consume drive's check/fetch/consume/verify; a care drive's start/transfer/treat, start/rest or start/sleep; an avoid drive's start/approach; a combat drive's start/equip/shove/engage/retreat) plus detail-free counters, for the named goal or, with no id, the active one — a goal a plan provider serves has no deterministic phase and honestly answers null; 'paused' is the goal a manual takeover parked, visible until a fresh activation replaces it; 'report' is the named loot or explore goal's ledger, live while the mission runs and sealed after it ends. The phase is the progress-messaging primitive: tell the user about transitions, when the value changes — it moves exactly when the work does, so polling faster buys nothing worth relaying.
 
 | Argument | Required | Schema |
 | --- | --- | --- |
@@ -773,13 +846,15 @@ The three additive payload keys in detail:
   `explore_area`, `check`/`fetch`/`consume`/`verify` for `satisfy_hunger`
   and `satisfy_thirst`, `start`/`transfer`/`treat` for `treat_wounds`,
   `start`/`rest` for `rest_until`, `start`/`sleep` for
-  `sleep_until_rested`, `start`/`approach` for `avoid_threat` — and
+  `sleep_until_rested`, `start`/`approach` for `avoid_threat`,
+  `start`/`equip`/`shove`/`engage`/`retreat` for `engage_single_zombie` — and
   `counters` carries the drive's own detail-free
   numbers (`legs_used`; `containers_inspected` and `containers_skipped`;
   `waypoints_visited` and `cells_discovered`; `candidates_tried`,
   `consumed` and `skipped`; `wounds_bandaged` and `bleeding_remaining`;
   `requested` as 0 or 1 for the one-action rest and sleep drives;
-  `threats_at_start` and `legs_started` for the retreat drive). A goal
+  `threats_at_start` and `legs_started` for the retreat drive;
+  `windows_fought` and `shoves` for the combat drive). A goal
   served by a plan provider has no deterministic phase and answers `null`,
   honestly, as does a goal whose drive already ended. **Clients should
   report progress on phase *transitions*, not on every poll**: the field
@@ -873,7 +948,7 @@ Recent structured log records, redacted and bounded.
 
 ## Capability gating
 
-Eighteen of the 41 tools name a capability. `published_tools()` offers a
+Twenty-two of the 45 tools name a capability. `published_tools()` offers a
 tool only when `CapabilityReport.usable()` is true for its capability, which
 means `verified` or `available_unverified`; `experimental`, `unsupported` and
 `disabled_by_policy` are all unusable. `withheld_tools()` returns the withheld
@@ -894,6 +969,7 @@ tool is an answer rather than an error.
 | `medical_bandage` | `pz_action_bandage` |
 | `survival_rest` | `pz_action_rest` |
 | `survival_sleep` | `pz_action_sleep` |
+| `combat_assist` | `pz_action_equip_best_weapon`, `pz_action_shove`, `pz_action_engage`, `pz_action_retreat` |
 
 The other twenty-three tools name no capability at all. For the three query
 tools that is deliberate and documented in `capabilities/probes.py`: everything
@@ -903,9 +979,15 @@ those names would report `unsupported` on a healthy install. They gate on the
 observation tier they need instead. It also means they are the three actions
 whose availability rests on no runtime evidence.
 
-`survival_sleep` and `drink_world_source` resolve to `experimental` on a clean
-static scan, so on most installs `pz_action_sleep` and `pz_action_drink_source`
-are **withheld**, with the reason, rather than offered.
+`survival_sleep`, `drink_world_source` and `combat_assist` resolve to
+`experimental` on a clean static scan, so on most installs `pz_action_sleep`,
+`pz_action_drink_source` and all four combat tools are **withheld**, with the
+reason, rather than offered. For `combat_assist` the reason is structural: the
+swing and shove entry points live behind Java accessors no Lua scan can see,
+so only a live shove's re-observed evidence can confirm the capability.
+`combat_assist` is a deliberately separate capability from `autonomous_attack`,
+whose probe keeps its hard `unsupported` ceiling — the assisted rung shipping
+does not move the autonomous one.
 
 ---
 
@@ -998,6 +1080,11 @@ have to maintain its own table of which failures are worth another attempt.
   selection is deterministic policy in `pz_agent_core.policy`. `pz_goal_submit`
   is the same rule one level up: a closed kind set, typed parameters, and no
   free-text field at all — an invented kind is refused, never approximated.
+- Order an unbounded fight. `pz_action_engage` is one bounded window with the
+  mod's own fixed swing and millisecond ceilings and no field to raise them;
+  "keep attacking until it is dead" is not expressible on this surface, and
+  the `engage_single_zombie` goal that chains windows re-runs the
+  deterministic combat policy before every one and retreats on deterioration.
 - Pass `allow_windows`. It is not published, because the movement adapter
   refuses it with `POLICY_DENIED`.
 - Name a destination for `pz_action_ensure_main`. The only container the adapter

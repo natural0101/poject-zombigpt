@@ -250,7 +250,7 @@ def outside_values(name: str) -> tuple[object, object]:
 
 
 class TestClosedVocabulary:
-    def test_goal_kinds_are_exactly_these_thirteen(self) -> None:
+    def test_goal_kinds_are_exactly_these_fourteen(self) -> None:
         # Hand-written. Adding a kind is a reviewed change to three tables, and
         # this literal is the thing that makes the review happen.
         assert {k.value for k in GoalKind} == {
@@ -267,6 +267,7 @@ class TestClosedVocabulary:
             "rest_until",
             "sleep_until_rested",
             "avoid_threat",
+            "engage_single_zombie",
         }
 
     def test_trainable_skills_are_exactly_these_eleven(self) -> None:
@@ -321,7 +322,7 @@ class TestClosedVocabulary:
         # strips deliberately; the constructor does neither.
         with pytest.raises(ValueError, match="is not a valid"):
             GoalKind(unknown)
-        assert len(GoalKind) == 13
+        assert len(GoalKind) == 14
 
     def test_no_lookup_hook_invents_a_member(self) -> None:
         # ``_missing_`` is the one hook that can turn an unrecognised value into
@@ -378,6 +379,12 @@ class TestClosedVocabulary:
             # mission's deterministic decision from the observed threat
             # picture, never a coordinate interpreted mid-chase.
             "avoid_threat": (set(), set()),
+            # Parameterless and pinned: the mission serves the nearest
+            # observed zombie. A target_ref parameter would carry a
+            # session-minted reference through a queue that outlives the
+            # observation it came from — a stale kill order — and was
+            # refused; the reasoning lives on the kind's docstring.
+            "engage_single_zombie": (set(), set()),
         }
         actual = {
             kind.value: (set(spec.required), set(spec.optional))

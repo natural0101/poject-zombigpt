@@ -346,7 +346,47 @@ function Observe.playerStats(player)
     stats.stress = readNumber(raw, { "getStress" })
     stats.panic = readNumber(raw, { "getPanic" })
   end
+  -- The equipped weapon's wear, carried under the open stats map because the
+  -- item tier has no condition field in the schema. Read off the primary hand
+  -- item only -- the one combat.engage would swing -- and absent whenever the
+  -- hand is empty or this build does not expose the reader: a fabricated
+  -- condition would let the deterministic combat policy clear a weapon nobody
+  -- measured.
+  local primary = invoke(player, "getPrimaryHandItem")
+  if primary ~= nil then
+    local condition = readNumber(primary, { "getCondition" })
+    if condition ~= nil then
+      stats.weapon_condition = condition
+    end
+    local conditionMax = readNumber(primary, { "getConditionMax" })
+    if conditionMax ~= nil then
+      stats.weapon_condition_max = conditionMax
+    end
+  end
   return stats
+end
+
+--- The zombie's body state as a token, or nil when no reader answered.
+---
+--- Tri-state on purpose: "prone" when a floor reader answered true, "crawling"
+--- when the crawl reader did, and "standing" ONLY when at least one reader
+--- answered at all. A build with none of the readers yields nil and the field
+--- stays absent -- absent must never read as standing, because the combat
+--- postcondition treats "prone" as the observed success and a defaulted
+--- "standing" would turn "could not be read" into "the shove did nothing".
+function Observe.zombieState(zombie)
+  local prone = readBoolean(zombie, { "isOnFloor", "isProne" })
+  local crawling = readBoolean(zombie, { "isCrawling" })
+  if prone == nil and crawling == nil then
+    return nil
+  end
+  if prone == true then
+    return "prone"
+  end
+  if crawling == true then
+    return "crawling"
+  end
+  return "standing"
 end
 
 --- Active moodles, keyed by their type name.
@@ -953,6 +993,8 @@ function Observe.nearbyZombies(player, playerPosition)
           distance = distance,
           visible = visible,
           chasing = chasing,
+          -- Tri-state body reading; nil leaves the field out entirely.
+          state = Observe.zombieState(zombie),
           x = position.x,
           y = position.y,
           z = position.z,

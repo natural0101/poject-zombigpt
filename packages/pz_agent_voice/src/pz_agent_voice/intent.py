@@ -428,9 +428,20 @@ SKILL_WORDS: Final[dict[TrainableSkill, frozenset[str]]] = {
 #: ``treat_wounds`` is deliberately *not* here: parameterless like
 #: ``return_home``, it clears the partition check as speakable and
 #: :data:`KIND_WORDS` carries its vocabulary.
-#: The grammar checks below still hold: a *new* kind must land either in
-#: :data:`KIND_WORDS` or here — a kind in neither refuses the import, and a
-#: kind in both refuses it too.
+#:
+#: ``engage_single_zombie`` is here for a reason unlike every other entry,
+#: and it is not a parameter-machinery gap to be closed by a later grammar:
+#: it is the partition doing the exact job it exists for. The kind is
+#: parameterless and would clear the mechanical check as speakable — and it
+#: must never be speakable anyway, because it is a kill order. A misheard
+#: transcript resolving to any other kind wastes a sandwich or a walk; a
+#: misheard transcript resolving to this one swings a weapon at whatever the
+#: mission observes nearest, on the authority of words nobody said. The
+#: retreat kind is speakable precisely because its worst mishearing makes
+#: the character *safer*; combat's worst mishearing is the single most
+#: harmful action this project can take, so the kind travels only through
+#: ``pz_goal_submit``, where the caller types the kind. Deliberate, and
+#: pinned by its own test so relaxing it is a reviewed decision.
 UNSPEAKABLE_KINDS: Final[frozenset[GoalKind]] = frozenset(
     {
         GoalKind.NAVIGATE_TO,
@@ -438,6 +449,7 @@ UNSPEAKABLE_KINDS: Final[frozenset[GoalKind]] = frozenset(
         GoalKind.EXPLORE_AREA,
         GoalKind.REST_UNTIL,
         GoalKind.SLEEP_UNTIL_RESTED,
+        GoalKind.ENGAGE_SINGLE_ZOMBIE,
     }
 )
 

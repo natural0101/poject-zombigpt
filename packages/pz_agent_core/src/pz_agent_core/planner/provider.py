@@ -116,6 +116,13 @@ class GoalKind(StrEnum):
     route executor, from the observed threat picture, and a provider asked
     to plan one would be a model choosing where to run from zombies. The
     typed refusal names the deterministic server, like the rest.
+
+    ``ENGAGE_SINGLE_ZOMBIE`` is that argument at its absolute limit: the
+    assisted-combat kind is driven by the CLI's deterministic combat
+    mission over the combat policy's per-window gates, and a provider asked
+    to plan one would be a model deciding a fight is safe. Every provider
+    refuses it by name; only an explicit user submission reaches it, and
+    the autonomy initiative path never mints it (pinned by test).
     """
 
     SATISFY_HUNGER = "satisfy_hunger"
@@ -131,6 +138,7 @@ class GoalKind(StrEnum):
     REST_UNTIL = "rest_until"
     SLEEP_UNTIL_RESTED = "sleep_until_rested"
     AVOID_THREAT = "avoid_threat"
+    ENGAGE_SINGLE_ZOMBIE = "engage_single_zombie"
 
 
 @dataclass(frozen=True, slots=True)
@@ -332,6 +340,18 @@ class NullProvider:
                 ReasonCode.CAPABILITY_UNAVAILABLE,
                 "avoid_threat is driven by the deterministic avoid mission, not "
                 "planned by a provider; a sidecar without the navigating planner "
+                "wired cannot serve it.",
+            )
+        if request.goal.kind is GoalKind.ENGAGE_SINGLE_ZOMBIE:
+            # The assisted-combat kind, refused by name and most emphatically
+            # of all: whether one zombie may be engaged is the deterministic
+            # combat policy's decision, remade before every bounded window by
+            # the combat mission, and a provider planning a fight would be a
+            # model deciding it is safe to swing.
+            return PlanProposal.refusal(
+                ReasonCode.CAPABILITY_UNAVAILABLE,
+                "engage_single_zombie is driven by the deterministic combat mission, "
+                "not planned by a provider; a sidecar without the navigating planner "
                 "wired cannot serve it.",
             )
         if request.goal.kind is GoalKind.SLEEP_UNTIL_RESTED:
