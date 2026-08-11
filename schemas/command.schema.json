@@ -83,7 +83,11 @@
         "combat.equip_best",
         "combat.shove",
         "combat.engage",
-        "combat.retreat"
+        "combat.retreat",
+        "crafting.inspect",
+        "crafting.craft",
+        "building.inspect",
+        "building.build"
       ]
     },
     "args": {

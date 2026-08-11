@@ -376,6 +376,39 @@ def _cases() -> list[tuple[ActionName, Command, Observation]]:
             a_command(ActionName.COMBAT_RETREAT, {}),
             combat_world,
         ),
+        # The two crafting actions. Both ship a recipe name — a bounded game
+        # identifier rather than a ref, which is a shape this table had not
+        # carried before — and the craft ships the count as well. The name goes
+        # to the mod exactly as the observation reported it, so a key either
+        # side renames is caught here, and so is a mod declaration that stopped
+        # accepting a string where the sidecar still sends one.
+        (
+            ActionName.CRAFTING_INSPECT,
+            a_command(ActionName.CRAFTING_INSPECT, {"recipe": "MakeCrate"}),
+            world,
+        ),
+        (
+            ActionName.CRAFTING_CRAFT,
+            a_command(ActionName.CRAFTING_CRAFT, {"recipe": "MakeCrate", "count": 1}),
+            world,
+        ),
+        # The two building actions. Both carry a square reference, which is the
+        # argument shape this table has checked since movement — but here it
+        # names where a permanent object would go rather than where a character
+        # would walk, so a rename on either side is worth catching twice over.
+        (
+            ActionName.BUILDING_INSPECT,
+            a_command(ActionName.BUILDING_INSPECT, {"square": square_ref(1201, 3400, 0)}),
+            world,
+        ),
+        (
+            ActionName.BUILDING_BUILD,
+            a_command(
+                ActionName.BUILDING_BUILD,
+                {"blueprint": "WoodenWall", "square": square_ref(1201, 3400, 0)},
+            ),
+            world,
+        ),
     ]
 
 

@@ -473,6 +473,24 @@ def encode_goal_params(params: GoalParams) -> JsonDict:
         out["target_endurance"] = params.target_endurance
     if params.hours is not None:
         out["hours"] = params.hours
+    # The craft parameters. ``product`` is *required* by its kind, so an
+    # encoder that dropped it would produce a body the decoder could only
+    # refuse — rest_until's defect, in the one channel where the refused thing
+    # is the only statement of what to make. ``count`` is the difference
+    # between the four runs the caller authorised and the one the mission would
+    # otherwise read out of its absence.
+    if params.product is not None:
+        out["product"] = params.product
+    if params.count is not None:
+        out["count"] = params.count
+    # The build parameter. ``structure`` is *required* by its kind alongside the
+    # three coordinates above, so an encoder that dropped it would send a
+    # request naming a square and nothing to put on it — a body the decoder can
+    # only refuse. It rides here rather than beside ``product`` because it is
+    # the same shape read for a different rung, and there is deliberately no
+    # count to carry with it: one command raises one structure once.
+    if params.structure is not None:
+        out["structure"] = params.structure
     return out
 
 
@@ -501,6 +519,20 @@ def decode_goal_params(payload: Mapping[str, Any]) -> GoalParams:
     categories = optional_str(payload, "categories", where=_PARAMS)
     target_endurance = _optional_float(payload, "target_endurance", where=_PARAMS)
     hours = optional_int(payload, "hours", where=_PARAMS)
+    # Read as a plain optional string and handed straight to the constructor,
+    # which is the only place the item-type alphabet and the length bound are
+    # stated. A shape check restated here would be a second copy of that rule,
+    # and the copy is what drifts; what this function must not do is *repair*
+    # the value, and it does not — a product outside the shape reaches the
+    # ValueError below and becomes a CodecError that does not quote it.
+    product = optional_str(payload, "product", where=_PARAMS)
+    count = optional_int(payload, "count", where=_PARAMS)
+    # Read exactly as ``product`` is, and for its reason: the alphabet and the
+    # bound are stated once, in the constructor, and a shape check restated here
+    # would be the copy that drifts. Nothing repairs the value — a blueprint
+    # outside the shape reaches the ValueError below and becomes a CodecError
+    # that does not quote it.
+    structure = optional_str(payload, "structure", where=_PARAMS)
     try:
         return GoalParams(
             skill=skill,
@@ -516,15 +548,24 @@ def decode_goal_params(payload: Mapping[str, Any]) -> GoalParams:
             categories=categories,
             target_endurance=target_endurance,
             hours=hours,
+            product=product,
+            count=count,
+            structure=structure,
         )
     except ValueError:
         # The constructor's message quotes the number it rejected, and for
         # `categories` its input is the caller's own string. Both came from the
-        # caller, so the chain is dropped rather than repeated.
+        # caller, so the chain is dropped rather than repeated. `product` is
+        # the same rule taken at its strictest: the channel refuses it without
+        # quoting it precisely because that field is where a model-authored
+        # sentence would arrive, so nothing about the value survives here
+        # either — and `structure` is that field one rung up, where the
+        # sentence would name something permanent.
         raise CodecError(
             f"{_PARAMS}: a numeric parameter lies outside the range the channel declares "
-            f"for it, or categories is not a comma-joined list of distinct loot "
-            f"category tokens within the channel's length bound"
+            f"for it, categories is not a comma-joined list of distinct loot "
+            f"category tokens within the channel's length bound, or product or "
+            f"structure is not a bounded game identifier"
         ) from None
 
 

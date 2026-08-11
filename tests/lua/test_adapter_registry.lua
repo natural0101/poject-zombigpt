@@ -40,6 +40,8 @@ local ADAPTER_FILES = {
   "Rest",
   "Sleep",
   "Combat",
+  "Crafting",
+  "Building",
 }
 
 --- The game actions an adapter file is responsible for. The control plane --
@@ -71,6 +73,10 @@ local GAME_ACTIONS = {
   "combat.shove",
   "combat.engage",
   "combat.retreat",
+  "crafting.inspect",
+  "crafting.craft",
+  "building.inspect",
+  "building.build",
 }
 
 local CONTROL_ACTIONS = {
@@ -202,10 +208,25 @@ print("- the capabilities that carry an experimental ceiling are published as ex
 -- them. It is a different capability from `autonomous_attack`, whose ceiling
 -- stays "unsupported by design" and which no adapter declares -- the pin at
 -- the end of this file fails if one ever does.
+--
+-- `crafting` joins them on two reasons at once. Build 42 rewrote crafting and
+-- none of the recipe spellings in adapters/Crafting.lua has been seen
+-- answering in a live session; and a craft consumes materials that cannot be
+-- put back, so the tools stay withheld on every install until a live run
+-- observes one.
+--
+-- `building` joins them on a stronger version of the same second reason. A
+-- craft spends materials the character owned; a build leaves a structure
+-- standing in the world, and this mod ships no action that takes one down. The
+-- capability therefore stays experimental -- `building.build` is withheld on
+-- every install until a live build promotes it -- and even promoted it is a P4
+-- action, which no mode gives an autonomous path to.
 local EXPERIMENTAL_CAPABILITIES = {
   survival_sleep = true,
   drink_world_source = true,
   combat_assist = true,
+  crafting = true,
+  building = true,
 }
 
 local declared = {}

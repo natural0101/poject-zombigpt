@@ -95,6 +95,23 @@ KIND_VALUES = frozenset(
 #: one resolving to this kind swings a weapon at whatever the mission
 #: observes nearest, on the authority of words nobody said. The dedicated
 #: test below pins that argument, not just the membership.
+#: ``craft_item`` is the second entry of that sort and the last in this list.
+#: Its required ``product`` is an item type as the build spells it, which no
+#: closed vocabulary in this process may hold — what a build can craft is the
+#: build's fact — so there is nothing for a matcher to match against, and a
+#: small hand-written product set would be a guess at this install correct
+#: only for vanilla. What makes the decision easy rather than merely awkward
+#: is the cost of being wrong: a misheard craft *destroys* materials, and no
+#: later observation returns them. Its dedicated test below pins that
+#: argument too.
+#: ``build_structure`` closes the list, and it is the craft's argument with the
+#: last mitigation removed. It fails the mechanical check twice — a blueprint
+#: identifier no vocabulary here may hold, and three coordinates that are
+#: already unspeakable as navigation's — and the cost of being wrong is worse
+#: than the craft's rather than equal to it: a misheard product wastes planks,
+#: a misheard square puts a permanent wall somewhere nobody asked for, and this
+#: project ships no action that takes one down. Its dedicated test pins that
+#: argument too.
 UNSPEAKABLE_KIND_VALUES = frozenset(
     {
         "navigate_to",
@@ -103,6 +120,8 @@ UNSPEAKABLE_KIND_VALUES = frozenset(
         "rest_until",
         "sleep_until_rested",
         "engage_single_zombie",
+        "craft_item",
+        "build_structure",
     }
 )
 
@@ -230,7 +249,26 @@ def test_navigation_is_deliberately_unspeakable() -> None:
     """
     assert {kind.value for kind in intent.UNSPEAKABLE_KINDS} == UNSPEAKABLE_KIND_VALUES
     assert (
-        frozenset({"target_x", "target_y", "target_z", "target_endurance", "hours"})
+        frozenset(
+            {
+                "target_x",
+                "target_y",
+                "target_z",
+                "target_endurance",
+                "hours",
+                # craft_item's two, both unspeakable: an item type has no
+                # spoken form this grammar could match, and a run count that
+                # a mishearing bound to the wrong parameter would authorise
+                # spending nobody asked for.
+                "product",
+                "count",
+                # build_structure's blueprint: the same identifier problem as
+                # the product, over an action nothing in this build can undo.
+                # Its square rides the three navigation coordinates above,
+                # which are unspeakable already.
+                "structure",
+            }
+        )
         | LOOT_PARAM_VALUES
         == intent.UNSPEAKABLE_PARAMS
     )
@@ -436,6 +474,104 @@ def test_combat_is_deliberately_unspeakable_because_it_is_a_kill_order() -> None
     # The neighbouring vocabularies keep their own meanings.
     assert resolve("отступай").kind is parse_kind("avoid_threat")
     assert resolve("стоп").intent is VoiceIntent.STOP
+
+
+def test_crafting_is_unspeakable_because_a_transcript_cannot_spell_a_product() -> None:
+    """The crafting decision, pinned with its argument rather than inherited.
+
+    Two independent reasons, and the test asserts both because either alone
+    could be argued away later. The mechanical one: the kind *requires*
+    ``product``, an item type as the build spells it, and this grammar's whole
+    parameter machinery is numbers-with-unit-words and skills — so the
+    partition check would refuse the kind as speakable even if somebody wanted
+    it, and no closed product vocabulary may be written here to change that,
+    because what a build can craft is the build's fact and a table of it in
+    this package would be a drifting copy of the game's.
+
+    The one that settles it: a misheard craft is not recoverable. «сделай
+    копьё» resolved against a hand-written product set would spend the wrong
+    planks on the authority of words nobody said, and unlike a wasted sandwich
+    or an unnecessary walk, nothing observes the materials back. So the kind
+    travels only through ``pz_goal_submit``, where the caller types the
+    product — and every craft-shaped sentence resolves to no goal at all,
+    while the neighbouring reading vocabulary keeps its own meaning: «выучи
+    рецепт» is still a book to read, not a thing to make.
+    """
+    craft = parse_kind("craft_item")
+    assert craft is not None
+    # The mechanical half: a required parameter this grammar cannot supply.
+    assert core_goals.GOAL_SPECS[craft].required == frozenset({"product"})
+    assert core_goals.GOAL_SPECS[craft].optional == frozenset({"count"})
+    assert {"product", "count"} <= intent.UNSPEAKABLE_PARAMS
+    # The declaration half, which is the decision.
+    assert craft in intent.UNSPEAKABLE_KINDS
+    assert craft not in intent.KIND_WORDS
+    assert craft not in intent.CAPABILITY_FOR_KIND
+    # No product word is a vocabulary entry anywhere in the grammar.
+    every_word = {word for words in intent.KIND_WORDS.values() for word in words}
+    every_word |= {word for words in intent.SKILL_WORDS.values() for word in words}
+    assert not every_word & {"сделай", "смастери", "скрафти", "craft", "копьё"}
+    # No craft-shaped sentence reaches a goal, spoken plainly or woken.
+    for transcript in ("сделай копьё", "агент, скрафти копьё", "смастери мне спальник", "craft"):
+        resolution = resolve(transcript)
+        assert resolution.kind is None, transcript
+        assert resolution.intent is not VoiceIntent.GOAL, transcript
+    # The neighbouring vocabulary keeps its meaning: learning a recipe from a
+    # book is a reading goal and stays speakable.
+    assert resolve("выучи рецепт").kind is parse_kind("learn_recipe")
+
+
+def test_building_is_unspeakable_because_a_misheard_square_cannot_be_undone() -> None:
+    """The building decision, pinned with the argument that makes it stricter.
+
+    The mechanical half is the craft's, doubled: the kind requires a
+    ``structure`` — a blueprint as the build spells it, which no vocabulary in
+    this process may hold for the reason a product may not — *and* the three
+    coordinates, which this grammar already declares unspeakable because a
+    world square cannot be dictated. Either alone would fail the partition
+    check.
+
+    The half that settles it is not the craft's, and the difference is the
+    point. A misheard craft spends planks; a misheard square raises a wall
+    somewhere nobody asked for — in a doorway, across a stair, around the
+    character — and there is no demolition action anywhere in this build,
+    because taking down what somebody put there is a different authority this
+    project does not have. So the mistake has no undo at all, and every action
+    the kind issues is P4 besides, which has no autonomous path in this
+    codebase. The kind travels only through ``pz_goal_submit``, where the
+    caller types the blueprint and the square and can read both back before
+    granting the placement.
+    """
+    build = parse_kind("build_structure")
+    assert build is not None
+    # The mechanical half: four required parameters, none of them speakable,
+    # and nothing optional to soften it.
+    assert core_goals.GOAL_SPECS[build].required == frozenset(
+        {"structure", "target_x", "target_y", "target_z"}
+    )
+    assert core_goals.GOAL_SPECS[build].optional == frozenset()
+    assert core_goals.GOAL_SPECS[build].required <= intent.UNSPEAKABLE_PARAMS
+    # The declaration half, which is the decision.
+    assert build in intent.UNSPEAKABLE_KINDS
+    assert build not in intent.KIND_WORDS
+    assert build not in intent.CAPABILITY_FOR_KIND
+    # No building word is a vocabulary entry anywhere in the grammar.
+    every_word = {word for words in intent.KIND_WORDS.values() for word in words}
+    every_word |= {word for words in intent.SKILL_WORDS.values() for word in words}
+    assert not every_word & {"построй", "постройся", "стена", "стену", "build", "wall"}
+    # No build-shaped sentence reaches a goal, spoken plainly or woken.
+    for transcript in (
+        "построй стену",
+        "агент, построй стену тут",
+        "постройся на 1200 3400",
+        "build",
+    ):
+        resolution = resolve(transcript)
+        assert resolution.kind is None, transcript
+        assert resolution.intent is not VoiceIntent.GOAL, transcript
+    # The neighbouring vocabulary keeps its meaning: the carpentry skill is
+    # still something speech may ask the character to train.
+    assert resolve("прокачай плотника").kind is parse_kind("train_skill")
 
 
 @pytest.mark.parametrize(

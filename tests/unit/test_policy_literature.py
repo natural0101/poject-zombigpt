@@ -3,11 +3,19 @@
 Every refusal in this file is checked for the *reason* it reports, because the
 explanation is the deliverable: "you are already level 4" is what the agent
 says out loud when it declines to read the beginner book.
+
+``unread_recipes`` is the one tri-state field, and all three of its values are
+pinned below. The absent case is the one that mattered: nothing published the
+key, so every magazine read as "no recipe you have not already learned" and the
+recipe goal could never be served by anything. Absence now refuses on its own
+terms — the item is not a confident pick and the refusal says the reader could
+not tell, rather than claiming the shelf holds nothing new.
 """
 
 from __future__ import annotations
 
 import random
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -266,6 +274,98 @@ def test_a_recipe_goal_skips_magazines_with_nothing_new_in_them() -> None:
     assert selection.choice is not None
     assert selection.choice.item_ref == fresh.ref
     assert reason_for(selection, known.ref) is RejectionReason.NO_UNREAD_RECIPES
+
+
+def without_recipe_count(item: Any) -> Any:
+    """The same item as a build that never publishes ``unread_recipes`` reports it.
+
+    The shared fixture always writes the key, which is exactly why the absent
+    case went unnoticed: no test could produce the payload the shipped mod was
+    actually sending.
+    """
+    payload = dict(item.literature)
+    payload.pop("unread_recipes")
+    return replace(item, literature=payload)
+
+
+def test_an_unreported_recipe_count_is_unknown_rather_than_zero() -> None:
+    magazine = literature_item(
+        "mag", display_name="Cookbook", full_type="Base.CookingMag1", kind="magazine"
+    )
+
+    view = LiteratureView.from_item(without_recipe_count(magazine))
+
+    assert view is not None
+    assert view.unread_recipes is None
+
+
+def test_a_recipe_goal_will_not_pick_a_magazine_nobody_could_look_inside() -> None:
+    """Not zero and not some: the refusal says which of the two it is."""
+    magazine = without_recipe_count(
+        literature_item(
+            "mag", display_name="Cookbook", full_type="Base.CookingMag1", kind="magazine"
+        )
+    )
+
+    selection = select_literature(inventory(magazine), reader(), LiteratureGoal.recipe())
+
+    assert selection.is_refusal
+    assert reason_for(selection, magazine.ref) is RejectionReason.NO_UNREAD_RECIPES
+    detail = selection.rejections[0].detail
+    assert "does not report" in detail
+    assert "already learned" not in detail
+
+
+def test_a_magazine_known_to_hold_something_new_beats_one_nobody_could_read() -> None:
+    unreadable = without_recipe_count(
+        literature_item(
+            "silent", display_name="Silent Mag", full_type="Base.CookingMag1", kind="magazine"
+        )
+    )
+    fresh = literature_item(
+        "fresh",
+        display_name="New Cookbook",
+        full_type="Base.CookingMag2",
+        kind="magazine",
+        unread_recipes=2,
+    )
+
+    selection = select_literature(inventory(unreadable, fresh), reader(), LiteratureGoal.recipe())
+
+    assert selection.choice is not None
+    assert selection.choice.item_ref == fresh.ref
+
+
+def test_an_unreported_recipe_count_does_not_disqualify_a_magazine_for_boredom() -> None:
+    """Only the recipe goal turns on the count; a mood read is still a mood read."""
+    magazine = without_recipe_count(
+        literature_item(
+            "mag", display_name="Cookbook", full_type="Base.CookingMag1", kind="magazine"
+        )
+    )
+
+    selection = select_literature(inventory(magazine), reader(), BOREDOM)
+
+    assert selection.choice is not None
+    assert selection.choice.item_ref == magazine.ref
+    factor = selection.choice.breakdown.factor("recipes")
+    assert factor is not None
+    assert factor.raw == 0.0
+    assert factor.detail == "unread recipes not reported"
+
+
+def test_a_recipe_count_that_is_not_a_number_reads_as_unreported() -> None:
+    magazine = literature_item(
+        "mag", display_name="Cookbook", full_type="Base.CookingMag1", kind="magazine"
+    )
+    payload = dict(magazine.literature or {})
+    payload["unread_recipes"] = "two"
+    garbled = replace(magazine, literature=payload)
+
+    view = LiteratureView.from_item(garbled)
+
+    assert view is not None
+    assert view.unread_recipes is None
 
 
 def test_a_specific_request_rejects_everything_else() -> None:

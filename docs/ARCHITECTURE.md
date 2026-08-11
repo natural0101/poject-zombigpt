@@ -75,10 +75,10 @@ See [`VOICE.md`](VOICE.md).
 | `ipc/` | `layout`, `journal`, `snapshot`, `queue`, `atomic`, `clocks` | The exchange directory: fixed filenames, the two-slot snapshot, the command/ack journals, leases and the idempotency cache |
 | `rpc/` | `wire`, `transport`, `descriptor`, `token` | The Local Core RPC link: envelope, server/client, the published descriptor and its token |
 | `session/` | `handshake`, `heartbeat`, `lock` | Attaching to the mod, liveness both ways, one sidecar per state directory |
-| `capabilities/` | `model`, `probes`, `scanner`, `report_io` | The state ladder, the twelve probes, the read-only symbol scan |
+| `capabilities/` | `model`, `probes`, `scanner`, `report_io` | The state ladder, the sixteen probes, the read-only symbol scan |
 | `observation/` | `store`, `diff`, `compact` | Bounded ring buffer, snapshot-to-snapshot diff, the redacted planner view |
 | `actions/` | `engine`, `adapter`, `builtin`, `adapters/*` | The lifecycle engine and one adapter per action family |
-| `policy/` | `permissions`, `autonomy`, `config`, `selection`, `food`, `drink`, `literature`, `medical` | Who may do what, and *which item* — deterministic |
+| `policy/` | `permissions`, `autonomy`, `config`, `selection`, `food`, `drink`, `literature`, `medical`, `crafting`, `building` | Who may do what, *which item*, *which recipe*, and whether a square may be built on — deterministic |
 | `safety/` | `reflex`, `threat`, `priority`, `input` | The guard, the danger assessment, the interrupt ladder |
 | `goals/` | `model`, `queue` | The typed goal channel: a closed set of kinds, a bounded one-at-a-time queue |
 | `planner/` | `plan`, `provider`, `critic`, `executor`, `providers/*` | The typed plan, `provider = "none"`, the two HTTP providers, the critic |
@@ -86,16 +86,16 @@ See [`VOICE.md`](VOICE.md).
 | `diagnostics/` | `log`, `trace`, `bundle`, `redaction` | Structured logs, replayable traces, the support bundle |
 | — | `version.py` | The five version constants, and the only place they are defined |
 
-`actions/adapters/` holds ten: `movement`, `container`, `inventory`, `consume`,
-`literature`, `equipment`, `medical`, `survival`, `world`, `plan`, over a shared
-`common`.
+`actions/adapters/` holds fourteen: `movement`, `container`, `inventory`,
+`consume`, `literature`, `equipment`, `medical`, `survival`, `world`, `doors`,
+`combat`, `crafting`, `building`, `plan`, over a shared `common`.
 
 ### `pz_agent_mcp` — the stdio MCP server and the Core RPC pair
 
 | Module | What it is |
 | --- | --- |
 | `__main__.py` | The console entry point. Four decisions and ten exit codes; owns no domain logic |
-| `catalog.py` | The published surface: 34 `ToolSpec`s and 7 `ResourceSpec`s, with bounds imported from the adapters that will receive them |
+| `catalog.py` | The published surface: 49 `ToolSpec`s and 7 `ResourceSpec`s, with bounds imported from the adapters that will receive them |
 | `router.py`, `resources.py` | Tool and resource handlers |
 | `validation.py`, `envelope.py`, `scrub.py`, `idempotency.py` | Argument checking, the result/error envelopes, redaction, replay |
 | `ports.py` | The eight `CoreServices` ports the boundary reads through — `session`, `observations`, `capabilities`, `actions`, `plans`, `goals`, `memory`, `diagnostics` |
@@ -312,6 +312,15 @@ the shape of a feature.
 
 **Coverage.** Only actions with a probe behind them are exposed. Everything else
 is honestly unavailable rather than approximated with synthetic input.
+
+**Taking things back.** The agent can place a structure — one square, one
+command, `P4`, and only on the user's own initiative — and it can never remove
+one. There is no demolition action in the protocol, in the adapters or in the
+mod, because removing what somebody put there is a different authority and this
+build does not ask for it. The asymmetry is why the building policy refuses more
+readily than any other: an occupied square, a placement that would take away the
+last way out the observation can see, or a map it could not read are all
+refusals before anything is queued.
 
 Those are the right trades for a system whose central promise is that when it
 says it did something, it did — and the promise is only worth what

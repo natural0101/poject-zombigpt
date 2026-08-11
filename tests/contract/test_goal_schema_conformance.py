@@ -88,6 +88,16 @@ NOT_YET_ON_THE_WIRE: Final[frozenset[str]] = frozenset(
         "sleep_until_rested",
         "avoid_threat",
         "engage_single_zombie",
+        # The crafting kind joins on the combat kind's exact terms: served
+        # locally by the deterministic craft mission, and a remote link that
+        # could spend a character's materials on a product nobody at the
+        # keyboard named is a protocol change nobody should make by accident.
+        "craft_item",
+        # The building kind, on stronger terms than any of them: it is P4 with
+        # no autonomous path, and a remote link that could raise a permanent
+        # wall on a square nobody at the keyboard named is the last thing this
+        # protocol should learn by accident.
+        "build_structure",
     }
 )
 
@@ -96,7 +106,7 @@ NOT_YET_ON_THE_WIRE: Final[frozenset[str]] = frozenset(
 #: have a row in NUMERIC_RANGES; the loot goal's non-numeric parameters are
 #: pinned separately below.)
 LOCAL_ONLY_PARAMS: Final[frozenset[str]] = frozenset(
-    {"target_x", "target_y", "target_z", "radius", "target_endurance", "hours"}
+    {"target_x", "target_y", "target_z", "radius", "target_endurance", "hours", "count"}
 )
 
 #: The loot goal's closed-token parameters: local to the sidecar, not on the
@@ -263,6 +273,13 @@ class TestTheClosedSetsAgree:
             "sleep_until_rested": {"hours": 8},
             "avoid_threat": {},
             "engage_single_zombie": {},
+            "craft_item": {"product": "Base.SpearCrude", "count": 1},
+            "build_structure": {
+                "structure": "carpentry_wall",
+                "target_x": 1200,
+                "target_y": 3400,
+                "target_z": 0,
+            },
         }
         assert set(local_params) == set(NOT_YET_ON_THE_WIRE)
         for kind, params in sorted(local_params.items()):

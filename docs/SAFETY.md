@@ -56,8 +56,8 @@ it was never given.
 | `P0` | Read-only | observe, inspect, wait |
 | `P1` | Reversible, on-person | transfer within your own inventory, cancel |
 | `P2` | Consumes a resource or moves you | eat, drink, read, equip, bandage, rest |
-| `P3` | Touches the world or leaves the safe radius | open a world container, travel |
-| `P4` | Never automatic | sleep |
+| `P3` | Touches the world, leaves the safe radius, or destroys something | open a world container, travel, craft from what you carry |
+| `P4` | Never automatic | sleep, every assisted-combat action, a craft that needs a surface or a world container, **every** placement of a structure |
 
 | Rule | Enforced by |
 | --- | --- |
@@ -73,10 +73,73 @@ explicit `P4` grant for that one call.
 
 The tier a tool advertises is the *base* tier its adapter declares, never a
 worst case. `movement.move_to` escalates to `P3` when the destination changes
-floor or leaves the safe radius, and `inventory.transfer` escalates to `P3` when
-the source is a world container; neither is visible from the tool name, so
-neither is published. `mcp/catalog.py`'s module docstring is where that decision
-is recorded.
+floor or leaves the safe radius, `inventory.transfer` escalates to `P3` when
+the source is a world container, and `crafting.craft` escalates to `P4` when the
+recipe it names may need a surface to run on or is only afforded by materials in
+a world container; none of that is visible from the tool name, so none of it is
+published. `mcp/catalog.py`'s module docstring is where that decision is
+recorded.
+
+**Crafting is the first thing this agent does that cannot be undone**, and the
+tiers say so. A walk can be re-walked, a door can be closed again, a shove costs
+the character nothing it keeps; two planks and a nail spent on a spear are
+spent, and no later observation puts them back. That is why crafting from
+materials the character carries is `P3` even though nothing moves and nothing in
+the world is touched — the tier is paid for the irreversibility, not for the
+travel. When travel *is* implied the call is `P4` and `_p4_gate` applies in
+full: the initiative must be the user's, the mode must be mutating, and the call
+must carry an explicit `P4` grant. Three further bounds sit under that:
+`crafting.craft` runs one recipe once with no loop and no retry, its capability
+is `experimental` so the tool is withheld until a live run promotes it, and
+success is the product *observed* in the inventory rather than the craft being
+queued. `pz_agent_core/policy/crafting.py` decides which recipe spends which
+materials — deterministic code with unit tests, exactly as food and literature
+selection are — and it never spends a user-reserved item, refusing with its own
+token so the user can answer the real question.
+
+**Building is the first thing this agent does that cannot be undone *and stays
+in the world*, and the tier says that too.** `building.build` is `P4` always: no
+escalation to reach it, no argument that makes it cheaper, and no `risk_for` on
+the adapter at all, because there is no version of putting a permanent object on
+a square that is worth less than the top of the ladder. So `_p4_gate` applies to
+every placement without exception — the initiative must be the user's, the mode
+must be mutating, and the call must carry an explicit `P4` grant — and there is
+no mode, no configuration and no initiative table in this project that lets the
+agent raise a wall on its own.
+
+The reason the tier is flat rather than escalating is the one fact worth reading
+twice: **there is no demolition action in this build.** Removing what somebody
+put there is a different authority and this project does not have it, so a
+placement is the only work the agent does that neither it nor a later
+observation can walk back. Everything else about the rung follows from that:
+
+- **One command raises one structure once.** There is no `count` on the wire —
+  deliberately unlike the craft, which publishes its one — because a count is
+  exactly what a loop in the mod would read. A second structure is a second
+  command through every gate again.
+- **Success is the structure observed on the square.** A queued build is not a
+  wall, and an ack that says the action finished is a statement about the queue.
+- **The refusals are typed and happen before anything is queued.**
+  `SQUARE_OCCUPIED` — something already stands there, and the agent never clears
+  a square. `RECIPE_MATERIALS_MISSING` and `RESOURCE_RESERVED` — the crafting
+  rung's own codes, on the crafting rung's tally. And `WOULD_TRAP_PLAYER`, which
+  is the one this rung exists for: a wall that seals the character in is a
+  mistake with no undo, so `pz_agent_core/policy/building.py` computes it
+  deterministically from the observed local map — a four-connected fill from the
+  square the character stands on, with the proposed structure treated as a wall
+  — and refuses when no route to open ground remains.
+- **The enclosure check states what it can and cannot see.** The observed map is
+  a bounded window. It cannot prove the character is not already enclosed by
+  something outside that window; what it proves is that this placement removes
+  no exit the observation found. Every way the check can fail to run — an
+  unreadable window, a character whose own square was not described, a fill that
+  hit its bound — is a refusal, not a pass. Erring toward refusal is the correct
+  direction here: a refused wall costs a sentence, and a wall that traps the
+  character costs the save.
+- **The tool is withheld anyway.** `building` is `experimental` on a clean scan,
+  so `pz_action_build` is not offered on any install this project can ship to;
+  the square reading, `pz_action_inspect_buildable`, is published because reading
+  places nothing and because it is what a user consults before granting the P4.
 
 ---
 

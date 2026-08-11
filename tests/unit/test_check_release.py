@@ -415,12 +415,12 @@ def test_well_formed_evidence_leaves_only_the_version_to_answer_for(tmp_path: Pa
     assert next(f for f in findings if f.check == "evidence.scenarios").ok
 
 
-def test_one_scenario_short_of_twenty_is_named(tmp_path: Path) -> None:
+def test_one_scenario_short_of_the_full_set_is_named(tmp_path: Path) -> None:
     manifest, evidence = _evidence(tmp_path / "tree", failing=SCENARIO_IDS[6])
     findings = _run(tmp_path, release=True, manifest=manifest, evidence_dir=evidence)
     detail = _failures(findings)["evidence.scenarios"]
     assert f"{SCENARIO_IDS[6]} is FAIL" in detail
-    assert "1 of 20" in detail
+    assert f"1 of {len(SCENARIO_IDS)}" in detail
 
 
 def test_a_manifest_of_scenarios_that_never_ran_certifies_nothing(tmp_path: Path) -> None:
