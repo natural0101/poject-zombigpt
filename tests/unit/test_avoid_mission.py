@@ -36,6 +36,7 @@ from pz_agent_cli.avoid_mission import (
     RememberedSafeZone,
 )
 from pz_agent_cli.loot_mission import (
+    ENDED_CANCELLED,
     ENDED_COMPLETE,
     MissionComplete,
     MissionProbe,
@@ -577,3 +578,139 @@ class TestTheWrapperJoins:
         report = wrapper.avoid_report(record.goal_id)
         assert report is not None and report["ended"] == ENDED_COMPLETE
         assert spy.goal_calls == [] and spy.propose_calls == 0
+
+
+# --------------------------------------------------------------------------
+# C1: a lost channel record must end the goal, not wedge the drive
+# --------------------------------------------------------------------------
+
+
+def chased_by_one(seq: int) -> Observation:
+    """The same picture every tick: one zombie chasing, four tiles out."""
+    return make_observation(
+        seq=seq,
+        nearby=NearbyView(
+            zombies=[
+                NearbyZombie(
+                    ref=f"zombie:{DEFAULT_SESSION}:z1",
+                    distance=4.0,
+                    chasing=True,
+                    position=Position(x=1204.0, y=3400.0, z=0),
+                )
+            ]
+        ),
+    )
+
+
+def a_filler(channel: ActionChannel, index: int) -> None:
+    """One unrelated action, submitted and settled, to age the record store."""
+    request = ActionRequest(
+        action=ActionName.ACTION_WAIT,
+        session_id=DEFAULT_SESSION,
+        idempotency_key=f"filler{index}",
+        args={"game_seconds": 1.0},
+    )
+    channel.submit(request)
+    taken = channel.take_next()
+    assert taken is not None
+    action_id, taken_request = taken
+    channel.settle(
+        action_id,
+        ActionResult.failure(
+            session_id=taken_request.session_id,
+            seq=100 + index,
+            command_id=action_id,
+            action=taken_request.action.value,
+            timestamp_ms=1_700_000_001_000 + index,
+            reason_code=ReasonCode.CANCELLED_BY_REQUEST,
+            message="filler",
+        ),
+    )
+
+
+class TestALostStepRecordEndsTheRetreat:
+    """A retreat whose step record the channel can no longer read.
+
+    ``ActionChannel.status`` answers ``None`` for three truths — never minted
+    here, evicted after turning terminal, minted by a previous process — and
+    all three mean the same thing to a mission: what became of that step was
+    never observed. The mission's own ``_pending_action`` is still set, so it
+    can neither fold the outcome in nor step past it; the goal must therefore
+    end, typed, on the very next tick. A retreat that silently stops
+    retreating while a zombie closes is the worst ending this stack has.
+    """
+
+    def test_an_evicted_step_record_fails_the_goal_instead_of_wedging(self) -> None:
+        clock = FakeClock()
+        queue = GoalQueue(clock=clock)
+        # Small enough that a couple of later actions push the settled retreat
+        # leg out of the channel's bounded history.
+        channel = ActionChannel(clock=clock, max_pending=1, max_remembered=2)
+        spy = SpyPlanner()
+        wrapper = NavigatingPlanner(spy)
+        wrapper.bind(Host(goals=queue, actions=channel))
+        record = avoid_goal(queue)
+        goal = to_planner_goal(record)
+
+        assert wrapper.propose_for_goal(goal, chased_by_one(1)) is None
+        taken = channel.take_next()
+        assert taken is not None
+        action_id, request = taken
+        channel.settle(
+            action_id,
+            ActionResult.succeeded(
+                session_id=request.session_id,
+                seq=7,
+                command_id=action_id,
+                action=request.action.value,
+                timestamp_ms=1_700_000_000_100,
+                evidence={"x": request.args["target"]["x"], "y": request.args["target"]["y"]},
+            ),
+        )
+        for index in range(1, 5):
+            a_filler(channel, index)
+        assert channel.status(action_id) is None, "the leg's record is gone from the channel"
+        assert wrapper.tracked_avoids == 1
+
+        value = wrapper.propose_for_goal(goal, chased_by_one(2))
+
+        assert value is None
+        ended = queue.record(record.goal_id)
+        assert ended is not None
+        assert ended.state is GoalState.FAILED, "the wedge: the goal must not sit ACTIVE"
+        assert ended.reason_code is ReasonCode.CAPABILITY_UNAVAILABLE
+        assert "the step's outcome was never observed" in ended.detail
+        # The drive is gone and its partial report survives, sealed.
+        assert wrapper.tracked_avoids == 0
+        report = wrapper.avoid_report(record.goal_id)
+        assert report is not None and report["ended"] == ENDED_CANCELLED
+        assert channel.pending_count == 0, "nothing new was dispatched"
+        assert spy.goal_calls == [] and spy.propose_calls == 0
+
+    def test_the_ended_goal_is_not_revived_by_further_ticks(self) -> None:
+        """The audit's driver: five consecutive ticks with the zombie still on us."""
+        clock = FakeClock()
+        queue = GoalQueue(clock=clock)
+        channel = ActionChannel(clock=clock, max_pending=1, max_remembered=2)
+        wrapper = NavigatingPlanner(None)
+        wrapper.bind(Host(goals=queue, actions=channel))
+        record = avoid_goal(queue)
+        goal = to_planner_goal(record)
+
+        assert wrapper.propose_for_goal(goal, chased_by_one(1)) is None
+        taken = channel.take_next()
+        assert taken is not None
+        action_id, request = taken
+        channel.settle(action_id, succeeded_move(request))
+        for index in range(1, 5):
+            a_filler(channel, index)
+        assert channel.status(action_id) is None
+
+        for tick in range(5):
+            assert wrapper.propose_for_goal(goal, chased_by_one(2 + tick)) is None
+            state = queue.record(record.goal_id)
+            assert state is not None
+            assert state.state is GoalState.FAILED, (
+                "the goal must reach a terminal state on the first tick after the loss"
+            )
+        assert channel.pending_count == 0

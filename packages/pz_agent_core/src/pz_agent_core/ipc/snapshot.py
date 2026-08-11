@@ -121,9 +121,34 @@ class SnapshotReader:
     outcome, distinct from both a tear and a rewind: the document behind the
     lock is presumed good, so the poll reports a miss naming the lock and
     leaves ``last_seq`` untouched for the next poll to build on.
+
+    ``session_id`` binds the reader to one session, and it is what a reader
+    that has accepted nothing yet has instead of ``last_seq``. The exchange
+    directory outlives the session that filled it: a sidecar that restarts, or
+    attaches for the first time, into a directory still holding the previous
+    session's slots follows the pointer to that session's last document, and
+    with nothing accepted there is no number to order it against — it is served
+    as the first observation of the new session, and
+    :class:`~pz_agent_core.observation.store.ObservationStore`, whose session
+    is unset until its first accept, takes it as the baseline. The rewind guard
+    re-anchors on the mod's next publish, so this corrects itself; the first
+    observation, which an attach and an arm decision are made against, does
+    not. A bound reader refuses any document naming another session — or naming
+    none, which cannot be shown to be this one's — with a diagnostic naming
+    both sessions, so the caller reports that it has no observation and why.
+    Bound by session rather than by age — the bound the arm gate applies to the
+    same files — because the question the first observation asks is *whose*
+    world this is rather than how old it is, and the handshook session id is
+    the answer to it. An age bound would still admit a document from a session
+    that ended a second ago; this one does not.
+
+    ``None`` — the default — is no session filter at all, which is what every
+    caller that publishes bare ``{"seq": …}`` documents and every reader that
+    predates the binding gets.
     """
 
     layout: IpcLayout
+    session_id: str | None = None
     _last_seq: int | None = field(default=None, init=False)
     _last_session: str | None = field(default=None, init=False)
 
@@ -168,6 +193,22 @@ class SnapshotReader:
             seq = document.get(POINTER_SEQ)
             if not isinstance(seq, int) or isinstance(seq, bool) or seq < 0:
                 diagnostics.append(f"slot {slot.value}: missing or invalid 'seq'")
+                continue
+            document_session = _document_session(document)
+            if self.session_id is not None and document_session != self.session_id:
+                # Refused here rather than after the two slots are ordered, so a
+                # leftover document cannot win on its higher sequence number
+                # either — the numbers of two sessions are not comparable.
+                whose = (
+                    f"holds session {document_session}"
+                    if document_session is not None
+                    else "names no session"
+                )
+                diagnostics.append(
+                    f"slot {slot.value} {whose}, not the {self.session_id} this sidecar "
+                    "handshook; it cannot be shown to describe this session's world, "
+                    "so it is refused"
+                )
                 continue
             candidates.append(
                 SnapshotRead(

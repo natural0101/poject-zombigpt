@@ -76,9 +76,15 @@ mission's typed reason and one-line report summary. The exception is a
 mission that finished without a single action running: it emits a bounded
 completion probe out the goal seam, whose real observed result the loop
 settles the goal with — the same arrangement a journey uses for a target the
-character already stands on. Missions die with their goals exactly as
-journeys do, and the mission's full report survives the goal in a bounded
-ledger this wrapper keeps (:meth:`NavigatingPlanner.loot_report`).
+character already stands on. A step the channel can no longer report on — its
+terminal record evicted from the bounded history, or the channel replaced —
+ends the goal ``CAPABILITY_UNAVAILABLE`` on the very next tick
+(:data:`UNOBSERVED_STEP_DETAIL`), rather than leaving the mission holding a
+step it can never retire: unlike a journey, a mission gates its own
+``next_step`` on that one step in flight, so "learn nothing and replan" is a
+thing only the journey path can honestly do. Missions die with their goals
+exactly as journeys do, and the mission's full report survives the goal in a
+bounded ledger this wrapper keeps (:meth:`NavigatingPlanner.loot_report`).
 
 How a journey's steps reach the engine — and why there are two routes:
 
@@ -128,6 +134,7 @@ from __future__ import annotations
 
 import threading
 from collections import OrderedDict
+from enum import Enum
 from typing import Final, Protocol
 
 from pz_agent_core.actions.adapters.movement import MOVE_RETRY_POLICY
@@ -222,6 +229,7 @@ __all__ = [
     "MAX_TRACKED_RETURNS",
     "NO_HOME_DETAIL",
     "NO_REST_TARGET_DETAIL",
+    "UNOBSERVED_STEP_DETAIL",
     "NavigatingPlanner",
     "NavigationHost",
     "unwrap_planner",
@@ -320,6 +328,17 @@ NO_HOME_DETAIL: Final = "no home point is set; stand at home and run: pz-agent r
 #: record is constructible without it, and a rest with no target has no
 #: postcondition to verify, so it must refuse, never pick one.
 NO_REST_TARGET_DETAIL: Final = "the rest_until goal carries no target endurance"
+
+#: The refusal for a mission step whose channel record can no longer be read.
+#: :meth:`~pz_agent_cli.runtime.ActionChannel.status` answers ``None`` for
+#: three truths — the id was never minted here, its terminal record was
+#: evicted from the bounded history, or a previous process minted it — and all
+#: three are the same fact to a mission: what became of that step was never
+#: observed. Assembled from constants only, so it satisfies the goal channel's
+#: rule that a record's detail is never caller text.
+UNOBSERVED_STEP_DETAIL: Final = (
+    "the step's outcome was never observed; the action channel no longer holds its record"
+)
 
 #: Wrapper hops :meth:`NavigatingPlanner._loot_ports` will look through for a
 #: ``memory`` attribute — the same walk, with the same slack, that the loop's
@@ -480,6 +499,19 @@ class _CombatDrive:
         #: The most recent succeeded engine result a channel step produced —
         #: the evidence a completed mission hands to ``GoalQueue.succeed``.
         self.last_success: ActionResult | None = None
+
+
+class _Pending(Enum):
+    """What became of the one channel step a mission drive had in flight.
+
+    Private to this module: the six kind handlers read it, nothing else does.
+    ``LOST`` is the state the wrapper cannot serve through — see
+    :meth:`NavigatingPlanner._collect_mission_pending`.
+    """
+
+    RUNNING = "running"
+    SETTLED = "settled"
+    LOST = "lost"
 
 
 class NavigatingPlanner:
@@ -1159,9 +1191,18 @@ class NavigatingPlanner:
             self._enforce_cap()
 
         channel = host.actions
-        waiting = self._collect_mission_pending(drive, channel)
-        if waiting:
+        pending = self._collect_mission_pending(drive, channel)
+        if pending is _Pending.RUNNING:
             self._map.observe(observation)
+            return None
+        if pending is _Pending.LOST:
+            # The mission still holds that step in flight and can never
+            # retire it, so it would decline every tick from here and no goal
+            # step would ever be charged: end the goal typed instead (see
+            # _collect_mission_pending).
+            self._map.observe(observation)
+            drive.mission.mark_abandoned()
+            self._finish_mission_refused(host, goal_id, drive, _lost_step_refusal())
             return None
         if (
             channel is not None
@@ -1258,26 +1299,34 @@ class NavigatingPlanner:
         self,
         drive: _LootDrive | _ExploreDrive | _ConsumeDrive | _CareDrive | _AvoidDrive | _CombatDrive,
         channel: ActionChannel | None,
-    ) -> bool:
-        """Fold a finished channel step into the mission. True while one runs."""
+    ) -> _Pending:
+        """Fold a finished channel step into the mission, and say what happened.
+
+        Three answers because there are three facts, and the middle one used
+        to be told as the last: ``RUNNING`` while the step is still being
+        driven, ``SETTLED`` once its terminal result has been folded in (or
+        there was nothing in flight to fold), and ``LOST`` when the channel
+        can no longer say — an evicted record, an id from a previous process.
+        A lost step is not a replan: the mission still holds it as its one
+        step in flight, so it can neither learn the outcome nor step past it,
+        and only the caller can end the goal. See :data:`UNOBSERVED_STEP_DETAIL`.
+        """
         action_id = drive.pending_action_id
         if action_id is None or channel is None:
-            return False
+            return _Pending.SETTLED
         record = channel.status(action_id)
         if record is None:
-            # Evicted, or a restarted channel: whatever happened to the step
-            # was never observed, so the mission learns nothing and replans.
             drive.pending_action_id = None
-            return False
+            return _Pending.LOST
         if not record.terminal:
-            return True
+            return _Pending.RUNNING
         drive.pending_action_id = None
         result = record.result
         if result is not None:
             drive.mission.note_result(result)
             if result.status is ActionStatus.SUCCEEDED:
                 drive.last_success = result
-        return False
+        return _Pending.SETTLED
 
     def _submit_mission_step(
         self, host: NavigationHost, goal_id: str, drive: _LootDrive, request: ActionRequest
@@ -1370,9 +1419,16 @@ class NavigatingPlanner:
             self._enforce_cap()
 
         channel = host.actions
-        waiting = self._collect_mission_pending(drive, channel)
-        if waiting:
+        pending = self._collect_mission_pending(drive, channel)
+        if pending is _Pending.RUNNING:
             self._map.observe(observation)
+            return None
+        if pending is _Pending.LOST:
+            # The loot path's reasoning, verbatim: a step whose outcome was
+            # never observed wedges the mission, so the goal ends typed.
+            self._map.observe(observation)
+            drive.mission.mark_abandoned()
+            self._finish_explore_refused(host, goal_id, drive, _lost_step_refusal())
             return None
         if (
             channel is not None
@@ -1512,9 +1568,16 @@ class NavigatingPlanner:
             self._enforce_cap()
 
         channel = host.actions
-        waiting = self._collect_mission_pending(drive, channel)
-        if waiting:
+        pending = self._collect_mission_pending(drive, channel)
+        if pending is _Pending.RUNNING:
             self._map.observe(observation)
+            return None
+        if pending is _Pending.LOST:
+            # The loot path's reasoning, verbatim: a step whose outcome was
+            # never observed wedges the mission, so the goal ends typed.
+            self._map.observe(observation)
+            drive.mission.mark_abandoned()
+            self._finish_consume_refused(host, goal_id, drive, _lost_step_refusal())
             return None
         if (
             channel is not None
@@ -1785,9 +1848,16 @@ class NavigatingPlanner:
             self._enforce_cap()
 
         channel = host.actions
-        waiting = self._collect_mission_pending(drive, channel)
-        if waiting:
+        pending = self._collect_mission_pending(drive, channel)
+        if pending is _Pending.RUNNING:
             self._map.observe(observation)
+            return None
+        if pending is _Pending.LOST:
+            # The loot path's reasoning, verbatim: a step whose outcome was
+            # never observed wedges the mission, so the goal ends typed.
+            self._map.observe(observation)
+            drive.mission.mark_abandoned()
+            self._finish_care_refused(host, goal_id, drive, _lost_step_refusal())
             return None
         if (
             channel is not None
@@ -1936,9 +2006,17 @@ class NavigatingPlanner:
             self._enforce_cap()
 
         channel = host.actions
-        waiting = self._collect_mission_pending(drive, channel)
-        if waiting:
+        pending = self._collect_mission_pending(drive, channel)
+        if pending is _Pending.RUNNING:
             self._map.observe(observation)
+            return None
+        if pending is _Pending.LOST:
+            # The loot path's reasoning, verbatim, and this is the kind it
+            # matters most for: a retreat that silently stopped retreating
+            # while the threat closed is the worst ending in this stack.
+            self._map.observe(observation)
+            drive.mission.mark_abandoned()
+            self._finish_avoid_refused(host, goal_id, drive, _lost_step_refusal())
             return None
         if (
             channel is not None
@@ -2108,9 +2186,16 @@ class NavigatingPlanner:
             self._enforce_cap()
 
         channel = host.actions
-        waiting = self._collect_mission_pending(drive, channel)
-        if waiting:
+        pending = self._collect_mission_pending(drive, channel)
+        if pending is _Pending.RUNNING:
             self._map.observe(observation)
+            return None
+        if pending is _Pending.LOST:
+            # The loot path's reasoning, verbatim: a step whose outcome was
+            # never observed wedges the mission, so the goal ends typed.
+            self._map.observe(observation)
+            drive.mission.mark_abandoned()
+            self._finish_combat_refused(host, goal_id, drive, _lost_step_refusal())
             return None
         if (
             channel is not None
@@ -2383,6 +2468,19 @@ class NavigatingPlanner:
             self._combat_reports.move_to_end(goal_id)
             while len(self._combat_reports) > MAX_KEPT_COMBAT_REPORTS:
                 self._combat_reports.popitem(last=False)
+
+
+def _lost_step_refusal() -> MissionRefused:
+    """The one refusal every kind ends a lost channel step with.
+
+    ``CAPABILITY_UNAVAILABLE`` because that is the fact about this process:
+    the channel that was carrying the mission's step can no longer report its
+    outcome, exactly as a wrapper with no channel at all cannot carry one.
+    One function so the six kinds cannot come to say it differently.
+    """
+    return MissionRefused(
+        reason_code=ReasonCode.CAPABILITY_UNAVAILABLE, detail=UNOBSERVED_STEP_DETAIL
+    )
 
 
 def _drive_lives(record: GoalRecord | None) -> bool:

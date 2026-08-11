@@ -455,6 +455,16 @@ class ObservationFeed:
     gap, a session change — the pointer is followed and the full document is
     offered instead. Anything that does not parse is counted and skipped, because
     one unusable record must not stall a stream the whole loop reads.
+
+    The recovery path is bound to one session (see
+    :attr:`~pz_agent_core.ipc.snapshot.SnapshotReader.session_id`, wired at
+    :meth:`SidecarLoop._build`). A document left in the slots by the session
+    before this one is refused rather than offered, and the refusal is a miss
+    whose reason lands in :attr:`diagnostics`: the loop then keeps reporting no
+    observation — ``ingested`` stays 0 and the store keeps asking for a full
+    snapshot — until the mod publishes under the live session, which is the
+    honest picture. The alternative was a baseline describing a world that had
+    ended, and every reflex evaluation and arm decision made against it.
     """
 
     layout: IpcLayout
@@ -1818,7 +1828,13 @@ class SidecarLoop:
         feed = ObservationFeed(
             layout=self.layout,
             reader=reader,
-            snapshots=SnapshotReader(self.layout),
+            # And bound to this session for the same reason the journal is
+            # positioned at the end: the slots the pointer names were left there
+            # by whatever ran here before, and seeking past them is not an
+            # option — the pointer has no position, only a document. The
+            # sequence numbers of two sessions are not comparable, so the reader
+            # is told whose documents it is allowed to serve.
+            snapshots=SnapshotReader(self.layout, session_id=session.session_id),
             max_records=self.limits.observations_per_tick,
         )
         sink = QueueCommandSink(queue, clock=self.clock)

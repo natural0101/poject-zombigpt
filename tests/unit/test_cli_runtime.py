@@ -49,7 +49,7 @@ from pz_agent_core.protocol import (
 from pz_agent_core.safety.reflex import ReflexGuard, ReflexSignals, SafetyEvent
 from pz_agent_core.session.handshake import SessionDescriptor
 from pz_agent_core.session.heartbeat import HeartbeatMonitor, Peer
-from tests.fixtures import DEFAULT_SESSION, make_player
+from tests.fixtures import DEFAULT_SESSION, make_observation, make_player
 from tests.fixtures.cli_worlds import CliWorld, make_world
 from tests.fixtures.ipc_builders import FakeClock
 from tests.fixtures.sidecar_worlds import (
@@ -797,6 +797,74 @@ def test_the_feed_recovers_a_baseline_from_the_snapshot_when_it_has_none(
 
         assert accepted == 1
         assert store.needs_full_snapshot is False
+
+
+class TestAFreshReaderDoesNotAdoptTheLastSessionsDocument:
+    """The exchange directory outlives the session that filled it.
+
+    A sidecar that attaches into a directory still holding the previous
+    session's slots has no baseline yet, so the feed follows the pointer — and
+    the document it finds there describes a world that has ended. Accepting it
+    makes it the store's baseline, which is the first picture the reflex guard
+    and an arm decision are made against. The snapshot read is therefore bound
+    to the session this sidecar handshook: a document from another one is
+    refused and said out loud, and the loop keeps reporting that it has no
+    observation until the mod publishes under the live session.
+    """
+
+    #: Whatever ran here before this sidecar did. ``DEFAULT_SESSION`` is a
+    #: fixed id, and every attach mints a fresh uuid, so it is never the live
+    #: session's.
+    DEAD_SESSION = DEFAULT_SESSION
+
+    def _publish_dead_session_snapshot(self, world: SidecarWorld) -> Observation:
+        dead = make_observation(session_id=self.DEAD_SESSION, seq=900, timestamp_ms=world.clock.now)
+        SnapshotWriter(world.layout, clock=world.clock).publish(dead.to_dict())
+        return dead
+
+    def test_the_loop_ticks_without_a_baseline_rather_than_taking_the_dead_one(
+        self, tmp_path: Path
+    ) -> None:
+        with attached_world(tmp_path) as world:
+            self._publish_dead_session_snapshot(world)
+
+            outcome = world.loop.tick()
+
+            assert outcome.ingested == 0
+            assert world.loop.store.latest() is None
+            assert world.loop.store.session_id is None
+            assert world.loop.store.needs_full_snapshot is True
+
+    def test_the_refusal_says_which_session_the_document_belongs_to(self, tmp_path: Path) -> None:
+        with attached_world(tmp_path) as world:
+            self._publish_dead_session_snapshot(world)
+            store = ObservationStore(capacity=4)
+            feed = ObservationFeed(
+                layout=world.layout,
+                reader=JournalReader(world.layout, world.layout.observation_events),
+                snapshots=SnapshotReader(world.layout, session_id=world.session_id),
+            )
+            feed.reader.seek_to_end()
+
+            assert feed.drain(store) == 0
+            assert store.needs_full_snapshot is True
+            assert any(self.DEAD_SESSION in line for line in feed.diagnostics), (
+                "a refused snapshot must name the session it came from, not vanish"
+            )
+
+    def test_the_live_sessions_snapshot_is_still_the_baseline(self, tmp_path: Path) -> None:
+        with attached_world(tmp_path) as world:
+            self._publish_dead_session_snapshot(world)
+            live = make_observation(
+                session_id=world.session_id, seq=0, timestamp_ms=world.clock.now
+            )
+            SnapshotWriter(world.layout, clock=world.clock).publish(live.to_dict())
+
+            outcome = world.loop.tick()
+
+            assert outcome.ingested == 1
+            assert world.loop.store.session_id == world.session_id
+            assert world.loop.store.needs_full_snapshot is False
 
 
 def test_the_observation_source_gives_up_rather_than_spinning_on_a_stopped_clock(
