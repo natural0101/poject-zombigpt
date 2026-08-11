@@ -33,6 +33,7 @@ from pz_agent_core.knowledge import (  # noqa: E402
     CorpusError,
     docs_in_sync,
     load_corpus,
+    write_docs,
 )
 
 
@@ -65,8 +66,7 @@ def main() -> int:
         print(f"knowledge docs are up to date ({len(GENERATED_DOCS)} files).")
         return 0
 
-    for name, render in GENERATED_DOCS:
-        (docs_root / name).write_text(render(corpus), encoding="utf-8")
+    write_docs(corpus, docs_root)
     print(f"wrote {len(GENERATED_DOCS)} generated docs.")
     return 0
 

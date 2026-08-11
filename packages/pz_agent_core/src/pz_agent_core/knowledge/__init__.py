@@ -28,6 +28,7 @@ from .docgen import (
     render_behavior_reference,
     render_guide_ru,
     render_sources,
+    write_docs,
 )
 from .loader import (
     GAMEPLAY_SUBDIR,
@@ -119,4 +120,5 @@ __all__ = [
     "render_guide_ru",
     "render_sources",
     "select_rules",
+    "write_docs",
 ]

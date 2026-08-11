@@ -34,6 +34,7 @@ from pz_agent_core.knowledge import (
     render_behavior_reference,
     render_guide_ru,
     render_sources,
+    write_docs,
 )
 from pz_agent_core.knowledge.docgen import _DOMAIN_TITLES_EN, _DOMAIN_TITLES_RU, _SOURCE_NAMES_RU
 from pz_agent_core.protocol import ActionName, RiskClass
@@ -337,8 +338,7 @@ def test_docs_in_sync_reports_clean_stale_and_missing(tmp_path: Path) -> None:
     corpus = _corpus()
     docs_root = tmp_path / "docs"
     docs_root.mkdir()
-    for name, render in GENERATED_DOCS:
-        (docs_root / name).write_text(render(corpus), encoding="utf-8")
+    write_docs(corpus, docs_root)
     assert docs_in_sync(corpus, docs_root) == []
 
     stale_name = GENERATED_DOCS[0][0]
@@ -354,8 +354,7 @@ def test_docs_in_sync_reports_clean_stale_and_missing(tmp_path: Path) -> None:
 def test_docs_in_sync_detects_a_changed_corpus(tmp_path: Path) -> None:
     docs_root = tmp_path / "docs"
     docs_root.mkdir()
-    for name, render in GENERATED_DOCS:
-        (docs_root / name).write_text(render(_corpus()), encoding="utf-8")
+    write_docs(_corpus(), docs_root)
     changed = KnowledgeCorpus(
         documents=(
             KnowledgeDocument(

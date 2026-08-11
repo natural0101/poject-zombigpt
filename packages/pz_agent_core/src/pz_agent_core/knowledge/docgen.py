@@ -69,6 +69,7 @@ __all__ = [
     "render_behavior_reference",
     "render_guide_ru",
     "render_sources",
+    "write_docs",
 ]
 
 #: Bytes one rendered document may occupy, aligned with the loader's own
@@ -420,6 +421,26 @@ def docs_in_sync(corpus: KnowledgeCorpus, docs_root: Path) -> list[str]:
             # mean the same thing to the caller — this file needs regenerating.
             stale.append(name)
             continue
-        if actual != expected:
+        # A Windows text-mode write turns every \n into \r\n on disk. That is
+        # a checkout/write artefact, not a content change, and calling such a
+        # file "stale" would make the drift gate cry wolf on one platform —
+        # exactly what a Windows CI run did. Content is what the gate guards,
+        # so the disk side is normalised before comparing; write_docs below
+        # writes LF explicitly so freshly generated files match the repository
+        # (.gitattributes pins eol=lf) byte for byte anyway.
+        if actual.replace(b"\r\n", b"\n") != expected:
             stale.append(name)
     return stale
+
+
+def write_docs(corpus: KnowledgeCorpus, docs_root: Path) -> None:
+    """Write every generated doc with explicit LF line endings.
+
+    ``Path.write_text`` translates newlines per platform, which on Windows
+    would produce CRLF files that disagree with the repository's pinned LF —
+    the one writer everything (the scripts wrapper and the tests) shares is
+    how that stays impossible.
+    """
+    for name, render in GENERATED_DOCS:
+        with (docs_root / name).open("w", encoding="utf-8", newline="\n") as sink:
+            sink.write(render(corpus))
