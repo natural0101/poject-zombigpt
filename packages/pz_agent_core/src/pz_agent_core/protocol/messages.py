@@ -984,6 +984,10 @@ class NearbyZombie:
     visible: bool = True
     chasing: bool = False
     position: Position | None = None
+    #: Body state token the build reported ("standing", "prone", "crawling",
+    #: ...). ``None`` means the reader is absent — a combat decision must never
+    #: read an unreadable state as "standing".
+    state: str | None = None
 
     def to_dict(self) -> JsonDict:
         out: JsonDict = {
@@ -994,11 +998,14 @@ class NearbyZombie:
         }
         if self.position is not None:
             out["position"] = self.position.to_dict(with_direction=False)
+        if self.state is not None:
+            out["state"] = self.state
         return out
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> NearbyZombie:
         position = payload.get("position")
+        state = payload.get("state")
         return cls(
             ref=_as_str(_require(payload, "ref"), field_name="zombie.ref"),
             distance=_as_float(_require(payload, "distance"), field_name="zombie.distance"),
@@ -1009,6 +1016,7 @@ class NearbyZombie:
                 if position is None
                 else Position.from_dict(_as_mapping(position, field_name="zombie.position"))
             ),
+            state=(None if state is None else _as_str(state, field_name="zombie.state")),
         )
 
 

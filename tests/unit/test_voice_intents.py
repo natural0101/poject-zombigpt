@@ -87,8 +87,23 @@ KIND_VALUES = frozenset(
 #: unit-word-shaped but the spoken-quantity path does not carry an hour scale
 #: end to end yet — a spoken sleep that silently slept the default night
 #: would be the invention the partition check exists to prevent.
+#: ``engage_single_zombie`` closes the list for a reason unlike every other
+#: entry: not a parameter-machinery gap, but the partition doing its founding
+#: job. The kind is parameterless and would clear the mechanical check — and
+#: it must never be speakable anyway, because it is a kill order: a misheard
+#: transcript resolving to any other kind wastes a sandwich or a walk, while
+#: one resolving to this kind swings a weapon at whatever the mission
+#: observes nearest, on the authority of words nobody said. The dedicated
+#: test below pins that argument, not just the membership.
 UNSPEAKABLE_KIND_VALUES = frozenset(
-    {"navigate_to", "loot_area", "explore_area", "rest_until", "sleep_until_rested"}
+    {
+        "navigate_to",
+        "loot_area",
+        "explore_area",
+        "rest_until",
+        "sleep_until_rested",
+        "engage_single_zombie",
+    }
 )
 
 #: The loot goal's parameters, restated as an independent literal for the
@@ -388,6 +403,39 @@ def test_the_retreat_word_resolves_to_avoid_threat() -> None:
         assert resolution.params.present() == frozenset()
         assert resolution.refusal is None
     assert resolve("стой, беги").intent is VoiceIntent.STOP
+
+
+def test_combat_is_deliberately_unspeakable_because_it_is_a_kill_order() -> None:
+    """The partition's founding case, pinned with its argument.
+
+    ``engage_single_zombie`` is parameterless and would clear the mechanical
+    partition check as speakable — return_home did exactly that — and it is
+    excluded anyway, on purpose: a kill order by voice with a misheard target
+    is the exact harm the partition exists for. A misheard «домой» walks the
+    character somewhere safe; a misheard attack word would swing a weapon at
+    whatever the mission observes nearest, on the authority of words nobody
+    said. So the kind is declared unspeakable, no phrasing table names it,
+    and every fight-shaped transcript resolves to no goal at all — while the
+    words that make the character *safer* keep their meanings: the retreat
+    vocabulary still retreats and the stop vocabulary still stops.
+    """
+    combat = parse_kind("engage_single_zombie")
+    assert combat is not None
+    # Parameterless — it would pass the mechanical partition check...
+    assert core_goals.GOAL_SPECS[combat].required == frozenset()
+    assert core_goals.GOAL_SPECS[combat].optional == frozenset()
+    # ...and is excluded by declaration anyway, which is the decision.
+    assert combat in intent.UNSPEAKABLE_KINDS
+    assert combat not in intent.KIND_WORDS
+    assert combat not in intent.CAPABILITY_FOR_KIND
+    # No attack-shaped sentence reaches a goal, spoken plainly or woken.
+    for transcript in ("атакуй", "убей зомби", "агент, убей зомби", "ударь зомби", "напади"):
+        resolution = resolve(transcript)
+        assert resolution.kind is None, transcript
+        assert resolution.intent is not VoiceIntent.GOAL, transcript
+    # The neighbouring vocabularies keep their own meanings.
+    assert resolve("отступай").kind is parse_kind("avoid_threat")
+    assert resolve("стоп").intent is VoiceIntent.STOP
 
 
 @pytest.mark.parametrize(

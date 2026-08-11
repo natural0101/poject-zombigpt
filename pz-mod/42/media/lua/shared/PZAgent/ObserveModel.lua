@@ -1055,6 +1055,14 @@ local function buildZombie(sessionId, descriptor, limits)
     return nil
   end
   local zombie = { ref = ref, distance = distance }
+  -- The body state travels only as a validated token. Absent stays absent --
+  -- the reader's tri-state honesty must survive the model -- and a string the
+  -- token alphabet cannot carry is dropped whole rather than mangled into a
+  -- state nobody observed.
+  local state = ObserveModel.token(descriptor.state)
+  if state ~= nil then
+    zombie.state = state
+  end
   if type(descriptor.visible) == "boolean" then
     zombie.visible = descriptor.visible
   else

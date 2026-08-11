@@ -46,6 +46,20 @@ IMPLEMENTED = {
     ActionName.SURVIVAL_REST,
     ActionName.SURVIVAL_SLEEP,
     ActionName.PLAN_CANCEL,
+    ActionName.COMBAT_EQUIP_BEST,
+    ActionName.COMBAT_SHOVE,
+    ActionName.COMBAT_ENGAGE,
+    ActionName.COMBAT_RETREAT,
+}
+
+#: The four assisted-combat actions: the protocol's top tier, every one, and
+#: every one behind the ``combat_assist`` capability. Named here so the P4
+#: census below is a literal a reviewer sees, not a derivation.
+COMBAT_ACTIONS = {
+    ActionName.COMBAT_EQUIP_BEST,
+    ActionName.COMBAT_SHOVE,
+    ActionName.COMBAT_ENGAGE,
+    ActionName.COMBAT_RETREAT,
 }
 
 #: The actions here that only read. They are the ones permitted in OBSERVE mode,
@@ -105,6 +119,27 @@ def test_only_the_read_only_actions_are_free_of_a_permission_tier() -> None:
     for action in registry.names():
         risk = registry.get(action).risk
         assert (risk is RiskClass.P0) == (action in READ_ONLY_HERE), action
+
+
+def test_every_combat_action_is_p4_behind_the_combat_assist_capability() -> None:
+    """The assisted rung's registry-level pins, all in one place.
+
+    P4 is the tier the permission machinery never grants on the agent's own
+    initiative, and ``combat_assist`` is the NEW capability — the four never
+    ride ``autonomous_attack``, whose unsupported-by-design ceiling belongs
+    to the rung this epic does not ship.
+    """
+    registry = register_game_adapters(AdapterRegistry())
+
+    for action in COMBAT_ACTIONS:
+        adapter = registry.get(action)
+        assert adapter.risk is RiskClass.P4, action
+        assert adapter.required_capability == "combat_assist", action
+        assert adapter.required_capability != "autonomous_attack", action
+    # And nothing outside sleep and combat sits at P4: the tier is a short,
+    # reviewed list, not a habit.
+    p4 = {a for a in registry.names() if registry.get(a).risk is RiskClass.P4}
+    assert p4 == COMBAT_ACTIONS | {ActionName.SURVIVAL_SLEEP}
 
 
 def test_every_adapter_bounds_its_own_polling() -> None:

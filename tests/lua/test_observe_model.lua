@@ -818,4 +818,29 @@ do
 end
 
 
+Harness.group("a zombie's state travels as a token or not at all")
+do
+  local document = built({
+    nearby = {
+      objects = {},
+      zombies = {
+        { runtime_id = 50, distance = 1, chasing = true, visible = true, state = "prone" },
+        { runtime_id = 51, distance = 2, chasing = true, visible = true, state = "crawling" },
+        { runtime_id = 52, distance = 3, chasing = true, visible = true },
+        -- A state the token alphabet cannot carry is dropped whole, never
+        -- mangled into a reading nobody made.
+        { runtime_id = 53, distance = 4, chasing = true, visible = true, state = "on the floor?" },
+        { runtime_id = 54, distance = 5, chasing = true, visible = true, state = 42 },
+      },
+    },
+  })
+  local zombies = document.nearby.zombies
+  equal(zombies[1].state, "prone", "a prone reading is carried")
+  equal(zombies[2].state, "crawling", "and a crawling one")
+  isNil(zombies[3].state, "an absent reading stays absent -- the reader's tri-state honesty survives the model")
+  isNil(zombies[4].state, "a string outside the token alphabet is dropped whole")
+  isNil(zombies[5].state, "and a non-string never becomes one")
+  equal(#zombies, 5, "the zombie itself is kept either way; only the claim it could not make is dropped")
+end
+
 Harness.finish("observe_model")

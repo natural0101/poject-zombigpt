@@ -73,6 +73,10 @@ SCHEMA_PATH: Final = Path(__file__).resolve().parents[2] / "schemas" / "goal.sch
 #: ``avoid_threat`` joins on those terms once more: the retreat is served
 #: locally by the deterministic avoid mission, and the same loud-refusal
 #: rule below covers it until the protocol change puts it on the link.
+#: ``engage_single_zombie`` joins on those terms and one more besides: the
+#: combat kind is served locally by the deterministic combat mission, and a
+#: remote link that could carry a kill order is a protocol change nobody
+#: should make by accident — the loud refusal below is the pin.
 NOT_YET_ON_THE_WIRE: Final[frozenset[str]] = frozenset(
     {
         "navigate_to",
@@ -83,6 +87,7 @@ NOT_YET_ON_THE_WIRE: Final[frozenset[str]] = frozenset(
         "rest_until",
         "sleep_until_rested",
         "avoid_threat",
+        "engage_single_zombie",
     }
 )
 
@@ -224,6 +229,7 @@ class TestTheClosedSetsAgree:
             "rest_until": {"target_endurance": 0.8},
             "sleep_until_rested": {"hours": 8},
             "avoid_threat": {},
+            "engage_single_zombie": {},
         }
         assert set(local_params) == set(NOT_YET_ON_THE_WIRE)
         for kind, params in sorted(local_params.items()):

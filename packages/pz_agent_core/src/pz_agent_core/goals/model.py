@@ -298,6 +298,24 @@ class GoalKind(StrEnum):
     :class:`~pz_agent_core.planner.provider.NullProvider` refuses all three
     by name, exactly as it refuses the four above.
 
+    ``ENGAGE_SINGLE_ZOMBIE`` is the other half of that directive — the убей,
+    on the ASSISTED rung only — served by the CLI's deterministic combat
+    mission (``pz_agent_cli.combat_mission``): the deterministic combat
+    policy re-assessed before every bounded attack window, retreat mandatory
+    on any deterioration, success only on the re-observed zombie down or
+    honestly gone. Deliberately parameterless: the mission serves the
+    nearest observed zombie and pins it for the whole mission. A target
+    reference parameter was considered and refused — a session-minted ref
+    submitted through this channel outlives the observation that minted it
+    (goals wait in a queue; zombies do not), so the parameter would invite
+    exactly the stale-target kill order the voice partition refuses, while
+    "the nearest observed zombie" is deterministic per observation and
+    re-checked by the policy every window. Only an explicit user submission
+    or tool call reaches this kind: :class:`~pz_agent_core.planner.provider.
+    NullProvider` refuses it by name, the needs arbiter's trigger table
+    never names it, and the autonomy planner's initiative table never mints
+    it — each absence pinned by its own test.
+
     ``AVOID_THREAT`` is the retreat half of the threat directive («если
     одиночного зомби безопасно убить — убей, иначе отступи» — this kind is
     the отступи), served by the CLI's deterministic avoid mission
@@ -323,6 +341,7 @@ class GoalKind(StrEnum):
     REST_UNTIL = "rest_until"
     SLEEP_UNTIL_RESTED = "sleep_until_rested"
     AVOID_THREAT = "avoid_threat"
+    ENGAGE_SINGLE_ZOMBIE = "engage_single_zombie"
 
 
 class LootScope(StrEnum):
@@ -823,6 +842,16 @@ _AVOID_BUDGET: Final = GoalBudget(
     max_wall_ms=300_000, max_steps=MAX_GOAL_STEPS, pending_ttl_ms=60_000
 )
 
+#: The combat budget — the tightest in the table on every axis, because every
+#: axis is a bound on how long a fight the user ordered may keep running
+#: without them. Two minutes of wall clock covers four bounded windows with
+#: room to retreat; the step budget bounds only the goal-seam probes (every
+#: equip, shove, window and retreat travels the action channel under the
+#: mission's own caps); and the pending TTL is the shortest anywhere: a kill
+#: order that waited half a minute describes a zombie that has moved, and
+#: expiring it honestly beats swinging at a remembered position.
+_COMBAT_BUDGET: Final = GoalBudget(max_wall_ms=120_000, max_steps=8, pending_ttl_ms=30_000)
+
 #: The whole channel in one table. Adding a kind without adding a row here
 #: fails :func:`_check_tables` at import time, not at the first submission.
 GOAL_SPECS: Final[Mapping[GoalKind, GoalSpec]] = MappingProxyType(
@@ -919,6 +948,17 @@ GOAL_SPECS: Final[Mapping[GoalKind, GoalSpec]] = MappingProxyType(
             required=frozenset(),
             optional=frozenset(),
             budget=_AVOID_BUDGET,
+        ),
+        # Parameterless on purpose, and pinned: the mission serves the
+        # nearest observed zombie, re-decided by the deterministic combat
+        # policy before every window. A target_ref parameter would carry a
+        # session-minted reference through a queue that outlives the
+        # observation it came from — a stale kill order — and was refused;
+        # the reasoning lives on the kind's docstring above.
+        GoalKind.ENGAGE_SINGLE_ZOMBIE: GoalSpec(
+            required=frozenset(),
+            optional=frozenset(),
+            budget=_COMBAT_BUDGET,
         ),
     }
 )
@@ -1319,6 +1359,11 @@ _PLANNER_KIND: Final[Mapping[GoalKind, PlannerGoalKind]] = MappingProxyType(
         # deterministic avoid mission serves it behind the wrapper, and
         # NullProvider refuses it by name for a loop assembled without one.
         GoalKind.AVOID_THREAT: PlannerGoalKind.AVOID_THREAT,
+        # The assisted-combat kind, on the same terms at their sharpest: the
+        # CLI's deterministic combat mission serves it behind the wrapper,
+        # and NullProvider refuses it by name — a provider must never be the
+        # thing that decides a fight is safe.
+        GoalKind.ENGAGE_SINGLE_ZOMBIE: PlannerGoalKind.ENGAGE_SINGLE_ZOMBIE,
     }
 )
 

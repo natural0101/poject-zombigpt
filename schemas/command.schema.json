@@ -79,7 +79,11 @@
         "door.open",
         "door.close",
         "door.unlock",
-        "inventory.transfer_batch"
+        "inventory.transfer_batch",
+        "combat.equip_best",
+        "combat.shove",
+        "combat.engage",
+        "combat.retreat"
       ]
     },
     "args": {

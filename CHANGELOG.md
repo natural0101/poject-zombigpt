@@ -12,7 +12,26 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Added
 
-- **The agent's knowledge is now a file format with an honesty gate**
+- **The character can defend itself — assisted, bounded, and never on its own
+  initiative** (`epic/p4-assisted-combat`, wave 1). Four new protocol actions
+  (`combat.equip_best`, `combat.shove`, `combat.engage`, `combat.retreat` —
+  ActionName 27–30) under a new `combat_assist` capability that starts
+  EXPERIMENTAL and can only be promoted by a live shove observed against the
+  real game; the pre-existing `autonomous_attack` ceiling stays `unsupported`
+  and is pinned untouched on both sides. `combat.engage` is one bounded
+  window: 1–3 swings, hard 4-second wall clock, terminal with an honest
+  reason either way — there is no loop in the mod. Sidecar-side
+  `CombatPolicy` gates every engagement before a command is minted (group
+  size over `max_group` — default 1, low endurance, panic, critical health,
+  broken weapon are each a typed refusal, not a worse fight). The
+  `engage_single_zombie` goal (14th kind) is deliberately parameterless —
+  it re-selects the nearest live target every window rather than accepting a
+  `target_ref` that could go stale into a kill order — and runs at most 4
+  windows before honestly failing. Zombies now report a tri-state `state`
+  (moving/prone/unknown) and the player's stats carry weapon condition, so
+  "the swing landed" is an observed postcondition, not an assumption. The
+  needs arbiter and autonomous initiative are pinned by test to never mint a
+  combat action: in AUTONOMOUS mode threat still means avoid, never engage.
   (`epic/p3-survival-knowledge`, wave 1). `knowledge/gameplay/*.yaml` — 50
   rules across 8 domains, validated by `schemas/gameplay-knowledge.schema.json`
   and a loader that refuses claims dressed above their evidence:

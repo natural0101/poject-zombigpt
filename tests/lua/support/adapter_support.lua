@@ -172,6 +172,24 @@ function Support.item(fields)
       return fields.two_handed == true
     end
   end
+  -- Weapon-shaped readers, granted only when the case names them: withholding
+  -- `condition` is how "this build cannot read the wear" is expressed, and the
+  -- combat ranking must exclude such an item rather than rank it as pristine.
+  if fields.category ~= nil then
+    item.getDisplayCategory = function()
+      return fields.category
+    end
+  end
+  if fields.condition ~= nil then
+    item.getCondition = function()
+      return fields.condition
+    end
+  end
+  if fields.condition_max ~= nil then
+    item.getConditionMax = function()
+      return fields.condition_max
+    end
+  end
   if fields.contents ~= nil then
     local container = Support.container(fields.contents, fields.capacity)
     item.getInventory = function()
@@ -511,6 +529,58 @@ function Support.door(fields)
   return door
 end
 
+--- An IsoZombie double over a mutable `state`, so a mock press can knock it
+--- down, start it crawling, kill it, or move it -- and a verify can observe
+--- the change. Each body-state reader exists only when the case grants it
+--- (`on_floor`, `crawling`, `dead` keys, even as false), so withholding all of
+--- them is how "this build reports no body state" is expressed.
+function Support.zombie(fields)
+  fields = fields or {}
+  local state = {
+    x = fields.x or 0,
+    y = fields.y or 0,
+    z = fields.z or 0,
+    on_floor = fields.on_floor == true,
+    crawling = fields.crawling == true,
+    dead = fields.dead == true,
+    present = true,
+  }
+  local zombie = { state = state, fields = fields }
+  zombie.getX = function()
+    return state.x
+  end
+  zombie.getY = function()
+    return state.y
+  end
+  zombie.getZ = function()
+    return state.z
+  end
+  zombie.getID = function()
+    return fields.id
+  end
+  if fields.online_id ~= nil then
+    zombie.getOnlineID = function()
+      return fields.online_id
+    end
+  end
+  if fields.on_floor ~= nil then
+    zombie.isOnFloor = function()
+      return state.on_floor
+    end
+  end
+  if fields.crawling ~= nil then
+    zombie.isCrawling = function()
+      return state.crawling
+    end
+  end
+  if fields.dead ~= nil then
+    zombie.isDead = function()
+      return state.dead
+    end
+  end
+  return zombie
+end
+
 local function squareKey(x, y, z)
   return string.format("%d:%d:%d", x, y, z)
 end
@@ -518,12 +588,30 @@ end
 Support.squareKey = squareKey
 
 --- Install a getCell global backed by `squares`, a map of "x:y:z" to square.
-function Support.installCell(squares)
+---
+--- `zombies` is optional and additive: when given, the cell also answers
+--- getZombieList over the doubles whose `state.present` is true, so a mock
+--- attack can remove one from the world by flipping the flag. When omitted
+--- the cell has no zombie accessor at all, which is how "this build cannot
+--- list zombies" is expressed to the combat adapters.
+function Support.installCell(squares, zombies)
   local cell = {
     getGridSquare = function(_, x, y, z)
       return squares[squareKey(math.floor(x), math.floor(y), math.floor(z))]
     end,
   }
+  if zombies ~= nil then
+    cell.getZombieList = function()
+      local present = {}
+      for index = 1, #zombies do
+        local zombie = zombies[index]
+        if zombie.state == nil or zombie.state.present ~= false then
+          present[#present + 1] = zombie
+        end
+      end
+      return Support.list(present)
+    end
+  end
   getCell = function()
     return cell
   end
@@ -680,6 +768,10 @@ end
 
 function Support.objectRef(x, y, z, objectIndex, session)
   return (PZAgent.Refs.buildObject(session or Support.SESSION, x, y, z, objectIndex))
+end
+
+function Support.zombieRef(runtimeId, session)
+  return (PZAgent.Refs.buildZombie(session or Support.SESSION, tostring(runtimeId), 0))
 end
 
 return Support

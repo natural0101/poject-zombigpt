@@ -16,7 +16,7 @@ local ROOT = arg[0]:match("^(.*)test_adapter_registry%.lua$") or ""
 local Harness = dofile(ROOT .. "support/harness.lua")
 local Support = dofile(ROOT .. "support/adapter_support.lua")
 
-local equal, ok = Harness.equal, Harness.ok
+local equal, ok, isNil = Harness.equal, Harness.ok, Harness.isNil
 
 local PZ = Harness.loadModules()
 dofile(ROOT .. "../../pz-mod/42/media/lua/client/PZAgent/CommandDispatcher.lua")
@@ -39,6 +39,7 @@ local ADAPTER_FILES = {
   "Medical",
   "Rest",
   "Sleep",
+  "Combat",
 }
 
 --- The game actions an adapter file is responsible for. The control plane --
@@ -66,6 +67,10 @@ local GAME_ACTIONS = {
   "medical.bandage",
   "survival.rest",
   "survival.sleep",
+  "combat.equip_best",
+  "combat.shove",
+  "combat.engage",
+  "combat.retreat",
 }
 
 local CONTROL_ACTIONS = {
@@ -178,7 +183,7 @@ print("- nothing published claims an action outside the whitelist")
 local pending = PZ.Adapters.PENDING_PROTOCOL or {}
 equal(#pending, 0, "no adapter claims an action the protocol does not know")
 
-print("- the two capabilities 12.4 caps are published as experimental")
+print("- the capabilities that carry an experimental ceiling are published as experimental")
 
 -- CapabilityRuntime reads `adapter.experimental` and publishes EXPERIMENTAL
 -- instead of AVAILABLE_UNVERIFIED when it is set. Toolkit.declare carried no
@@ -189,9 +194,18 @@ print("- the two capabilities 12.4 caps are published as experimental")
 --
 -- Asserted against the capability names rather than the adapters, because what
 -- an operator reads is the published report and the report is keyed that way.
+--
+-- `combat_assist` joins the two 12.4 caps for its own stated reason: the shove
+-- and attack press spellings are the least certain engine assumptions in the
+-- mod (docs/GAME_API_VERIFICATION.md says so, row by row), so the assisted
+-- combat rung must not publish as ordinary unverified until a live run proves
+-- them. It is a different capability from `autonomous_attack`, whose ceiling
+-- stays "unsupported by design" and which no adapter declares -- the pin at
+-- the end of this file fails if one ever does.
 local EXPERIMENTAL_CAPABILITIES = {
   survival_sleep = true,
   drink_world_source = true,
+  combat_assist = true,
 }
 
 local declared = {}
@@ -217,6 +231,13 @@ for capability, isExperimental in pairs(declared) do
     )
   end
 end
+
+print("- no adapter touches the capability 12.4 pins shut")
+
+-- The assisted combat rung rides `combat_assist`. `autonomous_attack` stays
+-- what it has always been -- unsupported by design, implemented by nothing --
+-- and this is the pin that keeps an adapter from quietly claiming it.
+isNil(declared["autonomous_attack"], "nothing published declares autonomous_attack")
 
 print("- every adapter names the engine symbols it needs")
 

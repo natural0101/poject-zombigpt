@@ -40,6 +40,10 @@ change proves this happened?*
 ``survival.rest``              endurance reached the target, or the posture was taken
 ``survival.sleep``             fatigue fell *and* the world clock advanced
 ``plan.cancel``                nothing this session owns is still in flight
+``combat.equip_best``          the primary hand changed to an observed weapon
+``combat.shove``               the target re-reads down or further away
+``combat.engage``              the target re-reads down, or is honestly gone
+``combat.retreat``             the nearest observed zombie's distance grew
 =============================  =========================================
 
 None of them selects anything. The item, the square, the book, the wound and the
@@ -51,6 +55,12 @@ from __future__ import annotations
 
 from ...protocol import ActionName
 from ..adapter import AdapterRegistry
+from .combat import (
+    CombatEngageAdapter,
+    CombatEquipBestAdapter,
+    CombatRetreatAdapter,
+    CombatShoveAdapter,
+)
 from .common import (
     ContainerChain,
     ItemIdentity,
@@ -78,6 +88,10 @@ __all__ = [
     "MOVE_RETRY_POLICY",
     "BandageAdapter",
     "BatchTransferAdapter",
+    "CombatEngageAdapter",
+    "CombatEquipBestAdapter",
+    "CombatRetreatAdapter",
+    "CombatShoveAdapter",
     "ContainerChain",
     "ContainerInspectAdapter",
     "ContainerOpenNearbyAdapter",
@@ -137,6 +151,15 @@ def register_game_adapters(registry: AdapterRegistry) -> AdapterRegistry:
     registry.register(BandageAdapter())
     registry.register(RestAdapter())
     registry.register(SleepAdapter())
+    # The assisted-combat rung, all four P4 behind the combat_assist
+    # capability. Registered unconditionally like every other adapter: the
+    # engine's capability check and the P4 permission gate are what keep them
+    # from ever running unasked, and hiding them from the registry would hide
+    # them from the census tests that pin exactly those properties.
+    registry.register(CombatEquipBestAdapter())
+    registry.register(CombatShoveAdapter())
+    registry.register(CombatEngageAdapter())
+    registry.register(CombatRetreatAdapter())
     # The one deference in the file, and the only registration here that is
     # conditional. ``register_builtins`` publishes an API-free cancel, and a
     # session that has both must keep that one: stopping has to work before

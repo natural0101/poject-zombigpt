@@ -1,5 +1,7 @@
-# Threat assessment and the retreat mission. Combat itself is the P4 epic's
-# half and is stated below as exactly what it is: not implemented.
+# Threat assessment, the retreat mission, and the assisted-combat rung. The
+# combat rule below states the gap exactly as it stands: the assisted
+# primitives exist in code, and none of them is verified until a live session
+# confirms the attack entry points.
 schema_version: "1.0"
 domain: threat_combat
 rules:
@@ -184,21 +186,37 @@ rules:
         unit: legs
         status: verified_script
 
-  - id: combat_not_implemented
+  - id: combat_assisted_unverified
     build: "42"
     source: code
-    source_detail: "packages/pz_agent_core/src/pz_agent_core/protocol/enums.py::ActionName"
+    source_detail: "packages/pz_agent_core/src/pz_agent_core/combat/policy.py::assess_engagement"
     status: unverified
-    claim: "Combat is not implemented: the protocol's action set carries no attack, weapon-swing or push action, so the kill half of the threat directive has no code to restate — retreat via avoid_threat is the implemented half, and combat remains future work under the P4 epic."
-    observed_inputs: []
-    preconditions: []
-    decision: "No code decides combat; this rule exists so retrieval for threat goals states the gap instead of leaving a planner to infer an ability that does not exist."
-    actions: []
-    postconditions: []
-    on_failure: "Not applicable: there is no combat action to fail."
+    claim: "Assisted combat exists in code and is unverified live: four bounded P4 actions (combat.equip_best, shove, engage — one attack window per command — retreat) and the engage_single_zombie mission ride the combat_assist capability, experimental until a live shove confirms the attack entry points."
+    observed_inputs:
+      - nearby.zombies[].distance
+      - nearby.zombies[].chasing
+      - nearby.zombies[].state
+      - player.stats.endurance
+      - player.stats.panic
+      - player.stats.health
+      - player.wounds[]
+      - inventory.items[].weapon
+    preconditions:
+      - "An explicit user-submitted engage_single_zombie goal or combat tool call: nothing on the agent's own initiative reaches these actions"
+      - "combat_assist usable on this install: on an unverified build every combat command is withheld or refused, never attempted"
+    decision: "assess_engagement re-reads group count, endurance, panic, injury and weapon condition from the current observation before every window and refuses with a closed token; the mission switches to mandatory retreat on any deterioration between windows, and each window is its own command, so the safety stop and reflex guard interrupt between them; autonomous_attack keeps its unsupported ceiling."
+    actions:
+      - combat.equip_best
+      - combat.shove
+      - combat.engage
+      - combat.retreat
+    postconditions:
+      - "The following observation reports the target down, honestly gone under the engage absence rule, or further away — the swing itself is never evidence"
+    on_failure: "A refusal or a window closing with the target standing ends typed (POLICY_DENIED, PRECONDITION_FAILED, POSTCONDITION_FAILED) with observed numbers as evidence; deterioration is answered by the mandatory retreat, never another window."
     risk_class: P4
     goal_kinds:
       - avoid_threat
+      - engage_single_zombie
     nearby_kinds:
       - zombie
     proven_by: []

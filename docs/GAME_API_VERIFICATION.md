@@ -17,10 +17,10 @@ Some guesses carry a `-- Build 42:` comment, findable with:
 grep -rn "Build 42:" pz-mod/
 ```
 
-`grep -rn "Build 42:" pz-mod/` returns six lines, in two files. It is a
-*shortcut*, not an inventory: the table below marks 136 symbol rows
+`grep -rn "Build 42:" pz-mod/` returns nine lines, in two files. It is a
+*shortcut*, not an inventory: the table below marks 146 symbol rows
 `requires_live` (several rows carry two or three slash-separated spellings,
-probed in the order written), so the grep covers roughly a twentieth of what is
+probed in the order written), so the grep covers a small fraction of what is
 unconfirmed. **This document is the list.** Use the grep to jump to a comment;
 use the table to know what has not been checked.
 
@@ -371,6 +371,47 @@ command fails honestly on its postcondition ("the door still reads locked"),
 never by writing the lock: `setLockedByKey(false)` is state-writing and stays
 forbidden. If a live run shows the game exposes a proper unlock entry point
 callable from Lua, that entry point should replace the toggle here.
+
+## Combat — the assisted rung (`adapters/Combat.lua`, capability `combat_assist`)
+
+Four user-commanded actions: `combat.equip_best`, `combat.shove`,
+`combat.engage`, `combat.retreat`. This is not `autonomous_attack` — that
+capability's ceiling stays "unsupported by design" (§12.4) and no adapter
+declares it — and nothing here is a system-input fallback: the shove and
+attack are guarded method calls on the player object, probed like every other
+symbol in this file.
+
+**The press spellings below are the least certain rows in this document.**
+Sleep held that title; these take it. Neither the shove press nor the attack
+press has ever been called by this project, the candidate names come from
+readings of Build 41/42 Lua rather than from anything exercised, and a wrong
+name is the *good* failure (a `CAPABILITY_UNAVAILABLE` naming the symbol). The
+bad failure — a name that exists but does something else — is why every
+combat postcondition re-reads the target and never trusts the call: a press
+that "worked" while the zombie kept walking ends `POSTCONDITION_FAILED` with
+the honest picture. `combat_assist` publishes at an `experimental` ceiling
+until a live run proves the presses, for the same reason `drink_world_source`
+does.
+
+Reused surfaces, recorded on their own rows above rather than repeated:
+`ISEquipWeaponAction` (equip_best queues the same class Equipment does),
+`ISWalkToTimedAction` and `ISTimedActionQueue.add` (retreat's walk), and the
+door quartet `IsoDoor.ToggleDoor` / `IsOpen` / `isLocked` / `isBarricaded`
+(retreat's bounded door rescue, the same rescue Movement runs). No playbook
+scenario issues a combat command yet — a gap by the closing paragraph's rule.
+
+| Symbol | Assumed signature | Used by | Fallback | Test | Failure signature | Status | Actual |
+|---|---|---|---|---|---|---|---|
+| `IsoCell.getZombieList` (combat resolution) | `() -> a zero-based list of IsoZombie`; the same list the observation reads | `adapters/Combat.lua` — resolving a `zombie:` reference to the live target, and retreat's nearest-zombie reading | every target command refuses naming the symbol; unlike the observation's silent empty section, here the gap is *loud* on purpose — "no such zombie" and "the list cannot be read" are opposite facts | `tests/lua/test_adapter_combat.lua` | `IsoCell.getZombieList is not available in this build` | `requires_live` | |
+| `IsoZombie.isOnFloor` / `isProne` | `() -> boolean`; true for a zombie knocked to the floor | `Observe.lua` (`zombieState` — the `state` token), `adapters/Combat.lua` — the shove and engage postconditions' "prone" reading | `state` field absent in observation; a combat verify that cannot read the floor can still succeed on death, absence or distance, and otherwise fails naming the state unreadable | `tests/lua/test_observe.lua`, `tests/lua/test_adapter_combat.lua` | none from observation — field absent; combat failures spell "state-unreadable" in the detail | `requires_live` | |
+| `IsoZombie.isCrawling` | `() -> boolean` | `Observe.lua` (`zombieState`), `adapters/Combat.lua` — the "crawling" token; a crawler is not a felled zombie | as the row above; with *neither* floor nor crawl reader the state is absent, never "standing" | `tests/lua/test_observe.lua`, `tests/lua/test_adapter_combat.lua` | none — field absent | `requires_live` | |
+| `IsoZombie.isDead` | `() -> boolean` | `adapters/Combat.lua` — the engage postcondition's "dead" reading | an unreadable death never reads as dead: the verify falls through to prone/absent, else fails honestly | `tests/lua/test_adapter_combat.lua` | none — the reading is simply not available as evidence | `requires_live` | |
+| `InventoryItem.getCondition` | `() -> number`; positive on a serviceable weapon | `Observe.lua` (`weapon_condition` stat), `adapters/Combat.lua` — equip_best's eligibility (readable condition > 0) and engage's weapon gate | stat absent in observation; equip_best excludes the item from ranking; engage refuses naming this reader — an unreadable weapon must not be swung on faith | S02 (the stat); `tests/lua/test_observe.lua`, `tests/lua/test_adapter_combat.lua` | `InventoryItem.getCondition is not available in this build` from engage; none from observation — field absent | `requires_live` | |
+| `InventoryItem.getConditionMax` | `() -> number` | `Observe.lua` (`weapon_condition_max` stat), `adapters/Combat.lua` — the condition fraction equip_best ranks by | stat absent; a weapon with no readable max keeps fraction 0 in the ranking — eligible as a last resort, outranked by anything measurable | `tests/lua/test_observe.lua`, `tests/lua/test_adapter_combat.lua` | none — field absent, ranking documented in `adapters/Combat.lua` | `requires_live` | |
+| `IsoGameCharacter.faceThisObject` / `FaceThisObject` | `(IsoMovingObject)` — turn toward the target | `adapters/Combat.lua` — before every shove and every attack press | the press is still made and `faced=false` rides the evidence; a swing made facing the wrong way fails on the re-observed target, which is the honest place | `tests/lua/test_adapter_combat.lua` | none — declared in evidence | `requires_live` | |
+| `IsoPlayer.setForceShove` / `setDoShove` / `DoShove` | probed in that order; the first two called with `true`, the last with no argument — **all three spellings and all three signatures are guesses** | `adapters/Combat.lua` (`combat.shove`) | command refused naming every candidate; there is no fallback and deliberately no synthetic input | `tests/lua/test_adapter_combat.lua` | `IsoPlayer.setForceShove / setDoShove / DoShove is not available in this build` | `requires_live` | **Least certain row in this file**, jointly with the attack press below. The postcondition (target re-observed prone, or measurably farther) is what keeps a wrong-but-existing name from lying |
+| `IsoPlayer.pressAttack` / `DoAttack` | probed in that order; `pressAttack(true)`, `DoAttack(0)` — **spellings and signatures are guesses** | `adapters/Combat.lua` (`combat.engage`) — one press per swing, at most `max_swings` (1..3) per window, window closed by `ENGAGE_WINDOW_MS=4000` | command refused naming both candidates; no synthetic input | `tests/lua/test_adapter_combat.lua` | `IsoPlayer.pressAttack / DoAttack is not available in this build` | `requires_live` | As above: succeeded is minted only off the re-observed target (prone/dead/absent), never off the press returning |
+| `instanceof(item, "HandWeapon")` | the engine's own class test, probed like the door classification above | `adapters/Combat.lua` (`isWeapon`) — equip_best's weapon classification, first authority | falls back to the display category reading `weapon` (case-insensitive); an item matching neither is simply not ranked | `tests/lua/test_adapter_combat.lua` | none — silent fallback | `requires_live` | |
 
 ## The game clock and the save's identity
 

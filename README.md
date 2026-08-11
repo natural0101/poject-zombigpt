@@ -148,7 +148,19 @@ Single-player only. The agent refuses to operate against multiplayer servers —
 automating another operator's server is out of scope: the configuration key is
 refused outright, and the action engine will not issue a mutating command unless
 the mod positively reports single player.
-It does not fight, does not drive, and does not alter game statistics directly
+Combat exists on exactly one rung: ASSISTED, single-target, behind the
+`combat_assist` capability and an explicit user-submitted goal or tool call.
+One bounded attack window per command — a handful of swings, terminal when the
+window closes — with a deterministic policy refusing groups over the limit,
+critical endurance or panic, heavy injury and a broken weapon, and success
+claimed only from the re-observed zombie, never from the swing. The capability
+is `experimental` until a live session confirms the attack entry points, so on
+a clean install the combat tools are withheld rather than offered. Autonomous
+combat remains unsupported by design — the `autonomous_attack` probe keeps its
+hard ceiling and no initiative path, arbiter or planner ever proposes a combat
+action — until (and unless) its own live-gated epic argues otherwise, and the
+reflex guard still stops everything at CRITICAL danger.
+It does not drive, and does not alter game statistics directly
 to paper over a missing API. Where an API cannot be verified, the capability is
 reported as unsupported rather than faked.
 

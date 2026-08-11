@@ -16,6 +16,7 @@ from pz_agent_core.actions import (
 from pz_agent_core.actions.adapters import register_game_adapters
 from pz_agent_core.actions.adapters.movement import MAX_ARRIVAL_RADIUS, MAX_MOVE_DISTANCE_SQUARES
 from pz_agent_core.capabilities.probes import (
+    COMBAT_ASSIST,
     DOOR_TOGGLE,
     DRINK_CARRIED,
     DRINK_WORLD_SOURCE,
@@ -62,6 +63,7 @@ BACKPACK = backpack_container_ref()
 SQUARE = f"square:{DEFAULT_SESSION}:1200:3400:0"
 CRATE = f"container:{DEFAULT_SESSION}:world:1200:3400:0:0:0"
 DOOR = f"object:{DEFAULT_SESSION}:1200:3401:0:2"
+ZOMBIE = f"zombie:{DEFAULT_SESSION}:31:0"
 
 #: The set named by docs/MCP_TOOLS.md, written out rather than derived, so a
 #: tool appearing or vanishing has to be a deliberate edit in two places.
@@ -94,6 +96,13 @@ DOCUMENTED_TOOLS = {
     "pz_action_equip",
     "pz_action_unequip",
     "pz_action_bandage",
+    # The assisted-combat four: P4 on the NEW combat_assist capability, an
+    # explicit call per command. autonomous_attack stays unsupported by design
+    # and no tool rides it.
+    "pz_action_equip_best_weapon",
+    "pz_action_shove",
+    "pz_action_engage",
+    "pz_action_retreat",
     "pz_action_rest",
     "pz_action_sleep",
     "pz_action_wait",
@@ -132,6 +141,7 @@ ALL_CAPABILITIES = (
     MEDICAL_BANDAGE,
     SURVIVAL_REST,
     SURVIVAL_SLEEP,
+    COMBAT_ASSIST,
 )
 
 
@@ -327,6 +337,15 @@ FULL_ACTION_PAYLOADS: dict[str, dict[str, Any]] = {
     # of them would leave untested for the other two.
     "pz_action_unequip": {"item_ref": ITEM, "hand": "primary", "slot": "Back"},
     "pz_action_bandage": {"body_part": "ForeArm_L", "item_ref": ITEM},
+    # The two argumentless combat tools offer nothing optional to fill in, and
+    # the two targeted ones take exactly the adapter's target_ref — the seam
+    # test drives all four against the real adapters, where the empty-world
+    # refusal is the policy's own (the target is not observed), never an
+    # unsupported-argument one.
+    "pz_action_equip_best_weapon": {},
+    "pz_action_shove": {"target_ref": ZOMBIE},
+    "pz_action_engage": {"target_ref": ZOMBIE},
+    "pz_action_retreat": {},
     "pz_action_rest": {
         "target_endurance": 0.95,
         "seat_ref": SQUARE,

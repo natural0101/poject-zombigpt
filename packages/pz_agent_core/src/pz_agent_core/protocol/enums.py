@@ -43,6 +43,10 @@ class ActionName(StrEnum):
     DOOR_CLOSE = "door.close"
     DOOR_UNLOCK = "door.unlock"
     INVENTORY_TRANSFER_BATCH = "inventory.transfer_batch"
+    COMBAT_EQUIP_BEST = "combat.equip_best"
+    COMBAT_SHOVE = "combat.shove"
+    COMBAT_ENGAGE = "combat.engage"
+    COMBAT_RETREAT = "combat.retreat"
 
 
 #: Actions that only read state. They are permitted in OBSERVE mode and do not

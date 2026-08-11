@@ -46,7 +46,14 @@ import pytest
 from pz_agent_core.actions.adapter import AdapterRegistry
 from pz_agent_core.actions.adapters import register_game_adapters
 from pz_agent_core.actions.builtin import register_builtins
-from pz_agent_core.protocol import ActionName, Command, Observation
+from pz_agent_core.protocol import (
+    ActionName,
+    Command,
+    NearbyView,
+    NearbyZombie,
+    Observation,
+    Position,
+)
 from pz_agent_core.protocol.refs import RefKind, ref_kind
 from tests.fixtures import DEFAULT_SESSION
 from tests.fixtures.adapter_worlds import (
@@ -174,6 +181,23 @@ def _cases() -> list[tuple[ActionName, Command, Observation]]:
         items=[apple, water, book, bandage, shirt, stashed],
         containers=[main_container(), bag_container(), crate_container()],
         objects=[crate_object, sink, door],
+    )
+    # A zombie at contact range, for the two combat actions that name one and
+    # the retreat that needs one observed. ``build_args`` for combat does not
+    # read the world — the policy gates live in ``validate`` — but the case
+    # table's contract is a world the happy path holds in, so it is here.
+    zombie = NearbyZombie(
+        ref=f"zombie:{DEFAULT_SESSION}:9001:0",
+        distance=1.5,
+        visible=True,
+        chasing=False,
+        position=Position(x=1201.5, y=3400.0, z=0),
+        state="standing",
+    )
+    combat_world = a_world(
+        items=[apple],
+        containers=[main_container()],
+        nearby=NearbyView(zombies=[zombie]),
     )
 
     return [
@@ -326,6 +350,31 @@ def _cases() -> list[tuple[ActionName, Command, Observation]]:
             ActionName.DOOR_UNLOCK,
             a_command(ActionName.DOOR_UNLOCK, {"door_ref": door.ref}),
             world,
+        ),
+        # The four combat actions. equip_best and retreat ship no arguments
+        # at all — the mod's declarations own their defaults — and the two
+        # targeted actions ship exactly the one zombie reference; a key
+        # either side renames, or a kind the Lua declaration does not
+        # accept, is caught here for all four.
+        (
+            ActionName.COMBAT_EQUIP_BEST,
+            a_command(ActionName.COMBAT_EQUIP_BEST, {}),
+            combat_world,
+        ),
+        (
+            ActionName.COMBAT_SHOVE,
+            a_command(ActionName.COMBAT_SHOVE, {"target_ref": zombie.ref}),
+            combat_world,
+        ),
+        (
+            ActionName.COMBAT_ENGAGE,
+            a_command(ActionName.COMBAT_ENGAGE, {"target_ref": zombie.ref}),
+            combat_world,
+        ),
+        (
+            ActionName.COMBAT_RETREAT,
+            a_command(ActionName.COMBAT_RETREAT, {}),
+            combat_world,
         ),
     ]
 

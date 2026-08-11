@@ -88,6 +88,16 @@ SURVIVAL_SLEEP: Final = "survival_sleep"
 # probes over one API would let them disagree about it.
 DOOR_TOGGLE: Final = "door_toggle"
 
+# One capability for the four assisted-combat actions, on the door precedent:
+# equip, shove, engage and retreat all ride the same walk-and-queue plumbing
+# plus attack entry points that live behind Java accessors no Lua scan can
+# see, so a build where one works is a build where all four do. Deliberately
+# a NEW name beside AUTONOMOUS_ATTACK, never a replacement for it: that
+# capability's unsupported-by-design ceiling is §12.4's decision about the
+# *autonomous* rung and stays exactly where it is. combat_assist is the
+# assisted rung — user-ordered, one bounded window per command, policy-gated.
+COMBAT_ASSIST: Final = "combat_assist"
+
 
 @dataclass(frozen=True, slots=True)
 class RuntimeConfirmation:
@@ -318,6 +328,36 @@ PROBES: Final[tuple[ProbeDefinition, ...]] = (
             description="the door reads open when re-read after the toggle",
         ),
         description="open, close and unlock doors through the game's own door interaction",
+    ),
+    ProbeDefinition(
+        capability=COMBAT_ASSIST,
+        # The walk/queue set — the only half of the interaction the game's Lua
+        # ever names, exactly the door probe's reasoning: the swing and the
+        # shove are Java entry points a Lua scan cannot see, so requiring them
+        # would report ``unsupported`` on a healthy install, and the mod
+        # re-probes the real entry points per command.
+        required_symbols=(
+            "ISWalkToTimedAction",
+            "ISWalkToTimedAction.new",
+            "ISTimedActionQueue.add",
+        ),
+        confirmation=RuntimeConfirmation(
+            # The least-assumptive combat action confirms the capability: a
+            # shove claims no damage and needs no weapon, and its evidence is
+            # the re-observed zombie, which is the same proof shape every
+            # combat action owes. ``target_ref`` is the ack key the mod's
+            # declaration agrees to carry (the orchestrator contract).
+            action=ActionName.COMBAT_SHOVE,
+            evidence_keys=("target_ref",),
+            description="the shoved zombie was re-observed down or further away",
+        ),
+        # Experimental until a live shove confirms it, like sleep and the
+        # world water source: every game-API assumption behind combat is
+        # requires_live, and the symbols being on disk says nothing about
+        # whether driving an attack is safe for the save.
+        static_state=CapabilityState.EXPERIMENTAL,
+        static_reason=REASON_EXPERIMENTAL_API,
+        description="assisted combat: one user-ordered, policy-gated, bounded window per command",
     ),
     ProbeDefinition(
         capability=AUTONOMOUS_ATTACK,

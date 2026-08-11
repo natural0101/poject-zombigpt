@@ -61,7 +61,10 @@ Toolkit.DEFAULT_STALL_MS = 6000
 --- comments said so -- so those actions published no capability at all and the
 --- mod's capability document named six where the system knows twelve.
 --- `autonomous_attack` is the one deliberate absence: no adapter implements it,
---- because §12.4 makes it permanently unsupported.
+--- because §12.4 makes it permanently unsupported. `combat_assist` is not that
+--- capability and must never be mistaken for it: it is the ASSISTED rung --
+--- four bounded, user-commanded actions in adapters/Combat.lua -- and adding it
+--- here neither touches the autonomous_attack probe nor raises its ceiling.
 Toolkit.CAPABILITY = {
   MOVE_TO_SQUARE = "move_to_square",
   INVENTORY_TRANSFER = "inventory_transfer",
@@ -75,6 +78,7 @@ Toolkit.CAPABILITY = {
   SURVIVAL_REST = "survival_rest",
   SURVIVAL_SLEEP = "survival_sleep",
   DOOR_TOGGLE = "door_toggle",
+  COMBAT_ASSIST = "combat_assist",
 }
 
 --- Health scale the game reports body parts on.

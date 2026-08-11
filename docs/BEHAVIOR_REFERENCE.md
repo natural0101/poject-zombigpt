@@ -1,7 +1,7 @@
 <!--
   GENERATED FILE - DO NOT EDIT BY HAND.
   Generator: pz_agent_core.knowledge.docgen.render_behavior_reference
-  Corpus revision: 49494ec57fe7ded0 (sha256/16 of the canonical corpus)
+  Corpus revision: 7e8169d348d5b434 (sha256/16 of the canonical corpus)
   Edit knowledge/gameplay/*.yaml and regenerate; the drift test
   byte-compares this file against a fresh render.
 -->
@@ -1489,30 +1489,35 @@ A retreat succeeds only on the observed postcondition: the nearest zombie at 12.
 
 **Proven by:** `tests/unit/test_avoid_mission.py`
 
-### `combat_not_implemented`
+### `combat_assisted_unverified`
 
-**Status:** `unverified` · **Source:** `code` — `packages/pz_agent_core/src/pz_agent_core/protocol/enums.py::ActionName` · **Build:** 42 · **Risk:** P4
+**Status:** `unverified` · **Source:** `code` — `packages/pz_agent_core/src/pz_agent_core/combat/policy.py::assess_engagement` · **Build:** 42 · **Risk:** P4
 
-Combat is not implemented: the protocol's action set carries no attack, weapon-swing or push action, so the kill half of the threat directive has no code to restate — retreat via avoid_threat is the implemented half, and combat remains future work under the P4 epic.
+Assisted combat exists in code and is unverified live: four bounded P4 actions (combat.equip_best, shove, engage — one attack window per command — retreat) and the engage_single_zombie mission ride the combat_assist capability, experimental until a live shove confirms the attack entry points.
 
-- **Goals:** `avoid_threat`
+- **Goals:** `avoid_threat`, `engage_single_zombie`
 - **Nearby:** `zombie`
+- **Observed inputs:** `nearby.zombies[].distance`, `nearby.zombies[].chasing`, `nearby.zombies[].state`, `player.stats.endurance`, `player.stats.panic`, `player.stats.health`, `player.wounds[]`, `inventory.items[].weapon`
 
 **Preconditions**
 
-- None recorded.
+- An explicit user-submitted engage_single_zombie goal or combat tool call: nothing on the agent's own initiative reaches these actions
+- combat_assist usable on this install: on an unverified build every combat command is withheld or refused, never attempted
 
 **Actions**
 
-- None — the rule drives no action.
+- `combat.equip_best`
+- `combat.shove`
+- `combat.engage`
+- `combat.retreat`
 
-**Decision** — No code decides combat; this rule exists so retrieval for threat goals states the gap instead of leaving a planner to infer an ability that does not exist.
+**Decision** — assess_engagement re-reads group count, endurance, panic, injury and weapon condition from the current observation before every window and refuses with a closed token; the mission switches to mandatory retreat on any deterioration between windows, and each window is its own command, so the safety stop and reflex guard interrupt between them; autonomous_attack keeps its unsupported ceiling.
 
 **Postconditions**
 
-- None recorded.
+- The following observation reports the target down, honestly gone under the engage absence rule, or further away — the swing itself is never evidence
 
-**Fallback** — Not applicable: there is no combat action to fail.
+**Fallback** — A refusal or a window closing with the target standing ends typed (POLICY_DENIED, PRECONDITION_FAILED, POSTCONDITION_FAILED) with observed numbers as evidence; deterioration is answered by the mandatory retreat, never another window.
 
 **Proven by:** nothing — which is why the status says so.
 

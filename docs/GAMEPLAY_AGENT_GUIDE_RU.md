@@ -1,7 +1,7 @@
 <!--
   GENERATED FILE - DO NOT EDIT BY HAND.
   Generator: pz_agent_core.knowledge.docgen.render_guide_ru
-  Corpus revision: 49494ec57fe7ded0 (sha256/16 of the canonical corpus)
+  Corpus revision: 7e8169d348d5b434 (sha256/16 of the canonical corpus)
   Edit knowledge/gameplay/*.yaml and regenerate; the drift test
   byte-compares this file against a fresh render.
 -->
@@ -175,5 +175,5 @@
 
 Гипотезы (фон для проверенных отказов, не руководство к действию):
 
-- `combat_not_implemented` — **не проверено (гипотеза)** (источник: код этого репозитория). Combat is not implemented: the protocol's action set carries no attack, weapon-swing or push action, so the kill half of the threat directive has no code to restate — retreat via avoid_threat is the implemented half, and combat remains future work under the P4 epic.
+- `combat_assisted_unverified` — **не проверено (гипотеза)** (источник: код этого репозитория). Assisted combat exists in code and is unverified live: four bounded P4 actions (combat.equip_best, shove, engage — one attack window per command — retreat) and the engage_single_zombie mission ride the combat_assist capability, experimental until a live shove confirms the attack entry points.
 

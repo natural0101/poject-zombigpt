@@ -77,9 +77,21 @@ the doctor warns and every previously `verified` capability downgrades.
 
 ## What the agent will not do
 
-**Combat.** `autonomous_attack`'s probe has a hard ceiling of `unsupported` with
-`NO_VERIFIED_API`, so even a live ack cannot raise it. Faking it by writing stats
-would be a lie shaped like a feature.
+**Autonomous combat.** `autonomous_attack`'s probe has a hard ceiling of
+`unsupported` with `NO_VERIFIED_API`, so even a live ack cannot raise it. Faking
+it by writing stats would be a lie shaped like a feature. What the assisted-combat
+epic shipped rides a *separate* capability, `combat_assist`, and narrows this
+limitation without touching that ceiling: single-target ASSISTED combat exists —
+four P4 actions (`combat.equip_best`, `combat.shove`, `combat.engage`,
+`combat.retreat`) and the `engage_single_zombie` goal — reachable only by an
+explicit user submission or tool call, one bounded attack window per command,
+policy-refused for groups over the limit, exhaustion, injury or a broken weapon,
+and verified only by the re-observed zombie. `combat_assist` itself resolves to
+`experimental` until a live session confirms the attack entry points, so on an
+unverified install the combat surface is withheld, not offered. Nothing on the
+agent's own initiative — no arbiter, no planner, no initiative table — can mint
+a combat goal or propose a combat action; each of those absences is pinned by
+its own test.
 
 **Drive.** Driving is not modelled and no action steers, starts or moves a
 vehicle. Vehicles are not entirely absent: `ContainerKind.VEHICLE` exists, so a

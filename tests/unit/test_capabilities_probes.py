@@ -17,11 +17,13 @@ from pz_agent_core.capabilities.model import (
 )
 from pz_agent_core.capabilities.probes import (
     AUTONOMOUS_ATTACK,
+    COMBAT_ASSIST,
     DRINK_WORLD_SOURCE,
     EAT_PERCENTAGE,
     INVENTORY_TRANSFER,
     MOVE_TO_SQUARE,
     PROBES,
+    PROBES_BY_NAME,
     READ_LITERATURE,
     ProbeDefinition,
     RuntimeConfirmation,
@@ -71,6 +73,7 @@ def test_every_capability_named_by_the_blueprint_has_a_probe() -> None:
         "drink_world_source",
         "autonomous_attack",
         "door_toggle",
+        "combat_assist",
     }
 
 
@@ -171,6 +174,76 @@ def test_missing_symbols_is_empty_for_a_complete_install(tmp_path: Path) -> None
 # ---------------------------------------------------------------------------
 # autonomous_attack stays refused
 # ---------------------------------------------------------------------------
+
+
+def test_combat_assist_and_autonomous_attack_are_separate_and_attack_stays_refused(
+    tmp_path: Path,
+) -> None:
+    """The assisted rung is a NEW capability; the autonomous one is untouched.
+
+    Both exist side by side, and ``autonomous_attack``'s ceiling is still
+    ``unsupported`` with the by-design reason — a live ack for combat.shove
+    confirms ``combat_assist`` and can never resurrect the other. This is the
+    epic's first safety constraint, pinned: shipping assisted combat must not
+    move the autonomous rung by a millimetre.
+    """
+    assert COMBAT_ASSIST in PROBES_BY_NAME
+    assert AUTONOMOUS_ATTACK in PROBES_BY_NAME
+
+    attack = PROBES_BY_NAME[AUTONOMOUS_ATTACK]
+    assert attack.ceiling is CapabilityState.UNSUPPORTED
+    assert attack.ceiling_reason == REASON_NO_VERIFIED_API
+    assert attack.static_state is CapabilityState.UNSUPPORTED
+    assert not attack.can_be_verified
+
+    assist = PROBES_BY_NAME[COMBAT_ASSIST]
+    # Confirmed by the least-assumptive combat action, and experimental until
+    # a live shove actually lands: requires_live, like sleep and the well.
+    assert assist.confirmation.action is ActionName.COMBAT_SHOVE
+    assert "target_ref" in assist.confirmation.evidence_keys
+    assert assist.static_state is CapabilityState.EXPERIMENTAL
+    assert assist.can_be_verified
+
+    report = resolve_all(full_index(tmp_path), build=BUILD, observed_at=WHEN)
+    assert report.state(COMBAT_ASSIST) is CapabilityState.EXPERIMENTAL
+    assert not report.usable(COMBAT_ASSIST)
+    assert report.state(AUTONOMOUS_ATTACK) is CapabilityState.UNSUPPORTED
+
+
+def test_combat_assist_can_be_confirmed_by_a_live_shove_ack(tmp_path: Path) -> None:
+    """The one path to a usable combat_assist runs through a real shove.
+
+    The ack must be for combat.shove and must carry the declared postcondition
+    key; anything else leaves the capability exactly where the scan put it.
+    """
+    probe = probe_for(COMBAT_ASSIST)
+    static = resolve_static(probe, full_index(tmp_path), build=BUILD, observed_at=WHEN)
+    assert static.state is CapabilityState.EXPERIMENTAL
+
+    confirmed = confirm(
+        probe,
+        static,
+        probe_ack(
+            ActionName.COMBAT_SHOVE,
+            {"target_ref": "zombie:s:1:0", "distance_before": 1.5, "distance_after": 2.5},
+        ),
+        build=BUILD,
+        observed_at=WHEN,
+    )
+    assert confirmed.state is CapabilityState.VERIFIED
+    assert confirmed.has_runtime_evidence
+
+    # And the wrong action's ack is refused, so nothing softer than a shove
+    # can ever raise it.
+    other = confirm(
+        probe,
+        static,
+        probe_ack(ActionName.ACTION_WAIT, {"target_ref": "zombie:s:1:0"}),
+        build=BUILD,
+        observed_at=WHEN,
+    )
+    assert other.state is CapabilityState.EXPERIMENTAL
+    assert other.reason.startswith(REASON_PROBE_NOT_CONFIRMED)
 
 
 def test_autonomous_attack_is_unsupported_after_a_full_scan(tmp_path: Path) -> None:

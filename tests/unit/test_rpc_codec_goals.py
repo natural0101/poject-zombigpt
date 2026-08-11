@@ -116,6 +116,12 @@ REQUIRED_PARAMS: dict[GoalKind, GoalParams] = {
     # (the schema-conformance contract test pins it); this codec's kind door
     # is parse_kind, so the token itself round-trips.
     GoalKind.AVOID_THREAT: GoalParams(),
+    # The combat kind, on the retreat kind's exact terms: parameterless by
+    # its own spec, local to the sidecar, and the wire schema refuses it
+    # upstream of this codec (NOT_YET_ON_THE_WIRE in the conformance
+    # contract) — putting a kill order on the remote link is a protocol
+    # change nobody makes by accident.
+    GoalKind.ENGAGE_SINGLE_ZOMBIE: GoalParams(),
 }
 
 #: The one kind whose *minimal* request this codec cannot carry: rest_until

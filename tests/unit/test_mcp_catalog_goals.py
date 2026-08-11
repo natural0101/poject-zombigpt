@@ -97,6 +97,12 @@ DOCUMENTED_KINDS: Final[frozenset[str]] = frozenset(
         "rest_until",
         "sleep_until_rested",
         "avoid_threat",
+        # The assisted-combat kind: typed submission is the ONLY route to it
+        # (the voice grammar declares it unspeakable, no provider plans it,
+        # and no arbiter or initiative table mints it), so pz_goal_submit
+        # carrying the token is not a loophole — it is the one door, and the
+        # caller types the kind.
+        "engage_single_zombie",
     }
 )
 
