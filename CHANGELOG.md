@@ -374,6 +374,21 @@ drift out of sync with `pz_agent_core.version`.
   goal completes on the absence of a frontier or a container. The honest end has
   no listener, so declaring the gap would fix nothing today.
 
+- **CI had never run on this branch, and every STATUS entry said "pending"
+  anyway.** Both workflows trigger on pushes to `main`, `dev`, `claude/**`,
+  `epic/**`, `fix/**`, `rescue/**` and `swarm/**`, and on pull requests targeting
+  `main` or `dev`. This branch is `stabilize/**`, and PR #10 targets
+  `epic/ux-one-command-play` — so neither trigger fires, and the PR reports zero
+  check runs across forty-three commits. Meanwhile every one of those commits was
+  followed by a STATUS reconciliation recording both platforms as `PENDING`, which
+  reads as "CI will tell us" about a verdict that was never coming. That is this
+  pass's own defect family in its own control document, written by the same hand
+  twenty-odd times. `stabilize/**` is now in both workflows' push branches, so the
+  Linux suite and the Windows package build actually run here and `PENDING` means
+  what it says. Nothing else changed: the local gate was always green, but a
+  green gate on one Linux container is not the two platforms the STATUS file
+  claims to be waiting on.
+
 - **The README says the agent cannot walk yet.** Its status block was accurate on
   its own terms — "nothing in this README describes behaviour that is not backed
   by code and tests" is still true, because the movement code and its tests both
