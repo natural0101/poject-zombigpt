@@ -135,7 +135,8 @@ so each side was only ever tested against its own idea of the document.
 recorded here because the three things that killed it are what the real fix must
 solve, and each was proven end to end rather than argued:
 
-1. **Reference collision — it fixed walking by breaking drinking.**
+1. **Reference collision — it fixed walking by breaking drinking. Since
+   closed.**
    `ObserveModel.buildObject` mints a non-container, **non-door** world object's
    ref with `Refs.buildSquare`, the same ref a square entry would carry. (Doors
    are exempt: they get a per-object ref from their `object_index`. The
@@ -188,6 +189,29 @@ every object carrying it. `consume.drink_source` asked only the first, and a tre
 scanned before a sink made the sink invisible. It now asks all of them
 (`nearby_objects` in `actions/adapters/common.py`). Any future consumer of a
 square-scoped reference has the same obligation.
+
+**That fix closes blocker 1 above**, which changes what a square tier now has to
+solve. Every other place that resolves a reference against `nearby.objects` was
+audited, and each asks a *position* question rather than a property one:
+`movement.move_near` in all four of its uses (`validate`, `build_args` and both
+sides of `verify`) and the planner critic's `_destination`. Position is shared by
+construction — everything answering to a square's reference stands on that square
+— so a square entry landing first changes nothing there. The square lookups
+themselves (`_square_object`, `world.inspect`'s `_reported_square`, the local
+map) match on **kind and position**, never on the reference, so they are
+unaffected by definition. A regression test pins the exact case that killed the
+attempt: a `kind="square"` entry listed ahead of a sink at the same reference, and
+the drink still accepted. It is written against the *shape* a tier would produce
+rather than against any tier, since none is shipped.
+
+One residual, noted rather than fixed because it could not be turned red: if the
+first entry at a reference carries no position while a later one does,
+`move_near` and the critic both answer "unlocatable" and refuse. That is an extra
+refusal, never a false success, and no path was found by which the mod emits a
+position-less object at a square reference.
+
+**Two blockers remain**, and they are the ones a tier must still answer: the
+partial solidity read (2) and the planner's compact view (3).
 
 **`plan.execute` is not served over the Core RPC link.** An earlier revision of
 this entry said the sidecar published no Core RPC endpoint at all; that gap is

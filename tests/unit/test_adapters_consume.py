@@ -430,6 +430,25 @@ def test_a_sink_is_still_a_water_source_when_something_is_listed_before_it() -> 
     )
 
 
+def test_a_square_entry_beside_the_sink_does_not_hide_it() -> None:
+    """The case that killed the first square-tier attempt.
+
+    A square tier would put an entry describing the *ground* into
+    ``nearby.objects`` carrying the square's own reference — the very reference
+    the sink already answers to, since anything that is not a container or a door
+    is referenced by its square. Sorted by distance the ground ties with
+    everything standing on it, so the square entry can land first.
+
+    Resolved with "the first entry that matches", that turned a sink into bare
+    ground and refused the drink with ``NO_SAFE_DRINK``. Asking every object at
+    the reference is what makes the tier survivable here; this test is the guard
+    on that, and it is deliberately written against the shape a tier would
+    produce rather than against any tier, because none is shipped.
+    """
+    ground = _a_thing("square", "loaded")
+    _drink_from_source(_square_holding(ground, _a_thing("sink", "water_source")))
+
+
 def test_drinking_from_a_source_is_proven_by_thirst_falling() -> None:
     """The postcondition of a registered adapter that nothing had ever run."""
     command = a_command(

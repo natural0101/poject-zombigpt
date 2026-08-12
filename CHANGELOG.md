@@ -246,6 +246,19 @@ drift out of sync with `pz_agent_core.version`.
   because they are what the real fix has to solve; shipping the attempt would have
   traded a named refusal for two silent wrong answers.
 
+  That fix closes the first of the three square-tier blockers, which changes what
+  a tier now has to solve. Every other reference resolution against
+  `nearby.objects` was audited and each asks a *position* question rather than a
+  property one — `movement.move_near` in all four of its uses and the planner
+  critic's `_destination` — and position is shared by construction, since
+  everything answering to a square's reference stands on that square. The square
+  lookups themselves match on kind and position, never on the reference. A
+  regression test pins the exact case that killed the attempt (a `kind="square"`
+  entry listed ahead of a sink at the same reference, drink still accepted) and is
+  verified non-vacuous: restore the first-match resolution and it fails with the
+  original `NO_SAFE_DRINK`. Two blockers remain — the partial solidity read and
+  the planner's compact view.
+
   Two more are recorded with their reasoning rather than closed. The first is a
   **decision**, not a stabilisation fix: the age check above refuses a *stale*
   floor but accepts a floor that was **never** measured, because
