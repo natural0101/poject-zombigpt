@@ -982,7 +982,13 @@ class NearbyZombie:
     ref: str
     distance: float
     visible: bool = True
-    chasing: bool = False
+    #: ``None`` means the reader is absent, not that the zombie is calm. The mod
+    #: omits the field when the build exposes no ``getTarget`` -- deliberately,
+    #: so this side is told it could not be read -- and the schema requires only
+    #: ``ref`` and ``distance``. Defaulting it to ``False`` turned that
+    #: declaration into a positive claim, one rung down every band of
+    #: :func:`~pz_agent_core.safety.threat._zombie_level`.
+    chasing: bool | None = None
     position: Position | None = None
     #: Body state token the build reported ("standing", "prone", "crawling",
     #: ...). ``None`` means the reader is absent — a combat decision must never
@@ -994,8 +1000,11 @@ class NearbyZombie:
             "ref": self.ref,
             "distance": self.distance,
             "visible": self.visible,
-            "chasing": self.chasing,
         }
+        if self.chasing is not None:
+            # Omitted rather than sent as null: the schema types this boolean,
+            # and an absent field is how the mod says the same thing.
+            out["chasing"] = self.chasing
         if self.position is not None:
             out["position"] = self.position.to_dict(with_direction=False)
         if self.state is not None:
@@ -1010,7 +1019,11 @@ class NearbyZombie:
             ref=_as_str(_require(payload, "ref"), field_name="zombie.ref"),
             distance=_as_float(_require(payload, "distance"), field_name="zombie.distance"),
             visible=_as_bool(payload.get("visible", True), field_name="zombie.visible"),
-            chasing=_as_bool(payload.get("chasing", False), field_name="zombie.chasing"),
+            chasing=(
+                None
+                if payload.get("chasing") is None
+                else _as_bool(payload["chasing"], field_name="zombie.chasing")
+            ),
             position=(
                 None
                 if position is None
@@ -1050,7 +1063,14 @@ class NearbyView:
         return min((z.distance for z in self.zombies), default=None)
 
     def chasing_zombies(self) -> list[NearbyZombie]:
-        return [z for z in self.zombies if z.chasing]
+        """Zombies observed to be chasing. An unread intent is not one of them.
+
+        Callers deciding how *dangerous* the tick is must not use this alone --
+        see :func:`~pz_agent_core.safety.threat.assess_threat`, which treats an
+        unread intent as a possible chase for the level while keeping this count
+        to what was actually observed.
+        """
+        return [z for z in self.zombies if z.chasing is True]
 
     def objects_with(self, semantic: str) -> list[NearbyObject]:
         return [o for o in self.objects if semantic in o.semantics]

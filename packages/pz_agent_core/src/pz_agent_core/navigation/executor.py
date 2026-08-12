@@ -349,7 +349,11 @@ def _threat_costs(local_map: LocalMap) -> dict[GridSquare, float]:
         for dx in range(-THREAT_AVOID_RADIUS, THREAT_AVOID_RADIUS + 1):
             for dy in range(-THREAT_AVOID_RADIUS, THREAT_AVOID_RADIUS + 1):
                 bump((sighting.x + dx, sighting.y + dy, sighting.z), THREAT_STEP_COST)
-        if sighting.chasing:
+        # ``is not False`` -- an intent the build could not report is routed
+        # around as though it were a chase, matching the threat assessment. The
+        # cost is a longer path; the other direction routes the character past a
+        # zombie nobody could rule out.
+        if sighting.chasing is not False:
             bump(sighting.square, CHASING_STEP_COST)
     return costs
 

@@ -87,6 +87,10 @@ class ThreatAssessment:
     level: DangerLevel
     zombie_count: int
     chasing_count: int
+    #: Zombies whose intent the build could not report. Counted separately so
+    #: the spoken reason never says "three chasing" about one observed chaser
+    #: and two the reader could not answer for.
+    chasing_unknown_count: int
     nearest_distance: float | None
     nearest_chasing_distance: float | None
     reason: str
@@ -109,7 +113,8 @@ def assess_threat(
     """Full assessment: level, counts, distances and a speakable reason."""
     floor = player.position.z
     zombies = nearby.zombies
-    chasing = [z for z in zombies if z.chasing]
+    chasing = [z for z in zombies if z.chasing is True]
+    chasing_unknown = [z for z in zombies if z.chasing is None]
     in_alert_radius = [z for z in zombies if _distance(z) <= config.alert_distance]
 
     level = DangerLevel.NONE
@@ -136,6 +141,7 @@ def assess_threat(
         level=level,
         zombie_count=len(zombies),
         chasing_count=len(chasing),
+        chasing_unknown_count=len(chasing_unknown),
         nearest_distance=nearest,
         nearest_chasing_distance=nearest_chasing,
         reason=_reason(
@@ -163,7 +169,11 @@ def _zombie_level(zombie: NearbyZombie, player_floor: int, config: ThreatConfig)
     MEDIUM, while an unaware zombie only reaches MEDIUM at contact range.
     """
     distance = _distance(zombie)
-    if zombie.chasing:
+    # ``None`` -- the build could not say -- takes this branch with ``True``. The
+    # guard exists for the case nobody can rule out, and the cost is a more
+    # cautious agent on a build with no ``getTarget``; the other direction is a
+    # chaser at contact range assessed as an unaware one.
+    if zombie.chasing is not False:
         if distance <= config.critical_distance:
             level = DangerLevel.CRITICAL
         elif distance <= config.close_distance:

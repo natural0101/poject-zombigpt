@@ -12,14 +12,14 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
-- **Thirty-two defects of one family: evidence read without checking whose it
+- **Thirty-three defects of one family: evidence read without checking whose it
   was, or when it was written** (`stabilize/arm-session-confirmation`). A static
   audit along the P0 causal chain — mod visibility, session identity, heartbeat
   freshness, the two-phase arm, terminality, pointer and sequence recovery, one
   action, goals made of several — starting from one found in `pz-agent play`,
   generalising its shape across the sidecar, and then running the same three
   families against the mod, which is where every one of the 2026-08-08 live
-  findings had lived, and finally against the tri-state rule itself. Fifteen on
+  findings had lived, and finally against the tri-state rule itself. Sixteen on
   the sidecar, seventeen on the mod. Every fix was
   watched red first; a hypothesis that could not be turned red was reported as a
   hypothesis and left alone.
@@ -198,6 +198,31 @@ drift out of sync with `pz_agent_core.version`.
   gets for the same reason, token-checked names and a cap, because it is an open
   map arriving from the game side. The compact document is serialised to the
   model wholesale, so this needed no prompt change to become visible.
+
+  *A zombie whose intent nobody could read was assessed as calm.* The mod omits
+  `chasing` when the build exposes no `getTarget`, and says so in its own
+  comment: an absent accessor "must stay absent so the sidecar is told it could
+  not be read". The schema agrees — only `ref` and `distance` are required. The
+  sidecar's parser read that absence as `chasing=False`, a positive claim that
+  the zombie is not hunting. `NearbyZombie` states the rule it broke in the file
+  itself: `state` is `str | None` with a comment that an unreadable body state
+  must never read as "standing", while `chasing` — which that class's own
+  docstring calls more important than distance for the reflex guard — defaulted
+  to `False`. The cost lands in `_zombie_level`, whose three ladders "differ by a
+  full rung at every band": a chaser at contact range was assessed as an unaware
+  zombie, one rung down, on every build without that accessor. The navigation
+  executor lost the same fact — it adds `CHASING_STEP_COST` around a chaser's
+  square, and an unread intent silently skipped it, routing the character past a
+  zombie nobody could rule out. `chasing` is now `bool | None` end to end,
+  omitted from `to_dict` rather than sent as a schema-invalid null; the threat
+  ladder and the route cost both treat "could not say" as a possible chase, the
+  same cost this pass already accepted for the failed zombie scan; and
+  `chasing_count` stays a count of *observed* chasers, with
+  `chasing_unknown_count` beside it, so the reason spoken to the player never
+  says "three chasing" about one chaser and two the reader could not answer for.
+  The local map's same-tick merge over the three states is explicit for the same
+  reason: an observed chase wins, but an unread intent survives rather than
+  collapsing to the calm neither reading claimed.
 
   *A test that never ran.* An earlier hand-merge in this same pass appended the
   zombie-scan group to `tests/lua/test_observe.lua` **after** `Harness.finish`,

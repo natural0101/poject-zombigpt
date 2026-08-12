@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from pz_agent_core.protocol import DangerLevel, NearbyView, Position
+from pz_agent_core.protocol import DangerLevel, NearbyView, NearbyZombie, Position
 from pz_agent_core.safety.threat import (
     DEFAULT_THREAT_CONFIG,
     ThreatConfig,
@@ -200,3 +200,56 @@ def test_a_zombie_on_another_floor_of_a_multi_storey_building_still_counts_a_lit
     below = make_zombie("z1", 2.0, chasing=True, floor=0)
 
     assert assess_danger(make_nearby(below), player) is DangerLevel.MEDIUM
+
+
+# --------------------------------------------------------------------------
+# a zombie whose intent nobody could read
+# --------------------------------------------------------------------------
+# The mod omits ``chasing`` deliberately when the build exposes no ``getTarget``
+# -- its own comment says an absent accessor "must stay absent so the sidecar is
+# told it could not be read". The schema agrees: only ``ref`` and ``distance``
+# are required. This side is where that declaration has to survive, because
+# ``_zombie_level`` runs a full rung lower at every band for a zombie it
+# believes is unaware.
+
+
+def test_an_unread_intent_is_not_a_reading_of_calm() -> None:
+    """Absent is not False. The parser is where the mod's declaration survives."""
+    parsed = NearbyZombie.from_dict({"ref": "zombie:s:1", "distance": 3.0})
+
+    assert parsed.chasing is None, (
+        "the mod left chasing out to say it could not be read, and it arrived as a "
+        "positive claim that the zombie is not chasing"
+    )
+
+
+def test_a_zombie_that_might_be_chasing_is_assessed_as_though_it_is() -> None:
+    """The guard's whole job is the case nobody can rule out.
+
+    Cost accepted deliberately, exactly as the failed zombie scan's floor was:
+    on a build with no ``getTarget`` the agent is more cautious than it needs to
+    be. The other direction is a chaser at contact range assessed as an unaware
+    one, which is the guarantee the README makes about threat interruption.
+    """
+    for distance in (1.0, 4.0, 12.0):
+        unknown = assess_danger(make_nearby(make_zombie("z1", distance, chasing=None)), CALM)
+        chaser = assess_danger(make_nearby(make_zombie("z2", distance, chasing=True)), CALM)
+        assert unknown is chaser, f"at {distance} tiles an unread intent dropped a rung"
+
+
+def test_the_count_of_chasers_stays_a_count_of_known_chasers() -> None:
+    """Treating unknowns as chasers for the ladder must not make them chasers in
+    the evidence: "three chasing" has to mean three that were observed chasing,
+    or the reason the agent speaks to the player is itself a false reading.
+    """
+    assessment = assess_threat(
+        make_nearby(
+            make_zombie("z1", 3.0, chasing=True),
+            make_zombie("z2", 3.0, chasing=None),
+            make_zombie("z3", 3.0, chasing=False),
+        ),
+        CALM,
+    )
+
+    assert assessment.chasing_count == 1
+    assert assessment.chasing_unknown_count == 1

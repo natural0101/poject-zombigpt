@@ -32,7 +32,9 @@ def make_zombie(
     runtime_id: str,
     distance: float,
     *,
-    chasing: bool = False,
+    # Tri-state, like the field: ``None`` is "the build could not report the
+    # zombie's target", which the threat assessment must not read as calm.
+    chasing: bool | None = False,
     visible: bool = True,
     floor: int | None = None,
 ) -> NearbyZombie:

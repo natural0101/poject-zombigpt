@@ -131,6 +131,20 @@ class DoorKnowledge:
         return self.locked is not True and self.barricaded is not True
 
 
+def _merge_chasing(left: bool | None, right: bool | None) -> bool | None:
+    """Two sightings of one square in one tick, over three states.
+
+    An observed chase wins outright. Failing that, an unread intent has to
+    survive: collapsing it to ``False`` because the other sighting happened to
+    be readable would manufacture the calm neither reading claimed.
+    """
+    if left is True or right is True:
+        return True
+    if left is None or right is None:
+        return None
+    return False
+
+
 @dataclass(frozen=True, slots=True)
 class ThreatSighting:
     """The last zombie sighting recorded on one square.
@@ -146,7 +160,10 @@ class ThreatSighting:
     x: int
     y: int
     z: int
-    chasing: bool
+    #: ``None`` is "the build could not say", not "calm" -- see
+    #: :class:`~pz_agent_core.protocol.NearbyZombie`. Routing treats it as a
+    #: possible chase, the same way the threat assessment does.
+    chasing: bool | None
     last_seen_seq: int
 
     @property
@@ -334,7 +351,7 @@ class LocalMap:
                     continue
                 chasing = zombie.chasing
                 if known is not None and known.last_seen_seq == seq:
-                    chasing = chasing or known.chasing
+                    chasing = _merge_chasing(chasing, known.chasing)
                 self._threats[square] = ThreatSighting(
                     x=square[0], y=square[1], z=square[2], chasing=chasing, last_seen_seq=seq
                 )
