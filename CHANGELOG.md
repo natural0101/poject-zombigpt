@@ -374,6 +374,16 @@ drift out of sync with `pz_agent_core.version`.
   goal completes on the absence of a frontier or a container. The honest end has
   no listener, so declaring the gap would fix nothing today.
 
+- **The README says the agent cannot walk yet.** Its status block was accurate on
+  its own terms — "nothing in this README describes behaviour that is not backed
+  by code and tests" is still true, because the movement code and its tests both
+  exist — and that is exactly why the sentence was not enough. A reader deciding
+  whether this build is worth their afternoon would not have learned the one fact
+  that decides it. The block now says movement refuses every real observation and
+  why, names what is unaffected (arming, the safety guarantees, the observation
+  tiers, eating, drinking, equipping, bandaging, reading), and points at
+  `LIMITATIONS.md` for the account and for the two other gates in the same state.
+
 - **The live handoff no longer sends its reader into the one thing that cannot
   work.** `LOCAL_GAME_HANDOFF.md` is what the person with the game reads, and its
   section on what needs a real game said nothing about the agent being unable to
