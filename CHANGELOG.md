@@ -12,14 +12,14 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
-- **Thirty-one defects of one family: evidence read without checking whose it
+- **Thirty-two defects of one family: evidence read without checking whose it
   was, or when it was written** (`stabilize/arm-session-confirmation`). A static
   audit along the P0 causal chain — mod visibility, session identity, heartbeat
   freshness, the two-phase arm, terminality, pointer and sequence recovery, one
   action, goals made of several — starting from one found in `pz-agent play`,
   generalising its shape across the sidecar, and then running the same three
   families against the mod, which is where every one of the 2026-08-08 live
-  findings had lived, and finally against the tri-state rule itself. Fourteen on
+  findings had lived, and finally against the tri-state rule itself. Fifteen on
   the sidecar, seventeen on the mod. Every fix was
   watched red first; a hypothesis that could not be turned red was reported as a
   hypothesis and left alone.
@@ -177,6 +177,27 @@ drift out of sync with `pz_agent_core.version`.
   thirst proves nothing, and the evidence still carries `source_ref` so an
   ordinary sip from a bottle cannot stand as confirmation of a capability nobody
   has seen work.
+
+  *The planner was told a street was empty on a scan that never ran.* The mod
+  publishes its own accounting of every reading it could not complete — eighteen
+  counters under the `observe.` prefix in `player.stats`, which is an open scalar
+  map, so all of them arrive on this side intact. **Nothing in the sidecar read a
+  single one.** An earlier wave noted the declaration had no listener and left it
+  as contract-shaped; the consumer that makes it matter is
+  `compact_for_planner`, the only picture a planner is ever given, and it builds
+  `stats` from a whitelist of five. So a zombie scan that could not run — the
+  safety-critical case fixed on the mod side earlier in this pass, where the
+  floor now answers HIGH — reached the model as `zombies: []`, `zombie_count: 0`,
+  `zombies_truncated: false`: a positive claim that the street is empty *and the
+  reading complete*, about a scan that never happened. The counts and truncation
+  flags there are about what **this** side dropped, and cannot say what the mod
+  could not read. The compact document now carries an `unread` block and the
+  nearby tier a `zombies_unscanned` flag. The block is generic on purpose —
+  enumerating the counters would leave the next one silently dropped, which is
+  the state all eighteen were in — and it gets the treatment `moodles` already
+  gets for the same reason, token-checked names and a cap, because it is an open
+  map arriving from the game side. The compact document is serialised to the
+  model wholesale, so this needed no prompt change to become visible.
 
   *A test that never ran.* An earlier hand-merge in this same pass appended the
   zombie-scan group to `tests/lua/test_observe.lua` **after** `Harness.finish`,

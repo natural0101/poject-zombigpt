@@ -295,6 +295,70 @@ def test_nearby_lists_are_capped_and_sorted_by_distance() -> None:
     assert distances == sorted(distances)
 
 
+# --------------------------------------------------------------------------
+# what the mod could not read
+# --------------------------------------------------------------------------
+# The mod publishes its own accounting of every reading it could not complete
+# under the ``observe.`` prefix in ``player.stats`` -- an open scalar map, so the
+# counters arrive on this side intact. Eighteen of them exist. Until now nothing
+# in the sidecar read a single one, and this module builds ``stats`` from a
+# whitelist of five, so the declaration stopped here.
+#
+# That matters most for the tier below, because the compact view is the only
+# picture the planner is ever given. A zombie scan that could not run publishes
+# an empty list, and an empty list is rendered as ``zombie_count: 0`` with
+# ``zombies_truncated: false`` -- a positive claim that the street is empty and
+# the reading complete, made about a scan that never happened.
+
+
+def test_a_scan_the_mod_could_not_run_is_not_an_empty_street() -> None:
+    """The planner must not be told a street is clear on a reading nobody took."""
+    view = _compact(
+        player=make_player(stats={"observe.zombies_unknown": True}),
+        nearby=make_nearby(objects=()),
+    )
+
+    nearby = view["nearby"]
+    assert nearby["zombies"] == []
+    assert nearby["zombies_unscanned"] is True, (
+        "the mod said it could not read the zombies and the planner is not being told"
+    )
+
+
+def test_a_scan_that_did_run_and_found_nobody_says_so_plainly() -> None:
+    """The control: an empty street must stay distinguishable from an unread one."""
+    view = _compact(nearby=make_nearby(objects=()))
+
+    assert view["nearby"]["zombies"] == []
+    assert view["nearby"]["zombies_unscanned"] is False
+
+
+def test_every_reading_the_mod_could_not_take_reaches_the_planner() -> None:
+    """Not just the zombies: whatever the mod declares, the planner is told.
+
+    Carried generically rather than one field at a time, so a counter the mod
+    adds later is visible here instead of silently dropped -- which is the state
+    all eighteen were in. Names are token-checked and the block is capped, the
+    same treatment ``moodles`` gets, because this is an open map too.
+    """
+    view = _compact(
+        player=make_player(
+            stats={
+                "observe.wounds_unknown": True,
+                "observe.containers_truncated": True,
+                "observe.items_omitted": 12,
+                "hunger": 0.4,
+            }
+        )
+    )
+
+    unread = view["unread"]
+    assert unread["wounds_unknown"] is True
+    assert unread["containers_truncated"] is True
+    assert unread["items_omitted"] == 12
+    assert "hunger" not in unread, "an ordinary stat is not a limit declaration"
+
+
 def test_the_container_list_is_capped_and_says_so() -> None:
     containers = [
         make_container(f"container:{MAIN.split(':', 2)[1]}:world:{i}:0:0:0:0", ContainerKind.WORLD)
