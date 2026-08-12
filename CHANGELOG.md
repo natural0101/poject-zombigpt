@@ -379,7 +379,7 @@ drift out of sync with `pz_agent_core.version`.
   than a promise: `python 3.11`, `python 3.12`, `lua` and `build artifact` all
   passed, and the Windows job built and certified a release candidate —
   `pz-agent-windows-v1.0.0-rc1.zip`, 48657492 bytes, 75 entries, sha256
-  `9e84a4e5…`, with `check_release.py --rc` printing `CERTIFIED v1.0.0-rc1: 8
+  `9e84a4e5…` — the RC of *that* commit, kept here as history; the digest identifying the **current** archive lives in `docs/control/EVIDENCE_INDEX.md`, which is the one record that is supposed to answer "which RC" — with `check_release.py --rc` printing `CERTIFIED v1.0.0-rc1: 8
   check(s) passed`. That includes `archive.bin: both executables are in bin/`,
   which the ZIP built in this Linux container could never satisfy and whose
   absence `LOCAL_GAME_HANDOFF.md` warns installers about; the packaged pair also
