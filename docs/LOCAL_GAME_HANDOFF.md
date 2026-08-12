@@ -255,6 +255,45 @@ Everything below ran and passed in the remote environment:
 
 ## 4. What requires a real game — and was therefore not done
 
+**Read this before you spend a session: three parts of the sidecar are wired to
+a mod that cannot drive them, and one of the three means the agent cannot walk.**
+None of this is your install. Reporting it as a bug costs you the session, which
+is the only resource in this project that can produce live evidence at all.
+
+| What you will see | Why | Do |
+| --- | --- | --- |
+| **Every `movement.move_to` and `movement.move_near` refuses `TARGET_NOT_LOADED`** — "no loaded square was reported at (x, y, z)", including the square next to the character | The sidecar finds a destination square by scanning `nearby.objects` for an entry whose `kind` is `square`; the mod emits no such entry. `world.inspect` reports zero squares described for the same reason, and the local map never learns any square is blocked | Skip every scenario that walks. Do **not** relax the precondition to get past it — it exists to stop the character being walked onto ground nothing assessed |
+| Containers are never refused as unreachable | `container.accessible` is always true: five sidecar sites refuse on it and nothing in the mod ever sets it false | Nothing. Expect a locked or blocked container to be attempted and to fail at the game rather than be refused early |
+| Snapshots are always full, never deltas | `Observe.context` sets `full = true` unconditionally | Nothing. The merge path in `store.py` is simply unused |
+
+`tests/contract/test_gates_without_producers.py` is the ledger for these three;
+`LIMITATIONS.md` carries the full account and, for the square tier, the two
+blockers a fix must still solve.
+
+**So what is worth doing with a live session?** Everything that does not walk,
+and one thing above all others:
+
+1. **Confirm the 52 engine symbols in `docs/GAME_API_VERIFICATION.md`.** This is
+   the highest-information hour available, because almost every remaining
+   unknown is downstream of it — including whether the square tier is even
+   buildable. A first attempt at that tier was rejected partly because it read
+   solidity from `isSolid`/`isSolidTrans` and published a wall as open ground
+   when a build exposed one and not the other. **Those two are not yet rows in
+   that document.** Add them and confirm them, and blocker 2 stops being a
+   guess. Start with `ISTakeWaterAction`, whose argument order the document
+   flags as wrong-filling silently if the build differs.
+2. **Arm, disarm, panic stop, manual takeover.** These need no movement, and
+   they are the safety guarantees the README makes.
+3. **The observation tiers** — player, inventory, nearby. Whether `getTarget`,
+   `getZombieList` and the body readers exist on this build decides how much of
+   the threat assessment is running on measured readings rather than on the
+   conservative substitutes this branch installed for their absence. Check the
+   `unread` block in the planner's view and the `observe.*` counters in
+   `player.stats`: **if any of them fire on a healthy install, that is the
+   finding**, not a nuisance.
+4. **Eat and drink from the inventory, equip, unequip, bandage, read.** These
+   reach the game without a step being taken.
+
 This is the honest part, and the reason this handoff exists.
 
 **There is no Project Zomboid in the environment this code was written in.** It

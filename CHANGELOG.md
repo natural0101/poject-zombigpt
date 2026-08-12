@@ -361,6 +361,22 @@ drift out of sync with `pz_agent_core.version`.
   goal completes on the absence of a frontier or a container. The honest end has
   no listener, so declaring the gap would fix nothing today.
 
+- **The live handoff no longer sends its reader into the one thing that cannot
+  work.** `LOCAL_GAME_HANDOFF.md` is what the person with the game reads, and its
+  section on what needs a real game said nothing about the agent being unable to
+  walk. A tester would have installed the mod, armed, run the movement scenarios,
+  met `TARGET_NOT_LOADED` on every one of them including the square next to the
+  character, and had no way to tell a structural gap from a broken install —
+  spending the only resource in this project that can produce live evidence at
+  all. It now opens with the three gates that have no producer, what each looks
+  like from the outside, and what to do about each (for movement: skip those
+  scenarios, and do **not** relax the precondition to get past them). It also
+  says what a session *is* worth spending on, in order: the 52 engine symbols
+  first, because nearly every remaining unknown is downstream of them — including
+  whether the square tier is buildable at all, since `isSolid` and `isSolidTrans`
+  are still not rows in `GAME_API_VERIFICATION.md` and confirming them turns
+  blocker 2 from a guess into a fact.
+
 ### Added
 
 - **A terminal is enough to play** (`epic/ux-one-command-play`, wave 1). The
