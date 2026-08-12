@@ -305,6 +305,22 @@ drift out of sync with `pz_agent_core.version`.
   original `NO_SAFE_DRINK`. Two blockers remain — the partial solidity read and
   the planner's compact view.
 
+  Sweeping the question that found the `chasing` defect — where does an absence
+  become a positive claim? — across every parser turned up two more gates with no
+  producer, the same shape as the square tier. `container.accessible` is **always
+  true**: five sidecar sites refuse on it, and nothing anywhere in the mod ever
+  sets that field, so a locked or blocked container is presented to the agent as
+  reachable and all five refusals are dead. `observation.full` is always true, so
+  `store.py`'s three partial-snapshot merge branches have never run — benign, but
+  untested against anything real. Neither can be fixed here: both need engine
+  readers of exactly the unverified kind that sank the tier. Three instances found
+  by accident is the reason they are now a ledger rather than folklore —
+  `tests/contract/test_gates_without_producers.py` asserts each producer is still
+  absent, so implementing one fails the test and asks for the row to be moved
+  instead of letting the dead branch wake up unnoticed. It carries a positive
+  control, since a pattern language matching nothing would pass every row by
+  construction.
+
   Two more are recorded with their reasoning rather than closed. The first is a
   **decision**, not a stabilisation fix: the age check above refuses a *stale*
   floor but accepts a floor that was **never** measured, because

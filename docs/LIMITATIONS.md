@@ -213,6 +213,36 @@ position-less object at a square reference.
 **Two blockers remain**, and they are the ones a tier must still answer: the
 partial solidity read (2) and the planner's compact view (3).
 
+**Two more sidecar gates have no producer.** The square tier above is the
+expensive instance of a shape that has now turned up three times: the sidecar
+branches on something, both branches are tested, and the mod has no path to one
+of them. Each side is exercised against its own idea of the document, so the
+suite is green and the behaviour is dead in the shipped system.
+
+- **`container.accessible` is always true.** Five sidecar sites refuse on it —
+  `container.py` twice, `inventory.py`, `selection.py`, and the `container_chain`
+  rollup — so an unreachable container is meant to be refused rather than
+  attempted. `ObserveModel` computes `accessible = node.accessible ~= false`, and
+  **nothing anywhere in the mod ever sets that field**: it is `true` at three
+  hardcoded roots and `nil` everywhere else. Every container in every document
+  the mod can build is therefore accessible, and all five refusals are dead. This
+  is the consequential one — a locked or blocked container is presented to the
+  agent as reachable. Closing it needs an engine reader for reachability, the
+  same unverified-symbol problem that sank the square tier.
+- **`observation.full` is always true.** `observation/store.py` branches three
+  times on a partial snapshot, merging it onto the last full one; `Observe.context`
+  sets `full = true` unconditionally, so no delta has ever been sent and those
+  branches have never run. Benign — a full snapshot every tick is the safe
+  direction — but the merge is untested against anything real.
+
+All three are now a ledger rather than folklore:
+`tests/contract/test_gates_without_producers.py` asserts each producer is *still*
+absent, so the day somebody implements one the test fails and asks for the row to
+be moved, instead of the dead branch waking up unnoticed beside its new producer.
+It carries a positive control, because a pattern language that matched nothing
+would make every row pass by construction — which is the failure mode the file
+was written about.
+
 **`plan.execute` is not served over the Core RPC link.** An earlier revision of
 this entry said the sidecar published no Core RPC endpoint at all; that gap is
 closed — `pz-agent start --foreground` builds `CoreServices` over the running
