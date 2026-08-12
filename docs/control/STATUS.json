@@ -13,11 +13,11 @@
     "NOT_STARTED": 80,
     "PASS": 400
   },
-  "head_commit": "80571335d4fec6a8a5b55e7b0dfd0178a598b80d",
+  "head_commit": "24491cde33ae6032b0c47ebbee2f1fe9c3e62fc1",
   "linux_ci": {
-    "commit": "80571335d4fec6a8a5b55e7b0dfd0178a598b80d",
+    "commit": "24491cde33ae6032b0c47ebbee2f1fe9c3e62fc1",
     "describes_current_head": true,
-    "status": "GREEN"
+    "status": "PENDING"
   },
   "live_scenarios": {
     "failed": 0,
@@ -67,7 +67,7 @@
     "archive_sha256": "9e84a4e564546cc0496ed41d59cf7eab723102b0e1623856aabc5e3e632ee44c",
     "live_game": "NOT_RUN",
     "source_commit": "80571335d4fec6a8a5b55e7b0dfd0178a598b80d",
-    "status": "CURRENT",
+    "status": "STALE",
     "workflow_run": "31605540915"
   },
   "repository": "https://github.com/natural0101/poject-zombigpt",
@@ -75,8 +75,8 @@
   "total_weight": 3104,
   "weighted_progress_percent": 74.26,
   "windows_ci": {
-    "commit": "80571335d4fec6a8a5b55e7b0dfd0178a598b80d",
+    "commit": "24491cde33ae6032b0c47ebbee2f1fe9c3e62fc1",
     "describes_current_head": true,
-    "status": "GREEN"
+    "status": "PENDING"
   }
 }
