@@ -12,6 +12,53 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **A step the action channel refused wedged its mission until the goal's wall
+  clock ran out** (`stabilize/arm-session-confirmation`). Found by a
+  seven-way audit asking one question of every mission family: can a mission be
+  driven to a state it never leaves without its goal ending? The answer for the
+  families themselves was no — the queue's own `tick()` expires an abandoned
+  active goal on `max_wall_ms`, and `runtime.tick()` calls it unconditionally
+  before any acting — but the audit surfaced a path that is not a leak and is
+  still a silence.
+
+  `ActionChannel.submit` raises `LoopError` for two reasons it names itself: the
+  queue filled between the wrapper's capacity check and the call — the MCP
+  router submits to the same channel from its own thread — or an idempotency key
+  was reused for a different request across a restart. All six
+  `_submit_*_step` handlers caught it and returned, on a comment claiming "the
+  step is dropped and the mission decides again from the next observation; its
+  own bounds cap how often this can repeat". That comment was the journey
+  path's, and it is false for a mission: the mission sets `_pending_action` when
+  it *emits* the step, gates `next_step` on it, and only a terminal
+  `ActionResult` clears it — a result that can never arrive for a request the
+  channel never admitted. So the mission declined every later tick with none of
+  its own bounds advancing, and the goal ended `ACTION_TIMEOUT` at its wall
+  budget — up to fifteen minutes for loot — naming a timeout instead of the
+  refusal that happened. This is the shape `fb8539a` already ended typed for an
+  *evicted* step record, left behind on the branch beside it. All six now mark
+  the mission abandoned and end the goal `CAPABILITY_UNAVAILABLE` with
+  `UNADMITTED_STEP_DETAIL`, a separate sentence from `UNOBSERVED_STEP_DETAIL`
+  because the two are different facts: there a record existed and was lost, here
+  none was ever minted. The journey path keeps its `LoopError` handler unchanged
+  — a journey really can replan past a dropped leg, which is why the comment was
+  true where it was written. Red first: the failing test asserted the goal ended
+  and got `ACTIVE`, and a second test states the wedge on its own by driving a
+  mission six ticks past an unanswerable step.
+
+- **Verified, not changed: two items the ledger carried as open.** Neither could
+  be turned red, so neither got an edit. *Arming on a danger floor that was
+  never measured* is unreachable for mutating commands on three independent
+  links: `ActionEngine._drive` refuses to dispatch without an observation
+  strictly newer than the last seen (`GAME_DISCONNECTED`), the mod publishes an
+  observation only after `Safety.setDanger` runs, and `ObserveModel.dangerFloor`
+  returns a `DANGER.*` constant on every path — including `HIGH` when nobody
+  scanned — so `setDanger`'s early return on an unknown level cannot fire from
+  that call site. *`_enforce_cap` dropping a live drive without ending its goal*
+  needs a fifth live drive of one kind, while `MAX_TRACKED_* = 4` and the queue
+  admits `DEFAULT_MAX_OPEN = 4` open goals in total; `app.py` builds its
+  `GoalQueue` with that default and nothing overrides it, so the eviction cannot
+  fire in the shipped configuration.
+
 - **Thirty-four defects of one family: evidence read without checking whose it
   was, or when it was written** (`stabilize/arm-session-confirmation`). A static
   audit along the P0 causal chain — mod visibility, session identity, heartbeat

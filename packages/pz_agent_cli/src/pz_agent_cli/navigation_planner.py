@@ -79,8 +79,9 @@ settles the goal with — the same arrangement a journey uses for a target the
 character already stands on. A step the channel can no longer report on — its
 terminal record evicted from the bounded history, or the channel replaced —
 ends the goal ``CAPABILITY_UNAVAILABLE`` on the very next tick
-(:data:`UNOBSERVED_STEP_DETAIL`), rather than leaving the mission holding a
-step it can never retire: unlike a journey, a mission gates its own
+(:data:`UNOBSERVED_STEP_DETAIL`), and so does a step the channel refused to
+admit at all (:data:`UNADMITTED_STEP_DETAIL`), rather than leaving the
+mission holding a step it can never retire: unlike a journey, a mission gates its own
 ``next_step`` on that one step in flight, so "learn nothing and replan" is a
 thing only the journey path can honestly do. Missions die with their goals
 exactly as journeys do, and the mission's full report survives the goal in a
@@ -229,6 +230,7 @@ __all__ = [
     "MAX_TRACKED_RETURNS",
     "NO_HOME_DETAIL",
     "NO_REST_TARGET_DETAIL",
+    "UNADMITTED_STEP_DETAIL",
     "UNOBSERVED_STEP_DETAIL",
     "NavigatingPlanner",
     "NavigationHost",
@@ -338,6 +340,14 @@ NO_REST_TARGET_DETAIL: Final = "the rest_until goal carries no target endurance"
 #: rule that a record's detail is never caller text.
 UNOBSERVED_STEP_DETAIL: Final = (
     "the step's outcome was never observed; the action channel no longer holds its record"
+)
+
+#: What a mission ends with when the channel refused to admit its step. A
+#: separate sentence from :data:`UNOBSERVED_STEP_DETAIL` because the two are
+#: different facts: there, a record existed and was lost; here, none was ever
+#: minted. Both leave the mission holding a step no result can retire.
+UNADMITTED_STEP_DETAIL: Final = (
+    "the action channel refused the step; no record was minted and no result can arrive"
 )
 
 #: Wrapper hops :meth:`NavigatingPlanner._loot_ports` will look through for a
@@ -1350,9 +1360,15 @@ class NavigatingPlanner:
             admitted = channel.submit(request)
         except LoopError:
             # Admission refused: the queue filled between the capacity check
-            # and now, or a restart made the key ambiguous. The step is
-            # dropped and the mission decides again from the next
-            # observation; its own bounds cap how often this can repeat.
+            # and now -- the MCP router submits to this same channel from its
+            # own thread -- or a restart made the key ambiguous. The mission
+            # recorded this step as in flight when it emitted it and only a
+            # terminal result clears that, so dropping it here would leave the
+            # mission declining every later tick with none of its own bounds
+            # advancing, until the goal's wall clock ended it as a timeout.
+            # End it typed instead, exactly as an evicted record does.
+            drive.mission.mark_abandoned()
+            self._finish_mission_refused(host, goal_id, drive, _unadmitted_step_refusal())
             return
         drive.pending_action_id = admitted.action_id
 
@@ -1497,9 +1513,15 @@ class NavigatingPlanner:
             admitted = channel.submit(request)
         except LoopError:
             # Admission refused: the queue filled between the capacity check
-            # and now, or a restart made the key ambiguous. The step is
-            # dropped and the mission decides again from the next
-            # observation; its own bounds cap how often this can repeat.
+            # and now -- the MCP router submits to this same channel from its
+            # own thread -- or a restart made the key ambiguous. The mission
+            # recorded this step as in flight when it emitted it and only a
+            # terminal result clears that, so dropping it here would leave the
+            # mission declining every later tick with none of its own bounds
+            # advancing, until the goal's wall clock ended it as a timeout.
+            # End it typed instead, exactly as an evicted record does.
+            drive.mission.mark_abandoned()
+            self._finish_explore_refused(host, goal_id, drive, _unadmitted_step_refusal())
             return
         drive.pending_action_id = admitted.action_id
 
@@ -1770,9 +1792,15 @@ class NavigatingPlanner:
             admitted = channel.submit(request)
         except LoopError:
             # Admission refused: the queue filled between the capacity check
-            # and now, or a restart made the key ambiguous. The step is
-            # dropped and the mission decides again from the next
-            # observation; its own bounds cap how often this can repeat.
+            # and now -- the MCP router submits to this same channel from its
+            # own thread -- or a restart made the key ambiguous. The mission
+            # recorded this step as in flight when it emitted it and only a
+            # terminal result clears that, so dropping it here would leave the
+            # mission declining every later tick with none of its own bounds
+            # advancing, until the goal's wall clock ended it as a timeout.
+            # End it typed instead, exactly as an evicted record does.
+            drive.mission.mark_abandoned()
+            self._finish_consume_refused(host, goal_id, drive, _unadmitted_step_refusal())
             return
         drive.pending_action_id = admitted.action_id
 
@@ -1931,9 +1959,15 @@ class NavigatingPlanner:
             admitted = channel.submit(request)
         except LoopError:
             # Admission refused: the queue filled between the capacity check
-            # and now, or a restart made the key ambiguous. The step is
-            # dropped and the mission decides again from the next
-            # observation; its own bounds cap how often this can repeat.
+            # and now -- the MCP router submits to this same channel from its
+            # own thread -- or a restart made the key ambiguous. The mission
+            # recorded this step as in flight when it emitted it and only a
+            # terminal result clears that, so dropping it here would leave the
+            # mission declining every later tick with none of its own bounds
+            # advancing, until the goal's wall clock ended it as a timeout.
+            # End it typed instead, exactly as an evicted record does.
+            drive.mission.mark_abandoned()
+            self._finish_care_refused(host, goal_id, drive, _unadmitted_step_refusal())
             return
         drive.pending_action_id = admitted.action_id
 
@@ -2110,9 +2144,15 @@ class NavigatingPlanner:
             admitted = channel.submit(request)
         except LoopError:
             # Admission refused: the queue filled between the capacity check
-            # and now, or a restart made the key ambiguous. The step is
-            # dropped and the mission decides again from the next
-            # observation; its own bounds cap how often this can repeat.
+            # and now -- the MCP router submits to this same channel from its
+            # own thread -- or a restart made the key ambiguous. The mission
+            # recorded this step as in flight when it emitted it and only a
+            # terminal result clears that, so dropping it here would leave the
+            # mission declining every later tick with none of its own bounds
+            # advancing, until the goal's wall clock ended it as a timeout.
+            # End it typed instead, exactly as an evicted record does.
+            drive.mission.mark_abandoned()
+            self._finish_avoid_refused(host, goal_id, drive, _unadmitted_step_refusal())
             return
         drive.pending_action_id = admitted.action_id
 
@@ -2247,9 +2287,15 @@ class NavigatingPlanner:
             admitted = channel.submit(request)
         except LoopError:
             # Admission refused: the queue filled between the capacity check
-            # and now, or a restart made the key ambiguous. The step is
-            # dropped and the mission decides again from the next
-            # observation; its own bounds cap how often this can repeat.
+            # and now -- the MCP router submits to this same channel from its
+            # own thread -- or a restart made the key ambiguous. The mission
+            # recorded this step as in flight when it emitted it and only a
+            # terminal result clears that, so dropping it here would leave the
+            # mission declining every later tick with none of its own bounds
+            # advancing, until the goal's wall clock ended it as a timeout.
+            # End it typed instead, exactly as an evicted record does.
+            drive.mission.mark_abandoned()
+            self._finish_combat_refused(host, goal_id, drive, _unadmitted_step_refusal())
             return
         drive.pending_action_id = admitted.action_id
 
@@ -2468,6 +2514,21 @@ class NavigatingPlanner:
             self._combat_reports.move_to_end(goal_id)
             while len(self._combat_reports) > MAX_KEPT_COMBAT_REPORTS:
                 self._combat_reports.popitem(last=False)
+
+
+def _unadmitted_step_refusal() -> MissionRefused:
+    """The one refusal every kind ends an unadmitted channel step with.
+
+    The mission recorded the step as in flight the moment it emitted it, and
+    only a terminal result clears that; a request the channel never admitted
+    has no record and will never produce one. Dropping it silently leaves the
+    mission declining every later tick with none of its own bounds advancing,
+    so the goal would end on its wall clock — ``ACTION_TIMEOUT`` minutes later,
+    naming a timeout instead of the refusal that actually happened.
+    """
+    return MissionRefused(
+        reason_code=ReasonCode.CAPABILITY_UNAVAILABLE, detail=UNADMITTED_STEP_DETAIL
+    )
 
 
 def _lost_step_refusal() -> MissionRefused:
