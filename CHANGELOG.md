@@ -161,6 +161,23 @@ drift out of sync with `pz_agent_core.version`.
   its single-match meaning for the callers that want it and now says in its own
   docstring why a property question needs `nearby_objects`.
 
+  *A registered adapter that no test had ever built.* Chasing the reference
+  defect above turned up `DrinkSourceAdapter` in a state nothing was watching
+  for: registered on the dispatcher, exported from the package, offered as an MCP
+  action — and constructed by no test anywhere in the repository. Its refusals
+  and its postcondition had never run. A census of the registry found it was the
+  only one of the twenty-six, so the gap is closed rather than wide, but it was
+  found by hand while looking for something else, which is not a method.
+  `tests/contract/test_registered_adapters_are_tested.py` now fails when a
+  registered adapter is built by no test; it is checked non-vacuously (drop the
+  consume tests and `DrinkSourceAdapter` is reported while `MoveToAdapter` is
+  not), and it excludes itself from its own corpus so its failure message cannot
+  count as the coverage it is complaining about. The adapter's own postcondition
+  is now covered too — thirst falling proves the drink, an unchanged *or risen*
+  thirst proves nothing, and the evidence still carries `source_ref` so an
+  ordinary sip from a bottle cannot stand as confirmation of a capability nobody
+  has seen work.
+
   *A test that never ran.* An earlier hand-merge in this same pass appended the
   zombie-scan group to `tests/lua/test_observe.lua` **after** `Harness.finish`,
   which calls `os.exit`. Eighty-eight assertions — the ones covering the

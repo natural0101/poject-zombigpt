@@ -19,7 +19,7 @@ from pz_agent_core.actions import (
 )
 from pz_agent_core.actions.adapters import DrinkAdapter, DrinkSourceAdapter, EatAdapter
 from pz_agent_core.actions.adapters.consume import MIN_CONSUME_FRACTION
-from pz_agent_core.capabilities import DRINK_CARRIED, EAT_PERCENTAGE
+from pz_agent_core.capabilities import DRINK_CARRIED, DRINK_WORLD_SOURCE, EAT_PERCENTAGE
 from pz_agent_core.protocol import (
     ActionName,
     ActionResult,
@@ -428,6 +428,56 @@ def test_a_sink_is_still_a_water_source_when_something_is_listed_before_it() -> 
     _drink_from_source(
         _square_holding(_a_thing("tree", "tree", "obstacle"), _a_thing("sink", "water_source"))
     )
+
+
+def test_drinking_from_a_source_is_proven_by_thirst_falling() -> None:
+    """The postcondition of a registered adapter that nothing had ever run."""
+    command = a_command(
+        ActionName.CONSUME_DRINK_SOURCE,
+        {"item_ref": BOTTLE.ref, "source_ref": WATER_SQUARE},
+    )
+    before = _square_holding(_a_thing("sink", "water_source"))
+    after = a_world(
+        seq=2,
+        items=[BOTTLE],
+        containers=[main_container()],
+        stats={"hunger": 0.5, "thirst": 0.2},
+        objects=[_a_thing("sink", "water_source")],
+    )
+
+    evidence = DrinkSourceAdapter().verify(command, before, after)
+
+    assert evidence is not None
+    assert evidence.kind == "thirst_decreased"
+    assert evidence.observed["thirst_before"] == 0.5
+    assert evidence.observed["thirst_after"] == 0.2
+    # Carried on purpose: without it an ordinary sip from a bottle would stand
+    # as confirmation of a capability nobody has seen work.
+    assert evidence.observed["source_ref"] == WATER_SQUARE
+
+
+def test_a_source_drink_that_did_not_move_thirst_proves_nothing() -> None:
+    """Unchanged and *worse* both have to answer None, not just unchanged."""
+    command = a_command(
+        ActionName.CONSUME_DRINK_SOURCE,
+        {"item_ref": BOTTLE.ref, "source_ref": WATER_SQUARE},
+    )
+    before = _square_holding(_a_thing("sink", "water_source"))
+
+    for thirst in (0.5, 0.6):
+        after = a_world(
+            seq=2,
+            items=[BOTTLE],
+            containers=[main_container()],
+            stats={"hunger": 0.5, "thirst": thirst},
+            objects=[_a_thing("sink", "water_source")],
+        )
+        assert DrinkSourceAdapter().verify(command, before, after) is None
+
+
+def test_drinking_from_a_source_declares_the_capability_it_needs() -> None:
+    assert DrinkSourceAdapter().required_capability == DRINK_WORLD_SOURCE
+    assert DrinkSourceAdapter().risk is RiskClass.P2
 
 
 def test_a_square_with_nothing_watery_on_it_is_still_refused() -> None:
