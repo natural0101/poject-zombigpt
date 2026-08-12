@@ -192,6 +192,26 @@ drift out of sync with `pz_agent_core.version`.
   `TROUBLESHOOTING.md` carries the symptom so a live tester does not spend the
   session hunting their install.
 
+  An implementation of the missing tier was built and adversarially verified, and
+  it is **not** in this branch: three regressions were proven end to end against
+  the mod's own published bytes. It fixed walking by breaking drinking —
+  `buildObject` mints a non-container world object's ref with `Refs.buildSquare`,
+  so every door, tree and water source inside the tier shared a reference with the
+  ground under it, the square sorted first, and `common.nearby_object`'s
+  `next(o for o in … if o.ref == ref)` returned the square: a sink one step away
+  went from `consume.drink_source` accepted to refused `NO_SAFE_DRINK` on the same
+  document. It published a wall as open ground on a build exposing `isSolid` and
+  not `isSolidTrans`, because "at least one reader answered" was treated as "the
+  question was answered" — the glass wall the two-reader design was justified by
+  is published `['loaded']` and the walk into it is accepted. And it starved the
+  planner one layer below the fix: `compact_for_planner` keeps the nearest 24
+  objects in one merged list with one cap, so a separate square budget in the mod
+  does not survive it — a furnished room lost nine real objects including a real
+  door two squares east, and a warehouse aisle delivered zero squares to the
+  planner. All three are recorded in `LIMITATIONS.md` with their measurements,
+  because they are what the real fix has to solve; shipping the attempt would have
+  traded a named refusal for two silent wrong answers.
+
   Two more are recorded with their reasoning rather than closed. The first is a
   **decision**, not a stabilisation fix: the age check above refuses a *stale*
   floor but accepts a floor that was **never** measured, because

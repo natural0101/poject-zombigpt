@@ -111,6 +111,72 @@ which is precisely why it is forbidden.
 These are not design trades. They are places where a component exists, is
 tested, and is not connected to the thing that would use it.
 
+**The agent cannot walk: the mod emits no square tier.** This is the largest gap
+in the build and it blocks every scenario involving movement.
+
+`movement.move_to`, `movement.move_near`, `world.inspect` and the navigation
+local map all locate the destination square by scanning `nearby.objects` for an
+entry whose `kind` is the literal `square`, reading `loaded` / `blocked` /
+`closed_window` / `drop` from its `semantics`. The mod has no code path that
+emits one: `Observe.nearbyObjects` sets each entry's `kind` from the container
+type, from `getObjectName` lowercased, or to the literal `corpse`;
+`Refs.KIND.SQUARE` occurs only where reference *strings* are minted and parsed;
+`Observe.nearbyFields` exports `objects` and `zombies` and no square tier; and
+the strings `"loaded"`, `"blocked"` and `"closed_window"` appear nowhere in the
+mod's Lua. Driven against a document shaped the way `Observe.nearbyObjects`
+shapes it, a one-square walk east refuses `TARGET_NOT_LOADED` — "no loaded
+square was reported at (1201, 3400, 0)".
+
+It survived a fully green suite because the sidecar's own fixtures mint the
+square objects the mod never sends (`tests/fixtures/adapter_worlds.py:a_square`),
+so each side was only ever tested against its own idea of the document.
+
+**An implementation was built, adversarially verified, and rejected.** It is
+recorded here because the three things that killed it are what the real fix must
+solve, and each was proven end to end rather than argued:
+
+1. **Reference collision — it fixed walking by breaking drinking.**
+   `ObserveModel.buildObject` mints a non-container world object's ref with
+   `Refs.buildSquare`, the same ref a square entry would carry. Every door, tree
+   and water source inside the tier then shares a reference with the ground
+   under it, and after the merge-and-sort the square lands first.
+   `common.nearby_object` resolves a ref with `next(o for o in nearby.objects if
+   o.ref == ref)`, so it returns the square. On the same bytes, with and without
+   the tier, a sink one square away went from `consume.drink_source` **ACCEPTED**
+   to **REFUSED `NO_SAFE_DRINK`** — "nothing at square:…:101:201:0 reports
+   water". Any fix must give the square tier a reference that cannot collide, or
+   change how world objects are addressed, which is a contract change.
+
+2. **A partial solidity read publishes a wall as open ground.** The attempt read
+   `isSolid` and `isSolidTrans` and published when *at least one* answered. On a
+   build exposing `isSolid` and not `isSolidTrans` — the exact case the two-reader
+   design was justified by — a glass wall is published `['loaded']` with no
+   `blocked`, and `_check_square` accepts the walk into it. "At least one reader
+   answered" is not the same as "the question was answered": a fix must require
+   every declared reader, or record which ones answered and treat a partial read
+   as unread.
+
+3. **The planner's compact view starves one layer below the fix.**
+   `compact_for_planner` sorts `nearby.objects` by distance and keeps the nearest
+   `MAX_OBJECTS = 24` in one merged list with one cap. A separate square budget in
+   the mod's document does not survive that. Measured on a furnished room, a
+   nine-square tier cost the planner nine real objects, evicting a real door two
+   squares east; in a warehouse aisle at sixteen objects per square, **zero**
+   squares reached the planner at all. No test anywhere puts a `kind == "square"`
+   entry through `compact_for_planner`.
+
+Two smaller things fall out of the same attempt. `closed_window` and `drop` have
+no reader that can be grounded in anything this codebase already trusts, and
+`_check_square` reads the absence of each as permission — so those two refusals
+are unenforceable until a reader exists. And any solidity accessor the mod comes
+to depend on must be added to `GAME_API_VERIFICATION.md` by hand:
+`tests/contract/test_game_api_inventory.py` deliberately checks engine *classes*,
+so a lowercase method name is invisible to it and would ship unverified.
+
+Until this is closed, `TARGET_NOT_LOADED` on every move is expected, and the
+sidecar's precondition must not be relaxed to get past it — an unassessed square
+is exactly the thing that refusal exists to catch.
+
 **`plan.execute` is not served over the Core RPC link.** An earlier revision of
 this entry said the sidecar published no Core RPC endpoint at all; that gap is
 closed — `pz-agent start --foreground` builds `CoreServices` over the running
