@@ -67,6 +67,7 @@ __all__ = [
     "grid_distance",
     "identity_of",
     "nearby_object",
+    "nearby_objects",
     "plane_distance",
     "player_main",
     "read_count",
@@ -519,8 +520,29 @@ def world_square(container_ref: str) -> tuple[int, int, int] | None:
 
 
 def nearby_object(nearby: NearbyView, ref: str) -> NearbyObject | None:
-    """The world object with this reference, or None when it is out of view."""
+    """The world object with this reference, or None when it is out of view.
+
+    Callers that ask a *property* question about a reference want
+    :func:`nearby_objects` instead: a reference is not always unique. Anything
+    that is neither a container nor a door is referenced by its square, and the
+    mod scans several objects per square by design, so "the first entry that
+    matches" can answer about the tree standing in front of the sink.
+    """
     return next((o for o in nearby.objects if o.ref == ref), None)
+
+
+def nearby_objects(nearby: NearbyView, ref: str) -> tuple[NearbyObject, ...]:
+    """Every world object with this reference, in the order the mod listed them.
+
+    ``ObserveModel.buildObject`` mints a per-object reference only for
+    containers and doors; everything else carries the reference of the square it
+    stands on, which is the reference the actions addressing those things are
+    contractually given (``source_ref`` is parsed as :attr:`RefKind.SQUARE`, and
+    the mod reads it back the same way and looks at the square). One reference
+    therefore denotes a place and everything on it, and a question about the
+    place has to be asked of all of them.
+    """
+    return tuple(o for o in nearby.objects if o.ref == ref)
 
 
 def container_kind_is_world(container: ContainerView) -> bool:

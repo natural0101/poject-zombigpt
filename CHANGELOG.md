@@ -12,14 +12,14 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
-- **Thirty defects of one family: evidence read without checking whose it
+- **Thirty-one defects of one family: evidence read without checking whose it
   was, or when it was written** (`stabilize/arm-session-confirmation`). A static
   audit along the P0 causal chain — mod visibility, session identity, heartbeat
   freshness, the two-phase arm, terminality, pointer and sequence recovery, one
   action, goals made of several — starting from one found in `pz-agent play`,
   generalising its shape across the sidecar, and then running the same three
   families against the mod, which is where every one of the 2026-08-08 live
-  findings had lived, and finally against the tri-state rule itself. Thirteen on
+  findings had lived, and finally against the tri-state rule itself. Fourteen on
   the sidecar, seventeen on the mod. Every fix was
   watched red first; a hypothesis that could not be turned red was reported as a
   hypothesis and left alone.
@@ -144,6 +144,23 @@ drift out of sync with `pz_agent_core.version`.
   `world.inspect` is never blocked and the state clears itself the moment one
   observation succeeds.
 
+  *A square is asked about, not the first thing standing on it.* A water source
+  is addressed by its **square** — `source_ref` is parsed as `RefKind.SQUARE` and
+  the mod's `Consumption` adapter reads it back the same way and looks for water
+  on that square — and `ObserveModel.buildObject` accordingly mints the square's
+  reference for everything that is not a container or a door. One reference
+  therefore denotes a place and everything on it, and the mod scans several
+  objects per square by design. `consume.drink_source` resolved it with
+  `nearby_object`, which is `next(o for o in nearby.objects if o.ref == ref)` —
+  the *first* match. A tree scanned before the sink answered for the sink, and a
+  square with a sink on it was refused `NO_SAFE_DRINK`, "nothing at
+  square:…:1201:3400:0 reports water". The question is now asked of every object
+  carrying that reference, and the refusal's evidence lists all their kinds
+  instead of one; a square with nothing watery on it is still refused, which is
+  the test that keeps the fix from becoming a formality. `nearby_object` keeps
+  its single-match meaning for the callers that want it and now says in its own
+  docstring why a property question needs `nearby_objects`.
+
   *A test that never ran.* An earlier hand-merge in this same pass appended the
   zombie-scan group to `tests/lua/test_observe.lua` **after** `Harness.finish`,
   which calls `os.exit`. Eighty-eight assertions — the ones covering the
@@ -195,9 +212,9 @@ drift out of sync with `pz_agent_core.version`.
   An implementation of the missing tier was built and adversarially verified, and
   it is **not** in this branch: three regressions were proven end to end against
   the mod's own published bytes. It fixed walking by breaking drinking —
-  `buildObject` mints a non-container world object's ref with `Refs.buildSquare`,
-  so every door, tree and water source inside the tier shared a reference with the
-  ground under it, the square sorted first, and `common.nearby_object`'s
+  `buildObject` mints a non-container, non-door world object's ref with
+  `Refs.buildSquare`, so every tree and water source inside the tier shared a
+  reference with the ground under it, the square sorted first, and `common.nearby_object`'s
   `next(o for o in … if o.ref == ref)` returned the square: a sink one step away
   went from `consume.drink_source` accepted to refused `NO_SAFE_DRINK` on the same
   document. It published a wall as open ground on a build exposing `isSolid` and

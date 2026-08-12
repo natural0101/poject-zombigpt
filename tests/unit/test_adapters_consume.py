@@ -17,7 +17,7 @@ from pz_agent_core.actions import (
     AdapterRegistry,
     PreconditionFailed,
 )
-from pz_agent_core.actions.adapters import DrinkAdapter, EatAdapter
+from pz_agent_core.actions.adapters import DrinkAdapter, DrinkSourceAdapter, EatAdapter
 from pz_agent_core.actions.adapters.consume import MIN_CONSUME_FRACTION
 from pz_agent_core.capabilities import DRINK_CARRIED, EAT_PERCENTAGE
 from pz_agent_core.protocol import (
@@ -28,7 +28,9 @@ from pz_agent_core.protocol import (
     CommandPolicy,
     ContainerView,
     ItemView,
+    NearbyObject,
     Observation,
+    Position,
     ReasonCode,
     RiskClass,
 )
@@ -364,6 +366,79 @@ def test_drinking_from_a_world_source_is_not_this_adapters_business() -> None:
 def test_drinking_declares_the_capability_it_needs() -> None:
     assert DrinkAdapter().required_capability == DRINK_CARRIED
     assert DrinkAdapter().risk is RiskClass.P2
+
+
+# --------------------------------------------------------------------------
+# a square is asked about, not the first thing listed on it
+# --------------------------------------------------------------------------
+
+#: A water source is addressed by its *square*, and both sides agree on that:
+#: ``source_ref`` is parsed as ``RefKind.SQUARE`` and the mod's Consumption
+#: adapter reads it back the same way and looks for water on that square.
+#: ``ObserveModel.buildObject`` accordingly mints the square's reference for
+#: every non-container, non-door object, so several objects on one square
+#: legitimately answer to one reference — and the mod scans several objects per
+#: square by design.
+WATER_SQUARE = f"square:{DEFAULT_SESSION}:1201:3400:0"
+
+
+def _square_holding(*objects: NearbyObject) -> Observation:
+    return a_world(
+        items=[BOTTLE],
+        containers=[main_container()],
+        stats={"hunger": 0.5, "thirst": 0.5},
+        objects=list(objects),
+    )
+
+
+def _a_thing(kind: str, *semantics: str) -> NearbyObject:
+    return NearbyObject(
+        ref=WATER_SQUARE,
+        kind=kind,
+        distance=1.0,
+        position=Position(x=1201.0, y=3400.0, z=0),
+        semantics=list(semantics),
+    )
+
+
+def _drink_from_source(observation: Observation) -> None:
+    DrinkSourceAdapter().validate(
+        a_command(
+            ActionName.CONSUME_DRINK_SOURCE,
+            {"item_ref": BOTTLE.ref, "source_ref": WATER_SQUARE},
+        ),
+        observation,
+    )
+
+
+def test_a_sink_alone_on_its_square_is_a_water_source() -> None:
+    """The control: without it the two tests below could pass vacuously."""
+    _drink_from_source(_square_holding(_a_thing("sink", "water_source")))
+
+
+def test_a_sink_is_still_a_water_source_when_something_is_listed_before_it() -> None:
+    """The question is about the square, not about its first occupant.
+
+    Both objects carry the square's reference, because that is the reference
+    scheme for anything that is not a container or a door. Resolving it with
+    "the first entry that matches" answers about the tree and reports that a
+    square with a sink on it has no water — a refusal that names a real sink as
+    absent.
+    """
+    _drink_from_source(
+        _square_holding(_a_thing("tree", "tree", "obstacle"), _a_thing("sink", "water_source"))
+    )
+
+
+def test_a_square_with_nothing_watery_on_it_is_still_refused() -> None:
+    """The fix must not turn the check into a formality."""
+    with pytest.raises(PreconditionFailed) as caught:
+        _drink_from_source(
+            _square_holding(_a_thing("tree", "tree", "obstacle"), _a_thing("wall", "obstacle"))
+        )
+
+    assert caught.value.reason_code is ReasonCode.NO_SAFE_DRINK
+    assert caught.value.evidence["kinds"] == ["tree", "wall"]
 
 
 # --------------------------------------------------------------------------

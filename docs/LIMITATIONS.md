@@ -136,10 +136,14 @@ recorded here because the three things that killed it are what the real fix must
 solve, and each was proven end to end rather than argued:
 
 1. **Reference collision — it fixed walking by breaking drinking.**
-   `ObserveModel.buildObject` mints a non-container world object's ref with
-   `Refs.buildSquare`, the same ref a square entry would carry. Every door, tree
-   and water source inside the tier then shares a reference with the ground
-   under it, and after the merge-and-sort the square lands first.
+   `ObserveModel.buildObject` mints a non-container, **non-door** world object's
+   ref with `Refs.buildSquare`, the same ref a square entry would carry. (Doors
+   are exempt: they get a per-object ref from their `object_index`. The
+   adversarial run measured this against an older base and said "every door,
+   tree and water source"; on this branch it is every tree and water source, and
+   a door whose index the reader could not carry.) Each of those inside the tier
+   then shares a reference with the ground under it, and after the merge-and-sort
+   the square lands first.
    `common.nearby_object` resolves a ref with `next(o for o in nearby.objects if
    o.ref == ref)`, so it returns the square. On the same bytes, with and without
    the tier, a sink one square away went from `consume.drink_source` **ACCEPTED**
@@ -176,6 +180,14 @@ so a lowercase method name is invisible to it and would ship unverified.
 Until this is closed, `TARGET_NOT_LOADED` on every move is expected, and the
 sidecar's precondition must not be relaxed to get past it — an unassessed square
 is exactly the thing that refusal exists to catch.
+
+One consequence of that reference scheme has been fixed independently of the
+tier, because it bites without one: a reference that names a square denotes the
+place *and everything on it*, so a question about the place has to be asked of
+every object carrying it. `consume.drink_source` asked only the first, and a tree
+scanned before a sink made the sink invisible. It now asks all of them
+(`nearby_objects` in `actions/adapters/common.py`). Any future consumer of a
+square-scoped reference has the same obligation.
 
 **`plan.execute` is not served over the Core RPC link.** An earlier revision of
 this entry said the sidecar published no Core RPC endpoint at all; that gap is
