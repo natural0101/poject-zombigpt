@@ -306,6 +306,9 @@ def _compact_player(player: PlayerState) -> JsonDict:
         "moodle_count": len(player.moodles),
         "moodles_truncated": len(moodles) < len(player.moodles),
         "bleeding": player.is_bleeding,
+        # Beside it, never instead of it: an empty wound list means "nothing was
+        # observed bleeding", which is not the same as "nothing is".
+        "wounds_unread": player.wounds_unread,
         "wound_count": len(player.wounds),
         "hands": {
             "primary": player.hands.primary,

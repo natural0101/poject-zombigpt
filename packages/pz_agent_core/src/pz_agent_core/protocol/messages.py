@@ -701,7 +701,22 @@ class PlayerState:
 
     @property
     def is_bleeding(self) -> bool:
+        """A wound was *observed* bleeding. Never a claim that none is.
+
+        The wound list is empty both when nothing is wrong and when the mod
+        could not read the body, so a caller deciding how *safe* the tick is
+        must consult :attr:`wounds_unread` beside this.
+        """
         return any(w.bleeding for w in self.wounds)
+
+    @property
+    def wounds_unread(self) -> bool:
+        """The mod said it could not read the body this tick.
+
+        Published as ``observe.wounds_unknown`` in the open ``stats`` map, which
+        is how the mod declares every reading it could not complete.
+        """
+        return self.stats.get("observe.wounds_unknown") is True
 
 
 @dataclass(frozen=True, slots=True)

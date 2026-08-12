@@ -12,14 +12,14 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
-- **Thirty-three defects of one family: evidence read without checking whose it
+- **Thirty-four defects of one family: evidence read without checking whose it
   was, or when it was written** (`stabilize/arm-session-confirmation`). A static
   audit along the P0 causal chain — mod visibility, session identity, heartbeat
   freshness, the two-phase arm, terminality, pointer and sequence recovery, one
   action, goals made of several — starting from one found in `pz-agent play`,
   generalising its shape across the sidecar, and then running the same three
   families against the mod, which is where every one of the 2026-08-08 live
-  findings had lived, and finally against the tri-state rule itself. Sixteen on
+  findings had lived, and finally against the tri-state rule itself. Seventeen on
   the sidecar, seventeen on the mod. Every fix was
   watched red first; a hypothesis that could not be turned red was reported as a
   hypothesis and left alone.
@@ -223,6 +223,28 @@ drift out of sync with `pz_agent_core.version`.
   The local map's same-tick merge over the three states is explicit for the same
   reason: an observed chase wins, but an unread intent survives rather than
   collapsing to the calm neither reading claimed.
+
+  *A body nobody could read was treated as a body with nothing wrong with it.*
+  `is_bleeding` is `any(w.bleeding for w in wounds)`, and the mod publishes an
+  empty wound list both when nothing is wrong and when it could not read the body
+  — declaring the second case as `observe.wounds_unknown`. Three separate files
+  cite "a missing `is_bleeding` never means 'not bleeding'" as settled practice
+  while arguing for some *other* gate; `engine.py`'s multiplayer refusal invokes
+  it by name. The gate it names was the one place not applying it. Two
+  deterministic consumers acted on the difference: `assess_threat` skipped
+  `bleeding_floor` entirely, so an unread body produced `DangerLevel.NONE` on a
+  tick where the clock may already have been running; and `combat.policy`, which
+  already refuses a fight on *unreadable health* — "an absent reader is never the
+  good reading, for what a fight spends" — permitted one on an unread body,
+  answering `SHOVE_FIRST`. Both now key on the mod's declaration through a new
+  `PlayerState.wounds_unread`. The spoken reason keeps the two apart all the way
+  to the words, the same way `chasing_count` does: "the player's body could not
+  be read this tick" rather than a wound nobody saw. The planner sees
+  `wounds_unread` beside `bleeding` in the compact view.
+
+  The third consumer, `policy.autonomy`, is deliberately left: it *raises* a
+  bandaging need from bleeding, so an unread body proposes less rather than more
+  — the same do-less reasoning that left `player.moodles` alone.
 
   *A test that never ran.* An earlier hand-merge in this same pass appended the
   zombie-scan group to `tests/lua/test_observe.lua` **after** `Harness.finish`,

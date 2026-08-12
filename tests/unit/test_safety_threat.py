@@ -253,3 +253,41 @@ def test_the_count_of_chasers_stays_a_count_of_known_chasers() -> None:
 
     assert assessment.chasing_count == 1
     assert assessment.chasing_unknown_count == 1
+
+
+# --------------------------------------------------------------------------
+# a body nobody could read
+# --------------------------------------------------------------------------
+# ``is_bleeding`` is ``any(w.bleeding for w in wounds)``, and the mod publishes
+# an empty wound list both when nothing is wrong and when it could not read the
+# body at all -- declaring the second case as ``observe.wounds_unknown``. Three
+# separate files in this codebase cite "a missing is_bleeding never means 'not
+# bleeding'" as settled practice while arguing for some other gate. This is that
+# gate.
+
+
+def test_an_unread_body_does_not_skip_the_bleeding_floor() -> None:
+    """The floor exists because a bleeding player has a clock running."""
+    unread = make_player(stats={"observe.wounds_unknown": True})
+
+    quiet = assess_danger(make_nearby(), unread)
+
+    assert quiet is not DangerLevel.NONE, (
+        "the mod said it could not read the body, and the bleeding floor was "
+        "skipped as though it had read one with nothing wrong with it"
+    )
+
+
+def test_a_body_that_was_read_and_is_whole_keeps_its_calm() -> None:
+    """The control: an observed-healthy body must not be dragged up the ladder."""
+    assert assess_danger(make_nearby(), CALM) is DangerLevel.NONE
+
+
+def test_the_spoken_reason_does_not_claim_bleeding_nobody_saw() -> None:
+    """The reason is spoken to the player, so it may not invent a wound."""
+    unread = make_player(stats={"observe.wounds_unknown": True})
+
+    reason = assess_threat(make_nearby(), unread).reason
+
+    assert "bleeding" not in reason, reason
+    assert "could not" in reason or "unread" in reason, reason

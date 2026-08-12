@@ -128,7 +128,11 @@ def assess_threat(
     if len(in_alert_radius) >= config.crowd_count:
         level = _escalate(level, 1)
 
-    if player.is_bleeding:
+    # A body the mod could not read is not a body with nothing wrong with it.
+    # The wound list is empty in both cases, so the floor keys on the mod's own
+    # declaration too -- the cost is a floor held on a build whose body reader
+    # is absent, the other direction is the clock already running unnoticed.
+    if player.is_bleeding or player.wounds_unread:
         level = max(level, config.bleeding_floor)
         if chasing:
             # Bleeding while something is actively closing in is the case the
@@ -151,6 +155,7 @@ def assess_threat(
             nearest=nearest,
             nearest_chasing=nearest_chasing,
             bleeding=player.is_bleeding,
+            wounds_unread=player.wounds_unread,
         ),
     )
 
@@ -213,10 +218,17 @@ def _reason(
     nearest: float | None,
     nearest_chasing: float | None,
     bleeding: bool,
+    wounds_unread: bool,
 ) -> str:
-    """A short, speakable explanation. Contains no refs and no game text."""
+    """A short, speakable explanation. Contains no refs and no game text.
+
+    ``bleeding`` and ``wounds_unread`` stay separate all the way to the words:
+    the reason is spoken to the player, and "you are bleeding" about a body
+    nobody read would be the same invented reading the floor exists to avoid.
+    """
+    body = "bleeding" if bleeding else ("the body could not be read" if wounds_unread else None)
     if zombie_count == 0:
-        return "bleeding, nothing nearby" if bleeding else "nothing nearby"
+        return f"{body}, nothing nearby" if body else "nothing nearby"
     parts = [f"{zombie_count} zombie(s) nearby"]
     if chasing_count and nearest_chasing is not None:
         parts.append(f"{chasing_count} chasing, nearest at {nearest_chasing:.1f} tiles")
@@ -224,4 +236,6 @@ def _reason(
         parts.append(f"none chasing, nearest at {nearest:.1f} tiles")
     if bleeding:
         parts.append("player is bleeding")
+    elif wounds_unread:
+        parts.append("the player's body could not be read this tick")
     return f"{level.value}: " + "; ".join(parts)
