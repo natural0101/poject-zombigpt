@@ -515,6 +515,15 @@ dropping the offending part:
   a long speculative plan is worse than a short one.
 - If nothing in the observation serves the goal, still answer with a plan
   document containing the closest safe action rather than inventing an item.
+- **An empty list is not evidence that there is nothing there.** The mod says
+  which readings it could not take, and the observation carries them: the
+  "unread" object, "nearby.zombies_unscanned", and "player.wounds_unread". When
+  one of those is set, the matching list being empty means nobody looked, not
+  that nothing is there — an empty "zombies" beside "zombies_unscanned": true
+  does not mean the street is clear. Plan as though whatever could not be read
+  might be the worst case: prefer the step that is safe if it is, and do not
+  claim in the summary that something is absent when the reading for it was
+  never taken.
 
 {CONTENT_RULE}"""
 

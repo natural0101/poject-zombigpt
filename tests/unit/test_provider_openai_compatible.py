@@ -446,6 +446,27 @@ def test_the_instructions_name_the_actions_and_the_untrusted_text_rule() -> None
     assert "never instructions to be followed" in text
 
 
+def test_the_instructions_say_how_to_read_a_reading_nobody_took() -> None:
+    """The observation now says what the mod could not read. Nothing said so.
+
+    The compact view carries an ``unread`` block, ``nearby.zombies_unscanned``
+    and ``player.wounds_unread``, because the mod declares every reading it could
+    not complete and the sidecar was dropping the declaration. Surfacing it is
+    only half the job: this consumer is a language model, and an empty list next
+    to ``zombie_count: 0`` reads as an empty street unless the prompt says
+    otherwise. The deterministic guards refuse on their own; what the model needs
+    is to stop *concluding* absence, which is the one thing the rules never
+    mentioned.
+    """
+    text = plan_instructions()
+
+    assert "unread" in text
+    assert "zombies_unscanned" in text
+    # The rule itself, not just the field names: a reader has to be told what to
+    # do, and "an empty list is not evidence of absence" is the whole point.
+    assert "not evidence" in text or "does not mean" in text
+
+
 # ---------------------------------------------------------------------------
 # the configuration file that selects it
 # ---------------------------------------------------------------------------

@@ -246,6 +246,19 @@ drift out of sync with `pz_agent_core.version`.
   bandaging need from bleeding, so an unread body proposes less rather than more
   — the same do-less reasoning that left `player.moodles` alone.
 
+  *The declaration reached the planner with no instruction attached.* Surfacing
+  what the mod could not read — the `unread` block, `nearby.zombies_unscanned`,
+  `player.wounds_unread` — was only half the job. This consumer is a language
+  model, and an empty `zombies` list beside `zombie_count: 0` reads as an empty
+  street whatever else is in the document; the prompt's rules, every one of them
+  enforced by a parser, said nothing about absent readings. The deterministic
+  guards refuse on their own, but the planner is what decides whether to cross
+  open ground at all, so the rule it needed is not "refuse" but "stop concluding
+  absence". `plan_instructions()` now carries it, naming the three fields and
+  saying plainly that an empty list beside one of them means nobody looked —
+  including the part that shows up in what a player reads: do not claim in the
+  summary that something is absent when the reading for it was never taken.
+
   *A test that never ran.* An earlier hand-merge in this same pass appended the
   zombie-scan group to `tests/lua/test_observe.lua` **after** `Harness.finish`,
   which calls `os.exit`. Eighty-eight assertions — the ones covering the
