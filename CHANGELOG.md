@@ -374,6 +374,28 @@ drift out of sync with `pz_agent_core.version`.
   goal completes on the absence of a frontier or a container. The honest end has
   no listener, so declaring the gap would fix nothing today.
 
+- **The first CI verdict this branch has ever had, and it is green on both
+  platforms.** Making the workflows see `stabilize/**` produced a result rather
+  than a promise: `python 3.11`, `python 3.12`, `lua` and `build artifact` all
+  passed, and the Windows job built and certified a release candidate —
+  `pz-agent-windows-v1.0.0-rc1.zip`, 48657492 bytes, 75 entries, sha256
+  `9e84a4e5…`, with `check_release.py --rc` printing `CERTIFIED v1.0.0-rc1: 8
+  check(s) passed`. That includes `archive.bin: both executables are in bin/`,
+  which the ZIP built in this Linux container could never satisfy and whose
+  absence `LOCAL_GAME_HANDOFF.md` warns installers about; the packaged pair also
+  completed an MCP `initialize` over the RPC link with `PATH` cut back to the
+  system directories, and Windows ran 8073 of 8114 tests with no failures.
+  `STATUS.json` now records `GREEN` on both platforms and the RC as `CURRENT` at
+  this commit, with its real digest — the artifact API's `ed0467…` is the *upload
+  wrapper's* hash, not the archive's, and writing that would have been a
+  fabricated identity of exactly the kind this file exists to catch.
+  `release_candidate.live_game` stays `NOT_RUN`, and the gate says so itself:
+  "this says nothing about the agent having run inside Project Zomboid".
+  `EVIDENCE_INDEX.md` moved with it — a guard nobody had exercised
+  (`test_the_evidence_index_carries_the_digest_status_derives`) caught the two
+  documents disagreeing about which RC they described, which is the drift that
+  file exists to prevent.
+
 - **CI had never run on this branch, and every STATUS entry said "pending"
   anyway.** Both workflows trigger on pushes to `main`, `dev`, `claude/**`,
   `epic/**`, `fix/**`, `rescue/**` and `swarm/**`, and on pull requests targeting
