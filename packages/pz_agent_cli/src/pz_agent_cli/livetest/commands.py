@@ -111,7 +111,7 @@ def add_live_test_parser(subparsers: argparse._SubParsersAction[argparse.Argumen
     """Register the ``live-test`` group and its six subcommands."""
     group = subparsers.add_parser(
         "live-test",
-        help="run the twenty live scenarios and build the evidence they produce",
+        help=f"run the {len(SCENARIO_IDS)} live scenarios and build the evidence they produce",
         description=(
             "The live-test harness. Scenarios start at NOT_RUN and only a run that "
             "observed every declared postcondition can move one to PASS."
@@ -455,7 +455,7 @@ def _resume(
         return EXIT_FAILURE
     start = first_unpassed(store)
     if start is None:
-        printer.line("nothing to resume: all twenty scenarios are PASS.")
+        printer.line(f"nothing to resume: all {len(SCENARIO_IDS)} scenarios are PASS.")
         return EXIT_OK
     remaining = SCENARIO_IDS[SCENARIO_IDS.index(start) :]
     pending = tuple(by_id(sid) for sid in remaining if store.read(sid).state is not LiveState.PASS)
@@ -573,7 +573,10 @@ def _status(
         f"BLOCKED {tally['BLOCKED']}   NOT_RUN {tally['NOT_RUN']}"
     )
     if tally["NOT_RUN"] == len(SCENARIO_IDS):
-        printer.line("  Nothing has been exercised. All twenty need a running game.")
+        # Counted, not spelled out: this line said "All twenty" while the tally
+        # printed directly above it said 22, because the crafting and building
+        # wave added two scenarios and a hardcoded word cannot follow a list.
+        printer.line(f"  Nothing has been exercised. All {len(SCENARIO_IDS)} need a running game.")
     return EXIT_OK if tally[LiveState.PASS.value] == len(SCENARIO_IDS) else EXIT_FAILURE
 
 

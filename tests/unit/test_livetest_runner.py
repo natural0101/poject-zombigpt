@@ -1208,7 +1208,12 @@ class TestCommands:
         exit_code = cli(world, root, "resume")
 
         assert exit_code == EXIT_OK
-        assert "all twenty" in world.stdout
+        # Asserted against the catalogue's length rather than a spelled-out
+        # word. This test pinned the literal "all twenty" and so held the
+        # message still while two scenarios were added: the line went on saying
+        # twenty under a tally reading 22, and the test that should have caught
+        # it was the reason it could not.
+        assert f"all {len(SCENARIO_IDS)} scenarios are PASS" in world.stdout
 
     def test_live_test_without_a_subcommand_says_what_it_needs(
         self, prepared: tuple[CliWorld, Path]

@@ -1,8 +1,14 @@
-"""The live-test harness: twenty scenarios that need a running Project Zomboid.
+"""The live-test harness: the scenarios that need a running Project Zomboid.
+
+There are twenty-two of them since the crafting and building wave added S21 and
+S22, and this docstring says so in words only because prose has to. The count
+that decides anything is ``len(SCENARIO_IDS)``: the two places that used to
+spell "twenty" into user-facing output were still saying it under a tally
+printing 22.
 
 Four modules, in dependency order:
 
-* :mod:`~pz_agent_cli.livetest.scenarios` — the twenty scenarios as data, with
+* :mod:`~pz_agent_cli.livetest.scenarios` — the scenarios as data, with
   machine-checkable postconditions. ``docs/LIVE_TEST_PLAYBOOK.md`` is generated
   from it.
 * :mod:`~pz_agent_cli.livetest.evidence` — paths, canonical bytes, SHA-256,

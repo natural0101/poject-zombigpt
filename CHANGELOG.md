@@ -32,6 +32,34 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **The final report is re-measured at the merged head, and §9 names what will
+  fail** (`dev`). `FINAL_IMPLEMENTATION_REPORT.md` was pinned to `3d8078d`, some
+  150 commits back, and its §8 still named an artefact from a run two RCs ago.
+  Every figure in it was re-taken rather than adjusted: 8508 tests collected
+  across 229 files, 4821 Lua assertions across 32 suites summed from the
+  harness's own per-suite lines, `ruff`/`mypy`/gate output quoted from a fresh
+  `check.sh`, the local RC rebuilt and re-refused by `check_release.py --rc`
+  (75 entries, `36f7357b…`), and the artefact of record replaced with CI's
+  (`1540df78…`, 77 entries, run 31734696473). The playbook's time budget was
+  re-summed from its own `**Time budget:**` lines — 20 460 s, 5 h 41 min across
+  22 scenarios — rather than adjusted from the twenty-scenario figure.
+
+  §9, the section `docs/RELEASE.md` calls "the one that keeps the rest honest",
+  gained the three abilities now known not to work against the shipped mod:
+  the agent cannot walk, `build_structure` refuses every placement, and nothing
+  loots a world container — each with its mechanism, and with the note that two
+  of the three are one missing producer, so one contract decision settles both.
+  A live session should not spend its time diagnosing them, and §10 no longer
+  lets "8467 tests passed" be read as "the agent plays the game".
+
+- **A hardcoded "twenty" outlived the twenty scenarios** (`dev`).
+  `pz-agent live-test status` printed "All twenty need a running game" directly
+  underneath a tally reading `NOT_RUN 22`, and `resume` and the subcommand help
+  said the same. The test covering that line asserted the literal string
+  `"all twenty"`, so the one check that should have caught the drift was what
+  held it in place. All four now count `SCENARIO_IDS`, and the test asserts
+  agreement with that length instead of a spelled-out word.
+
 - **The building half of P5 cannot succeed once, for the reason the agent
   cannot walk** (`dev`). Found by asking the merge the question the dead-gate
   ledger exists for: does the arriving sidecar logic decide on values the mod

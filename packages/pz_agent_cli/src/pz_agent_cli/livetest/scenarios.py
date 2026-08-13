@@ -1160,8 +1160,8 @@ SCENARIOS: Final[tuple[LiveScenario, ...]] = (
     # The two irreversible rungs, and the two scenarios that were missing
     # while their code shipped. Both are appended rather than slotted in
     # beside the actions they exercise: a scenario id names a directory in the
-    # evidence tree, so renumbering the twenty would orphan every artefact
-    # already filed under the old names.
+    # evidence tree, so renumbering the existing ids would orphan every
+    # artefact already filed under the old names.
     #
     # Both also share one honest obstacle, stated here once and repeated in
     # each scenario's own required_state because an operator reads one
