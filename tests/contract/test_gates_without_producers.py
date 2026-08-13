@@ -27,21 +27,21 @@ this seam, and the seam is a hand-written contract between two languages with no
 schema binding them. Expect more, and note that three of the eight are one root:
 the mod and the sidecar spelling the same fact differently.
 
-**The command direction has already been through this.** The observation seam
-is the one these rows are about; the seam running the other way — the args the
-sidecar sends against the args each mod adapter declares — was audited before,
-and the record of it is in ``adapters/movement.py``'s ``as_args`` docstring: the
-mod refuses any undeclared argument outright (``Toolkit``: "unknown argument"),
-and ``movement.move_to`` used to send a ``square_ref`` and four flags the mod
-never declared, so it "was therefore refused outright, every time". That is
-fixed. Anyone re-auditing that direction should know two things learned the hard
-way here: the mod's arg tables are declared three different ways — a literal, a
-function call (``drinkArgs()``) and a bare variable (``sourceArgs``) — so a
-regex over the Lua sees only some of them and quietly under-reports; and the
-mod's own test harness (``tests/lua/support/adapter_support.lua``) will load
-every adapter and let ``PZAgent.Adapters.ALL`` be read directly, which resolves
-all three. The right comparison is *sent ⊆ declared*, not equality, because an
-optional declared argument may be omitted.
+**The command direction is already guarded, and better than this file is.**
+These rows are about the observation seam. The seam running the other way — the
+args the sidecar sends against the args each mod adapter declares — has a
+standing mechanical check in ``test_adapter_args_agreement.py``, which dumps
+every declaration through the mod's own loader
+(``tests/lua/support/dump_adapter_args.lua``) and compares it to what
+``build_args`` emits. It covers *both* adapter families, the game-facing ones and
+ActionRuntime's control adapters, and its docstring records two real defects
+caught that way: an ``origin`` object no adapter declared, which would have
+refused every transfer, and ``action.wait``/``plan.cancel`` disagreeing about
+``game_seconds`` versus ``duration_ms`` and about ``command_id``.
+
+So do not re-audit that direction by hand, and do not write a second checker for
+it — this note exists because someone did, found nothing new, and clobbered the
+dumper on the way past. Read that test first.
 
 This is a **ledger, not a prohibition**. A dead gate is sometimes the right
 state: ``observation.full`` is always true and the partial-snapshot merge is
