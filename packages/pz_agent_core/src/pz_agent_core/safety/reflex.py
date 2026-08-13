@@ -369,9 +369,13 @@ class ReflexGuard:
         if danger >= self.config.block_at:
             # Nothing to interrupt, so nothing is cancelled — but a returned
             # event means "start no new task", and that is the whole point of
-            # this rung. It is not redundant with the engine's own threshold:
-            # that one reads ``safety.danger_level``, which the mod fills from a
-            # value it never computes, so it is ``none`` while this is HIGH.
+            # this rung. It is not redundant with the engine's own threshold,
+            # though no longer for the reason this gave: the mod does compute
+            # ``safety.danger_level`` now (ObserveModel.dangerFloor, set at the
+            # end of every successful observation), so it is not stuck at
+            # ``none``. The two still differ, which is why both exist — that
+            # floor is deliberately coarse and derived from the zombie scan
+            # alone, while this rung reads the assessment this module builds.
             return [
                 _event(
                     ReasonCode.THREAT_INTERRUPTED,

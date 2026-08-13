@@ -131,6 +131,28 @@ It survived a fully green suite because the sidecar's own fixtures mint the
 square objects the mod never sends (`tests/fixtures/adapter_worlds.py:a_square`),
 so each side was only ever tested against its own idea of the document.
 
+**A second gap sits behind it: nothing walks the character up to a door.**
+`movement.move_near` accepts `container`, `square` and `item` references and
+refuses `object` — on both sides, the sidecar's `_MoveNearSpec.parse` and the
+mod's own `Movement` argument declaration. That tuple was chosen when no scan
+could produce an object reference, and it has been wrong since `bf92ee2`:
+`ObserveModel.buildObject` gives a door its own reference from its
+`object_index` (`ObserveModel.lua:981`), falling back to the square only when
+the index could not be read, and `doors.py` requires exactly that kind for the
+`door_ref` it resolves out of the same `nearby` block. So the single per-object
+reference the mod does mint is the one `move_near` rejects: a caller holding a
+nearby door — the very reference `navigation/executor.py` hands to `door.open`
+— gets `INVALID_REF`.
+
+It is recorded rather than fixed because widening the accepted kinds would
+change a contract on both sides of the seam to no observable effect while the
+destination square is still missing: a walk that cannot resolve where it is
+going does not start caring which reference named the target. The two gaps are
+one repair, and neither half can be confirmed without a live game. Both
+comments that made this read as impossible ("ObserveModel never mints one",
+"nothing ever mints one") were corrected in place; the behaviour was not
+touched.
+
 **An implementation was built, adversarially verified, and rejected.** It is
 recorded here because the three things that killed it are what the real fix must
 solve, and each was proven end to end rather than argued:

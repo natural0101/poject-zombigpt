@@ -161,10 +161,14 @@ def unequip_prerequisite(item: ItemView) -> Prerequisite:
 def _approach_prerequisite(container: ContainerView, square: tuple[int, int, int]) -> Prerequisite:
     """Walk to the container's own square with an adjacency radius.
 
-    ``movement.move_near`` names a world *object* reference, and a container
-    reference is not one; the square the container stands on is derivable from
-    the container reference itself, so the runnable form of "go to it" is a
-    ``move_to`` whose radius is arm's length.
+    ``move_to`` rather than ``move_near``, but not for the reason this said
+    before: ``movement.move_near`` does accept a container reference
+    (``_MoveNearSpec.parse``, and the mod declares the same three kinds), so
+    "walk to the crate" is expressible. The prerequisite stays a ``move_to``
+    because the square is derivable from the container reference here and a
+    ``move_to`` carries the arrival radius explicitly; a reader weighing the
+    two should know both run, and that neither runs today for the reason in
+    docs/LIMITATIONS.md.
     """
     return Prerequisite(
         action=ActionName.MOVEMENT_MOVE_TO,

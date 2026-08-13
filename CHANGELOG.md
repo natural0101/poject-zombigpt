@@ -12,6 +12,42 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **Four load-bearing comments that asserted a guarantee the code does not
+  give** (`stabilize/arm-session-confirmation`). The mission-wedge defect fixed
+  in `5757008` survived four passes because a comment made the broken path read
+  as correct, so the same shape was hunted deliberately: comments that claim
+  something about behaviour living somewhere else. Seven areas audited, thirteen
+  candidates raised, three refuted on the spot, and every survivor re-checked by
+  hand against the code it names before anything was edited. **No behaviour
+  changed in this commit** — the comments were brought to the truth, and where
+  the truth is a gap, the gap is now recorded instead of denied.
+
+  The sharpest is not merely wrong prose. `movement.move_near` accepts
+  `container`, `square` and `item` references and refuses `object`, justified on
+  both sides of the seam by the claim that no scan can produce one
+  (`movement.py`, and the mod's own `Movement.lua`, which had already replaced
+  one wrong reason with another). Since `bf92ee2` the observer mints exactly one
+  per-object reference — a door's, from its `object_index` — and `doors.py`
+  requires that kind for the `door_ref` it resolves out of the same `nearby`
+  block. So the one object reference the mod produces is the one `move_near`
+  rejects, and **nothing walks the character up to a door**. The kinds were left
+  as they are and the gap written into `docs/LIMITATIONS.md` beside the missing
+  square tier: widening a contract on both sides to no observable effect, while
+  the destination square a walk resolves against is still absent from every
+  observation, would be a change nobody could confirm. `inventory.py` carried
+  the mirror error, offering "a container reference is not [an object
+  reference]" as the reason its prerequisite is a `move_to` — `move_near` takes
+  a container reference and always has.
+
+  The fourth is in safety code: the reflex guard's block rung explained itself as
+  non-redundant because the mod "fills `safety.danger_level` from a value it
+  never computes, so it is `none` while this is HIGH". The mod computes it —
+  `ObserveModel.dangerFloor`, written at the end of every successful
+  observation, which this same branch gave a measurement clock. The rung is
+  still not redundant, for a reason that is actually true: the floor is
+  deliberately coarse and derived from the zombie scan alone, while the rung
+  reads the assessment the module builds.
+
 - **A step the action channel refused wedged its mission until the goal's wall
   clock ran out** (`stabilize/arm-session-confirmation`). Found by a
   seven-way audit asking one question of every mission family: can a mission be
