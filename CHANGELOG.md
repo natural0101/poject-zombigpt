@@ -12,6 +12,36 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Added
 
+- **The sweep's last three claims, checked by hand: two real, one refuted, one a
+  duplicate** (`stabilize/arm-session-confirmation`). Named as unverified last
+  time rather than quietly dropped, so they were verified.
+
+  `ItemView.extra["weapon"]` is real. `combat/policy.py` reads a weapon's
+  condition out of an `extra` block the mod never builds — while the mod *does*
+  read the condition, into the player's stats as `weapon_condition` and
+  `weapon_condition_max`, which nothing on the sidecar reads. The
+  item-vocabulary mismatch again. The direction is safe and the function says so
+  itself: `None` means unreadable and the policy refuses rather than guessing, so
+  an engagement stops at `weapon_unusable` instead of swinging a weapon nobody
+  measured — and it sits behind `combat_assist`, which is experimental and
+  unreachable anyway.
+
+  `player.present == False` is a dead gate but a **benign** one, and that is
+  worth a row precisely so the next reader does not mistake the gate for the
+  mechanism. The mod cannot say it, but the condition arrives by another route:
+  with no character, `Observe.context` returns nil and no observation is
+  published at all, which the engine already treats as `GAME_DISCONNECTED`. The
+  unusable-character case rides `alive`, which defaults the safe way.
+
+  `chain.on_person == False` was not counted: it is a consequence of the
+  world-container row already recorded, not an independent root — every
+  container in the tree is on-person because no other kind ever enters it.
+
+  Eight rows now. Both new patterns were checked in both directions, and the
+  `present` one had to be tightened after the first attempt matched an unrelated
+  `player_present = false` in the agent's own state — a false positive that would
+  have made the row prove nothing.
+
 - **A world container can be named but never resolved, so nothing loots**
   (`stabilize/arm-session-confirmation`). The third gap of the square tier's
   shape, verified by hand from the agent sweep's claims rather than taken on

@@ -12,14 +12,20 @@ fixtures mint the entries the mod never sends. It was found by hand while
 chasing something unrelated. So were the two after it. That is three for three
 found by accident, which is the reason this file exists.
 
-The last two rows were not accidents. They came out of an audit that asked, of
-every comment claiming a guarantee, whether the code it named actually gives it
-— and both times the answer was a gate whose producer had never been written,
-sitting behind a comment that said it had. ``ActionState.type`` is the one that
-matters: a safety rung the spec asks for, dead since it was written, invisible
-because the comment beside it asserted the mod filled the field. Five rows now,
-two of them safety-relevant, and the count is a reason to keep looking rather
-than a reason to feel finished.
+Everything after the third row was found on purpose. Two came out of an audit
+asking, of every comment claiming a guarantee, whether the code it named gives
+it — and both times the answer was a gate whose producer had never been written,
+behind a comment saying it had. ``ActionState.type`` is that one: a safety rung
+the spec asks for, dead since it was written.
+
+The last three came from sweeping for this class deliberately, which nobody had
+ever done. The world-container row is the expensive one: it takes ``loot_area``
+with it, the same way the square tier takes movement. Eight rows now, and the
+lesson has changed shape — the first three were accidents, so the count read as
+bad luck; five deliberate finds in two sweeps says this class is *systematic* at
+this seam, and the seam is a hand-written contract between two languages with no
+schema binding them. Expect more, and note that three of the eight are one root:
+the mod and the sidecar spelling the same fact differently.
 
 This is a **ledger, not a prohibition**. A dead gate is sometimes the right
 state: ``observation.full`` is always true and the partial-snapshot merge is
@@ -105,6 +111,38 @@ WITHOUT_PRODUCER: Final = {
         "here can confirm. Pattern checked both ways -- no match today, matches when "
         "a WORLD root is spliced in beside the WORN one.",
         r"walkItemContainer\([\s\S]{0,200}?CONTAINER_KIND\.WORLD",
+    ),
+    'ItemView.extra["weapon"]': (
+        "combat/policy.py's weapon_condition_fraction reads the weapon's condition "
+        'out of item.extra["weapon"], and the mod never builds an extra block at '
+        "all. It does read the condition -- Observe.playerFields puts it in the "
+        "player's stats as weapon_condition and weapon_condition_max -- so this is "
+        "the item-vocabulary mismatch again rather than a missing reading, and "
+        "nothing on the sidecar reads those stat names. The fraction is therefore "
+        "always None. The direction is safe and the function says so: None means "
+        "unreadable and the policy refuses on it rather than guessing, so an "
+        "engagement stops at weapon_unusable instead of swinging a weapon nobody "
+        "measured. It also sits behind combat_assist, which is experimental and "
+        "cannot be live-confirmed at all, so nothing reaches it in the shipped "
+        "configuration.",
+        r"extra\s*=\s*\{[\s\S]{0,200}?weapon",
+    ),
+    "player.present == False": (
+        "Five sidecar sites refuse on it -- the action engine, the planner "
+        "executor, the autonomy gate, the reflex guard and the observation's own "
+        "usable() -- and the mod cannot say it: Observe.playerFields sets "
+        "present = true as a literal and is only reached with a player in hand. "
+        "This one is benign, and understanding why is the point of the row. The "
+        "condition it guards does arrive, by another route entirely: with no "
+        "character, Observe.context returns nil and the tick publishes no "
+        "observation, which the engine already treats as GAME_DISCONNECTED. The "
+        "unusable-character case is carried by `alive`, which defaults the safe "
+        "way -- unknown liveness reads as dead. So these are belt-and-braces "
+        "checks on a fact that reaches the sidecar as silence, not as a false "
+        "boolean. Recorded so the next reader does not mistake the gate for the "
+        "mechanism. (The pattern is anchored on a word boundary: PZAgent_Main "
+        "carries an unrelated player_present = false in the agent's own state.)",
+        r"\bpresent\s*=\s*false",
     ),
     "a nearby zombie's position sub-table": (
         "ObserveModel.dangerFloor decides whether a zombie is on the player's floor "
