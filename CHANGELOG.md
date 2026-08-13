@@ -12,6 +12,27 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Added
 
+- **The item-detail seam is now checked mechanically instead of one field at a
+  time** (`stabilize/arm-session-confirmation`).
+  `tests/contract/test_item_domain_vocabularies.py` reads the keys the mod's item
+  readers emit, reads the keys the sidecar's typed views ask for, re-derives the
+  counts `docs/LIMITATIONS.md` quotes, and pins the exact set of keys the sidecar
+  decides on without a producer. A new mismatch on either side now fails a test
+  rather than becoming the ninth thing somebody finds by accident. Three of the
+  eight dead-gate rows were this one root, and `schemas/observation.schema.json`
+  declares `food` and its siblings as objects while constraining none of their
+  properties — nothing had ever compared the two vocabularies.
+
+  The check earned itself immediately by failing on its author: the `fluid`
+  set was written from memory and was wrong in three keys. Derived rather than
+  recalled, it also sharpened a safety claim made two commits ago. Each hazard
+  key crosses in exactly **one** block — `poisonous` is sent in `food` and not in
+  `fluid`; `tainted` is sent in `fluid` and not in `food` — so poisoned food and
+  tainted water are both still refused, but the crossed pairs are not. A fluid
+  the engine flags poisonous rather than tainted reads as false on that key.
+  Whether the game ever flags one that way is a live-game question; the earlier
+  wording implied a symmetry that does not exist.
+
 - **The sweep's last three claims, checked by hand: two real, one refuted, one a
   duplicate** (`stabilize/arm-session-confirmation`). Named as unverified last
   time rather than quietly dropped, so they were verified.

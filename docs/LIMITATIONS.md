@@ -186,10 +186,23 @@ false**, a book's length and read-progress are unknown, and a bottle's remaining
 volume is not what the mod measured.
 
 What survives the mismatch is worth stating precisely, because it is the
-difference between a sharp hazard and a dull one: `poisonous` and `tainted` are
-spelled the same on both sides and do cross, so poisoned food and tainted water
-are still refused. What is lost is the softer judgement — rot, freshness, portions
-left, pages left, alcohol.
+difference between a sharp hazard and a dull one — and the precise version is
+narrower than it first looks. Each hazard key crosses in exactly **one** block:
+`poisonous` is sent in `food` and not in `fluid`; `tainted` is sent in `fluid`
+(`itemFluid` sends `amount`, `capacity`, `tainted`, and nothing else) and not in
+`food`. So poisoned food is refused and tainted water is refused — the two cases
+that matter most — but the crossed pairs are not: a fluid the engine flags
+poisonous rather than tainted, or a food it flags tainted rather than poisonous,
+reads as false on that key. Whether the game ever flags them that way is a
+live-game question, not one this side can answer.
+
+What is lost outright is the softer judgement — rot, freshness, portions left,
+pages left, alcohol.
+
+These counts are no longer prose. `tests/contract/test_item_domain_vocabularies.py`
+re-derives them from both sources on every run and pins the exact set of keys the
+sidecar decides on without a producer, so a new mismatch fails a test instead of
+waiting to be found by hand.
 
 Recorded rather than repaired. Fixing it means choosing which side renames, or
 adding a translation layer at the seam, and that is a contract decision across
