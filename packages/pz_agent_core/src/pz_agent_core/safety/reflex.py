@@ -49,7 +49,22 @@ MAX_EVENTS: Final = 12
 
 #: Long, interruptible activities during which a threat must pre-empt: §17.2's
 #: "visible zombie near during read/eat → interrupt". Matched against
-#: ``ActionState.type``, which the mod fills with the action name it queued.
+#: ``ActionState.type`` — **which the shipped mod never fills, so this set
+#: currently matches nothing and the rung it guards has never fired.** The
+#: observation's action block is ``Ownership.describe``'s table
+#: (``Runtime.lua:183`` → ``Observe.lua:1125``), and that table carries
+#: ownership, busy, readable, total, mod_owned, foreign, truncated and classes
+#: — no ``action_type``, which is the only field ``ObserveModel.action`` reads
+#: into ``type``. Where the mod does record an ``action_type`` elsewhere it is
+#: ``action.Type``, the engine's Java class name kept "for diagnostics", not a
+#: protocol action name, so even wiring it through would not match these
+#: strings. The consequence is bounded rather than absent: the flee rung above
+#: this one ignores the action type entirely, so a real emergency still stops
+#: everything — but during a read or a meal the agent reacts only at
+#: ``flee_at`` and never at the lower ``interrupt_at`` §17.2 asks for. Left as
+#: it is and recorded in docs/LIMITATIONS.md: filling it means teaching the mod
+#: to carry the in-flight command's protocol name into the queue description,
+#: a change to safety-critical code that no test here can confirm.
 DEFAULT_VULNERABLE_ACTIONS: Final = frozenset({"consume.eat", "consume.drink", "literature.read"})
 
 #: Rung each reason code occupies in the §"Иерархия приоритетов" ladder.

@@ -354,6 +354,40 @@ transition cannot be resumed; it is rebuilt from a fresh observation.
 goals are pursued by repeatedly re-planning, which means the agent can look
 indecisive if the world keeps changing under it.
 
+**The vulnerable-action interrupt rung has never fired.** `ReflexGuard`
+carries §17.2's "visible zombie near during read/eat → interrupt" as
+`DEFAULT_VULNERABLE_ACTIONS`, matched against `ActionState.type`. The shipped
+mod never fills that field: the observation's action block is
+`Ownership.describe`'s table (`Runtime.lua:183` → `Observe.lua:1125`), which
+carries `ownership`, `busy`, `readable`, `total`, `mod_owned`, `foreign`,
+`truncated` and `classes` and no `action_type` — the one field
+`ObserveModel.action` reads into `type`. So `running_type` is always `""`,
+`vulnerable` is always false, and the rung guarded by it is dead code in the
+shipped system. Where the mod does record an `action_type` elsewhere
+(`Safety.lua:430`) it is `action.Type`, the engine's Java class name kept "for
+diagnostics", so wiring that through would still not match `consume.eat` or
+`literature.read`.
+
+The consequence is bounded, not absent: the flee rung above it ignores the
+action type entirely, so a real emergency still cancels everything. What is
+missing is the *earlier* reaction — during a read or a meal the agent responds
+only at `flee_at`, never at the lower `interrupt_at` the spec asks for. Fixing
+it means teaching the mod to carry the in-flight command's protocol action name
+into the queue description, a change to safety-critical code on the side no
+test here can exercise, so it is recorded rather than guessed at.
+
+**Going stale does not disarm the mod.** `Safety.sidecarStale` is consulted in
+exactly three places — `Safety.arm`, `Safety.mayStart` and the snapshot — and
+all three only refuse; none touches `state.armed` or `state.mode`.
+`Safety.disarm` is reached only from a `session.disarm` command, a newly
+accepted session, or a panic stop. So after an unclean sidecar exit whose
+`session.disarm` never lands, the mod keeps reporting the mode it was granted
+until one of those three happens. It cannot act on it: `mayStart` refuses every
+action but stop, disarm and cancel while the heartbeat is stale. The residue is
+a stale reading, not a running agent — but two places in the sidecar used to
+promise a "stale-sidecar disarm" that does not exist, one of them in the notice
+text an operator reads.
+
 **Recovery never re-arms.** After any crash, restart or save change, the agent
 comes back in `OBSERVE`. You re-arm it. Not configurable.
 

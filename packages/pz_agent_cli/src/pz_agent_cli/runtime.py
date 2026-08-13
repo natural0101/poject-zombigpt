@@ -1884,14 +1884,22 @@ class SidecarLoop:
             )
         if was_armed and attached is not None:
             # The game holds an armed mode this process granted; tell it to
-            # drop to OFF now rather than whenever the sidecar heartbeat goes
-            # stale. Nothing will tick to read the ack, and that is stated
-            # rather than papered over.
+            # drop to OFF. Nothing will tick to read the ack, and that is
+            # stated rather than papered over -- but the backstop this named
+            # before does not exist. Going stale never disarms the mod:
+            # Safety.sidecarStale is read in exactly three places (arm,
+            # mayStart, the snapshot) and all three only refuse, while
+            # Safety.disarm is reached from a session.disarm command, a new
+            # session, or a panic stop. So if this command does not land, the
+            # mod keeps reporting the mode it was granted until one of those
+            # happens. It cannot act on it -- mayStart refuses everything but
+            # stop, disarm and cancel while the heartbeat is stale -- so the
+            # residue is a stale reading, not a running agent.
             self._submit_session_disarm(
                 attached,
                 detail=(
                     "session.disarm sent at shutdown; no tick remains to read the "
-                    "ack, so the mod's stale-sidecar disarm is the backstop"
+                    "ack, and going stale does not disarm the mod by itself"
                 ),
                 watch=False,
             )
@@ -2420,7 +2428,8 @@ class SidecarLoop:
                 detail=(
                     "the game never acked session.disarm within "
                     f"{self.limits.arm_confirm_timeout_ms} ms; its own takeover and "
-                    "panic safety, and the stale-sidecar disarm, are the backstop"
+                    "panic safety are the backstop, and a stale heartbeat stops it "
+                    "starting anything, though it does not disarm it"
                 ),
             )
 

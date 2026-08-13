@@ -337,9 +337,14 @@ class EngageZombieMission:
         if self._pending_action is not None:
             return None
         if self._end_after_retreat is not None:
-            # The retreat this ending owed has been driven to its own
-            # terminal result (or was refused admission and note_result never
-            # fired — either way nothing of ours is in flight). Seal.
+            # The retreat this ending owed has been driven to its own terminal
+            # result, so nothing of ours is in flight. The refused-admission
+            # history this used to name as well cannot reach here: _emit sets
+            # _pending_action before the planner ever offers the step, only a
+            # matching terminal result clears it, and the guard above returns
+            # on it. Since 5757008 that case does not survive to be asked
+            # anyway -- the wrapper ends the goal typed instead of dropping
+            # the step. Seal.
             ended, reason, cause = self._end_after_retreat
             return self._refuse(ended, reason, cause)
         if self._consecutive_failures >= self._limits.max_consecutive_failures:

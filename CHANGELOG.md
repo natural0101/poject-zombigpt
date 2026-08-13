@@ -12,6 +12,43 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **A safety rung that has never fired, and a backstop that does not exist**
+  (`stabilize/arm-session-confirmation`). The comment audit's remaining
+  survivors were verified by hand rather than left on an agent's word. Three
+  more were false, two of them in safety-relevant code, and **no behaviour
+  changed** — each is corrected in place and the gap behind it recorded.
+
+  `ReflexGuard` carries §17.2's "visible zombie near during read/eat →
+  interrupt" as `DEFAULT_VULNERABLE_ACTIONS`, matched against
+  `ActionState.type` under a comment saying the mod fills it with the action
+  name it queued. The shipped mod never fills that field at all: the
+  observation's action block is `Ownership.describe`'s table, which has no
+  `action_type` — the only field `ObserveModel.action` reads into `type`. So
+  `running_type` is always `""`, `vulnerable` is always false, and the rung is
+  dead code. Where the mod does record an `action_type` it is the engine's Java
+  class name kept for diagnostics, so wiring that through would not match
+  either. The consequence is bounded, not absent: the flee rung above ignores
+  the action type, so an emergency still stops everything — what is missing is
+  the earlier reaction, at `interrupt_at` rather than `flee_at`.
+
+  Two places promised that going stale disarms the mod, one of them inside the
+  `DisarmNotice` text an operator reads. It does not: `Safety.sidecarStale` is
+  consulted in exactly three places and all three only refuse, while
+  `Safety.disarm` is reached only from a `session.disarm` command, a new
+  session, or a panic stop. After an unclean exit whose disarm never lands the
+  mod keeps reporting the mode it was granted — but cannot act on it, because
+  `mayStart` refuses everything except stop, disarm and cancel while the
+  heartbeat is stale. A stale reading, not a running agent, and now said that
+  way. (The adversarial pass had waved the second one through as a terminology
+  quibble; it is user-facing text naming a mechanism that does not exist, so it
+  was corrected anyway.)
+
+  Third, `combat_mission` sealed an owed retreat under a parenthetical claiming
+  the refused-admission history also reaches that line "with nothing of ours in
+  flight". It cannot: `_emit` sets `_pending_action` before the step is ever
+  offered and the guard above returns on it — and since `5757008` that case
+  ends the goal typed instead.
+
 - **Four load-bearing comments that asserted a guarantee the code does not
   give** (`stabilize/arm-session-confirmation`). The mission-wedge defect fixed
   in `5757008` survived four passes because a comment made the broken path read
