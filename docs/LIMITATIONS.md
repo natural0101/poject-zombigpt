@@ -131,6 +131,44 @@ It survived a fully green suite because the sidecar's own fixtures mint the
 square objects the mod never sends (`tests/fixtures/adapter_worlds.py:a_square`),
 so each side was only ever tested against its own idea of the document.
 
+**The item-detail tier speaks two vocabularies, and neither side knows.** The
+same shape as the missing square tier, one layer down, and this time the data is
+present under other names. Measured field by field:
+
+| block | sidecar reads | mod sends | overlap |
+| --- | --- | --- | --- |
+| `food` | 22 | 8 | 6 |
+| `literature` | 11 | 5 | 2 |
+| `fluid` | 16 | 3 | 1 |
+
+`ObserveModel.domain` passes keys through verbatim — it sorts, caps and shapes
+values but never renames — and `FoodView.from_payload` and its siblings read
+`item.food` / `item.literature` / `item.fluid` straight off the observation. So
+the names have to agree, and mostly they do not. The clearest cases are the same
+fact under two names: the mod sends `pages`, `skill_level_min`, `skill_level_max`
+while the sidecar reads `pages_total`, `min_level`, `max_level`; the mod sends
+`amount` and `capacity` while the sidecar reads `remaining_units` and
+`capacity_units`; the mod sends `rotten` as a boolean while the sidecar asks
+whether `freshness == "rotten"`.
+
+Because every reader defaults a missing key (`read_str` to `""`, the numeric
+readers to zero or a supplied default), nothing errors. The decisions simply come
+out as though the world were uniformly bland: **`FoodView.is_rotten` is always
+false**, a book's length and read-progress are unknown, and a bottle's remaining
+volume is not what the mod measured.
+
+What survives the mismatch is worth stating precisely, because it is the
+difference between a sharp hazard and a dull one: `poisonous` and `tainted` are
+spelled the same on both sides and do cross, so poisoned food and tainted water
+are still refused. What is lost is the softer judgement — rot, freshness, portions
+left, pages left, alcohol.
+
+Recorded rather than repaired. Fixing it means choosing which side renames, or
+adding a translation layer at the seam, and that is a contract decision across
+two languages whose only real test is a live game. Guessing it statically would
+be the same move as relaxing the sidecar to accept the square tier: it would turn
+the suite green over a question nobody had answered.
+
 **A second gap sits behind it: nothing walks the character up to a door.**
 `movement.move_near` accepts `container`, `square` and `item` references and
 refuses `object` — on both sides, the sidecar's `_MoveNearSpec.parse` and the

@@ -12,6 +12,36 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Added
 
+- **The item-detail tier speaks two vocabularies** (`stabilize/arm-session-confirmation`).
+  A deliberate sweep for the dead-gate class — the shape behind the missing
+  square tier, five instances of which had all been found by accident — turned up
+  the same failure one layer down, and this time the data is present under other
+  names.
+
+  Measured field by field, not estimated: `food` — the sidecar reads 22 keys, the
+  mod sends 8, 6 agree; `literature` — 11 read, 5 sent, 2 agree; `fluid` — 16
+  read, 3 sent, 1 agrees. `ObserveModel.domain` passes key names through verbatim
+  and the typed views read the raw block straight off the observation, so the
+  names have to match and mostly do not. The sharpest cases are one fact under
+  two names: `pages` vs `pages_total`, `skill_level_min`/`max` vs
+  `min_level`/`max_level`, `amount`/`capacity` vs
+  `remaining_units`/`capacity_units`, and a boolean `rotten` against a
+  `freshness == "rotten"` test.
+
+  Nothing errors, because every reader defaults a missing key — so the decisions
+  come out as though the world were uniformly bland. **`FoodView.is_rotten` is
+  always false.** What does survive is worth naming precisely: `poisonous` and
+  `tainted` are spelled the same on both sides, so poisoned food and tainted
+  water are still refused; what is lost is rot, portions left, pages left and
+  alcohol.
+
+  Recorded in `docs/LIMITATIONS.md`, not repaired. Choosing which side renames —
+  or adding a translation layer at the seam — is a contract decision across two
+  languages whose only real test is a live game, and guessing it statically would
+  be the same move as relaxing the sidecar to accept the square tier.
+
+### Added
+
 - **Two more rows in the dead-gate ledger, both found on purpose**
   (`stabilize/arm-session-confirmation`).
   `tests/contract/test_gates_without_producers.py` existed with three rows, all
