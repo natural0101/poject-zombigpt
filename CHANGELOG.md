@@ -10,6 +10,29 @@ drift out of sync with `pz_agent_core.version`.
 
 ## [Unreleased]
 
+### Added
+
+- **Two more rows in the dead-gate ledger, both found on purpose**
+  (`stabilize/arm-session-confirmation`).
+  `tests/contract/test_gates_without_producers.py` existed with three rows, all
+  three found by accident while chasing something else. The comment audit turned
+  up two more of the same shape — a sidecar gate whose producer was never
+  written, behind a comment asserting it had been — so they are recorded where
+  the test will notice if that ever changes.
+
+  `ActionState.type` is the one that matters: §17.2's "interrupt a read or a meal
+  when a zombie is near" has never fired, because the observation's action block
+  is `Ownership.describe`'s table and that table has no `action_type`. The second
+  is `dangerFloor`'s floor test, which reads a `position` sub-table its caller
+  never supplies, so every zombie counts as same-floor.
+
+  Both patterns were verified in both directions before being committed, which is
+  the discipline the file itself argues for: neither matches the mod today, and
+  each matches when a plausible producer is spliced in. The `action_type` window
+  is measured rather than guessed — `describe`'s return table ends 784 characters
+  into the function, the nearest unrelated `action_type` is 2296 in, so a 1200
+  character window sees a real producer and not the other one.
+
 ### Fixed
 
 - **The last six comment-audit survivors, verified and corrected**

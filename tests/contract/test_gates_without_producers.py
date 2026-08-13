@@ -9,8 +9,17 @@ system and nobody could tell.
 The square tier was the expensive one — ``movement.move_to`` refuses every real
 observation because no ``kind="square"`` entry exists to find, and the sidecar's
 fixtures mint the entries the mod never sends. It was found by hand while
-chasing something unrelated. So were the two below. That is three for three
+chasing something unrelated. So were the two after it. That is three for three
 found by accident, which is the reason this file exists.
+
+The last two rows were not accidents. They came out of an audit that asked, of
+every comment claiming a guarantee, whether the code it named actually gives it
+— and both times the answer was a gate whose producer had never been written,
+sitting behind a comment that said it had. ``ActionState.type`` is the one that
+matters: a safety rung the spec asks for, dead since it was written, invisible
+because the comment beside it asserted the mod filled the field. Five rows now,
+two of them safety-relevant, and the count is a reason to keep looking rather
+than a reason to feel finished.
 
 This is a **ledger, not a prohibition**. A dead gate is sometimes the right
 state: ``observation.full`` is always true and the partial-snapshot merge is
@@ -64,6 +73,32 @@ WITHOUT_PRODUCER: Final = {
         "every real observation with TARGET_NOT_LOADED. See LIMITATIONS.md for "
         "the full account and the two blockers a fix must still solve.",
         r'kind\s*=\s*[\'"]square[\'"]',
+    ),
+    "ActionState.type": (
+        "safety/reflex.py matches DEFAULT_VULNERABLE_ACTIONS against it to serve "
+        "§17.2's 'visible zombie near during read/eat -> interrupt'. The mod never "
+        "fills it: the observation's action block is Ownership.describe's table "
+        "(Runtime.lua -> Observe.context), which carries ownership, busy, readable, "
+        "total, mod_owned, foreign, truncated and classes and no action_type — the "
+        "one field ObserveModel.action reads into `type`. So running_type is always "
+        "the empty string and that rung has never fired. Bounded rather than absent: "
+        "the flee rung above it ignores the action type, so the loss is the earlier "
+        "reaction at interrupt_at, not the emergency at flee_at. The window below is "
+        "measured, not guessed: describe's return table ends 784 characters into the "
+        "function and the nearest unrelated action_type (the panic plan's, a "
+        "different function) is 2296 in, so 1200 sees a real producer and not that.",
+        r"function Ownership\.describe[\s\S]{0,1200}?action_type",
+    ),
+    "a nearby zombie's position sub-table": (
+        "ObserveModel.dangerFloor decides whether a zombie is on the player's floor "
+        'with `type(zombie.position) ~= "table"`, and its only production caller '
+        "hands it the raw reader table from Observe.nearbyFields, whose zombies carry "
+        "flat x, y, z — the position sub-table is added later, by buildZombie. So the "
+        "guard's escape branch fires for every zombie and a horde one storey up counts "
+        "as closing. The error runs toward caution, which is why the docstring was "
+        "corrected and the code was not: reading the flat z would make a safety guard "
+        "less conservative on static reasoning alone, and that wants a live game.",
+        r"chasing\s*=\s*chasing,[\s\S]{0,400}?position\s*=\s*\{",
     ),
 }
 
