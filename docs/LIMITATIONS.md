@@ -204,6 +204,26 @@ re-derives them from both sources on every run and pins the exact set of keys th
 sidecar decides on without a producer, so a new mismatch fails a test instead of
 waiting to be found by hand.
 
+**And the divergence is local, not the seam's nature.** The rest of the seam was
+checked the same way and every structural tier agrees *exactly*: the item's own
+fields (12 keys), the container's (7) and the zombie's (6) match key for key,
+nothing read that is not sent and nothing sent that is not read. The player's
+stats map is clean in the direction that costs something — every stat the sidecar
+reads is one the mod sends.
+
+That is not luck, and it points at the repair. Each of those tiers has a typed
+dataclass on the Python side and an explicit table on the Lua side, written
+against each other and reviewed together. The three that diverged — `food`,
+`literature`, `fluid` — are exactly the ones passed through as raw `JsonDict`
+where nothing forced agreement, which is also why
+`schemas/observation.schema.json` declares them as objects and constrains none of
+their properties.
+
+So the fix is not "rewrite the contract". It is to give those three blocks the
+treatment the other tiers already have, plus the one unbuilt bridge for the
+weapon's condition. That is a bounded piece of work — and still one whose result
+only a live game can confirm.
+
 Recorded rather than repaired. Fixing it means choosing which side renames, or
 adding a translation layer at the seam, and that is a contract decision across
 two languages whose only real test is a live game. Guessing it statically would

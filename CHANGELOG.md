@@ -12,6 +12,30 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Added
 
+- **The rest of the seam checked, and the divergence turns out to be local**
+  (`stabilize/arm-session-confirmation`). The vocabulary check now covers every
+  structural tier crossing the observation boundary, and they all agree
+  *exactly*: the item's own fields (12 keys), the container's (7) and the
+  zombie's (6) match key for key — nothing read that is not sent, nothing sent
+  that is not read. The zombie block matters most and is the most careful: both
+  sides keep `visible`, `chasing` and `state` tri-state, with the mod recording
+  an unknown in its limits rather than defaulting.
+
+  That result changes the story the earlier findings told. The three blocks that
+  diverged — `food`, `literature`, `fluid` — are exactly the ones passed through
+  as raw `JsonDict` where nothing forced agreement, which is also why
+  `schemas/observation.schema.json` declares them as objects and constrains none
+  of their properties. Everywhere a typed dataclass faces an explicit Lua table,
+  the two agree. So the repair is not "rewrite the contract" but "give those
+  three the treatment the other tiers already have", plus the one unbuilt bridge
+  for the weapon's condition — bounded work, still only confirmable in a live
+  game.
+
+  The check caught its author a second time: the item extraction read 8 keys
+  instead of 12, because four of them are assigned after the table literal
+  rather than inside it. A pattern that stops early does not prove agreement, it
+  proves it looked at less.
+
 - **The stats seam checked the same way, and it is clean** (`stabilize/arm-session-confirmation`).
   The item-domain vocabulary check was extended to the player's open stats map,
   expecting the item blocks over again. It is not, and a clean negative is worth

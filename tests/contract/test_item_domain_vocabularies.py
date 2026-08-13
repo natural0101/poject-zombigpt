@@ -222,3 +222,82 @@ def test_no_stat_is_decided_on_without_a_producer() -> None:
 def test_the_stats_nobody_reads_are_the_known_ones() -> None:
     """The harmless direction, pinned so a new one gets a look rather than a pass."""
     assert _mod_stat_keys() - _sidecar_stat_keys() == STATS_SENT_UNREAD
+
+
+# --------------------------------------------------------------------------
+# the structural tiers, which turn out to be exact
+# --------------------------------------------------------------------------
+
+#: Each structural block, as (a slice of ObserveModel that builds it, the
+#: sidecar dataclass that reads it). These are the tiers with a typed dataclass
+#: on one side and an explicit table on the other, and every one of them agrees
+#: key for key.
+STRUCTURAL: Final = {
+    "item": (r"local item = \{(.*?)\n  return item", "ItemView", 12),
+    "container": (
+        r"state\.containers\[state\.containerCount\] = \{(.*?)\n  \}",
+        "ContainerView",
+        7,
+    ),
+    "zombie": (
+        r"local zombie = \{ ref = ref, distance = distance \}(.*?)\n  return",
+        "NearbyZombie",
+        6,
+    ),
+}
+
+MODEL_LUA: Final = (
+    REPO_ROOT / "pz-mod" / "42" / "media" / "lua" / "shared" / "PZAgent" / "ObserveModel.lua"
+)
+MESSAGES_PY: Final = (
+    REPO_ROOT / "packages" / "pz_agent_core" / "src" / "pz_agent_core" / "protocol" / "messages.py"
+)
+
+
+def _structural_mod_keys(block: str, pattern: str) -> set[str]:
+    source = MODEL_LUA.read_text(encoding="utf-8")
+    match = re.search(pattern, source, re.S)
+    assert match is not None, f"{block}: ObserveModel no longer builds this table the same way"
+    body = match.group(1)
+    keys = set(re.findall(r"^\s+(\w+) =", body, re.M))
+    keys |= set(re.findall(r"^\s*(?:item|zombie)\.(\w+)\s*=", body, re.M))
+    if block == "zombie":
+        keys |= {"ref", "distance"}
+    return keys
+
+
+def _structural_sidecar_keys(cls: str) -> set[str]:
+    source = MESSAGES_PY.read_text(encoding="utf-8")
+    match = re.search(rf"class {cls}.*?(?=\nclass |\Z)", source, re.S)
+    assert match is not None, f"{cls} is no longer a class in messages.py"
+    return set(re.findall(r'payload(?:\.get\(|,\s*)"(\w+)"', match.group(0)))
+
+
+def test_the_structural_tiers_agree_key_for_key() -> None:
+    """The finding that explains the ones above.
+
+    The item's own fields, the container's, and the zombie's all match exactly —
+    12, 7 and 6 keys, nothing read that is not sent and nothing sent that is not
+    read. That is not luck: each of these has a typed dataclass on the Python
+    side and an explicit table on the Lua side, and the two were written against
+    each other. The blocks that diverged are the ones passed through as raw
+    ``JsonDict`` where nothing forced agreement.
+
+    So the repair for the item-detail tier is not "rewrite the contract" — it is
+    to give ``food``, ``literature`` and ``fluid`` the treatment these three
+    already have. Asserting the exactness keeps that argument true.
+    """
+    for block, (pattern, cls, expected) in STRUCTURAL.items():
+        mod = _structural_mod_keys(block, pattern)
+        side = _structural_sidecar_keys(cls)
+        assert mod, f"{block}: extracted no keys from the mod"
+        assert side, f"{block}: extracted no keys from {cls}"
+        assert len(mod) == expected, f"{block}: mod now sends {len(mod)} keys, not {expected}"
+        assert mod == side, (
+            f"{block}: the structural tier has drifted.\n"
+            f"  read but not sent: {sorted(side - mod)}\n"
+            f"  sent but not read: {sorted(mod - side)}\n"
+            f"This tier used to agree exactly, which is the argument that the "
+            f"item-detail divergence is a fixable local defect rather than the "
+            f"seam's natural state."
+        )
