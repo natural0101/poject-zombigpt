@@ -10,6 +10,29 @@ drift out of sync with `pz_agent_core.version`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The handoff the game machine reads had fallen behind the findings**
+  (`stabilize/arm-session-confirmation`). `LOCAL_GAME_HANDOFF.md` §4 opened with
+  "three parts of the sidecar are wired to a mod that cannot drive them" and
+  listed three. The ledger has held eight for several commits, and the three
+  most consequential of this branch's discoveries were absent from the one
+  document the person at the game machine actually reads before spending a
+  session.
+
+  That is the same defect this whole pass has been removing, aimed at the
+  handoff: a document that was true when written, read as current later. It now
+  lists all eight with what each looks like from the chair, and two of the new
+  rows change what a session is worth spending on — `loot_area` is blocked twice
+  over rather than once, and a food or drink *choice* is decided blind, so the
+  act can be trusted as evidence while the selection cannot.
+
+  The priority list gained the one experiment that would change what the agent
+  is allowed to do: start a read or a meal, let a zombie approach, and confirm
+  the character stops at all. §17.2's earlier interrupt is dead code, the flee
+  rung above it is not, and only a live session can say whether that second rung
+  fires when it must.
+
 ### Added
 
 - **A map of the contract seams, where the next person will look for it**

@@ -255,18 +255,25 @@ Everything below ran and passed in the remote environment:
 
 ## 4. What requires a real game — and was therefore not done
 
-**Read this before you spend a session: three parts of the sidecar are wired to
-a mod that cannot drive them, and one of the three means the agent cannot walk.**
-None of this is your install. Reporting it as a bug costs you the session, which
-is the only resource in this project that can produce live evidence at all.
+**Read this before you spend a session: eight parts of the sidecar are wired to
+a mod that cannot drive them. Two of them mean the agent cannot walk and cannot
+loot, and one is a safety rung that has never fired.** None of this is your
+install. Reporting it as a bug costs you the session, which is the only resource
+in this project that can produce live evidence at all.
 
 | What you will see | Why | Do |
 | --- | --- | --- |
 | **Every `movement.move_to` and `movement.move_near` refuses `TARGET_NOT_LOADED`** — "no loaded square was reported at (x, y, z)", including the square next to the character | The sidecar finds a destination square by scanning `nearby.objects` for an entry whose `kind` is `square`; the mod emits no such entry. `world.inspect` reports zero squares described for the same reason, and the local map never learns any square is blocked | Skip every scenario that walks. Do **not** relax the precondition to get past it — it exists to stop the character being walked onto ground nothing assessed |
+| **Every container action against a crate, cupboard or corpse refuses `INVALID_REF`** — "is not in the observed container tree" | The mod's inventory has two roots, the main inventory and each worn container, with carried containers nested inside items. A nearby world container is *referenced* — `buildObject` mints it a proper container ref — but never listed, and `resolve_container` searches the list alone | Skip `loot_area` entirely. It is blocked twice over: it cannot walk to the crate and could not open it standing there |
+| A rotten meal, an empty bottle and a finished book all read as fine | The mod sends `rotten`, `pages`, `amount`/`capacity`; the sidecar reads `freshness`, `pages_total`, `remaining_units`. Different names for the same facts, so every one of them reads as its type's default. `poisonous` (food) and `tainted` (fluid) *do* cross, so the two sharpest hazards are still refused | Do not trust a food or drink *choice* as evidence of anything. Whether it was eaten is still observed honestly; **which** item the policy picked was decided blind |
+| A zombie arriving during a meal or a book does not interrupt it until the danger is high enough to stop everything | §17.2's interrupt rung matches `ActionState.type`, and the mod never fills that field | Worth timing if you can: the flee rung above it does fire, so the character should still stop — later than the spec asks. If it does **not** stop at all, that is a finding |
 | Containers are never refused as unreachable | `container.accessible` is always true: five sidecar sites refuse on it and nothing in the mod ever sets it false | Nothing. Expect a locked or blocked container to be attempted and to fail at the game rather than be refused early |
+| Combat stops at `weapon_unusable` rather than swinging | `weapon_condition_fraction` reads `item.extra["weapon"]`; the mod puts the wear in `player.stats` instead, deliberately, and nothing reads it there. Unreadable makes the policy refuse rather than guess | Nothing — and note `combat_assist` is experimental, so you should not reach this at all |
 | Snapshots are always full, never deltas | `Observe.context` sets `full = true` unconditionally | Nothing. The merge path in `store.py` is simply unused |
+| A horde one storey up counts as closing | `dangerFloor` tests `zombie.position.z`, and its caller passes the raw reader table where the position is three flat fields | Nothing. The error runs toward caution — the floor reads higher than the world warrants, never lower |
 
-`tests/contract/test_gates_without_producers.py` is the ledger for these three;
+`tests/contract/test_gates_without_producers.py` is the ledger for all eight and
+`tests/contract/test_item_domain_vocabularies.py` measures the third;
 `LIMITATIONS.md` carries the full account and, for the square tier, the two
 blockers a fix must still solve.
 
@@ -292,7 +299,17 @@ and one thing above all others:
    `player.stats`: **if any of them fire on a healthy install, that is the
    finding**, not a nuisance.
 4. **Eat and drink from the inventory, equip, unequip, bandage, read.** These
-   reach the game without a step being taken.
+   reach the game without a step being taken. Watch the *choice* rather than the
+   act: the vocabulary mismatch above means the policy picked that sandwich
+   without being able to read rot, portions or pages. If the agent eats
+   something visibly spoiled, that is the mismatch showing, not a new bug — and
+   it is worth reporting as confirmation that it bites in a real save.
+5. **One thing to time, if the session allows.** Start a read or a meal and let
+   a zombie approach. §17.2 asks for an interrupt at the lower threshold; that
+   rung is dead, so the character should stop only when the danger reaches the
+   flee threshold. Confirming *that it stops at all* is the safety-relevant
+   half. If it does not, stop the session and say so — that is the one finding
+   in this list that would change what the agent is allowed to do.
 
 This is the honest part, and the reason this handoff exists.
 
