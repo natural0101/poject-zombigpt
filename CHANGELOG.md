@@ -12,6 +12,26 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Added
 
+- **The stats seam checked the same way, and it is clean** (`stabilize/arm-session-confirmation`).
+  The item-domain vocabulary check was extended to the player's open stats map,
+  expecting the item blocks over again. It is not, and a clean negative is worth
+  a test rather than a shrug: every stat the sidecar reads — `endurance`,
+  `fatigue`, `health`, `hunger`, `panic`, `thirst` — is one `Observe.playerStats`
+  sends, and `observe.wounds_unknown` is minted by ObserveModel's limit block.
+  Nothing there reads as a default for ever. `test_no_stat_is_decided_on_without_a_producer`
+  now asserts that emptiness, so the disease stays confined to the item-detail
+  blocks instead of spreading unnoticed.
+
+  Reading the mod's own code also corrected a row this branch wrote last commit.
+  `ItemView.extra["weapon"]` was described as the item-vocabulary mismatch again.
+  It is not quite: `Observe.playerStats` puts the equipped weapon's wear in the
+  stats map **deliberately**, saying why in a comment — "because the item tier
+  has no condition field in the schema" — and refusing to fabricate a condition
+  when the reader is absent. So it is one bridge that was never built, not two
+  vocabularies drifting apart, and the ledger row now says so. (It also named
+  `Observe.playerFields`, which is the wrong function; the stats are built by
+  `Observe.playerStats`.)
+
 - **The item-detail seam is now checked mechanically instead of one field at a
   time** (`stabilize/arm-session-confirmation`).
   `tests/contract/test_item_domain_vocabularies.py` reads the keys the mod's item

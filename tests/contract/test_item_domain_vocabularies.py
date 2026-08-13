@@ -155,3 +155,70 @@ def test_no_new_key_is_decided_on_without_a_producer() -> None:
             f"  gone (a producer now exists, or the read was dropped): "
             f"{sorted(UNSENT[block] - unsent)}"
         )
+
+
+# --------------------------------------------------------------------------
+# the player's stats map, checked the same way — and clean
+# --------------------------------------------------------------------------
+
+#: Stats the mod sends that nothing reads. This is the harmless direction: a
+#: reader is free to ignore what it does not need. ``weapon_condition`` is the
+#: exception worth knowing about, and it is not carelessness on either side --
+#: ``Observe.playerStats`` puts the equipped weapon's wear here *deliberately*,
+#: saying so in a comment ("carried under the open stats map because the item
+#: tier has no condition field in the schema"), while combat/policy.py looks for
+#: it in ``item.extra["weapon"]``. One bridge that was never built, not a
+#: vocabulary drifting apart. See the ledger row in
+#: test_gates_without_producers.py.
+STATS_SENT_UNREAD: Final = {"stress", "weapon_condition", "weapon_condition_max"}
+
+
+def _mod_stat_keys() -> set[str]:
+    source = OBSERVE_LUA.read_text(encoding="utf-8")
+    match = re.search(
+        r"function Observe\.playerStats\(player\)(.*?)\n  return stats\nend", source, re.S
+    )
+    assert match is not None, "Observe.playerStats no longer ends by returning stats"
+    return set(re.findall(r"stats\.(\w+)\s*=", match.group(1)))
+
+
+def _sidecar_stat_keys() -> set[str]:
+    """Every stat name the sidecar asks the open stats map for."""
+    root = REPO_ROOT / "packages" / "pz_agent_core" / "src" / "pz_agent_core"
+    keys: set[str] = set()
+    for path in root.rglob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        keys |= set(re.findall(r'_stat\(\s*(?:self|observation)\s*,\s*"([a-z_.]+)"', text))
+        keys |= set(re.findall(r'_stat\("([a-z_.]+)"', text))
+        keys |= set(re.findall(r'stats\.get\("([a-z_.]+)"', text))
+    return keys
+
+
+def test_no_stat_is_decided_on_without_a_producer() -> None:
+    """The stats map is clean in the direction that costs something.
+
+    This was expected to be the item blocks over again and is not, which is
+    worth a test rather than a shrug: every stat the sidecar reads --
+    endurance, fatigue, health, hunger, panic, thirst -- is one
+    ``Observe.playerStats`` sends, and ``observe.wounds_unknown`` is minted by
+    ObserveModel's limit block. Nothing here reads as a default for ever. The
+    disease is confined to the item-detail blocks above, and this asserts that
+    it stays confined.
+    """
+    mod, side = _mod_stat_keys(), _sidecar_stat_keys()
+    assert mod, "read no keys out of Observe.playerStats"
+    assert side, "read no stat names out of the sidecar"
+    namespaced = {key for key in side if "." in key}
+    for key in namespaced:
+        assert key.startswith("observe."), f"{key}: an unexpected namespace in the stats map"
+    unsent = side - mod - namespaced
+    assert unsent == set(), (
+        f"a stat is now decided on without a producer: {sorted(unsent)} -- either "
+        f"the mod stopped sending it or the sidecar started reading a name nobody "
+        f"writes, and both read as the accessor's default for ever"
+    )
+
+
+def test_the_stats_nobody_reads_are_the_known_ones() -> None:
+    """The harmless direction, pinned so a new one gets a look rather than a pass."""
+    assert _mod_stat_keys() - _sidecar_stat_keys() == STATS_SENT_UNREAD
