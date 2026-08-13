@@ -42,8 +42,19 @@ DOMAINS: Final = {
     "fluid": ("itemFluid", "drink.py", 16, 3, 1),
 }
 
-#: Keys the sidecar decides on that the mod does not send. Recorded, not
-#: tolerated silently: every one of these reads as its type's default for ever.
+#: Keys the sidecar reads that the mod does not send. Recorded, not tolerated
+#: silently. All but one read as their type's default for ever, which is the
+#: defect: a fact nobody measured, stated confidently.
+#:
+#: The exception is ``literature.unread_recipes``, and it is what the repair of
+#: one of these looks like short of writing the missing producer. The key is
+#: still unsent -- that is why it is still listed -- but the sidecar no longer
+#: decides on it: absent reads as *unknown*, a recipe goal refuses with a
+#: sentence saying the count could not be read rather than that the magazine
+#: holds nothing new, and a boredom goal scores it on the factors that *were*
+#: readable. Membership here means "read without a producer", not "read as a
+#: default"; the two stopped being the same thing with that fix.
+#:
 #: See docs/LIMITATIONS.md, "The item-detail tier speaks two vocabularies".
 UNSENT: Final = {
     "food": {
@@ -104,8 +115,19 @@ def _mod_keys(reader: str) -> set[str]:
 
 
 def _sidecar_keys(module: str) -> set[str]:
-    """The keys one typed view asks its raw payload for."""
-    return set(re.findall(r'payload,\s*"(\w+)"', (POLICY / module).read_text(encoding="utf-8")))
+    """The keys one typed view asks its raw payload for.
+
+    Two spellings, because a field that must tell *absent* from *zero* cannot go
+    through the shared ``read_*`` helpers at all -- their whole job is to
+    substitute a default -- and reads its key with ``payload.get`` instead. The
+    first version of this pattern saw only the helper form, so the literature
+    block appeared to drop from eleven keys to ten the moment ``unread_recipes``
+    became tri-state, when nothing had stopped being read. An extractor that
+    goes blind exactly where the seam gets *more* careful would retire this
+    file's rows one honest fix at a time.
+    """
+    source = (POLICY / module).read_text(encoding="utf-8")
+    return set(re.findall(r'(?:payload,\s*|payload\.get\()"(\w+)"', source))
 
 
 def test_both_extractors_see_something() -> None:
@@ -140,11 +162,19 @@ def test_the_measured_counts_still_hold() -> None:
 def test_no_new_key_is_decided_on_without_a_producer() -> None:
     """The one that earns this file.
 
-    A key the sidecar reads and the mod never sends is a decision made on a
-    default. The set is recorded above; anything new in it is a fresh instance of
-    the defect this seam keeps producing, and anything that has *left* it is a
-    producer somebody wrote — either way the ledger and LIMITATIONS.md need the
-    edit before this passes again.
+    A key the sidecar reads and the mod never sends is a fact nobody measured,
+    and by default it is also a fact stated confidently. The set is recorded
+    above; anything new in it is a fresh instance of the defect this seam keeps
+    producing, and anything that has *left* it is a producer somebody wrote —
+    either way the ledger and LIMITATIONS.md need the edit before this passes
+    again.
+
+    A row can also be repaired without leaving: making the read tri-state keeps
+    the key here (nothing produces it) while removing the confident claim, which
+    is what happened to ``literature.unread_recipes``. So this test pins which
+    keys have no producer, and the comment on the set above carries which of
+    them still decide on a default — the second question is the one that hurts,
+    and it is not answerable from set membership alone.
     """
     for block, (reader, module, _reads, _sends, _overlap) in DOMAINS.items():
         mod, side = _mod_keys(reader), _sidecar_keys(module)

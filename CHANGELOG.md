@@ -12,6 +12,44 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **Nothing could ever be picked to learn a recipe from**
+  (`stabilize/arm-session-confirmation`). `LiteratureView.unread_recipes` was
+  read with `read_int`, whose job is to substitute a default, and no mod reader
+  publishes the key on any build. Every magazine therefore reported zero unread
+  recipes, and `_filter_recipes` refused each one for the reason "nothing new in
+  it" — the `LEARN_RECIPE` goal could not be served by any item in the world,
+  while the refusal named the magazine rather than the missing reader.
+
+  The field is now tri-state, absent meaning **unknown** rather than zero: a
+  recipe goal refuses with a sentence saying the count could not be read, a
+  magazine with a real positive count beats one nobody could look inside, and a
+  boredom goal — which never turned on the count — scores it on the factors that
+  were readable instead of dropping it. A value present but not a number lands
+  on unknown too. Absence refuses deliberately: a skill the character does not
+  actually gain is worse than a book left unopened.
+
+  Invisible until now because the shared fixture always writes the key, so no
+  test could produce the payload the shipped mod actually sends — the same
+  green-that-does-not-cover shape as the missing square tier, one field down.
+  The fix was carried over from the mirror branch, where it was written beside
+  P5 work that stays out of `dev`; it depends on none of it, and `literature.py`
+  had not been touched here since the branches parted.
+
+- **The vocabulary ledger went blind exactly where the seam got more careful**
+  (`stabilize/arm-session-confirmation`). `_sidecar_keys` matched only the
+  shared `read_*(payload, "key")` helpers, so the moment `unread_recipes` became
+  tri-state — which *requires* bypassing those helpers, since they exist to
+  supply the default — the literature block appeared to drop from eleven read
+  keys to ten and `test_the_measured_counts_still_hold` failed. Nothing had
+  stopped being read. Left alone, an extractor with that blind spot would retire
+  a ledger row for every honest fix, which is the opposite of what the file is
+  for. It now sees `payload.get("key")` as well.
+
+  The ledger's own claim needed the same correction: membership means "read
+  without a producer", which until now was the same thing as "decided on a
+  default" and no longer is. `unread_recipes` stays listed — nothing produces it
+  — with the set's comment carrying which rows still decide blind.
+
 - **The handoff the game machine reads had fallen behind the findings**
   (`stabilize/arm-session-confirmation`). `LOCAL_GAME_HANDOFF.md` §4 opened with
   "three parts of the sidecar are wired to a mod that cannot drive them" and

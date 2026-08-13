@@ -199,6 +199,26 @@ live-game question, not one this side can answer.
 What is lost outright is the softer judgement — rot, freshness, portions left,
 pages left, alcohol.
 
+**One of these is now repaired without its producer, and it shows what the other
+repairs look like.** `unread_recipes` is read by the sidecar and sent by nobody,
+so it defaulted to zero, so `_filter_recipes` refused *every* magazine in the
+world for the reason "nothing new in it" — the `LEARN_RECIPE` goal could not be
+served by any item on any build. The field is now tri-state: absent is
+**unknown**, distinct from both zero and some. A recipe goal still refuses, but
+with a sentence saying the count could not be read rather than claiming the
+magazine is exhausted, a magazine with a real positive count beats one nobody
+could look inside, and a boredom goal — which never turned on the count — scores
+it on the factors that *were* readable instead of dropping it. Absence falls on
+the refusing side deliberately: a skill the character does not actually gain is
+a worse outcome than a book left unopened.
+
+That is the pattern for the rest of this table, and it is narrower than renaming
+the seam: where a missing key is currently answered with a default, answer it
+with *unknown* and let each consumer say what unknown means to it. It does not
+recover the fact — only the mod can do that — but it stops the sidecar stating
+one it never measured. What it cannot fix is `FoodView.is_rotten` and its
+siblings reading as confident falsehoods until the same treatment reaches them.
+
 These counts are no longer prose. `tests/contract/test_item_domain_vocabularies.py`
 re-derives them from both sources on every run and pins the exact set of keys the
 sidecar decides on without a producer, so a new mismatch fails a test instead of
