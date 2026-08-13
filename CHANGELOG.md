@@ -12,6 +12,27 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Added
 
+- **A map of the contract seams, where the next person will look for it**
+  (`stabilize/arm-session-confirmation`). `tests/contract/__init__.py` was
+  empty; it now says which seams already have a standing agreement check and
+  which one did not. Written because the previous commit was a duplicate
+  checker that found nothing new and broke the existing one's Lua dumper on the
+  way past — the map is the fix for that class of waste, not an apology for it.
+
+  The inventory is worth stating on its own: agreement is already machine-checked
+  for adapter arguments, capability declarations, capability evidence, the engine
+  API inventory, the MCP tool surface, four wire schemas, and what the documents
+  promise against what the parser does. Forty-seven contract tests in all. The
+  one seam with no such check was the observation document's field
+  vocabularies — and that is exactly where eight dead gates accumulated,
+  including the three that cost the most: the agent cannot walk, nothing loots,
+  and a safety rung that has never fired.
+
+  That correspondence is the argument for the two files this branch added. It is
+  also the general lesson, stated where a reader will meet it: an agreement kept
+  only by review is kept until the day it is not, and the suite stays green
+  through the whole of that day.
+
 - **The rest of the seam checked, and the divergence turns out to be local**
   (`stabilize/arm-session-confirmation`). The vocabulary check now covers every
   structural tier crossing the observation boundary, and they all agree
