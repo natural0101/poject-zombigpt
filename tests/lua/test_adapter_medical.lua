@@ -208,6 +208,51 @@ do
   contains(detail, "ForeArm_L", "and the detail names the wound that was not treated")
 end
 
+Harness.group("a dressing the wound already carried is not one this command applied")
+do
+  local s = scene()
+  -- A soaked bandage over a wound that is still losing blood. The part reads
+  -- `bandaged` before the command starts, so "bandaged is true afterwards" is a
+  -- fact that holds whether ISApplyBandage landed or never ran at all -- and an
+  -- adapter that accepts it has verified something the action did not do.
+  s.parts[2].state.bandaged = true
+  local args = { body_part = "ForeArm_L" }
+  ok(Bandage:validate(args, s.ctx), "a bleeding part may be dressed again")
+  ok(Bandage:prepare(args, s.ctx), "and prepares")
+  local before = Toolkit.observe(s.player)
+  ok(Bandage:begin(args, s.ctx), "and starts")
+
+  Support.drainQueue(s.queue)
+  local evidence, code, detail = Bandage:verify(before, Toolkit.observe(s.player), args, s.ctx)
+  isNil(evidence, "the dressing the part already carried proves nothing about this command")
+  equal(code, REASON.POSTCONDITION_FAILED, "so the command failed its postcondition")
+  contains(detail, "already", "and the detail says the dressing predates the command")
+
+  -- The wound stopping is still the postcondition, dressing or no dressing.
+  s.bandage.actions[1]:perform()
+  local proof = Bandage:verify(before, Toolkit.observe(s.player), args, s.ctx)
+  ok(proof ~= nil, "a part that has stopped bleeding is the evidence")
+  equal(proof.bleeding_after, false, "carrying the reading that settled it")
+end
+
+Harness.group("a dressing that was not there before is what proves one landed")
+do
+  local s = scene()
+  local args = { body_part = "ForeArm_L" }
+  ok(Bandage:validate(args, s.ctx), "the command validates")
+  ok(Bandage:prepare(args, s.ctx), "and prepares")
+  local before = Toolkit.observe(s.player)
+  ok(Bandage:begin(args, s.ctx), "and starts")
+
+  -- A dressing that landed on a wound that keeps bleeding: the part was not
+  -- bandaged before and is now, which is this command's own effect.
+  s.parts[2].state.bandaged = true
+  local proof = Bandage:verify(before, Toolkit.observe(s.player), args, s.ctx)
+  ok(proof ~= nil, "a dressing that was not there before is an observation of this command")
+  equal(proof.bandaged_after, true, "carrying the dressing the part now reports")
+  equal(proof.bleeding_after, true, "and stating plainly that the wound is still bleeding")
+end
+
 Harness.group("the wound is read back off the body part it was aimed at")
 do
   local s = scene()
@@ -229,6 +274,48 @@ do
 
   local other = Toolkit.observe(s.player).body["Hand_R"]
   equal(other.bleeding, true, "the wound nobody asked about is untouched")
+end
+
+Harness.group("a wound whose bleeding cannot be read is not a wound that stopped")
+do
+  -- The whole postcondition is `bleeding == false`, so a bleeding flag that is
+  -- absent rather than false decides the command. A part the engine would not
+  -- answer for must read as nothing at all: flattened to false it is the exact
+  -- shape of the ack this adapter exists to refuse -- "wound_dressed,
+  -- bleeding_after=false" over a character who is still losing blood, and the
+  -- one ack that mints `verified` for medical_bandage.
+  local s = scene()
+  local args = {}
+  ok(Bandage:validate(args, s.ctx), "the command validates")
+  ok(Bandage:prepare(args, s.ctx), "and prepares")
+  local before = Toolkit.observe(s.player)
+  ok(Bandage:begin(args, s.ctx), "and starts")
+
+  -- The dressing was never applied; the accessor simply stops answering.
+  Support.drainQueue(s.queue)
+  s.parts[2].isBleeding = function()
+    error("kahlua gap", 0)
+  end
+  local after = Toolkit.observe(s.player)
+  isNil(after.body["ForeArm_L"].bleeding, "an unread flag is nothing, not false")
+  local evidence, code, detail = Bandage:verify(before, after, args, s.ctx)
+  isNil(evidence, "so the wound was never observed to stop bleeding")
+  equal(code, REASON.CAPABILITY_UNAVAILABLE, "the gap is a capability, not a dressed wound")
+  contains(detail, "isBleeding", "naming the reading that was not available")
+
+  -- A dressing the part does report is still a postcondition on its own: the
+  -- refusal above is about the absent reading, not about being strict twice.
+  local dressed = scene()
+  ok(Bandage:validate(args, dressed.ctx), "a second command validates")
+  ok(Bandage:prepare(args, dressed.ctx), "and prepares")
+  local was = Toolkit.observe(dressed.player)
+  ok(Bandage:begin(args, dressed.ctx), "and starts")
+  dressed.bandage.actions[1]:perform()
+  dressed.parts[2].isBleeding = nil
+  local proof = Bandage:verify(was, Toolkit.observe(dressed.player), args, dressed.ctx)
+  ok(proof ~= nil, "a part that reports a dressing was dressed")
+  equal(proof.bandaged_after, true, "which is the reading that carried it")
+  isNil(proof.bleeding_after, "with no invented bleeding reading")
 end
 
 Harness.group("bandage stops for the player and for a horde")

@@ -56,6 +56,22 @@ Safety.SIDECAR_MAX_AGE_MS = 5 * 1000
 --- owns the level itself.
 Safety.DANGER_BLOCK_RANK = 3
 
+--- A danger floor measured longer ago than this is not a reading any more.
+---
+--- The floor is written in one place only -- PZAgent.Observe.context, after the
+--- player, the build and the nearby scan have all been read -- so an
+--- observation that fails anywhere before that point leaves the previous run's
+--- level standing while the mod keeps heartbeating and keeps taking commands.
+--- The gate cannot tell that level from one a scan produced this tick unless it
+--- is told when the scan happened, which is why setDanger takes a clock.
+---
+--- The allowance is the observation's own cadence, measured against the same
+--- worst case the heartbeat's is: PZAgent_Main runs the heartbeat every 10
+--- ticks and tolerates 5 s of silence, and it observes every 60 ticks -- six
+--- times as long between readings, so six times the allowance. Tightening it
+--- below the cadence would refuse a floor that is merely one tick late.
+Safety.DANGER_MAX_AGE_MS = 6 * Safety.SIDECAR_MAX_AGE_MS
+
 --- Bound on the stop events kept in memory for the HUD and diagnostics.
 Safety.STOP_HISTORY = 8
 
@@ -73,6 +89,10 @@ function Safety.newState(options)
     mode = Protocol.MODE.OFF,
     manual_takeover = false,
     danger_level = Protocol.DANGER.NONE,
+    -- NONE with no measurement behind it, exactly as sidecar_last_seen_ms is
+    -- absent rather than "seen at zero": a fresh state has not looked.
+    danger_seen_ms = nil,
+    danger_max_age_ms = options.dangerMaxAgeMs or Safety.DANGER_MAX_AGE_MS,
     sidecar_last_seen_ms = nil,
     sidecar_max_age_ms = options.sidecarMaxAgeMs or Safety.SIDECAR_MAX_AGE_MS,
     debounce_events = options.debounceEvents or Safety.DEBOUNCE_EVENTS,
@@ -102,13 +122,36 @@ function Safety.noteSidecarHeartbeat(state, nowMs)
   state.sidecar_last_seen_ms = nowMs
 end
 
---- Set the reflex guard's current threat assessment.
-function Safety.setDanger(state, level)
+--- Set the reflex guard's current threat assessment, as measured at `nowMs`.
+---
+--- The moment is half the reading. A level with no time attached is a level
+--- whose age nothing can judge, so a caller that passes no clock leaves the
+--- floor unmeasured rather than dating it now: a fabricated measurement time is
+--- what would make a stale floor look freshly taken.
+function Safety.setDanger(state, level, nowMs)
   if PZAgent.Protocol.dangerRank(level) == nil then
     return false, "unknown danger level"
   end
   state.danger_level = level
+  if type(nowMs) == "number" then
+    state.danger_seen_ms = nowMs
+  else
+    state.danger_seen_ms = nil
+  end
   return true
+end
+
+--- How long ago the danger floor was measured, or nil when nothing has ever
+--- measured it on this state.
+---
+--- The two answers are different facts and the gate treats them differently:
+--- an age says an observation ran and how long ago, nil says this state has
+--- published nothing at all. See mayStart for what each one costs.
+function Safety.dangerAgeMs(state, nowMs)
+  if state.danger_seen_ms == nil then
+    return nil
+  end
+  return nowMs - state.danger_seen_ms
 end
 
 --- Register one player input event. Returns true when it triggered a takeover.
@@ -254,6 +297,36 @@ function Safety.mayStart(state, actionName, nowMs, context)
   end
   if PZAgent.Ownership.blocksAutomation(context.queue) then
     return false, reasons.PLAYER_BUSY_MANUAL_ACTION, "the action queue holds work the mod does not own"
+  end
+  local dangerAge = Safety.dangerAgeMs(state, nowMs)
+  if dangerAge ~= nil and dangerAge > state.danger_max_age_ms then
+    -- A floor is only a threat assessment while something keeps taking it. The
+    -- measurement happens in one place -- the end of a successful observation --
+    -- so a mod that observed once and then stopped (an unreadable position, a
+    -- build probe that started failing, a sequence error) keeps showing this
+    -- gate the calm of the last scan it managed, through the horde it can no
+    -- longer see. The age is checked before the level below, because a level
+    -- nobody re-measured is no more evidence of a threat than of calm, and this
+    -- gate is consulted again on every step of a running command, so work
+    -- already in flight ends too instead of running blind to its timeout.
+    --
+    -- PRECONDITION_FAILED rather than THREAT_INTERRUPTED: nothing observed a
+    -- threat, and naming one would invent a reading exactly as the stale calm
+    -- does.
+    --
+    -- A floor that has never been measured at all (dangerAge nil) is the same
+    -- `none` and is deliberately *not* refused here. It is the state of a
+    -- freshly armed agent before its first observation, and no mutating command
+    -- can reach it in the shipped system: the sidecar's action engine will not
+    -- dispatch one without an observation strictly newer than the last it saw
+    -- (pz_agent_core.actions.engine ActionEngine._drive, which rejects with
+    -- GAME_DISCONNECTED when none arrives), and the mod publishes its first
+    -- observation only by running the measurement above. Refusing it here as
+    -- well would be the same one-line check, but it would also refuse every
+    -- agent that is armed without having observed, which is a contract this
+    -- gate does not own.
+    return false, reasons.PRECONDITION_FAILED,
+      string.format("the danger floor was last measured %d ms ago", dangerAge)
   end
   local rank = Protocol.dangerRank(state.danger_level) or 0
   if rank >= state.danger_block_rank then

@@ -10,6 +10,806 @@ drift out of sync with `pz_agent_core.version`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The handoff the game machine reads had fallen behind the findings**
+  (`stabilize/arm-session-confirmation`). `LOCAL_GAME_HANDOFF.md` §4 opened with
+  "three parts of the sidecar are wired to a mod that cannot drive them" and
+  listed three. The ledger has held eight for several commits, and the three
+  most consequential of this branch's discoveries were absent from the one
+  document the person at the game machine actually reads before spending a
+  session.
+
+  That is the same defect this whole pass has been removing, aimed at the
+  handoff: a document that was true when written, read as current later. It now
+  lists all eight with what each looks like from the chair, and two of the new
+  rows change what a session is worth spending on — `loot_area` is blocked twice
+  over rather than once, and a food or drink *choice* is decided blind, so the
+  act can be trusted as evidence while the selection cannot.
+
+  The priority list gained the one experiment that would change what the agent
+  is allowed to do: start a read or a meal, let a zombie approach, and confirm
+  the character stops at all. §17.2's earlier interrupt is dead code, the flee
+  rung above it is not, and only a live session can say whether that second rung
+  fires when it must.
+
+### Added
+
+- **A map of the contract seams, where the next person will look for it**
+  (`stabilize/arm-session-confirmation`). `tests/contract/__init__.py` was
+  empty; it now says which seams already have a standing agreement check and
+  which one did not. Written because the previous commit was a duplicate
+  checker that found nothing new and broke the existing one's Lua dumper on the
+  way past — the map is the fix for that class of waste, not an apology for it.
+
+  The inventory is worth stating on its own: agreement is already machine-checked
+  for adapter arguments, capability declarations, capability evidence, the engine
+  API inventory, the MCP tool surface, four wire schemas, and what the documents
+  promise against what the parser does. Forty-seven contract tests in all. The
+  one seam with no such check was the observation document's field
+  vocabularies — and that is exactly where eight dead gates accumulated,
+  including the three that cost the most: the agent cannot walk, nothing loots,
+  and a safety rung that has never fired.
+
+  That correspondence is the argument for the two files this branch added. It is
+  also the general lesson, stated where a reader will meet it: an agreement kept
+  only by review is kept until the day it is not, and the suite stays green
+  through the whole of that day.
+
+- **The rest of the seam checked, and the divergence turns out to be local**
+  (`stabilize/arm-session-confirmation`). The vocabulary check now covers every
+  structural tier crossing the observation boundary, and they all agree
+  *exactly*: the item's own fields (12 keys), the container's (7) and the
+  zombie's (6) match key for key — nothing read that is not sent, nothing sent
+  that is not read. The zombie block matters most and is the most careful: both
+  sides keep `visible`, `chasing` and `state` tri-state, with the mod recording
+  an unknown in its limits rather than defaulting.
+
+  That result changes the story the earlier findings told. The three blocks that
+  diverged — `food`, `literature`, `fluid` — are exactly the ones passed through
+  as raw `JsonDict` where nothing forced agreement, which is also why
+  `schemas/observation.schema.json` declares them as objects and constrains none
+  of their properties. Everywhere a typed dataclass faces an explicit Lua table,
+  the two agree. So the repair is not "rewrite the contract" but "give those
+  three the treatment the other tiers already have", plus the one unbuilt bridge
+  for the weapon's condition — bounded work, still only confirmable in a live
+  game.
+
+  The check caught its author a second time: the item extraction read 8 keys
+  instead of 12, because four of them are assigned after the table literal
+  rather than inside it. A pattern that stops early does not prove agreement, it
+  proves it looked at less.
+
+- **The stats seam checked the same way, and it is clean** (`stabilize/arm-session-confirmation`).
+  The item-domain vocabulary check was extended to the player's open stats map,
+  expecting the item blocks over again. It is not, and a clean negative is worth
+  a test rather than a shrug: every stat the sidecar reads — `endurance`,
+  `fatigue`, `health`, `hunger`, `panic`, `thirst` — is one `Observe.playerStats`
+  sends, and `observe.wounds_unknown` is minted by ObserveModel's limit block.
+  Nothing there reads as a default for ever. `test_no_stat_is_decided_on_without_a_producer`
+  now asserts that emptiness, so the disease stays confined to the item-detail
+  blocks instead of spreading unnoticed.
+
+  Reading the mod's own code also corrected a row this branch wrote last commit.
+  `ItemView.extra["weapon"]` was described as the item-vocabulary mismatch again.
+  It is not quite: `Observe.playerStats` puts the equipped weapon's wear in the
+  stats map **deliberately**, saying why in a comment — "because the item tier
+  has no condition field in the schema" — and refusing to fabricate a condition
+  when the reader is absent. So it is one bridge that was never built, not two
+  vocabularies drifting apart, and the ledger row now says so. (It also named
+  `Observe.playerFields`, which is the wrong function; the stats are built by
+  `Observe.playerStats`.)
+
+- **The item-detail seam is now checked mechanically instead of one field at a
+  time** (`stabilize/arm-session-confirmation`).
+  `tests/contract/test_item_domain_vocabularies.py` reads the keys the mod's item
+  readers emit, reads the keys the sidecar's typed views ask for, re-derives the
+  counts `docs/LIMITATIONS.md` quotes, and pins the exact set of keys the sidecar
+  decides on without a producer. A new mismatch on either side now fails a test
+  rather than becoming the ninth thing somebody finds by accident. Three of the
+  eight dead-gate rows were this one root, and `schemas/observation.schema.json`
+  declares `food` and its siblings as objects while constraining none of their
+  properties — nothing had ever compared the two vocabularies.
+
+  The check earned itself immediately by failing on its author: the `fluid`
+  set was written from memory and was wrong in three keys. Derived rather than
+  recalled, it also sharpened a safety claim made two commits ago. Each hazard
+  key crosses in exactly **one** block — `poisonous` is sent in `food` and not in
+  `fluid`; `tainted` is sent in `fluid` and not in `food` — so poisoned food and
+  tainted water are both still refused, but the crossed pairs are not. A fluid
+  the engine flags poisonous rather than tainted reads as false on that key.
+  Whether the game ever flags one that way is a live-game question; the earlier
+  wording implied a symmetry that does not exist.
+
+- **The sweep's last three claims, checked by hand: two real, one refuted, one a
+  duplicate** (`stabilize/arm-session-confirmation`). Named as unverified last
+  time rather than quietly dropped, so they were verified.
+
+  `ItemView.extra["weapon"]` is real. `combat/policy.py` reads a weapon's
+  condition out of an `extra` block the mod never builds — while the mod *does*
+  read the condition, into the player's stats as `weapon_condition` and
+  `weapon_condition_max`, which nothing on the sidecar reads. The
+  item-vocabulary mismatch again. The direction is safe and the function says so
+  itself: `None` means unreadable and the policy refuses rather than guessing, so
+  an engagement stops at `weapon_unusable` instead of swinging a weapon nobody
+  measured — and it sits behind `combat_assist`, which is experimental and
+  unreachable anyway.
+
+  `player.present == False` is a dead gate but a **benign** one, and that is
+  worth a row precisely so the next reader does not mistake the gate for the
+  mechanism. The mod cannot say it, but the condition arrives by another route:
+  with no character, `Observe.context` returns nil and no observation is
+  published at all, which the engine already treats as `GAME_DISCONNECTED`. The
+  unusable-character case rides `alive`, which defaults the safe way.
+
+  `chain.on_person == False` was not counted: it is a consequence of the
+  world-container row already recorded, not an independent root — every
+  container in the tree is on-person because no other kind ever enters it.
+
+  Eight rows now. Both new patterns were checked in both directions, and the
+  `present` one had to be tightened after the first attempt matched an unrelated
+  `player_present = false` in the agent's own state — a false positive that would
+  have made the row prove nothing.
+
+- **A world container can be named but never resolved, so nothing loots**
+  (`stabilize/arm-session-confirmation`). The third gap of the square tier's
+  shape, verified by hand from the agent sweep's claims rather than taken on
+  their word, and the one that takes a whole goal kind with it.
+
+  `InventoryView.container` searches `inventory.containers` alone and
+  `resolve_container` refuses `INVALID_REF` for anything not in it.
+  `container.inspect` needs that twice — as a precondition and again to verify
+  against the observation after — and `inventory.transfer` resolves its source
+  the same way. The mod's inventory has exactly two roots, the main inventory and
+  each worn container, with `CARRIED` containers nested inside items. There is no
+  third root and no path that adds a nearby crate.
+
+  The crate is not invisible: `buildObject` mints it a container reference
+  whenever the descriptor carries an `object_index` and a `container_index`, so a
+  planner can see it and name it. It simply cannot be resolved, because the
+  reference points into a list it was never added to. With the missing square
+  tier above it, the loot mission is blocked twice over — it cannot walk to the
+  crate, and could not open it if it were standing there.
+
+  Recorded, not repaired, and added to the dead-gate ledger with a pattern
+  checked both ways: no match today, a match when a `WORLD` root is spliced in
+  beside the `WORN` one. The missing half is a mod-side inventory tier for an
+  open world container — when a crate enters the tree, when it leaves, what its
+  contents cost to read every tick — and that is a contract addition whose only
+  honest test is a live game.
+
+- **The item-detail tier speaks two vocabularies** (`stabilize/arm-session-confirmation`).
+  A deliberate sweep for the dead-gate class — the shape behind the missing
+  square tier, five instances of which had all been found by accident — turned up
+  the same failure one layer down, and this time the data is present under other
+  names.
+
+  Measured field by field, not estimated: `food` — the sidecar reads 22 keys, the
+  mod sends 8, 6 agree; `literature` — 11 read, 5 sent, 2 agree; `fluid` — 16
+  read, 3 sent, 1 agrees. `ObserveModel.domain` passes key names through verbatim
+  and the typed views read the raw block straight off the observation, so the
+  names have to match and mostly do not. The sharpest cases are one fact under
+  two names: `pages` vs `pages_total`, `skill_level_min`/`max` vs
+  `min_level`/`max_level`, `amount`/`capacity` vs
+  `remaining_units`/`capacity_units`, and a boolean `rotten` against a
+  `freshness == "rotten"` test.
+
+  Nothing errors, because every reader defaults a missing key — so the decisions
+  come out as though the world were uniformly bland. **`FoodView.is_rotten` is
+  always false.** What does survive is worth naming precisely: `poisonous` and
+  `tainted` are spelled the same on both sides, so poisoned food and tainted
+  water are still refused; what is lost is rot, portions left, pages left and
+  alcohol.
+
+  Recorded in `docs/LIMITATIONS.md`, not repaired. Choosing which side renames —
+  or adding a translation layer at the seam — is a contract decision across two
+  languages whose only real test is a live game, and guessing it statically would
+  be the same move as relaxing the sidecar to accept the square tier.
+
+### Added
+
+- **Two more rows in the dead-gate ledger, both found on purpose**
+  (`stabilize/arm-session-confirmation`).
+  `tests/contract/test_gates_without_producers.py` existed with three rows, all
+  three found by accident while chasing something else. The comment audit turned
+  up two more of the same shape — a sidecar gate whose producer was never
+  written, behind a comment asserting it had been — so they are recorded where
+  the test will notice if that ever changes.
+
+  `ActionState.type` is the one that matters: §17.2's "interrupt a read or a meal
+  when a zombie is near" has never fired, because the observation's action block
+  is `Ownership.describe`'s table and that table has no `action_type`. The second
+  is `dangerFloor`'s floor test, which reads a `position` sub-table its caller
+  never supplies, so every zombie counts as same-floor.
+
+  Both patterns were verified in both directions before being committed, which is
+  the discipline the file itself argues for: neither matches the mod today, and
+  each matches when a plausible producer is spliced in. The `action_type` window
+  is measured rather than guessed — `describe`'s return table ends 784 characters
+  into the function, the nearest unrelated `action_type` is 2296 in, so a 1200
+  character window sees a real producer and not the other one.
+
+### Fixed
+
+- **The last six comment-audit survivors, verified and corrected**
+  (`stabilize/arm-session-confirmation`). All six were false, none needed a
+  behaviour change, and two turned out to matter more than prose.
+
+  `ObserveModel.dangerFloor` documents itself as reading "the same fields the
+  observation carries" and as counting zombies on another floor as present but
+  never as closing. It reads neither: its only production caller hands it the
+  raw reader table, whose zombies carry flat `x`/`y`/`z`, while the floor test
+  reads `zombie.position.z` — so the guard's own `type(...) ~= "table"` branch
+  fires for every zombie and a horde one storey up counts as closing. The error
+  runs toward caution, which is why the docstring was corrected and the code was
+  not: teaching it to read the flat `z` would make a safety guard *less*
+  conservative on static reasoning alone.
+
+  The wound reference is documented as having "no cross-language format to
+  match". It has one: `policy.medical.wound_body_part` splits the string and
+  reads segment three as the body part, yielding `""` — a part no command can
+  name — for anything that does not split into exactly three. The comment
+  invited precisely the change that would silently disable bandaging by
+  location.
+
+  The rest: `Counters:reset` is documented as called when a session is accepted
+  and has no production caller at all, so sequence counters are game-session
+  scoped rather than handshake-scoped; `PZAgent.Json` no longer refuses a
+  corrupt byte string (it escapes it as Latin-1, which its own header calls a
+  fallback), so the rule against splitting a long name now rests on honesty
+  rather than on a lost observation; and `autonomy.py` twice justified an
+  omission with "nothing in the protocol's action set" does this, when
+  `medical.bandage`, `survival.rest` and `survival.sleep` have been there since
+  P3, with goal kinds and care missions behind them. Both omissions stand — the
+  autonomy table is the agent's own initiative, and the low-endurance case had a
+  second reason that never depended on the false one — but they now say why
+  truthfully.
+
+- **A safety rung that has never fired, and a backstop that does not exist**
+  (`stabilize/arm-session-confirmation`). The comment audit's remaining
+  survivors were verified by hand rather than left on an agent's word. Three
+  more were false, two of them in safety-relevant code, and **no behaviour
+  changed** — each is corrected in place and the gap behind it recorded.
+
+  `ReflexGuard` carries §17.2's "visible zombie near during read/eat →
+  interrupt" as `DEFAULT_VULNERABLE_ACTIONS`, matched against
+  `ActionState.type` under a comment saying the mod fills it with the action
+  name it queued. The shipped mod never fills that field at all: the
+  observation's action block is `Ownership.describe`'s table, which has no
+  `action_type` — the only field `ObserveModel.action` reads into `type`. So
+  `running_type` is always `""`, `vulnerable` is always false, and the rung is
+  dead code. Where the mod does record an `action_type` it is the engine's Java
+  class name kept for diagnostics, so wiring that through would not match
+  either. The consequence is bounded, not absent: the flee rung above ignores
+  the action type, so an emergency still stops everything — what is missing is
+  the earlier reaction, at `interrupt_at` rather than `flee_at`.
+
+  Two places promised that going stale disarms the mod, one of them inside the
+  `DisarmNotice` text an operator reads. It does not: `Safety.sidecarStale` is
+  consulted in exactly three places and all three only refuse, while
+  `Safety.disarm` is reached only from a `session.disarm` command, a new
+  session, or a panic stop. After an unclean exit whose disarm never lands the
+  mod keeps reporting the mode it was granted — but cannot act on it, because
+  `mayStart` refuses everything except stop, disarm and cancel while the
+  heartbeat is stale. A stale reading, not a running agent, and now said that
+  way. (The adversarial pass had waved the second one through as a terminology
+  quibble; it is user-facing text naming a mechanism that does not exist, so it
+  was corrected anyway.)
+
+  Third, `combat_mission` sealed an owed retreat under a parenthetical claiming
+  the refused-admission history also reaches that line "with nothing of ours in
+  flight". It cannot: `_emit` sets `_pending_action` before the step is ever
+  offered and the guard above returns on it — and since `5757008` that case
+  ends the goal typed instead.
+
+- **Four load-bearing comments that asserted a guarantee the code does not
+  give** (`stabilize/arm-session-confirmation`). The mission-wedge defect fixed
+  in `5757008` survived four passes because a comment made the broken path read
+  as correct, so the same shape was hunted deliberately: comments that claim
+  something about behaviour living somewhere else. Seven areas audited, thirteen
+  candidates raised, three refuted on the spot, and every survivor re-checked by
+  hand against the code it names before anything was edited. **No behaviour
+  changed in this commit** — the comments were brought to the truth, and where
+  the truth is a gap, the gap is now recorded instead of denied.
+
+  The sharpest is not merely wrong prose. `movement.move_near` accepts
+  `container`, `square` and `item` references and refuses `object`, justified on
+  both sides of the seam by the claim that no scan can produce one
+  (`movement.py`, and the mod's own `Movement.lua`, which had already replaced
+  one wrong reason with another). Since `bf92ee2` the observer mints exactly one
+  per-object reference — a door's, from its `object_index` — and `doors.py`
+  requires that kind for the `door_ref` it resolves out of the same `nearby`
+  block. So the one object reference the mod produces is the one `move_near`
+  rejects, and **nothing walks the character up to a door**. The kinds were left
+  as they are and the gap written into `docs/LIMITATIONS.md` beside the missing
+  square tier: widening a contract on both sides to no observable effect, while
+  the destination square a walk resolves against is still absent from every
+  observation, would be a change nobody could confirm. `inventory.py` carried
+  the mirror error, offering "a container reference is not [an object
+  reference]" as the reason its prerequisite is a `move_to` — `move_near` takes
+  a container reference and always has.
+
+  The fourth is in safety code: the reflex guard's block rung explained itself as
+  non-redundant because the mod "fills `safety.danger_level` from a value it
+  never computes, so it is `none` while this is HIGH". The mod computes it —
+  `ObserveModel.dangerFloor`, written at the end of every successful
+  observation, which this same branch gave a measurement clock. The rung is
+  still not redundant, for a reason that is actually true: the floor is
+  deliberately coarse and derived from the zombie scan alone, while the rung
+  reads the assessment the module builds.
+
+- **A step the action channel refused wedged its mission until the goal's wall
+  clock ran out** (`stabilize/arm-session-confirmation`). Found by a
+  seven-way audit asking one question of every mission family: can a mission be
+  driven to a state it never leaves without its goal ending? The answer for the
+  families themselves was no — the queue's own `tick()` expires an abandoned
+  active goal on `max_wall_ms`, and `runtime.tick()` calls it unconditionally
+  before any acting — but the audit surfaced a path that is not a leak and is
+  still a silence.
+
+  `ActionChannel.submit` raises `LoopError` for two reasons it names itself: the
+  queue filled between the wrapper's capacity check and the call — the MCP
+  router submits to the same channel from its own thread — or an idempotency key
+  was reused for a different request across a restart. All six
+  `_submit_*_step` handlers caught it and returned, on a comment claiming "the
+  step is dropped and the mission decides again from the next observation; its
+  own bounds cap how often this can repeat". That comment was the journey
+  path's, and it is false for a mission: the mission sets `_pending_action` when
+  it *emits* the step, gates `next_step` on it, and only a terminal
+  `ActionResult` clears it — a result that can never arrive for a request the
+  channel never admitted. So the mission declined every later tick with none of
+  its own bounds advancing, and the goal ended `ACTION_TIMEOUT` at its wall
+  budget — up to fifteen minutes for loot — naming a timeout instead of the
+  refusal that happened. This is the shape `fb8539a` already ended typed for an
+  *evicted* step record, left behind on the branch beside it. All six now mark
+  the mission abandoned and end the goal `CAPABILITY_UNAVAILABLE` with
+  `UNADMITTED_STEP_DETAIL`, a separate sentence from `UNOBSERVED_STEP_DETAIL`
+  because the two are different facts: there a record existed and was lost, here
+  none was ever minted. The journey path keeps its `LoopError` handler unchanged
+  — a journey really can replan past a dropped leg, which is why the comment was
+  true where it was written. Red first: the failing test asserted the goal ended
+  and got `ACTIVE`, and a second test states the wedge on its own by driving a
+  mission six ticks past an unanswerable step.
+
+- **Verified, not changed: two items the ledger carried as open.** Neither could
+  be turned red, so neither got an edit. *Arming on a danger floor that was
+  never measured* is unreachable for mutating commands on three independent
+  links: `ActionEngine._drive` refuses to dispatch without an observation
+  strictly newer than the last seen (`GAME_DISCONNECTED`), the mod publishes an
+  observation only after `Safety.setDanger` runs, and `ObserveModel.dangerFloor`
+  returns a `DANGER.*` constant on every path — including `HIGH` when nobody
+  scanned — so `setDanger`'s early return on an unknown level cannot fire from
+  that call site. *`_enforce_cap` dropping a live drive without ending its goal*
+  needs a fifth live drive of one kind, while `MAX_TRACKED_* = 4` and the queue
+  admits `DEFAULT_MAX_OPEN = 4` open goals in total; `app.py` builds its
+  `GoalQueue` with that default and nothing overrides it, so the eviction cannot
+  fire in the shipped configuration.
+
+- **Thirty-four defects of one family: evidence read without checking whose it
+  was, or when it was written** (`stabilize/arm-session-confirmation`). A static
+  audit along the P0 causal chain — mod visibility, session identity, heartbeat
+  freshness, the two-phase arm, terminality, pointer and sequence recovery, one
+  action, goals made of several — starting from one found in `pz-agent play`,
+  generalising its shape across the sidecar, and then running the same three
+  families against the mod, which is where every one of the 2026-08-08 live
+  findings had lived, and finally against the tri-state rule itself. Seventeen on
+  the sidecar, seventeen on the mod. Every fix was
+  watched red first; a hypothesis that could not be turned red was reported as a
+  hypothesis and left alone.
+
+  *Claims resting on evidence that did not prove them.* `play` confirmed its arm
+  from any fresh heartbeat reporting armed in the requested mode, without
+  comparing the session — so a heartbeat left by an **earlier** sidecar could
+  confirm an arm this session never got, and the command exited 0. `doctor`
+  PZD010 called a session active from an undated read, telling the owner of a
+  game that crashed an hour ago that it was live, two lines under PZD006 saying
+  that same heartbeat was stale. `HeartbeatMonitor` read a *future*-stamped
+  heartbeat as fresh for the whole of the skew, so a peer whose clock ran ahead
+  could publish once and stop forever while every reader saw "fresh" — the
+  handshake and the snapshot reader already refuse a document stamped past their
+  window; the heartbeat was the one with no ceiling in that direction. The
+  `engage_single_zombie` mission reported a kill it had not made: a failed window
+  plus a succeeded `combat.shove` — whose adapter verifies "down **or strictly
+  further away**" — plus the zombie leaving the nearby tier closed the goal as
+  done, the shove that pushed it away serving as the evidence. `avoid_threat`
+  read a *missing* nearby tier as an open horizon, completing a retreat with a
+  chaser four tiles out. `status` printed a silent heartbeat's armed/mode/player
+  as the state now, three lines under the word "stale".
+
+  *A previous run's document taken as current.* The snapshot reader compared
+  session-scoped sequence numbers **across** sessions, so after a game session
+  change it refused every new snapshot as a rewind and the sidecar went blind
+  while handshake and heartbeat both looked healthy. A fresh reader also adopted
+  the previous session's slots as its first observation — the picture an attach
+  and an arm decision are made against. Both are now scoped to the session the
+  sidecar handshook. An arm request stamped ahead of the tick's clock was
+  consumed and armed the run, and a pid record stamped ahead read as a ticking
+  sidecar forever: the same one-sided subtraction of two processes' clocks.
+
+  *Work that reached no end.* A disarm superseding a pending arm countermanded
+  nothing at the game, so the mod could finish arming into a mode the sidecar had
+  abandoned. `disarm` stranded a suspended goal for ever — exempt from the
+  pending TTL because activation was supposed to resume it, and activation
+  refuses once disarmed — holding an open slot no timer could reach. A mission
+  whose step record aged out of the channel's bounded history left the wrapper
+  proposing nothing tick after tick, the goal idling to its wall clock; it now
+  ends `CAPABILITY_UNAVAILABLE` on the next tick, identically across all six
+  goal kinds. A journal recreated at an earlier serial now reports the loss
+  instead of silently renumbering.
+
+  *And the same three families on the mod side.* A running command had two
+  bounds and both read one clock — the lease and the adapter timeout — while
+  `now()` returns a constant on a build without `getTimestampMs`, which is one
+  more Kahlua gap of the kind that live run hit; against a frozen clock neither
+  can fire, so the adapter was polled without end and the sidecar waited on an
+  ack nobody would write. A raise anywhere in admission killed the whole tick
+  and left that command with **no ack at all, ever** — the reader has already
+  tracked it, so every redelivery classifies as a duplicate, and duplicates are
+  deliberately never acked. The trigger that made that reachable: registration
+  validated an argument's type and enum values but not its numeric bounds, which
+  are used only in a comparison against the arriving value, so a non-number
+  raised at dispatch in a file whose contract is that malformed declarations are
+  caught at load.
+
+  The replay cache had no session dimension while outliving any one session, so
+  a restarted sidecar reusing an idempotency key met its predecessor's stored
+  result: `succeeded` replayed on evidence about objects whose runtime ids no
+  longer denote the same things, **addressed to a session nobody is listening
+  on** — so the live command went unanswered too. A session the mod had already
+  closed could be reopened by re-presenting its own document. And the mod's
+  armed state survived a session swap entirely: `Safety.disarm` was reached by
+  an explicit disarm and by a panic stop and by nothing on a session change, so
+  a second sidecar inherited authority it never asked for and could not see it
+  held — it believes it is in OBSERVE while the mod accepts mutating commands.
+
+  On the observation side: an unread body and an unhurt one produced the
+  identical document (`wounds` is omitted when empty, and `treat_wounds`
+  completes on exactly `bleeding_observed == 0`); the nearby scan reported a
+  complete scan of an empty world when it could not read the world at all;
+  `survival.rest` promoted a rest to succeeded with no departure reading; and
+  `medical.bandage` verified on a dressing the wound was already wearing.
+
+  *An absent reader is not a false answer — five more places.* The sharpest is
+  safety-critical: the zombie scan returned an empty list on three failure paths
+  (`getCell` missing, raising, or answering nil; `getZombieList` missing), all
+  indistinguishable from an empty street, so the danger floor counted zero and
+  answered `DANGER.NONE`. Three deterministic consumers act on that with no model
+  in the loop — the mod's gate, the sidecar's threat abort, and the reflex guard,
+  whose only "nobody could tell" channel is a table the mod always supplies. On
+  any build where `getZombieList` is absent or renamed, an armed AUTONOMOUS agent
+  was cleared to work, reason `POSTCONDITION_MET`, on a scan that never happened
+  — the README's threat-interruption guarantee, on a count nobody took. The
+  schema requires `danger_level` and has no absent form, so the floor now answers
+  HIGH when the zombies could not be read (the lowest rung reaching both block
+  thresholds: it starts nothing and interrupts a vulnerable long action without
+  claiming an emergency nobody saw), with a `zombies_unknown` counter beside it
+  so the HIGH cannot be mistaken for a measurement.
+
+  Four more, one layer down, all from the same shared snapshot helper publishing
+  an inventory nobody could walk as an empty one: `inventory.search` answered
+  "you carry no bandage" about a character nobody read; `consume.eat`/`drink`
+  read an item's absence from an unreadable inventory as it having been eaten;
+  `equipment.unequip` read a double absence across a worn set and a hand that had
+  stopped answering as a garment taken off; and `snapshotBody` flattened
+  `bleeding` to false while `medical.bandage`'s whole postcondition is
+  `bleeding == false` — the exact ack that file's own header says it exists to
+  prevent. Each ends in the same place: the mod mints `verified` from any
+  succeeded ack carrying evidence, so a verify concluding from a flattened
+  absence promotes the capability in the very document the sidecar gates its
+  write tools on.
+
+  *A floor nobody has measured recently is not calm.* Closing the zombie-scan
+  gap left its neighbour standing, and the neighbour turned out to be reachable.
+  `Safety.setDanger` is called from exactly one place — the end of
+  `Observe.context` — so every tick that fails *before* that point leaves the
+  previous reading in `agent.safety.danger_level` while the mod keeps
+  heartbeating and keeps accepting commands. It was reproduced end to end: arm an
+  agent, observe once against a calm street (floor `none`), then remove `getCore`
+  so `Heartbeat.detectBuild` fails, and tick twelve more times across sixty
+  seconds with the sidecar heartbeat renewed and two chasing zombies now present.
+  `Safety.mayStart(safety, "consume.eat", …)` answered **`POSTCONDITION_MET`** —
+  cleared to act, on a reading a minute old, taken before the horde arrived. The
+  floor now carries the clock that measured it (`danger_seen_ms`), and `mayStart`
+  refuses a mutating action whose floor has not been re-measured within
+  `DANGER_MAX_AGE_MS` (30 s, six sidecar heartbeat windows) with
+  `PRECONDITION_FAILED` naming the missing *measurement* rather than a threat
+  nobody saw. The refusal sits after the always-allowed and read-only returns, so
+  `world.inspect` is never blocked and the state clears itself the moment one
+  observation succeeds.
+
+  *A square is asked about, not the first thing standing on it.* A water source
+  is addressed by its **square** — `source_ref` is parsed as `RefKind.SQUARE` and
+  the mod's `Consumption` adapter reads it back the same way and looks for water
+  on that square — and `ObserveModel.buildObject` accordingly mints the square's
+  reference for everything that is not a container or a door. One reference
+  therefore denotes a place and everything on it, and the mod scans several
+  objects per square by design. `consume.drink_source` resolved it with
+  `nearby_object`, which is `next(o for o in nearby.objects if o.ref == ref)` —
+  the *first* match. A tree scanned before the sink answered for the sink, and a
+  square with a sink on it was refused `NO_SAFE_DRINK`, "nothing at
+  square:…:1201:3400:0 reports water". The question is now asked of every object
+  carrying that reference, and the refusal's evidence lists all their kinds
+  instead of one; a square with nothing watery on it is still refused, which is
+  the test that keeps the fix from becoming a formality. `nearby_object` keeps
+  its single-match meaning for the callers that want it and now says in its own
+  docstring why a property question needs `nearby_objects`.
+
+  *A registered adapter that no test had ever built.* Chasing the reference
+  defect above turned up `DrinkSourceAdapter` in a state nothing was watching
+  for: registered on the dispatcher, exported from the package, offered as an MCP
+  action — and constructed by no test anywhere in the repository. Its refusals
+  and its postcondition had never run. A census of the registry found it was the
+  only one of the twenty-six, so the gap is closed rather than wide, but it was
+  found by hand while looking for something else, which is not a method.
+  `tests/contract/test_registered_adapters_are_tested.py` now fails when a
+  registered adapter is built by no test; it is checked non-vacuously (drop the
+  consume tests and `DrinkSourceAdapter` is reported while `MoveToAdapter` is
+  not), and it excludes itself from its own corpus so its failure message cannot
+  count as the coverage it is complaining about. The adapter's own postcondition
+  is now covered too — thirst falling proves the drink, an unchanged *or risen*
+  thirst proves nothing, and the evidence still carries `source_ref` so an
+  ordinary sip from a bottle cannot stand as confirmation of a capability nobody
+  has seen work.
+
+  *The planner was told a street was empty on a scan that never ran.* The mod
+  publishes its own accounting of every reading it could not complete — eighteen
+  counters under the `observe.` prefix in `player.stats`, which is an open scalar
+  map, so all of them arrive on this side intact. **Nothing in the sidecar read a
+  single one.** An earlier wave noted the declaration had no listener and left it
+  as contract-shaped; the consumer that makes it matter is
+  `compact_for_planner`, the only picture a planner is ever given, and it builds
+  `stats` from a whitelist of five. So a zombie scan that could not run — the
+  safety-critical case fixed on the mod side earlier in this pass, where the
+  floor now answers HIGH — reached the model as `zombies: []`, `zombie_count: 0`,
+  `zombies_truncated: false`: a positive claim that the street is empty *and the
+  reading complete*, about a scan that never happened. The counts and truncation
+  flags there are about what **this** side dropped, and cannot say what the mod
+  could not read. The compact document now carries an `unread` block and the
+  nearby tier a `zombies_unscanned` flag. The block is generic on purpose —
+  enumerating the counters would leave the next one silently dropped, which is
+  the state all eighteen were in — and it gets the treatment `moodles` already
+  gets for the same reason, token-checked names and a cap, because it is an open
+  map arriving from the game side. The compact document is serialised to the
+  model wholesale, so this needed no prompt change to become visible.
+
+  *A zombie whose intent nobody could read was assessed as calm.* The mod omits
+  `chasing` when the build exposes no `getTarget`, and says so in its own
+  comment: an absent accessor "must stay absent so the sidecar is told it could
+  not be read". The schema agrees — only `ref` and `distance` are required. The
+  sidecar's parser read that absence as `chasing=False`, a positive claim that
+  the zombie is not hunting. `NearbyZombie` states the rule it broke in the file
+  itself: `state` is `str | None` with a comment that an unreadable body state
+  must never read as "standing", while `chasing` — which that class's own
+  docstring calls more important than distance for the reflex guard — defaulted
+  to `False`. The cost lands in `_zombie_level`, whose three ladders "differ by a
+  full rung at every band": a chaser at contact range was assessed as an unaware
+  zombie, one rung down, on every build without that accessor. The navigation
+  executor lost the same fact — it adds `CHASING_STEP_COST` around a chaser's
+  square, and an unread intent silently skipped it, routing the character past a
+  zombie nobody could rule out. `chasing` is now `bool | None` end to end,
+  omitted from `to_dict` rather than sent as a schema-invalid null; the threat
+  ladder and the route cost both treat "could not say" as a possible chase, the
+  same cost this pass already accepted for the failed zombie scan; and
+  `chasing_count` stays a count of *observed* chasers, with
+  `chasing_unknown_count` beside it, so the reason spoken to the player never
+  says "three chasing" about one chaser and two the reader could not answer for.
+  The local map's same-tick merge over the three states is explicit for the same
+  reason: an observed chase wins, but an unread intent survives rather than
+  collapsing to the calm neither reading claimed.
+
+  *A body nobody could read was treated as a body with nothing wrong with it.*
+  `is_bleeding` is `any(w.bleeding for w in wounds)`, and the mod publishes an
+  empty wound list both when nothing is wrong and when it could not read the body
+  — declaring the second case as `observe.wounds_unknown`. Three separate files
+  cite "a missing `is_bleeding` never means 'not bleeding'" as settled practice
+  while arguing for some *other* gate; `engine.py`'s multiplayer refusal invokes
+  it by name. The gate it names was the one place not applying it. Two
+  deterministic consumers acted on the difference: `assess_threat` skipped
+  `bleeding_floor` entirely, so an unread body produced `DangerLevel.NONE` on a
+  tick where the clock may already have been running; and `combat.policy`, which
+  already refuses a fight on *unreadable health* — "an absent reader is never the
+  good reading, for what a fight spends" — permitted one on an unread body,
+  answering `SHOVE_FIRST`. Both now key on the mod's declaration through a new
+  `PlayerState.wounds_unread`. The spoken reason keeps the two apart all the way
+  to the words, the same way `chasing_count` does: "the player's body could not
+  be read this tick" rather than a wound nobody saw. The planner sees
+  `wounds_unread` beside `bleeding` in the compact view.
+
+  The third consumer, `policy.autonomy`, is deliberately left: it *raises* a
+  bandaging need from bleeding, so an unread body proposes less rather than more
+  — the same do-less reasoning that left `player.moodles` alone.
+
+  *The declaration reached the planner with no instruction attached.* Surfacing
+  what the mod could not read — the `unread` block, `nearby.zombies_unscanned`,
+  `player.wounds_unread` — was only half the job. This consumer is a language
+  model, and an empty `zombies` list beside `zombie_count: 0` reads as an empty
+  street whatever else is in the document; the prompt's rules, every one of them
+  enforced by a parser, said nothing about absent readings. The deterministic
+  guards refuse on their own, but the planner is what decides whether to cross
+  open ground at all, so the rule it needed is not "refuse" but "stop concluding
+  absence". `plan_instructions()` now carries it, naming the three fields and
+  saying plainly that an empty list beside one of them means nobody looked —
+  including the part that shows up in what a player reads: do not claim in the
+  summary that something is absent when the reading for it was never taken.
+
+  *A test that never ran.* An earlier hand-merge in this same pass appended the
+  zombie-scan group to `tests/lua/test_observe.lua` **after** `Harness.finish`,
+  which calls `os.exit`. Eighty-eight assertions — the ones covering the
+  safety-critical fix above — were present, readable, named in the ledger and
+  executed never; the suite reported 146 passing and exited before reaching them.
+  This is the pass's own defect family turned on its evidence: a green count that
+  did not cover what it appeared to cover. `finish` now sits at the end of the
+  file and the suite runs 234.
+
+  Two flattenings were examined and deliberately left: `player.alive` is false
+  for both a corpse and a build without `isDead`, but every consumer refuses or
+  stops on it and none acts, so the cost is a wrong sentence rather than a wrong
+  action; `player.moodles` flattens an absent reader into "no moodles", whose
+  only consumers propose *less*. Editing for either would have fixed nothing.
+
+  Recorded and deliberately **not** fixed, a third door onto the same silence:
+  the mission-cap eviction path marks a drive abandoned and banks its report
+  without ending the goal. It fired in no test, and reproducing it needs a
+  concurrency the queue does not currently produce.
+
+  **One finding is reproduced, unfixed, and larger than a stabilization fix: the
+  agent cannot walk.** `movement.move_to`, `movement.move_near`, `world.inspect`
+  and the local map all locate the destination square by scanning
+  `nearby.objects` for an entry whose `kind` is `square`, reading `loaded` /
+  `blocked` / `closed_window` / `drop` from its semantics. The mod has no code
+  path that emits one. `Observe.nearbyObjects` sets each entry's `kind` from the
+  container type, from `getObjectName` lowercased, or to the literal `corpse`;
+  `Refs.KIND.SQUARE` appears only where reference *strings* are minted and
+  parsed; `nearbyFields` exports `objects` and `zombies` and no square tier; and
+  the strings `"loaded"`, `"blocked"` and `"closed_window"` occur nowhere in the
+  mod's Lua at all. Driven against a document assembled the way
+  `Observe.nearbyObjects` assembles it, a one-square walk east and a walk up to a
+  container the mod *did* report both refuse with `TARGET_NOT_LOADED` — "no
+  loaded square was reported at (1201, 3400, 0)". Every navigation leg goes
+  through this, so it is a total functional outage of movement, and it was
+  invisible because the sidecar's fixtures mint the square objects
+  (`tests/fixtures/adapter_worlds.py:a_square`) that the mod never sends: the
+  same green-that-does-not-cover shape as the dead test group above, this time
+  across a contract boundary. It is **not** fixed here. The sidecar side must not
+  be relaxed — that is the forbidden direction, and it would walk the character
+  onto squares nothing assessed. The mod side means building the half of the
+  interface that was never built: a square record per scanned square, with a
+  solidity read behind `blocked`, since emitting `loaded` alone would assert
+  passability nobody measured. That is a scope decision, not a minimal edit, and
+  it is written down for the owner rather than taken unilaterally.
+  `TROUBLESHOOTING.md` carries the symptom so a live tester does not spend the
+  session hunting their install.
+
+  An implementation of the missing tier was built and adversarially verified, and
+  it is **not** in this branch: three regressions were proven end to end against
+  the mod's own published bytes. It fixed walking by breaking drinking —
+  `buildObject` mints a non-container, non-door world object's ref with
+  `Refs.buildSquare`, so every tree and water source inside the tier shared a
+  reference with the ground under it, the square sorted first, and `common.nearby_object`'s
+  `next(o for o in … if o.ref == ref)` returned the square: a sink one step away
+  went from `consume.drink_source` accepted to refused `NO_SAFE_DRINK` on the same
+  document. It published a wall as open ground on a build exposing `isSolid` and
+  not `isSolidTrans`, because "at least one reader answered" was treated as "the
+  question was answered" — the glass wall the two-reader design was justified by
+  is published `['loaded']` and the walk into it is accepted. And it starved the
+  planner one layer below the fix: `compact_for_planner` keeps the nearest 24
+  objects in one merged list with one cap, so a separate square budget in the mod
+  does not survive it — a furnished room lost nine real objects including a real
+  door two squares east, and a warehouse aisle delivered zero squares to the
+  planner. All three are recorded in `LIMITATIONS.md` with their measurements,
+  because they are what the real fix has to solve; shipping the attempt would have
+  traded a named refusal for two silent wrong answers.
+
+  That fix closes the first of the three square-tier blockers, which changes what
+  a tier now has to solve. Every other reference resolution against
+  `nearby.objects` was audited and each asks a *position* question rather than a
+  property one — `movement.move_near` in all four of its uses and the planner
+  critic's `_destination` — and position is shared by construction, since
+  everything answering to a square's reference stands on that square. The square
+  lookups themselves match on kind and position, never on the reference. A
+  regression test pins the exact case that killed the attempt (a `kind="square"`
+  entry listed ahead of a sink at the same reference, drink still accepted) and is
+  verified non-vacuous: restore the first-match resolution and it fails with the
+  original `NO_SAFE_DRINK`. Two blockers remain — the partial solidity read and
+  the planner's compact view.
+
+  Sweeping the question that found the `chasing` defect — where does an absence
+  become a positive claim? — across every parser turned up two more gates with no
+  producer, the same shape as the square tier. `container.accessible` is **always
+  true**: five sidecar sites refuse on it, and nothing anywhere in the mod ever
+  sets that field, so a locked or blocked container is presented to the agent as
+  reachable and all five refusals are dead. `observation.full` is always true, so
+  `store.py`'s three partial-snapshot merge branches have never run — benign, but
+  untested against anything real. Neither can be fixed here: both need engine
+  readers of exactly the unverified kind that sank the tier. Three instances found
+  by accident is the reason they are now a ledger rather than folklore —
+  `tests/contract/test_gates_without_producers.py` asserts each producer is still
+  absent, so implementing one fails the test and asks for the row to be moved
+  instead of letting the dead branch wake up unnoticed. It carries a positive
+  control, since a pattern language matching nothing would pass every row by
+  construction.
+
+  Two more are recorded with their reasoning rather than closed. The first is a
+  **decision**, not a stabilisation fix: the age check above refuses a *stale*
+  floor but accepts a floor that was **never** measured, because
+  `Safety.newState` starts at `DANGER.NONE` with no timestamp and three suites
+  arm without observing at all (`tests/lua/support/command_support.lua:201`,
+  `test_action_runtime.lua`, `test_movement_runtime.lua`). Deleting one clause —
+  `dangerAge ~= nil and` — closes it and breaks those three, which is a contract
+  change about whether arming requires an observation. The options are (a) refuse
+  a nil age like a stale one, (b) gate *arming* on a successful observation
+  instead of the gate, or (c) accept it on the record; nobody has picked one, so
+  it is written down here rather than chosen unilaterally. The second is a
+  **wart** with its trace, so it need not be re-investigated: `nearbyObjects`
+  fails the same silent way the zombie scan did, but all six sidecar consumers of
+  `nearby.objects` abstain on an empty list rather than concluding from it —
+  there is no local map that banks a scan as knowledge, and no explore or loot
+  goal completes on the absence of a frontier or a container. The honest end has
+  no listener, so declaring the gap would fix nothing today.
+
+- **The first CI verdict this branch has ever had, and it is green on both
+  platforms.** Making the workflows see `stabilize/**` produced a result rather
+  than a promise: `python 3.11`, `python 3.12`, `lua` and `build artifact` all
+  passed, and the Windows job built and certified a release candidate —
+  `pz-agent-windows-v1.0.0-rc1.zip`, 48657492 bytes, 75 entries, sha256
+  `9e84a4e5…` — the RC of *that* commit, kept here as history; the digest identifying the **current** archive lives in `docs/control/EVIDENCE_INDEX.md`, which is the one record that is supposed to answer "which RC" — with `check_release.py --rc` printing `CERTIFIED v1.0.0-rc1: 8
+  check(s) passed`. That includes `archive.bin: both executables are in bin/`,
+  which the ZIP built in this Linux container could never satisfy and whose
+  absence `LOCAL_GAME_HANDOFF.md` warns installers about; the packaged pair also
+  completed an MCP `initialize` over the RPC link with `PATH` cut back to the
+  system directories, and Windows ran 8073 of 8114 tests with no failures.
+  `STATUS.json` now records `GREEN` on both platforms and the RC as `CURRENT` at
+  this commit, with its real digest — the artifact API's `ed0467…` is the *upload
+  wrapper's* hash, not the archive's, and writing that would have been a
+  fabricated identity of exactly the kind this file exists to catch.
+  `release_candidate.live_game` stays `NOT_RUN`, and the gate says so itself:
+  "this says nothing about the agent having run inside Project Zomboid".
+  `EVIDENCE_INDEX.md` moved with it — a guard nobody had exercised
+  (`test_the_evidence_index_carries_the_digest_status_derives`) caught the two
+  documents disagreeing about which RC they described, which is the drift that
+  file exists to prevent.
+
+- **CI had never run on this branch, and every STATUS entry said "pending"
+  anyway.** Both workflows trigger on pushes to `main`, `dev`, `claude/**`,
+  `epic/**`, `fix/**`, `rescue/**` and `swarm/**`, and on pull requests targeting
+  `main` or `dev`. This branch is `stabilize/**`, and PR #10 targets
+  `epic/ux-one-command-play` — so neither trigger fires, and the PR reports zero
+  check runs across forty-three commits. Meanwhile every one of those commits was
+  followed by a STATUS reconciliation recording both platforms as `PENDING`, which
+  reads as "CI will tell us" about a verdict that was never coming. That is this
+  pass's own defect family in its own control document, written by the same hand
+  twenty-odd times. `stabilize/**` is now in both workflows' push branches, so the
+  Linux suite and the Windows package build actually run here and `PENDING` means
+  what it says. Nothing else changed: the local gate was always green, but a
+  green gate on one Linux container is not the two platforms the STATUS file
+  claims to be waiting on.
+
+- **The README says the agent cannot walk yet.** Its status block was accurate on
+  its own terms — "nothing in this README describes behaviour that is not backed
+  by code and tests" is still true, because the movement code and its tests both
+  exist — and that is exactly why the sentence was not enough. A reader deciding
+  whether this build is worth their afternoon would not have learned the one fact
+  that decides it. The block now says movement refuses every real observation and
+  why, names what is unaffected (arming, the safety guarantees, the observation
+  tiers, eating, drinking, equipping, bandaging, reading), and points at
+  `LIMITATIONS.md` for the account and for the two other gates in the same state.
+
+- **The live handoff no longer sends its reader into the one thing that cannot
+  work.** `LOCAL_GAME_HANDOFF.md` is what the person with the game reads, and its
+  section on what needs a real game said nothing about the agent being unable to
+  walk. A tester would have installed the mod, armed, run the movement scenarios,
+  met `TARGET_NOT_LOADED` on every one of them including the square next to the
+  character, and had no way to tell a structural gap from a broken install —
+  spending the only resource in this project that can produce live evidence at
+  all. It now opens with the three gates that have no producer, what each looks
+  like from the outside, and what to do about each (for movement: skip those
+  scenarios, and do **not** relax the precondition to get past them). It also
+  says what a session *is* worth spending on, in order: the 52 engine symbols
+  first, because nearly every remaining unknown is downstream of them — including
+  whether the square tier is buildable at all, since `isSolid` and `isSolidTrans`
+  are still not rows in `GAME_API_VERIFICATION.md` and confirming them turns
+  blocker 2 from a guess into a fact.
+
 ### Added
 
 - **A terminal is enough to play** (`epic/ux-one-command-play`, wave 1). The

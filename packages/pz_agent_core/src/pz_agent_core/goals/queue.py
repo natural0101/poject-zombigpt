@@ -43,9 +43,13 @@ the backlog. Three consequences are the design rather than accidents of it:
   interruption the user never asked for. Its bound is the channel's own
   progress instead: it sits at the front of the backlog behind goals whose
   budgets are each finite, its own re-suspensions are capped, and every stop
-  lever (cancel, panic) still ends it like any pending goal. A caller that
-  stops activating strands it — the same caller-controlled exception the
-  paragraph above already grants to a caller that stops ticking.
+  lever (cancel, panic, and — unlike an ordinary pending goal —
+  :meth:`GoalQueue.disarm`) still ends it. Disarm is on that list precisely
+  *because* of the exemption: a channel that will not activate is a channel
+  that cannot resume, so a parked goal left behind by one would be open with
+  no timer able to reach it. A caller that stops activating strands it — the
+  same caller-controlled exception the paragraph above already grants to a
+  caller that stops ticking.
 * **Preemption is bounded.** :data:`~.model.MAX_SUSPENSIONS_PER_GOAL`
   suspensions per goal, then :meth:`GoalQueue.suspend` refuses and the arbiter
   must let the goal finish. And suspension frees no slot — the parked goal is
@@ -761,26 +765,49 @@ class GoalQueue:
         self._armed = True
 
     def disarm(self) -> tuple[GoalTransition, ...]:
-        """End the active goal and stop activating new ones.
+        """End every goal that had started and stop activating new ones.
 
-        The backlog survives: disarming is a statement about what the agent may
-        do, not about what the user wanted. Re-arming and activating resumes it,
-        and a goal nobody comes back for still expires on its time to live.
+        The never-started backlog survives: disarming is a statement about what
+        the agent may do, not about what the user wanted. Re-arming and
+        activating resumes it, and a goal nobody comes back for still expires
+        on its time to live.
+
+        A *suspended* goal ends here with the active one, because it is a goal
+        that started too — and because it is the only goal in this channel that
+        time cannot reach. :meth:`tick` exempts it from the pending time to
+        live on the grounds that ordinary activation brings it back, and a
+        disarmed channel activates nothing; leaving it parked would strand it
+        open for ever, holding one of the ``max_open`` slots, with no lever but
+        a cancel or a panic stop. Ended, its record says which lever ended it
+        and the user may state the goal again.
         """
         now = self._tick_clock()
         self._armed = False
+        ended: list[GoalTransition] = []
         running = self.active
-        if running is None:
-            return ()
-        return (
-            self._terminate(
-                running,
-                GoalState.CANCELLED,
-                ReasonCode.NOT_ARMED,
-                now,
-                "the session was disarmed while this goal was running",
-            ),
-        )
+        if running is not None:
+            ended.append(
+                self._terminate(
+                    running,
+                    GoalState.CANCELLED,
+                    ReasonCode.NOT_ARMED,
+                    now,
+                    "the session was disarmed while this goal was running",
+                )
+            )
+        for record in self.pending:
+            if record.suspended_by is None:
+                continue
+            ended.append(
+                self._terminate(
+                    record,
+                    GoalState.CANCELLED,
+                    ReasonCode.NOT_ARMED,
+                    now,
+                    "the session was disarmed while this goal waited to resume",
+                )
+            )
+        return tuple(ended)
 
     def panic_stop(self) -> tuple[GoalTransition, ...]:
         """Leave nothing in flight: no active goal, no backlog, no pending cancel.

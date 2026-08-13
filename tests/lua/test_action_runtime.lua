@@ -349,6 +349,100 @@ do
   equal(terminal.reason_code, REASON.LEASE_EXPIRED, "on the lease that ran out while it waited")
 end
 
+Harness.group("a poll outliving a clock that stopped still reaches a terminal ack")
+do
+  -- PZAgent_Main's clock reads getTimestampMs when the build exposes it and
+  -- answers a constant 0 when it does not, so "the clock does not advance
+  -- between polls" is a state this mod can really be in -- and it is the state
+  -- a Kahlua gap in that one global puts it in. Both bounds a running command
+  -- had were readings of that clock: the lease (issued_at_ms + lease_ms) and
+  -- the adapter timeout (now - started_at_ms). Frozen, neither can ever fire,
+  -- so an adapter that keeps answering "not yet" is polled forever, the single
+  -- in-flight slot is never freed, and the sidecar waits on a terminal ack that
+  -- never comes.
+  local stuck = {
+    action = "movement.move_to",
+    required_symbols = {},
+    poll_calls = 0,
+    interrupts = 0,
+  }
+  stuck.start = function()
+    return { done = false, progress = 0 }
+  end
+  stuck.poll = function()
+    stuck.poll_calls = stuck.poll_calls + 1
+    return { done = false }
+  end
+  stuck.interrupt = function()
+    stuck.interrupts = stuck.interrupts + 1
+  end
+  local agent, fs, runtime = Support.runtime(Mock, { stuck })
+  Support.publish(fs, { Support.command({ action = "movement.move_to", args = {} }) })
+  runtime:tick(agent, NOW)
+  ok(runtime:inFlight() ~= nil, "the command holds the single in-flight slot")
+
+  -- Every step reads the same millisecond, exactly as it would on a build with
+  -- no getTimestampMs. The ceiling is this test's own patience, not a bound the
+  -- runtime is entitled to lean on.
+  local ceiling = 5000
+  local steps = 0
+  while runtime:inFlight() ~= nil and steps < ceiling do
+    runtime:step(agent, NOW)
+    steps = steps + 1
+  end
+  ok(steps < ceiling, string.format("the stopped clock did not leave it running forever (%d steps)", steps))
+  isNil(runtime:inFlight(), "the in-flight slot was freed")
+  local terminal = lastTerminal(fs)
+  ok(terminal ~= nil, "a terminal ack was published")
+  if terminal ~= nil then
+    equal(terminal.status, STATUS.FAILED, "the command failed rather than hanging")
+    equal(terminal.reason_code, REASON.ACTION_TIMEOUT, "on the timeout the runtime could not measure")
+    contains(terminal.message, "did not advance", "and the ack names the clock that stopped")
+  end
+  equal(stuck.interrupts, 1, "the adapter was told to clean up, exactly once")
+end
+
+Harness.group("the stalled-poll bound never preempts a clock that is moving")
+do
+  -- The other half of the bound above: it must catch a clock that stopped and
+  -- must never shorten the window of a command whose clock is fine. This one
+  -- polls far past the stalled-poll bound and still ends on its own declared
+  -- timeout, at the millisecond that timeout names.
+  local slow = {
+    action = "movement.move_to",
+    required_symbols = {},
+    timeout_ms = 1000,
+    poll_calls = 0,
+  }
+  slow.start = function()
+    return { done = false, progress = 0 }
+  end
+  slow.poll = function()
+    slow.poll_calls = slow.poll_calls + 1
+    return { done = false }
+  end
+  slow.interrupt = function() end
+  local agent, fs, runtime = Support.runtime(Mock, { slow })
+  Support.publish(fs, {
+    Support.command({ action = "movement.move_to", args = {}, issued_at_ms = NOW, lease_ms = 300000 }),
+  })
+  runtime:tick(agent, NOW)
+
+  local at = NOW
+  while runtime:inFlight() ~= nil and at < NOW + 3000 do
+    at = at + 1
+    runtime:step(agent, at)
+  end
+  isNil(runtime:inFlight(), "the command ended")
+  ok(
+    slow.poll_calls > 600,
+    string.format("it was polled %d times, past the stalled-poll bound, on a clock that kept moving", slow.poll_calls)
+  )
+  local terminal = lastTerminal(fs)
+  equal(terminal.reason_code, REASON.ACTION_TIMEOUT, "and it ended on its own wall-clock timeout")
+  contains(terminal.message, "no result within 1000 ms", "which is the bound the adapter declared")
+end
+
 Harness.group("work from a session that closed ends as lost")
 do
   local slow = Support.spyAdapter("movement.move_to", { polls = 99, evidence = { position = "0,0,0" } })
@@ -1071,6 +1165,123 @@ do
   runtime:tick(agent, NOW + 3)
   local following = lastTerminal(fs)
   equal(following.status, STATUS.SUCCEEDED, "the next command ran to a terminal ack once the journal healed")
+end
+
+Harness.group("a remembered result from a closed session is not the answer to a live command")
+do
+  -- The reader's replay cache is keyed by command id and idempotency key, and
+  -- nothing about it is session-scoped: it lives as long as the game process,
+  -- while a session lives as long as one sidecar run. A sidecar that restarts
+  -- and reissues a key it used before therefore meets its predecessor's stored
+  -- result -- from before a reload, about objects whose runtime ids no longer
+  -- denote the same things.
+  --
+  -- Replaying it is wrong three times over: the postcondition is claimed
+  -- without anything having been observed in this session, the evidence
+  -- belongs to a world that no longer exists, and the ack is addressed to the
+  -- session the stored record named, which the live sidecar drops as an ack
+  -- for a foreign session -- so its command is never answered at all.
+  local spy = Support.spyAdapter("movement.move_to", { evidence = { position = "5,5,0" } })
+  local agent, fs, runtime = Support.runtime(Mock, { spy }, { maxWorkPerTick = 8 })
+  Support.publish(fs, {
+    Support.command({ action = "movement.move_to", args = {}, idempotency_key = "goal-x:step-1:1" }),
+  })
+  runtime:tick(agent, NOW)
+  equal(lastTerminal(fs).status, STATUS.SUCCEEDED, "the first session's command succeeded")
+
+  -- The sidecar restarts and opens a new session over the same exchange
+  -- directory; the mod's reader, and its memory, are the ones that survive.
+  local decision = agent.session:offer({
+    protocol_version = "1.0",
+    session_id = Support.OTHER_SESSION,
+    created_at_ms = NOW + 10,
+    nonce = "nonce-two",
+    mode = "autonomous",
+  }, NOW + 10)
+  ok(decision.accepted, "the second session is open")
+  agent.queue_description = PZ.Ownership.describe({}, agent.session:id())
+  agent.safety.armed = true
+  agent.safety.mode = Protocol.MODE.AUTONOMOUS
+
+  local reissued = Support.command({
+    action = "movement.move_to",
+    args = {},
+    session_id = Support.OTHER_SESSION,
+    idempotency_key = "goal-x:step-1:1",
+    issued_at_ms = NOW + 10,
+  })
+  Support.appendRaw(fs, Support.line(reissued))
+  runtime:tick(agent, NOW + 11)
+
+  local answer = Support.lastAck(fs)
+  equal(answer.command_id, reissued.command_id, "the new command is the one answered")
+  equal(answer.session_id, Support.OTHER_SESSION, "the ack is addressed to the session that issued it")
+  ok(Protocol.isTerminalStatus(answer.status), "and it is terminal, so the command is not left hanging")
+  equal(answer.status, STATUS.REJECTED, "the dead session's result is refused, not replayed")
+  equal(answer.reason_code, REASON.STALE_SESSION, "naming the session the stored result belongs to")
+  contains(answer.message, SESSION, "the detail names that closed session")
+  isNil(answer.evidence, "no evidence from the closed session travels on it")
+  equal(spy.starts, 1, "and nothing was re-executed behind the refusal")
+end
+
+Harness.group("a redelivery inside one session still replays its remembered result")
+do
+  -- The other half: the replay path itself is what makes a lost ack safe, and
+  -- the session rule above must not cost it. Same session, same key, new
+  -- command id -- the stored terminal result is replayed verbatim.
+  local spy = Support.spyAdapter("movement.move_to", { evidence = { position = "7,7,0" } })
+  local agent, fs, runtime = Support.runtime(Mock, { spy }, { maxWorkPerTick = 8 })
+  Support.publish(fs, {
+    Support.command({ action = "movement.move_to", args = {}, idempotency_key = "goal-y:step-1:1" }),
+  })
+  runtime:tick(agent, NOW)
+  local reissued = Support.command({
+    action = "movement.move_to",
+    args = {},
+    idempotency_key = "goal-y:step-1:1",
+  })
+  Support.appendRaw(fs, Support.line(reissued))
+  runtime:tick(agent, NOW + 1)
+  local answer = Support.lastAck(fs)
+  equal(answer.command_id, reissued.command_id, "the redelivery is answered under its own command id")
+  equal(answer.session_id, SESSION, "in the session that is still open")
+  equal(answer.status, STATUS.SUCCEEDED, "with the remembered result")
+  equal(spy.starts, 1, "and the adapter ran exactly once")
+end
+
+Harness.group("a raise while a command is admitted still ends that command")
+do
+  -- Admission crosses the registry, the capability report and the safety gate.
+  -- None of the three is an adapter call, so none of them was under the pcall
+  -- this file wraps everything else in -- and the command reader has already
+  -- remembered the command by the time they run, so a redelivery of it comes
+  -- back as a duplicate whose original "has not reached a terminal state yet".
+  -- Forever: nothing else was ever going to write its ack.
+  local spy = Support.spyAdapter("movement.move_to", { evidence = { position = "3,3,0" } })
+  local agent, fs, runtime = Support.runtime(Mock, { spy }, { maxWorkPerTick = 8 })
+  local realResolve = runtime.dispatcher.resolve
+  runtime.dispatcher.resolve = function()
+    error("the registry is gone", 0)
+  end
+  Support.publish(fs, { Support.command({ action = "movement.move_to", args = {} }) })
+  local survived, tickError = pcall(runtime.tick, runtime, agent, NOW)
+  runtime.dispatcher.resolve = realResolve
+
+  ok(survived, "the tick survived the raising registry (" .. tostring(tickError) .. ")")
+  equal(spy.starts, 0, "no adapter was reached")
+  isNil(runtime:inFlight(), "no slot is held by the command that could not be admitted")
+  local terminal = lastTerminal(fs)
+  ok(terminal ~= nil, "the command still got a terminal ack")
+  if terminal ~= nil then
+    equal(terminal.status, STATUS.REJECTED, "it was rejected, having reached nothing")
+    equal(terminal.reason_code, REASON.INTERNAL_ERROR, "on the raise, which is never a success")
+    contains(terminal.message, "the registry is gone", "and the ack names what raised")
+  end
+
+  Support.appendRaw(fs, Support.line(Support.command({ action = "movement.move_to", args = {} })))
+  runtime:tick(agent, NOW + 1)
+  local following = lastTerminal(fs)
+  equal(following.status, STATUS.SUCCEEDED, "the next command runs once the registry answers again")
 end
 
 Harness.group("the evidence emptiness checks hold with the global next removed")

@@ -11,6 +11,16 @@ to an LLM over MCP — behind a policy layer the LLM cannot talk past.
 > for exactly which parts are implemented, which are stubs, and which require a
 > live game session to verify. Nothing in this README describes behaviour that
 > is not backed by code and tests.
+>
+> **The agent cannot walk yet.** `movement.move_to` and `movement.move_near`
+> refuse every real observation with `TARGET_NOT_LOADED`, because the sidecar
+> locates a destination square in a part of the observation the mod does not yet
+> produce. Everything that does not travel — arming, the safety guarantees, the
+> observation tiers, eating, drinking, equipping, bandaging, reading — is
+> unaffected. This is a missing half of an interface rather than a bug in either
+> half, and [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md) carries the account and
+> what a fix has to solve. Two other sidecar gates are in the same state and are
+> listed there too.
 
 ---
 

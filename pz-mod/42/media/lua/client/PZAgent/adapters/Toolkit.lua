@@ -945,14 +945,27 @@ end
 
 Toolkit.itemRecord = itemRecord
 
+--- Returns true when every container this walk opened answered.
+---
+--- A container that would not answer used to end the walk in silence, and the
+--- caller was left holding a snapshot that reads "these are the items" when
+--- what happened is "nobody could tell". Toolkit.countIdentity already refuses
+--- to collapse those two facts; this is the same refusal one level up, and
+--- Toolkit.observe turns a false here into an absence it publishes.
+---
+--- The bounds are deliberately *not* reported this way. A budget spent and a
+--- container past MAX_CONTAINER_ITEMS are readings that stopped where this mod
+--- said they would; an unreadable container is no reading at all, and only the
+--- second one is a thing a postcondition must refuse to conclude from.
 local function walkItems(container, containerKey, into, depth, budget)
   local items = Toolkit.containerItems(container)
   if items == nil then
-    return
+    return false
   end
+  local read = true
   for index = 1, #items do
     if budget.items <= 0 then
-      return
+      return read
     end
     budget.items = budget.items - 1
     local item = items[index]
@@ -962,11 +975,13 @@ local function walkItems(container, containerKey, into, depth, budget)
       if depth < Toolkit.MAX_SNAPSHOT_DEPTH then
         local ok, nested = Toolkit.call(item, "getInventory")
         if ok and nested ~= nil then
-          walkItems(nested, "carried:" .. tostring(record.id), into, depth + 1, budget)
+          local opened = walkItems(nested, "carried:" .. tostring(record.id), into, depth + 1, budget)
+          read = read and opened
         end
       end
     end
   end
+  return read
 end
 
 local function snapshotBody(player)
@@ -997,9 +1012,13 @@ local function snapshotBody(player)
       local health = readNumberOf(part, { "getHealth" })
       parts[name] = {
         index = index,
-        bleeding = readBooleanOf(part, { "bleeding", "isBleeding" }) == true,
-        bandaged = readBooleanOf(part, { "bandaged", "isBandaged" }) == true,
-        deep_wounded = readBooleanOf(part, { "isDeepWounded", "deepWounded" }) == true,
+        -- No `== true` on any of these. A flag this build will not answer for
+        -- is nil, the way `severity` below is nil: flattened to false it is
+        -- indistinguishable from a part the game says is not bleeding, and
+        -- medical.bandage's whole postcondition is `bleeding == false`.
+        bleeding = readBooleanOf(part, { "bleeding", "isBleeding" }),
+        bandaged = readBooleanOf(part, { "bandaged", "isBandaged" }),
+        deep_wounded = readBooleanOf(part, { "isDeepWounded", "deepWounded" }),
         severity = health ~= nil and (PERCENT - health) / PERCENT or nil,
       }
     end
@@ -1014,9 +1033,19 @@ end
 --- the character only -- position, stats, body parts, hands, and every item on
 --- the person -- because those are the observations that do not depend on a
 --- reference still resolving.
+---
+--- `snapshot.unread` names the engine accessor behind every section that could
+--- not be read. The empty tables are unavoidable -- three adapters index them
+--- -- but an empty `items` and an unwalked one are different facts, and without
+--- this the second reads as "the character carries nothing", which is the
+--- fabricated negative Toolkit.countIdentity refuses to produce for a
+--- container. Consult it through Toolkit.unread.
 function Toolkit.observe(player)
-  local snapshot = { items = {}, body = {}, hands = {}, worn = {} }
+  local snapshot = { items = {}, body = {}, hands = {}, worn = {}, unread = {} }
   if player == nil then
+    snapshot.unread.items = "IsoPlayer.getInventory"
+    snapshot.unread.worn = "IsoPlayer.getWornItems"
+    snapshot.unread.hands = "IsoPlayer.getPrimaryHandItem"
     return snapshot
   end
   local x = readNumberOf(player, { "getX" })
@@ -1043,12 +1072,20 @@ function Toolkit.observe(player)
 
   local budget = { items = Toolkit.MAX_SNAPSHOT_ITEMS }
   local okMain, main = Toolkit.call(player, "getInventory")
-  if okMain and main ~= nil then
-    walkItems(main, "player-main", snapshot.items, 1, budget)
+  if not okMain or main == nil then
+    snapshot.unread.items = "IsoPlayer.getInventory"
+  elseif not walkItems(main, "player-main", snapshot.items, 1, budget) then
+    snapshot.unread.items = "ItemContainer.getItems"
   end
   local okWorn, worn = Toolkit.call(player, "getWornItems")
-  if okWorn and worn ~= nil then
-    local size = listSize(worn) or 0
+  if not okWorn or worn == nil then
+    snapshot.unread.worn = "IsoPlayer.getWornItems"
+  else
+    local size = listSize(worn)
+    if size == nil then
+      snapshot.unread.worn = "WornItems.size"
+      size = 0
+    end
     local scanned = math.min(size, Toolkit.MAX_WORN)
     for index = 0, scanned - 1 do
       local entry = listGet(worn, index)
@@ -1069,20 +1106,45 @@ function Toolkit.observe(player)
         snapshot.items[identity] = record
         local okNested, nested = Toolkit.call(item, "getInventory")
         if okNested and nested ~= nil and slot ~= nil then
-          walkItems(nested, "worn:" .. slot .. ":" .. tostring(identity), snapshot.items, 2, budget)
+          local key = "worn:" .. slot .. ":" .. tostring(identity)
+          if not walkItems(nested, key, snapshot.items, 2, budget) then
+            snapshot.unread.items = snapshot.unread.items or "ItemContainer.getItems"
+          end
         end
       end
     end
   end
   local okPrimary, primary = Toolkit.call(player, "getPrimaryHandItem")
-  if okPrimary and primary ~= nil then
+  if not okPrimary then
+    snapshot.unread.hands = "IsoPlayer.getPrimaryHandItem"
+  elseif primary ~= nil then
     snapshot.hands.primary = Toolkit.readIdentity(primary, { "getID" })
   end
   local okSecondary, secondary = Toolkit.call(player, "getSecondaryHandItem")
-  if okSecondary and secondary ~= nil then
+  if not okSecondary then
+    snapshot.unread.hands = snapshot.unread.hands or "IsoPlayer.getSecondaryHandItem"
+  elseif secondary ~= nil then
     snapshot.hands.secondary = Toolkit.readIdentity(secondary, { "getID" })
   end
   return snapshot
+end
+
+--- The engine accessor a section of `snapshot` could not be read through, or
+--- nil when the section is a reading rather than a silence.
+---
+--- Sections: "items", "worn", "hands". A verify whose postcondition is an
+--- *absence* -- the item is gone, the slot is empty, the hand is free -- has to
+--- ask this before it concludes, because an absence in a walk nobody made is
+--- not an observation.
+function Toolkit.unread(snapshot, section)
+  if type(snapshot) ~= "table" or type(snapshot.unread) ~= "table" then
+    return nil
+  end
+  local symbol = snapshot.unread[section]
+  if type(symbol) ~= "string" then
+    return nil
+  end
+  return symbol
 end
 
 --- The snapshot the runtime supplied, or one taken here.

@@ -24,11 +24,11 @@ still unfixed.
 | `PZD003` | `user_directory` | The `Zomboid` user directory could not be found — the one holding `Saves/`, `mods/` and `console.txt`, not the install. On Windows it follows `USERPROFILE` and OneDrive redirection. Set `game.user_dir` to override. |
 | `PZD004` | `directory_permissions` | The Zomboid directory exists but could not be written to. Fixing `PZD003` first is usually the answer; permissions cannot be tested on a directory that was never located. |
 | `PZD005` | `mod_installed` | The bridge mod is not in the mods folder. Run `pz-agent install-mod`. Present on disk is not the same as loaded — see `PZD006`. |
-| `PZD006` | `game_heartbeat` | No `heartbeat.game.json`, or one whose timestamp is not advancing. This is the check that distinguishes "the mod is installed" from "the mod is running": a mod that threw during load looks identical to an idle exchange directory everywhere except here. Enable **PZ Agent Bridge** in the in-game mod list and load a save. |
+| `PZD006` | `game_heartbeat` | No `heartbeat.game.json`, or one whose timestamp is not advancing. This is the check that distinguishes "the mod is installed" from "the mod is running": a mod that threw during load looks identical to an idle exchange directory everywhere except here. Enable **PZ Agent Bridge** in the in-game mod list and load a save. A fourth cause has its own remediation: a heartbeat stamped *ahead* of this machine's clock is refused as describing no moment on it, and the answer there is the system clock and time synchronisation, not the mod list. |
 | `PZD007` | `ipc_writable` | The exchange directory could not be written to, so the sidecar could not send a command even if everything else were healthy. |
 | `PZD008` | `timed_actions` | The timed-action classes the adapters construct could not be found by a scan of the install's own Lua. This is what turns capabilities from unprobed into a state backed by evidence; a failure here explains a later `CAPABILITY_UNAVAILABLE`. |
 | `PZD009` | `conflicting_files` | Something is left over in the exchange directory that this build did not write — usually a previous version's journals. |
-| `PZD010` | `active_session` | Reports whether a session is open and which mode it is in. `unknown` with no exchange directory is normal before the first run. |
+| `PZD010` | `active_session` | Reports whether a session is open and which mode it is in. `unknown` with no exchange directory is normal before the first run. A session is called active only when the game's heartbeat *names it and is current*: a matching id in a heartbeat that has gone silent is reported as the last word of a game that is no longer running, because a crashed game leaves a file carrying exactly that id. |
 
 A check can report `pass`, `info`, `warn`, `fail` or `unknown` — `info` is a
 fact rather than a verdict ("no session is attached" is neither healthy nor
@@ -229,6 +229,44 @@ stale references.
 Re-observe and rebuild. This is not retryable, and retrying is why the code
 refuses to.
 
+## "TARGET_NOT_LOADED" on every move — known, unfixed
+
+If `movement.move_to` refuses with `no loaded square was reported at (x, y, z)`
+for **every** destination, including the square next to the character, this is a
+known gap and not a fault of your install, your position, or the loaded cell.
+
+`movement.move_to`, `movement.move_near`, `world.inspect` and the local map all
+look for the destination square in `nearby.objects`, matching entries whose
+`kind` is `square` and reading `loaded` / `blocked` / `closed_window` / `drop`
+from their semantics. **The mod has no code path that emits such an entry.**
+`Observe.nearbyObjects` sets each entry's `kind` from the container type, from
+`getObjectName`, or to the literal `corpse`; `Refs.KIND.SQUARE` exists only to
+mint and parse *reference strings*. `nearby` carries `objects` and `zombies` and
+no square tier at all.
+
+So the sidecar's half of this interface is built and the mod's half is not. The
+character cannot be walked anywhere by the agent until one of them changes.
+Reproduced against a document assembled exactly as `Observe.nearbyObjects`
+assembles it:
+
+```
+- the character walks in the world the mod actually describes
+  FAIL a one-square walk east is accepted
+         reason: TARGET_NOT_LOADED
+         detail: no loaded square was reported at (1201, 3400, 0)
+  FAIL walking up to a container the mod reported is accepted
+         reason: TARGET_NOT_LOADED
+
+  object kinds in the document: ['corpse', 'counter', 'door']
+  entries with kind 'square':   0
+```
+
+There is no workaround, and none should be improvised: the refusal is the
+adapter's precondition doing its job, and relaxing it would let the agent walk
+into squares nothing has assessed. `world.inspect` is affected the same way — it
+reports `squares_described: 0` — and the local map never learns that any square
+is blocked, so it records obstacles only where a door, window or tree was seen.
+
 ## "LEASE_EXPIRED"
 
 The command's TTL ran out before it could execute — usually because it queued
@@ -249,6 +287,49 @@ One side stopped writing its heartbeat.
 
 Neither side re-arms itself on recovery. Restart the sidecar with
 `pz-agent start`, then arm again deliberately.
+
+## "play said it armed, but the agent does nothing"
+
+Two different faults print almost the same thing, and the difference is which
+session the evidence belongs to.
+
+- **`play` refuses with "the game's heartbeat belongs to session … , not to the
+  session this sidecar attached"** → the game is still running against a save an
+  earlier sidecar attached to. Nothing was armed. Stop the game, or run
+  `pz-agent stop` and start again, so both sides agree on one session. This
+  refusal is the correct answer, not a bug: an arm confirmed by a previous
+  session's heartbeat would be authority nobody granted.
+- **`pz-agent status` shows the game attached and armed, but no action ever
+  runs** → check the sidecar's diagnostics for a refused snapshot naming another
+  session. A sidecar that attaches into an exchange directory still holding the
+  previous session's observation slots reports that it has no picture of the
+  world rather than acting on a dead one, and it clears as soon as the mod
+  publishes under the live session. If it does not clear, the mod is not
+  publishing: see `PZD006`.
+
+## "THREAT_INTERRUPTED" with no zombie in sight
+
+The agent refuses mutating work and names a threat you cannot see. Before
+assuming it is wrong, check whether it can see either: on a build where the
+zombie list cannot be read at all, the mod publishes no count and the danger
+floor answers HIGH rather than "clear". `pz-agent status` shows the reading, and
+the observation carries an `observe.zombies_unknown` marker beside it.
+
+That is the honest answer, not a bug. An empty list from a scan that never ran
+is indistinguishable from an empty street, and the deterministic guard acts on
+that level with no model in the loop — reporting calm there would mean the agent
+works blind next to whatever is actually in the room. If the marker is present,
+the fix is the build's own API, not the agent: report it with the build number,
+because a renamed or absent `getZombieList` is a compatibility finding.
+
+## "The goal stopped without saying anything"
+
+It should not, and if you see it the report is worth filing. Every goal ends by
+a named reason: a step whose outcome could never be observed — the action's
+record aged out of the channel's history, or the channel was replaced — ends the
+goal `CAPABILITY_UNAVAILABLE` on the next tick rather than leaving it running
+against a step nobody can settle. A goal that sits in progress with nothing
+being dispatched is a defect, not a slow plan.
 
 ## "Restore refused"
 

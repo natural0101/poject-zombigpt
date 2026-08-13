@@ -54,7 +54,7 @@ from .common import (
     check_args,
     find_by_identity,
     identity_of,
-    nearby_object,
+    nearby_objects,
     player_main,
     read_number,
     read_ref,
@@ -473,21 +473,27 @@ class DrinkSourceAdapter:
         require_in_main(inventory, item)
 
         nearby = require_nearby(observation)
-        source = nearby_object(nearby, spec.source_ref)
-        if source is None:
+        # Every object on the square, not the first one listed: `source_ref` is
+        # a *square* reference by contract, and everything that is not a
+        # container or a door carries the reference of the square it stands on.
+        # The mod scans several objects per square by design, so asking the
+        # first match whether it is water answers about the tree in front of the
+        # sink and calls a square with a sink on it dry.
+        found = nearby_objects(nearby, spec.source_ref)
+        if not found:
             raise PreconditionFailed(
                 "the observation does not report anything at that square",
                 reason_code=ReasonCode.INVALID_REF,
                 evidence={"source_ref": spec.source_ref, "observation_seq": observation.seq},
             )
-        if self.WATER_SEMANTIC not in source.semantics:
+        if not any(self.WATER_SEMANTIC in o.semantics for o in found):
             raise PreconditionFailed(
                 f"nothing at {spec.source_ref} reports water",
                 reason_code=ReasonCode.NO_SAFE_DRINK,
                 evidence={
                     "source_ref": spec.source_ref,
-                    "kind": source.kind,
-                    "semantics": list(source.semantics),
+                    "kinds": [o.kind for o in found],
+                    "semantics": sorted({s for o in found for s in o.semantics}),
                 },
             )
 

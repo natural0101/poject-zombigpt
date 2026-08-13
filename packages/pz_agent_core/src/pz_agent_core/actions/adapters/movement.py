@@ -462,13 +462,21 @@ class _MoveNearSpec:
             )
         return cls(
             # Not RefKind.OBJECT, though the argument is named object_ref and the
-            # protocol defines that kind. PZAgent.ObserveModel never mints one:
-            # it describes a nearby thing as a container reference when it holds
-            # a container and as a square reference otherwise, "because that
-            # reference is the one an inventory transfer can actually name". So
-            # insisting on an object reference here rejected every reference the
-            # mod is capable of producing, and move_near could not be reached
-            # from a real observation at all.
+            # protocol defines that kind. This tuple was chosen when the observer
+            # described a nearby thing as a container reference when it held a
+            # container and as a square reference otherwise -- an object
+            # reference no scan could produce -- and it has been wrong since
+            # bf92ee2 taught the observer to mint one. ObserveModel.buildObject
+            # gives a door its own reference from its object_index
+            # (ObserveModel.lua:981), falling back to the square only when the
+            # index could not be read, and doors.py requires exactly
+            # RefKind.OBJECT for the door_ref it resolves out of the same nearby
+            # block. So the one per-object reference the mod does mint is the
+            # one this refuses, and no action walks the character up to a door.
+            # Widening it is not a comment's job: the destination square a walk
+            # resolves against is itself missing from every observation, so the
+            # kind here is the second of two gaps, not the live one. Both are
+            # docs/LIMITATIONS.md's "the agent cannot walk".
             object_ref=read_ref(
                 command,
                 "object_ref",

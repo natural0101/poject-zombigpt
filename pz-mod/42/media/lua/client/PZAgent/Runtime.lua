@@ -128,6 +128,14 @@ function Runtime.readSession(agent, nowMs)
   local decision = agent.session:offer(document, nowMs, { sidecarFresh = sidecarFresh })
   if decision.accepted then
     agent.session_offer_marker = nonce
+    -- A new session inherits no authority. Safety.disarm is reached by an
+    -- explicit disarm command and by a panic stop, and by nothing on a session
+    -- swap -- so an armed mod that accepted a second session carried the first
+    -- one's authority into it. The sidecar on the other end never asked for it
+    -- and cannot see that it holds it: it believes it is in OBSERVE, while the
+    -- mod would accept mutating commands. Arming is per session by definition,
+    -- and this is where a session begins.
+    PZAgent.Safety.disarm(agent.safety, PZAgent.Protocol.REASON.SESSION_TERMINATED, nowMs)
     return true, decision
   end
   if sidecarFresh and type(nonce) == "string" then

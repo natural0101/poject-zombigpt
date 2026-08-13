@@ -436,6 +436,48 @@ do
   isNil(Model.wound(SESSION, { part = "not a segment", bleeding = true }), "and a part with no usable name is refused")
 end
 
+Harness.group("an unread body and an unhurt one are two different documents")
+do
+  -- The sidecar's PlayerState.wounds defaults to the empty list, so an omitted
+  -- key and an explicit [] both read as "no wounds" there. The distinction the
+  -- mod can still publish is the limit counter: silence about the counter means
+  -- a reader answered, and TreatWoundsMission's bleeding_observed == 0 is only
+  -- a postcondition when one did.
+  local unread = built({
+    player = {
+      present = true,
+      alive = true,
+      position = { x = 1, y = 2, z = 0 },
+      stats = {},
+      moodles = {},
+    },
+  })
+  isNil(unread.player.wounds, "a body that was never read publishes no wound list")
+  equal(
+    unread.player.stats[Model.LIMIT_PREFIX .. "wounds_unknown"],
+    true,
+    "and declares that nobody counted, so an empty list is not read as an observation"
+  )
+
+  local unhurt = built({
+    player = {
+      present = true,
+      alive = true,
+      position = { x = 1, y = 2, z = 0 },
+      stats = {},
+      moodles = {},
+      wounds = { { part = "Torso", severity = 0 } },
+    },
+  })
+  ok(unhurt.player.wounds ~= nil, "a body that was read and found whole publishes the list it read")
+  equal(#unhurt.player.wounds, 0, "which is empty, because nothing was wrong with it")
+  isNil(
+    unhurt.player.stats[Model.LIMIT_PREFIX .. "wounds_unknown"],
+    "and claims no gap, because there was none"
+  )
+  Harness.contains(Json.encode(unhurt), '"wounds":[]', "the empty list is on the wire as an empty array")
+end
+
 Harness.group("nearby reports what was seen, nearest first, and what it could not tell")
 do
   local document = built({
@@ -494,6 +536,22 @@ do
   isNil(
     empty.player.stats[Model.LIMIT_PREFIX .. "zombies_truncated"],
     "and carries no truncation flag, which is what separates 'none' from 'we stopped counting'"
+  )
+  isNil(
+    empty.player.stats[Model.LIMIT_PREFIX .. "zombies_unknown"],
+    "nor an unknown flag, since this scan did run"
+  )
+
+  -- The list is empty in both cases and the schema has no way to leave it out
+  -- meaningfully -- the sidecar reads an absent `zombies` as an empty one -- so
+  -- the counter is what carries "nobody counted", beside a danger floor that
+  -- has fallen back to the rung that stops the agent.
+  local blind = built({ nearby = { objects = {}, zombies = {}, zombies_unscanned = true } })
+  equal(#blind.nearby.zombies, 0, "a scan that never ran also emits an empty list")
+  equal(
+    blind.player.stats[Model.LIMIT_PREFIX .. "zombies_unknown"],
+    true,
+    "so the document declares that nobody looked, rather than implying a count of zero"
   )
   Harness.contains(Json.encode(empty.nearby), "\"zombies\":[]", "an empty list encodes as an array, not an object")
 end
@@ -804,11 +862,28 @@ do
     "a zombie chasing on the storey above is present but not closing"
   )
 
-  equal(Model.dangerFloor(nil, here), Protocol.DANGER.NONE, "no nearby table is not danger")
+  -- These three used to answer NONE, which is the one reading the floor may
+  -- never give: it is the level Safety.mayStart, the action engine's threshold
+  -- and the reflex guard's max() all act on with no model in the loop, so
+  -- "nobody scanned" answered as "calm" is a blinded guard reporting quiet.
+  -- The schema requires `safety.danger_level` and its enum has no "unknown", so
+  -- the floor falls back to the rung that stops the agent instead, and
+  -- `observe.zombies_unknown` says beside it that nothing was measured.
+  equal(Model.dangerFloor(nil, here), Protocol.DANGER.HIGH, "no nearby table at all is not a calm street")
   equal(
     Model.dangerFloor({ zombies = "not a list" }, here),
+    Protocol.DANGER.HIGH,
+    "nor is a nearby table whose zombie list cannot be read"
+  )
+  equal(
+    Model.dangerFloor({ zombies = {}, zombies_unscanned = true }, here),
+    Protocol.DANGER.HIGH,
+    "nor an empty list the reader has declared it never filled"
+  )
+  equal(
+    Model.dangerFloor({ zombies = {} }, here),
     Protocol.DANGER.NONE,
-    "a malformed nearby table is not danger"
+    "while a list that was filled and came back empty still reads as calm"
   )
   equal(
     Model.dangerFloor({ zombies = { { distance = 1 } } }, nil),

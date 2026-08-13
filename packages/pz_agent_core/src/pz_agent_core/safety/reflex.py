@@ -49,7 +49,22 @@ MAX_EVENTS: Final = 12
 
 #: Long, interruptible activities during which a threat must pre-empt: §17.2's
 #: "visible zombie near during read/eat → interrupt". Matched against
-#: ``ActionState.type``, which the mod fills with the action name it queued.
+#: ``ActionState.type`` — **which the shipped mod never fills, so this set
+#: currently matches nothing and the rung it guards has never fired.** The
+#: observation's action block is ``Ownership.describe``'s table
+#: (``Runtime.lua:183`` → ``Observe.lua:1125``), and that table carries
+#: ownership, busy, readable, total, mod_owned, foreign, truncated and classes
+#: — no ``action_type``, which is the only field ``ObserveModel.action`` reads
+#: into ``type``. Where the mod does record an ``action_type`` elsewhere it is
+#: ``action.Type``, the engine's Java class name kept "for diagnostics", not a
+#: protocol action name, so even wiring it through would not match these
+#: strings. The consequence is bounded rather than absent: the flee rung above
+#: this one ignores the action type entirely, so a real emergency still stops
+#: everything — but during a read or a meal the agent reacts only at
+#: ``flee_at`` and never at the lower ``interrupt_at`` §17.2 asks for. Left as
+#: it is and recorded in docs/LIMITATIONS.md: filling it means teaching the mod
+#: to carry the in-flight command's protocol name into the queue description,
+#: a change to safety-critical code that no test here can confirm.
 DEFAULT_VULNERABLE_ACTIONS: Final = frozenset({"consume.eat", "consume.drink", "literature.read"})
 
 #: Rung each reason code occupies in the §"Иерархия приоритетов" ladder.
@@ -369,9 +384,13 @@ class ReflexGuard:
         if danger >= self.config.block_at:
             # Nothing to interrupt, so nothing is cancelled — but a returned
             # event means "start no new task", and that is the whole point of
-            # this rung. It is not redundant with the engine's own threshold:
-            # that one reads ``safety.danger_level``, which the mod fills from a
-            # value it never computes, so it is ``none`` while this is HIGH.
+            # this rung. It is not redundant with the engine's own threshold,
+            # though no longer for the reason this gave: the mod does compute
+            # ``safety.danger_level`` now (ObserveModel.dangerFloor, set at the
+            # end of every successful observation), so it is not stuck at
+            # ``none``. The two still differ, which is why both exist — that
+            # floor is deliberately coarse and derived from the zombie scan
+            # alone, while this rung reads the assessment this module builds.
             return [
                 _event(
                     ReasonCode.THREAT_INTERRUPTED,

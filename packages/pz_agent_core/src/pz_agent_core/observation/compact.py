@@ -64,6 +64,7 @@ MAX_CONTAINERS: Final = 16
 MAX_ZOMBIES: Final = 16
 MAX_OBJECTS: Final = 24
 MAX_MOODLES: Final = 16
+MAX_UNREAD: Final = 24
 MAX_TAGS: Final = 8
 MAX_SEMANTICS: Final = 6
 MAX_CAPABILITIES: Final = 64
@@ -159,6 +160,7 @@ def compact_for_planner(
         "active_goal_id": observation.active_goal_id,
         "game": _compact_game(observation),
         "player": _compact_player(observation.player),
+        "unread": _unread(observation.player),
         "safety": {
             "armed": observation.safety.armed,
             "mode": observation.safety.mode.value,
@@ -304,6 +306,9 @@ def _compact_player(player: PlayerState) -> JsonDict:
         "moodle_count": len(player.moodles),
         "moodles_truncated": len(moodles) < len(player.moodles),
         "bleeding": player.is_bleeding,
+        # Beside it, never instead of it: an empty wound list means "nothing was
+        # observed bleeding", which is not the same as "nothing is".
+        "wounds_unread": player.wounds_unread,
         "wound_count": len(player.wounds),
         "hands": {
             "primary": player.hands.primary,
@@ -403,8 +408,32 @@ def _compact_item(item: ItemView) -> JsonDict:
     return out
 
 
+#: How the mod names its own accounting of readings it could not complete.
+#: ``player.stats`` is an open scalar map, so these arrive intact and are simply
+#: not read by anything -- all eighteen of them, until this block existed.
+LIMIT_PREFIX: Final = "observe."
+
+
+def _unread(player: PlayerState) -> JsonDict:
+    """What the mod said it could not read, as it said it.
+
+    Carried generically rather than one field at a time. The counters are the
+    mod's own vocabulary and it grows; enumerating them here would mean a new one
+    is silently dropped, which is the state every one of them was in. Names are
+    token-checked and the block is capped, the same treatment ``moodles`` gets,
+    because this is an open map arriving from the game side too.
+    """
+    named = [
+        (name[len(LIMIT_PREFIX) :], value)
+        for name, value in player.stats.items()
+        if name.startswith(LIMIT_PREFIX) and _token(name[len(LIMIT_PREFIX) :]) is not None
+    ]
+    return dict(sorted(named)[:MAX_UNREAD])
+
+
 def _compact_nearby(observation: Observation) -> JsonDict:
     nearby = observation.nearby
+    unread = _unread(observation.player)
     if nearby is None:
         return {"available": False, "zombies": [], "objects": []}
     floor = observation.player.position.z
@@ -416,6 +445,11 @@ def _compact_nearby(observation: Observation) -> JsonDict:
         "zombie_count": len(nearby.zombies),
         "zombies_truncated": len(nearby.zombies) > len(zombies),
         "chasing_count": len(nearby.chasing_zombies()),
+        # Whether the scan ran at all, which an empty list cannot say. A zombie
+        # scan the mod could not perform publishes the same empty list as a
+        # genuinely empty street, and the counts and truncation flags above are
+        # about what *this* side dropped, not about what the mod could not read.
+        "zombies_unscanned": bool(unread.get("zombies_unknown", False)),
         "objects": [_compact_object(o) for o in objects],
         "object_count": len(nearby.objects),
         "objects_truncated": len(nearby.objects) > len(objects),

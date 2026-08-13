@@ -166,8 +166,13 @@ end
 
 --- Cut `text` to at most `limit` bytes without splitting a UTF-8 sequence.
 ---
---- Splitting one would leave a string PZAgent.Json refuses to encode, which
---- would drop the entire observation over one long item name.
+--- Splitting one used to leave a string PZAgent.Json refused to encode, which
+--- would drop the entire observation over one long item name. Json no longer
+--- refuses -- in the "bytes" model a byte that is not valid UTF-8 is escaped as
+--- Latin-1, which its own header calls a fallback and not a refusal -- so the
+--- cost of splitting is now a mangled name rather than a lost observation. The
+--- rule stands on the cheaper ground that a truncated name is honest and a
+--- half-character is not.
 local function truncateUtf8(text, limit)
   if #text <= limit then
     return text
@@ -354,8 +359,10 @@ local function newLimits()
     objects_omitted = 0,
     zombies_truncated = false,
     zombies_omitted = 0,
+    zombies_unknown = false,
     wounds_truncated = false,
     wounds_omitted = 0,
+    wounds_unknown = false,
     moodles_truncated = false,
     moodles_omitted = 0,
     chasing_unknown = false,
@@ -376,8 +383,10 @@ local LIMIT_KEYS = {
   "objects_omitted",
   "zombies_truncated",
   "zombies_omitted",
+  "zombies_unknown",
   "wounds_truncated",
   "wounds_omitted",
+  "wounds_unknown",
   "moodles_truncated",
   "moodles_omitted",
   "chasing_unknown",
@@ -527,8 +536,13 @@ local WOUND_KINDS = {
 --- A wound reference.
 ---
 --- PZAgent.Refs has no wound builder and neither does pz_agent_core.protocol.refs,
---- so there is no cross-language format to match; the only consumer is the diff,
---- which keys array entries by `ref`. It is still assembled from the Refs kind
+--- but that does not make the layout private: pz_agent_core.policy.medical's
+--- `wound_body_part` splits this string on the separator and reads segment
+--- three as the body part, returning "" -- a part no command can name -- for
+--- anything that does not split into exactly three. So `wound:<session>:<part>`
+--- IS a cross-language format contract, enforced by no symmetric builder and by
+--- nothing that would fail loudly. The diff, which keys array entries by `ref`,
+--- is not its only consumer. It is still assembled from the Refs kind
 --- constant, the Refs separator and the Refs segment validator, so
 --- `Refs.kindOf` and `Refs.belongsToSession` classify it like any other
 --- reference and a session's wounds cannot be mistaken for the next session's.
@@ -668,9 +682,17 @@ function ObserveModel.player(sessionId, fields, limits)
   if building ~= nil then
     player.building = building
   end
-  local wounds = ObserveModel.wounds(sessionId, fields.wounds, limits)
-  if #wounds > 0 then
-    player.wounds = wounds
+  -- Tri-state, like `chasing` on a zombie and for the same reason. A body the
+  -- reader walked publishes its list even when the list is empty, because an
+  -- empty list is the observation "nothing is bleeding"; a body the reader
+  -- could not walk publishes no list at all and says so through the limit
+  -- counter, because the sidecar's PlayerState.wounds defaults to the empty
+  -- list and a completion criterion of bleeding_observed == 0 would otherwise
+  -- be met by a character nobody examined.
+  if type(fields.wounds) == "table" then
+    player.wounds = ObserveModel.wounds(sessionId, fields.wounds, limits)
+  else
+    limits.wounds_unknown = true
   end
   return player
 end
@@ -1131,6 +1153,13 @@ function ObserveModel.nearby(sessionId, fields, limits)
       limits.zombies_truncated = true
       limits.zombies_omitted = limits.zombies_omitted + (ObserveModel.integer(fields.zombies_dropped) or 1)
     end
+    if fields.zombies_unscanned == true then
+      -- The reader looked at no zombie at all. The emitted list is empty either
+      -- way, so this counter is the only thing that keeps a document produced
+      -- while blind from reading like a document produced on an empty street --
+      -- and it is what says the danger floor beside it was not measured.
+      limits.zombies_unknown = true
+    end
   end
   return {
     objects = boundedNearby(objects, ObserveModel.MAX_OBJECTS, "objects_truncated", "objects_omitted", limits),
@@ -1318,14 +1347,39 @@ ObserveModel.DANGER_CROWD = 3
 
 --- Derive a conservative danger floor from an already-built `nearby` table.
 ---
---- Pure: it reads the same fields the observation carries, so a change to the
---- reported shape cannot leave this reading something that is no longer there.
---- Zombies on another floor are counted as present but never as closing —
+--- It does NOT read the fields the observation carries. Its only production
+--- caller (Observe.context) hands it the raw reader table from
+--- Observe.nearbyFields, whose zombies carry flat `x`, `y`, `z`; the `position`
+--- sub-table is added later, by ObserveModel.buildZombie. So the floor test
+--- below always takes its `type(zombie.position) ~= "table"` branch and every
+--- zombie counts as same-floor.
+--- Zombies on another floor are MEANT to be counted as present but never as
+--- closing, and are not: with no `position` to read, the same-floor test passes
+--- for all of them, so a horde one storey up counts as closing. The error runs
+--- toward caution -- the floor reads higher than the world warrants, never
+--- lower -- which is why it is recorded rather than quietly corrected: making
+--- it read the flat `z` would make this guard *less* conservative on static
+--- reasoning alone. Originally —
 --- a horde one storey up is a reason to be wary, not to abort.
 function ObserveModel.dangerFloor(nearby, playerPosition)
   local levels = protocol().DANGER
-  if type(nearby) ~= "table" or type(nearby.zombies) ~= "table" then
-    return levels.NONE
+  if
+    type(nearby) ~= "table"
+    or type(nearby.zombies) ~= "table"
+    or nearby.zombies_unscanned == true
+  then
+    -- Nobody scanned. `safety.danger_level` is required by the schema and its
+    -- vocabulary has no "unknown", so this cannot be left absent the way an
+    -- unread stat is -- and NONE would be a fabricated reading of the one field
+    -- three deterministic consumers act on with no model in the loop
+    -- (Safety.mayStart, the action engine's threshold, the reflex guard's
+    -- max()). So it falls back to the reading that stops the agent, exactly as
+    -- an unread `paused` falls back to "not running", and the observation
+    -- carries `observe.zombies_unknown` beside it so the level is never mistaken
+    -- for something that was seen. HIGH rather than CRITICAL: it is the lowest
+    -- rung that reaches Safety.DANGER_BLOCK_RANK, so it starts nothing new
+    -- without also claiming the character has to flee something nobody saw.
+    return levels.HIGH
   end
 
   local playerFloor = nil

@@ -223,6 +223,39 @@ def test_a_record_from_the_future_is_not_treated_as_fresher_than_possible() -> N
     assert record.is_stale(500, 1) is False
 
 
+def test_a_record_stamped_far_ahead_of_now_is_not_read_as_a_ticking_sidecar(
+    tmp_path: Path,
+) -> None:
+    """The clamp above is skew tolerance, and past a bound it hides a stall.
+
+    ``age_ms`` clamps a future stamp to zero, so a record left by a run whose
+    clock was ahead — the machine's clock stepped back afterwards, by an NTP
+    correction or by hand — reads as "refreshed 0 ms ago" *forever*, long after
+    the process that wrote it died. Everything downstream then believes a dead
+    sidecar is ticking: ``start`` refuses to launch a replacement, and
+    ``pz-agent arm`` reports its request delivered to a pid that will never
+    read it. :meth:`~pz_agent_core.session.heartbeat.HeartbeatMonitor.liveness`
+    already refuses a peer's heartbeat past its skew tolerance for exactly this
+    reason; the same evidence deserves the same reading here.
+    """
+    clock = FakeClock()
+    spawn = SpawnRecorder()
+    supervisor = _supervisor(tmp_path, clock, spawn=spawn)
+    supervisor.start(["python"])
+    assert supervisor.status().state is SupervisorState.RUNNING
+
+    clock.now = BASE_TIME_MS - 3_600_000
+
+    status = supervisor.status()
+    assert status.state is SupervisorState.STOPPED
+    assert status.alive is False
+    assert "ahead" in status.detail
+    assert status.record is not None, "the evidence stays with the verdict"
+    # And the consequence that matters: a replacement may be started.
+    assert supervisor.start(["python"]).started is True
+    assert len(spawn.calls) == 2
+
+
 # ---------------------------------------------------------------------------
 # stopping
 # ---------------------------------------------------------------------------

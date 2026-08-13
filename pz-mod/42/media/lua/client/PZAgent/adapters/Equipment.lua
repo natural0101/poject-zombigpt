@@ -445,6 +445,14 @@ local function unequipVerify(_, before, after, args, ctx)
       reasons.POSTCONDITION_FAILED,
       stillHeld and "the item is still in the character's hand" or "the item is still worn"
   end
+  local unread = Toolkit.unread(after, "hands") or Toolkit.unread(after, "worn")
+  if unread ~= nil then
+    -- The whole postcondition is an absence from two sets, so it only holds
+    -- once both were read. An item missing from a worn list that would not
+    -- answer is still on the character, and calling that "item_unequipped" is
+    -- the one ack that mints `verified` for this capability.
+    return Toolkit.unavailable(unread)
+  end
   return {
     kind = "item_unequipped",
     item_ref = spec.item_ref,

@@ -212,6 +212,12 @@ class EngageZombieMission:
 
         self._target_ref: str | None = None
         self._windows = 0
+        #: Whether a ``combat.engage`` **window** was itself observed
+        #: succeeding. Only that adapter's verify carries the absence rule
+        #: ("down, or honestly gone"), so only that success may read a
+        #: vanished target as a kill — a shove proves "down *or further
+        #: away*" and an equip proves nothing about the zombie at all.
+        self._window_succeeded = False
         self._shoves = 0
         self._equip_requested = False
         self._refusal: str | None = None
@@ -307,6 +313,8 @@ class EngageZombieMission:
         if result.status is ActionStatus.SUCCEEDED:
             self._any_success = True
             self._consecutive_failures = 0
+            if self._stage == PHASE_ENGAGE:
+                self._window_succeeded = True
         elif self._end_after_retreat is None:
             self._consecutive_failures += 1
         self._stage = PHASE_START if self._end_after_retreat is None else PHASE_RETREAT
@@ -329,9 +337,14 @@ class EngageZombieMission:
         if self._pending_action is not None:
             return None
         if self._end_after_retreat is not None:
-            # The retreat this ending owed has been driven to its own
-            # terminal result (or was refused admission and note_result never
-            # fired — either way nothing of ours is in flight). Seal.
+            # The retreat this ending owed has been driven to its own terminal
+            # result, so nothing of ours is in flight. The refused-admission
+            # history this used to name as well cannot reach here: _emit sets
+            # _pending_action before the planner ever offers the step, only a
+            # matching terminal result clears it, and the guard above returns
+            # on it. Since 5757008 that case does not survive to be asked
+            # anyway -- the wrapper ends the goal typed instead of dropping
+            # the step. Seal.
             ended, reason, cause = self._end_after_retreat
             return self._refuse(ended, reason, cause)
         if self._consecutive_failures >= self._limits.max_consecutive_failures:
@@ -370,11 +383,14 @@ class EngageZombieMission:
         if observed is not None and observed.state is not None and observed.state in DOWN_STATES:
             return self._finish(observation)
         if observed is None:
-            if self._any_success and self._windows > 0:
+            if self._window_succeeded:
                 # The engage adapter's absence rule already decided the hard
                 # half sidecar-side: a window only *succeeds* when the target
                 # was re-observed down or honestly gone, so a vanished target
-                # after a succeeded window is that verified outcome.
+                # after a succeeded window is that verified outcome. It must
+                # be that adapter's own success and no other: a shove verifies
+                # "down or further away", which is the likeliest reason a
+                # target leaves observation without being killed.
                 return self._finish(observation)
             return self._refuse(
                 ENDED_LOST,

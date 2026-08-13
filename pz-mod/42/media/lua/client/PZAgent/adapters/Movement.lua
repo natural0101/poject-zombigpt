@@ -671,11 +671,14 @@ local MoveNear = {
       type = ARG.REF,
       required = true,
       -- No `zombie`: walking up to one is never automatic. No `object` either,
-      -- but not for the reason an earlier comment here gave -- both sides do
-      -- parse that kind. The real reason is that nothing ever mints one:
-      -- PZAgent.ObserveModel describes a nearby thing as a container reference
-      -- when it holds a container and as a square reference otherwise, so an
-      -- object reference could only arrive from a caller that invented it.
+      -- and the two reasons given here before were both wrong. Both sides do
+      -- parse that kind, and something does mint one: ObserveModel.buildObject
+      -- gives a door its own reference from its object_index, falling back to
+      -- the square only when that index could not be read. So an object
+      -- reference arrives from an ordinary scan, not an inventing caller, and
+      -- refusing it here is why nothing walks the character up to a door.
+      -- Left as it stands rather than widened blind: see docs/LIMITATIONS.md,
+      -- where this sits behind the missing destination square.
       kinds = { square = true, container = true, item = true },
     },
     reach = { type = ARG.NUMBER, min = 0.1, max = Movement.MAX_RADIUS },

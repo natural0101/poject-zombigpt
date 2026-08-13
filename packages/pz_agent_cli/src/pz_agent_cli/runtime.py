@@ -455,6 +455,16 @@ class ObservationFeed:
     gap, a session change — the pointer is followed and the full document is
     offered instead. Anything that does not parse is counted and skipped, because
     one unusable record must not stall a stream the whole loop reads.
+
+    The recovery path is bound to one session (see
+    :attr:`~pz_agent_core.ipc.snapshot.SnapshotReader.session_id`, wired at
+    :meth:`SidecarLoop._build`). A document left in the slots by the session
+    before this one is refused rather than offered, and the refusal is a miss
+    whose reason lands in :attr:`diagnostics`: the loop then keeps reporting no
+    observation — ``ingested`` stays 0 and the store keeps asking for a full
+    snapshot — until the mod publishes under the live session, which is the
+    honest picture. The alternative was a baseline describing a world that had
+    ended, and every reflex evaluation and arm decision made against it.
     """
 
     layout: IpcLayout
@@ -1818,7 +1828,13 @@ class SidecarLoop:
         feed = ObservationFeed(
             layout=self.layout,
             reader=reader,
-            snapshots=SnapshotReader(self.layout),
+            # And bound to this session for the same reason the journal is
+            # positioned at the end: the slots the pointer names were left there
+            # by whatever ran here before, and seeking past them is not an
+            # option — the pointer has no position, only a document. The
+            # sequence numbers of two sessions are not comparable, so the reader
+            # is told whose documents it is allowed to serve.
+            snapshots=SnapshotReader(self.layout, session_id=session.session_id),
             max_records=self.limits.observations_per_tick,
         )
         sink = QueueCommandSink(queue, clock=self.clock)
@@ -1868,14 +1884,22 @@ class SidecarLoop:
             )
         if was_armed and attached is not None:
             # The game holds an armed mode this process granted; tell it to
-            # drop to OFF now rather than whenever the sidecar heartbeat goes
-            # stale. Nothing will tick to read the ack, and that is stated
-            # rather than papered over.
+            # drop to OFF. Nothing will tick to read the ack, and that is
+            # stated rather than papered over -- but the backstop this named
+            # before does not exist. Going stale never disarms the mod:
+            # Safety.sidecarStale is read in exactly three places (arm,
+            # mayStart, the snapshot) and all three only refuse, while
+            # Safety.disarm is reached from a session.disarm command, a new
+            # session, or a panic stop. So if this command does not land, the
+            # mod keeps reporting the mode it was granted until one of those
+            # happens. It cannot act on it -- mayStart refuses everything but
+            # stop, disarm and cancel while the heartbeat is stale -- so the
+            # residue is a stale reading, not a running agent.
             self._submit_session_disarm(
                 attached,
                 detail=(
                     "session.disarm sent at shutdown; no tick remains to read the "
-                    "ack, so the mod's stale-sidecar disarm is the backstop"
+                    "ack, and going stale does not disarm the mod by itself"
                 ),
                 watch=False,
             )
@@ -2256,9 +2280,10 @@ class SidecarLoop:
         takes effect *first* and unconditionally, because refusing to drop
         authority is never right, and the game's answer is then watched the
         same bounded way and reported on :attr:`disarm_notice` rather than
-        allowed to un-disarm anything. A disarm that revoked nothing sends
-        nothing: the panic level calls this every tick it holds, and a
-        command per tick would be the unbounded stream this project forbids.
+        allowed to un-disarm anything. A disarm that revoked nothing *and*
+        superseded no pending arm sends nothing: the panic level calls this
+        every tick it holds, and a command per tick would be the unbounded
+        stream this project forbids.
         """
         changed = self._armed or self._mode is not SessionMode.OBSERVE
         pending_arm = self._pending_arm
@@ -2285,10 +2310,26 @@ class SidecarLoop:
                 message=f"the sidecar disarmed while this submission waited: {reason}",
             )
         if self._attached is not None:
-            if changed:
+            if changed or pending_arm is not None:
+                # The superseded arm is the second thing worth countermanding.
+                # It is still on the command journal and still inside its lease,
+                # and the mod's arm gate refuses only a stale sidecar heartbeat
+                # — which this beating sidecar does not have — so it may yet
+                # grant a mode this loop has just abandoned, exactly as a late
+                # ack does past the confirmation deadline (_watch_pending_arm
+                # countermands that one for the same reason). Bounded: the
+                # pending arm is resolved above, so the tick-by-tick disarm a
+                # held panic sentinel performs sends this once, not per tick.
                 self._submit_session_disarm(
                     self._attached,
-                    detail=f"session.disarm sent after disarming locally ({reason})",
+                    detail=(
+                        f"session.disarm sent after disarming locally ({reason})"
+                        if changed
+                        else (
+                            "session.disarm sent to countermand the arm this disarm "
+                            f"superseded, which the game may still grant ({reason})"
+                        )
+                    ),
                     watch=True,
                 )
             self._publish_heartbeat()
@@ -2387,7 +2428,8 @@ class SidecarLoop:
                 detail=(
                     "the game never acked session.disarm within "
                     f"{self.limits.arm_confirm_timeout_ms} ms; its own takeover and "
-                    "panic safety, and the stale-sidecar disarm, are the backstop"
+                    "panic safety are the backstop, and a stale heartbeat stops it "
+                    "starting anything, though it does not disarm it"
                 ),
             )
 
@@ -2666,7 +2708,9 @@ class SidecarLoop:
         """Take at most one pending request, refusing the ones that prove nothing.
 
         An **arm** issued before this process attached is refused outright, and
-        so is one that has gone stale. That is the mechanism behind "never
+        so is one that has gone stale — or one stamped so far ahead of this tick
+        that it cannot have been written against this clock. That is the
+        mechanism behind "never
         re-arms itself": after a crash, the ``arm`` file the user wrote for the
         *previous* session is still on disk, and consuming it would hand
         authority to a loop that has just come up knowing nothing about the
@@ -2713,6 +2757,29 @@ class SidecarLoop:
                 detail=(
                     "the arm request was issued before this sidecar attached, so it is "
                     "refused; a request left behind by a previous run proves nothing — ask again"
+                ),
+            )
+            return None
+        if request.issued_at_ms - now_ms > CONTROL_MAX_AGE_MS:
+            # The other end of the same bound, and it is not symmetry for its own
+            # sake: both tests above subtract two *wall*-clock readings taken in
+            # different processes, so a run that wrote its request while the
+            # machine's clock was ahead — before NTP corrected it, or after the
+            # user set it by hand — leaves a file the attach test reads as
+            # "issued after we came up" and the age test reads as "negative, so
+            # fresh". That is a previous run's arm arming this one. A request
+            # stamped a little ahead is ordinary (this tick's ``now_ms`` was read
+            # before the request was written, and the writer is another process),
+            # so the tolerance is the same ceiling rather than zero; past it the
+            # stamp is not a measurement of anything this loop can compare with.
+            self._decide(
+                request,
+                applied=False,
+                detail=(
+                    f"the arm request is stamped more than {CONTROL_MAX_AGE_MS} ms ahead "
+                    "of this tick, so it was written against a different clock and its "
+                    "age cannot be measured; it proves nothing about what the user wants "
+                    "now — check the system clock and ask again"
                 ),
             )
             return None

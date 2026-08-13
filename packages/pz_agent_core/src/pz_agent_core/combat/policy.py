@@ -285,6 +285,19 @@ def assess_engagement(
             target_down=down,
         )
 
+    if player.wounds_unread:
+        # The same rule the unreadable-health refusal below applies, on the
+        # reader beside it: the wound list is empty both when nothing is wrong
+        # and when the mod could not read the body, and a fight is not the place
+        # to spend the difference.
+        return _refuse(
+            CombatRefusal.WOUNDED,
+            "the mod could not read the character's body this tick",
+            group_count=group_count,
+            target_distance=distance,
+            target_down=down,
+        )
+
     if player.is_bleeding:
         return _refuse(
             CombatRefusal.WOUNDED,

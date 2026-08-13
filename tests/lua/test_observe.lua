@@ -116,7 +116,9 @@ do
 
   same(Observe.playerStats({}), {}, "a character with no stats object contributes no stats")
   same(Observe.playerMoodles({}), {}, "and no moodles")
-  same(Observe.playerWounds({}), {}, "and no wounds")
+  -- Not an empty list: an unread body is a different fact from an unhurt one,
+  -- and the group below is about keeping them apart.
+  isNil(Observe.playerWounds({}), "and no wound list at all")
 
   local roots, rootsReason = Observe.inventoryRoots({})
   isNil(roots, "a character with no inventory yields no container roots")
@@ -124,7 +126,9 @@ do
 
   local nearby = Observe.nearbyObjects({ x = 0, y = 0, z = 0 })
   same(nearby.objects, {}, "with no cell there is nothing nearby")
-  equal(nearby.truncated, false, "and nothing was cut short either")
+  -- Not "nothing was cut short": nothing was read. The group below is about
+  -- keeping a scan that read nothing apart from a scan that found nothing.
+  equal(nearby.truncated, true, "and the scan says it read nothing rather than that it found nothing")
 end
 
 Harness.group("the game block reports what the engine actually answered")
@@ -244,6 +248,34 @@ do
     body = Support.bodyDamage({ Support.bodyPart({ health = 10 }) }),
   }))
   equal(unnamed[1].part, "part-0", "a part whose type cannot be read is identified by position, not by a guess")
+end
+
+Harness.group("a body nobody could read is not a body with nothing wrong with it")
+do
+  -- TreatWoundsMission finishes on bleeding_observed == 0, so "the reader
+  -- answered: no injuries" and "no reader answered" must not leave the same
+  -- trace. The reader is the only layer that can still tell them apart.
+  local unread, reason = Observe.playerWounds(Support.player({}))
+  isNil(unread, "a character whose body damage this build does not expose yields no wound list")
+  Harness.contains(reason, "body", "and the reason names what could not be read")
+
+  local unlistable = Observe.playerWounds(Support.player({ body = { getBodyParts = function() return nil end } }))
+  isNil(unlistable, "and neither does one whose body parts are not a readable collection")
+
+  local healthy = Observe.playerWounds(Support.player({
+    body = Support.bodyDamage({
+      Support.bodyPart({ part = "Torso", health = 100 }),
+      Support.bodyPart({ part = "Left_Arm", health = 100 }),
+    }, 100),
+  }))
+  equal(#healthy, 2, "a body that was read describes every part, whether or not it is hurt")
+
+  local mute = Observe.playerFields(Support.player({}))
+  isNil(mute.wounds, "the player block carries no wound list when the body could not be read")
+  local whole = Observe.playerFields(Support.player({
+    body = Support.bodyDamage({ Support.bodyPart({ part = "Torso", health = 100 }) }, 100),
+  }))
+  equal(#whole.wounds, 1, "and carries the descriptors when it could")
 end
 
 Harness.group("the inventory walk nests, names its slots and finds the hands")
@@ -717,6 +749,74 @@ do
   removeCell()
 end
 
+Harness.group("a world the reader could not reach is not a world with nothing in it")
+do
+  -- assess_threat on the sidecar reads an empty zombie list as DangerLevel.NONE
+  -- and compact_for_planner reports `available: true`. So a scan that read
+  -- nothing must not arrive looking like a scan that found nothing: the section
+  -- is left out when the cell could not be reached at all, and declared
+  -- incomplete when the cell answered but an accessor did not.
+  local player = furnishedPlayer()
+  local position = { x = 100, y = 200, z = 0 }
+  local squares = (2 * Observe.RADIUS + 1) ^ 2
+
+  getCell = nil
+  local objects = Observe.nearbyObjects(position)
+  equal(objects.truncated, true, "with no cell every square around the player went unread, and it says so")
+  equal(objects.dropped, squares, "counting every one of them")
+  local zeds = Observe.nearbyZombies(player, position)
+  -- `unscanned`, not `truncated`: nothing was counted at all, which is a
+  -- different fact from "there were more of them than I counted", and it is the
+  -- one the danger floor reads to refuse rather than report calm.
+  equal(zeds.unscanned, true, "and the zombie list is declared unread rather than reported empty")
+
+  local fields, reason = Observe.nearbyFields(player, position)
+  isNil(fields, "a world nobody could look at produces no nearby section")
+  Harness.contains(reason, "getCell", "and the reason names the probe that was missing")
+
+  local document = Model.build({
+    session_id = SESSION,
+    seq = 3,
+    timestamp_ms = NOW,
+    game = { build = "42.20" },
+    player = Observe.playerFields(player),
+    nearby = fields,
+  })
+  isNil(document.nearby, "so the document carries no nearby block at all, which the sidecar reads as unavailable")
+
+  -- A cell that is there but cannot list its zombies is a different case: the
+  -- world was looked at, and what could be read is worth publishing.
+  getCell = function()
+    return {
+      getGridSquare = function(_, x, y, z)
+        if x == 101 and y == 200 and z == 0 then
+          return Support.square({ Support.worldObject({ name = "Door" }) })
+        end
+        return nil
+      end,
+    }
+  end
+  local mute, muteReason = Observe.nearbyFields(player, position)
+  ok(mute ~= nil, "a cell that answers is still a nearby section: " .. tostring(muteReason))
+  equal(#mute.objects, 1, "with the objects it could read")
+  equal(mute.zombies_unscanned, true, "and the unreadable zombie list declared, not published as an empty horde")
+
+  local partial = Model.build({
+    session_id = SESSION,
+    seq = 4,
+    timestamp_ms = NOW,
+    game = { build = "42.20" },
+    player = Observe.playerFields(player),
+    nearby = mute,
+  })
+  equal(
+    partial.player.stats[Model.LIMIT_PREFIX .. "zombies_unknown"],
+    true,
+    "which reaches the document as the limit the sidecar can read"
+  )
+  getCell = nil
+end
+
 Harness.group("a tick publishes a snapshot, or says why it did not")
 do
   local removeCore = installCore("42.20")
@@ -912,6 +1012,184 @@ do
   })
   equal(document.player.stats.weapon_condition, 7, "the condition reaches the document's stats")
   equal(document.player.stats.weapon_condition_max, 10, "beside its maximum")
+end
+
+Harness.group("a floor nobody has measured recently is not calm")
+do
+  -- The tick that publishes a snapshot is the only thing that writes the danger
+  -- floor, and it writes it last -- after the player, the build and the nearby
+  -- scan. Everything that fails before that point leaves the previous reading
+  -- standing while the mod keeps heartbeating and keeps taking commands, so the
+  -- question this group asks is what the mod's own gate does with a `none` that
+  -- nothing has re-measured.
+  local removeCore = installCore("42.20")
+  local removeWorld = Support.installWorld("Muldraugh, KY/survivor")
+  local removeTime = Support.installGameTime({ speed = 1, paused = false })
+  local removeCell = Support.installCell({}, {})
+
+  local REASON = PZ.Protocol.REASON
+  local agent = newAgent()
+  agent.player = furnishedPlayer()
+  agent.queue_description = PZ.Ownership.describe({}, SESSION)
+  PZ.Safety.noteSidecarHeartbeat(agent.safety, NOW)
+  ok(
+    PZ.Safety.arm(agent.safety, "AUTONOMOUS", NOW, { sessionId = SESSION, playerPresent = true }),
+    "the agent arms: live sidecar, open session, a character to act with"
+  )
+
+  --- The gate the sidecar's mutating commands pass through, with everything
+  --- except the danger floor in order.
+  local function mayEat(nowMs)
+    return PZ.Safety.mayStart(agent.safety, "consume.eat", nowMs, {
+      sessionId = SESSION,
+      playerPresent = true,
+      playerAlive = true,
+      queue = PZ.Ownership.describe({}, SESSION),
+    })
+  end
+
+  ok(Observe.tick(agent, NOW) ~= nil, "the first observation publishes")
+  equal(agent.safety.danger_level, PZ.Protocol.DANGER.NONE, "and measures an empty street as no danger")
+  ok(mayEat(NOW), "on that reading a mutating action may start")
+
+  -- Now the build probe stops answering, which is the whole of the change: the
+  -- character is still there and alive, the session is still open, and the
+  -- sidecar keeps beating below. Meanwhile the street fills up.
+  removeCore()
+  removeCell()
+  removeCell = Support.installCell({}, {
+    Support.zombie({ id = 1, x = 100, y = 200, has_target = true, target = agent.player }),
+    Support.zombie({ id = 2, x = 101, y = 201, has_target = true, target = agent.player }),
+  })
+
+  local last = NOW
+  local failures = 0
+  for step = 1, 12 do
+    last = NOW + step * 5000
+    PZ.Safety.noteSidecarHeartbeat(agent.safety, last)
+    local document, reason = Observe.tick(agent, last)
+    if document == nil and reason ~= nil then
+      failures = failures + 1
+    end
+  end
+  equal(failures, 12, "a minute of ticks, every one of them failing to observe")
+  Harness.contains(agent.safety.last_error, "getCore", "and saying so on the HUD")
+  ok(not PZ.Safety.sidecarStale(agent.safety, last), "while the sidecar is as live as it ever was")
+  equal(agent.safety.danger_level, PZ.Protocol.DANGER.NONE, "the floor still carries the reading from a minute ago")
+
+  local allowed, reason, detail = mayEat(last)
+  ok(not allowed, "a mutating action may not start on a floor nothing has measured since")
+  equal(reason, REASON.PRECONDITION_FAILED, "the refusal names the missing precondition")
+  Harness.contains(detail, "measured", "and says what is missing: a measurement, not a threat")
+  equal(
+    agent.safety.danger_level,
+    PZ.Protocol.DANGER.NONE,
+    "and the stale level is left as it was rather than raised to a danger nobody observed"
+  )
+
+  ok(PZ.Safety.mayStart(agent.safety, "safety.stop", last, {}), "stopping still works, as it does under everything")
+  ok(
+    PZ.Safety.mayStart(agent.safety, "world.inspect", last, {
+      sessionId = SESSION,
+      playerPresent = true,
+      playerAlive = true,
+      queue = PZ.Ownership.describe({}, SESSION),
+    }),
+    "and the read that would take a new measurement is not what gets blocked"
+  )
+
+  -- world.inspect is that read: it drives this very tick. One that gets through
+  -- ends the refusal, and on what the scan actually finds.
+  removeCore = installCore("42.20")
+  ok(Observe.tick(agent, last) ~= nil, "the observation recovers")
+  equal(agent.safety.danger_level, PZ.Protocol.DANGER.HIGH, "measuring the horde that arrived meanwhile")
+  local afterRecovery, recoveryReason = mayEat(last)
+  ok(not afterRecovery, "which is its own reason to refuse")
+  equal(recoveryReason, REASON.THREAT_INTERRUPTED, "now named as the threat it is")
+
+  removeCell()
+  removeTime()
+  removeWorld()
+  removeCore()
+end
+
+Harness.group("a zombie scan that could not run is not an empty street")
+do
+  local player = furnishedPlayer()
+  local position = { x = 100, y = 200, z = 0 }
+
+  -- A build that answers for squares but exposes no zombie list at all.
+  local blindCell = {
+    getGridSquare = function()
+      return nil
+    end,
+  }
+  getCell = function()
+    return blindCell
+  end
+
+  local scan = Observe.nearbyZombies(player, position)
+  equal(#scan.zombies, 0, "a build with no zombie list yields no zombies")
+  equal(scan.unscanned, true, "and the reader says the scan never ran")
+
+  local fields = Observe.nearbyFields(player, position)
+  equal(fields.zombies_unscanned, true, "which travels with the nearby fields")
+  equal(
+    Model.dangerFloor(fields, position),
+    PZ.Protocol.DANGER.HIGH,
+    "so the floor is the reading that stops the agent, not the calm of an empty street"
+  )
+
+  -- What that costs when it reads NONE: the deterministic gate, with no model
+  -- anywhere in the loop, lets mutating work start on a scan that never ran.
+  local state = PZ.Safety.newState()
+  PZ.Safety.noteSidecarHeartbeat(state, NOW)
+  PZ.Safety.arm(state, "AUTONOMOUS", NOW, { sessionId = SESSION })
+  PZ.Safety.setDanger(state, Model.dangerFloor(fields, position))
+  local gate = {
+    sessionId = SESSION,
+    playerPresent = true,
+    playerAlive = true,
+    queue = PZ.Ownership.describe({}, SESSION),
+  }
+  local allowed, reason = PZ.Safety.mayStart(state, "consume.eat", NOW, gate)
+  ok(not allowed, "so the mod's own gate refuses to start mutating work while it is blind")
+  equal(reason, PZ.Protocol.REASON.THREAT_INTERRUPTED, "naming the threat it cannot rule out")
+
+  -- And the document says the floor was not measured, the way an unread
+  -- `paused` or `speed` already does, so nobody reads HIGH as an observation.
+  local document = Model.build({
+    session_id = SESSION,
+    seq = 3,
+    timestamp_ms = NOW,
+    game = { build = "42.20" },
+    player = Observe.playerFields(player),
+    nearby = fields,
+  })
+  equal(
+    document.player.stats[Model.LIMIT_PREFIX .. "zombies_unknown"],
+    true,
+    "the snapshot declares that nobody counted, rather than implying a count of zero"
+  )
+
+  -- A scan that did run and found nothing keeps saying so.
+  local removeCell = Support.installCell({}, {})
+  local empty = Observe.nearbyFields(player, position)
+  isNil(empty.zombies_unscanned, "a scan that ran makes no such claim")
+  equal(Model.dangerFloor(empty, position), PZ.Protocol.DANGER.NONE, "and an empty street is still calm")
+  local calm = Model.build({
+    session_id = SESSION,
+    seq = 4,
+    timestamp_ms = NOW,
+    game = { build = "42.20" },
+    player = Observe.playerFields(player),
+    nearby = empty,
+  })
+  isNil(
+    calm.player.stats[Model.LIMIT_PREFIX .. "zombies_unknown"],
+    "and the counter stays silent, so it means what it says when it appears"
+  )
+  removeCell()
 end
 
 Harness.finish("observe")

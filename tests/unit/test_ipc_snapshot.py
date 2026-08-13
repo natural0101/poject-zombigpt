@@ -17,6 +17,17 @@ def _document(seq: int) -> dict[str, object]:
     return {"seq": seq, "full": True, "player": {"present": True}}
 
 
+#: Two session ids, in the shape the mod stamps on every observation.
+SESSION_A = "11111111-1111-4111-8111-111111111111"
+SESSION_B = "22222222-2222-4222-8222-222222222222"
+
+
+def _session_document(session_id: str, seq: int) -> dict[str, object]:
+    doc = _document(seq)
+    doc["session_id"] = session_id
+    return doc
+
+
 def test_publish_alternates_slots_and_moves_the_pointer(tmp_path: Path) -> None:
     layout = make_layout(tmp_path)
     writer = SnapshotWriter(layout, clock=FakeClock())
@@ -127,6 +138,141 @@ def test_the_reader_refuses_to_rewind(tmp_path: Path) -> None:
     read = reader.read()
     assert isinstance(read, SnapshotMiss)
     assert any("older than the accepted 5" in diagnostic for diagnostic in read.diagnostics)
+
+
+class TestTheRewindGuardIsScopedToOneSession:
+    """Sequence numbers restart with the session, so they cannot be compared across one.
+
+    The mod builds fresh counters on ``OnGameStart`` and publishes the first
+    snapshot of the new session as seq 0, into an exchange directory still
+    holding the previous session's files. Ordering that 0 against the number
+    the dead session reached made the reader refuse the live world snapshot
+    after snapshot — and this pointer is the *only* observation channel the mod
+    publishes on, so the sidecar sat blind, with a diagnostic that read like a
+    torn slot, until the new session climbed past the old one's last number.
+    """
+
+    def test_the_next_sessions_first_snapshot_is_not_refused_as_a_rewind(
+        self, tmp_path: Path
+    ) -> None:
+        layout = make_layout(tmp_path)
+        writer = SnapshotWriter(layout)
+        writer.publish(_session_document(SESSION_A, 900))
+        reader = SnapshotReader(layout)
+        assert isinstance(reader.read(), SnapshotRead)
+        assert reader.last_seq == 900
+
+        # The player restarts the game: a new session, numbering from zero.
+        writer.publish(_session_document(SESSION_B, 0))
+        first = reader.read()
+
+        assert isinstance(first, SnapshotRead)
+        assert first.seq == 0
+        assert first.document["session_id"] == SESSION_B
+        assert any("restart per session" in diagnostic for diagnostic in first.diagnostics), (
+            "the session change must be said out loud, not passed over in silence"
+        )
+
+        # And the new session's own ordering is picked up from there.
+        writer.publish(_session_document(SESSION_B, 1))
+        second = reader.read()
+        assert isinstance(second, SnapshotRead)
+        assert second.seq == 1
+
+    def test_a_rewind_inside_one_session_is_still_refused(self, tmp_path: Path) -> None:
+        layout = make_layout(tmp_path)
+        writer = SnapshotWriter(layout)
+        writer.publish(_session_document(SESSION_B, 1))
+        writer.publish(_session_document(SESSION_B, 5))
+        reader = SnapshotReader(layout)
+        assert isinstance(reader.read(), SnapshotRead)
+
+        # The pointed-at slot is caught mid-write; the fallback is this same
+        # session's older document, which must not rewind the world model.
+        layout.snapshot_slot(SnapshotSlot.B).write_text('{"seq": 6, "trunc', encoding="utf-8")
+        read = reader.read()
+
+        assert isinstance(read, SnapshotMiss)
+        assert any("older than the accepted 5" in diagnostic for diagnostic in read.diagnostics)
+        assert reader.last_seq == 5
+
+
+class TestABoundReaderServesOnlyItsOwnSession:
+    """The exchange directory survives the session that filled it.
+
+    ``last_seq`` cannot help here: a reader that has accepted nothing has
+    nothing to order the leftover document against, so the previous session's
+    last snapshot is served as the first observation of the next one. Binding
+    the reader to the session the sidecar handshook answers *whose* rather than
+    *how old*, and a document from any other session is refused by name.
+    """
+
+    def test_the_previous_sessions_leftover_document_is_refused(self, tmp_path: Path) -> None:
+        layout = make_layout(tmp_path)
+        SnapshotWriter(layout).publish(_session_document(SESSION_A, 900))
+        reader = SnapshotReader(layout, session_id=SESSION_B)
+
+        read = reader.read()
+
+        assert isinstance(read, SnapshotMiss)
+        assert any(SESSION_A in diagnostic for diagnostic in read.diagnostics)
+        assert any(SESSION_B in diagnostic for diagnostic in read.diagnostics)
+        assert reader.last_seq is None, "a refused document must not anchor the rewind guard"
+
+    def test_the_bound_sessions_document_is_served_and_anchors_the_guard(
+        self, tmp_path: Path
+    ) -> None:
+        layout = make_layout(tmp_path)
+        writer = SnapshotWriter(layout)
+        writer.publish(_session_document(SESSION_A, 900))
+        reader = SnapshotReader(layout, session_id=SESSION_B)
+        assert isinstance(reader.read(), SnapshotMiss)
+
+        # The mod accepts the handshake and publishes under the live session.
+        writer.publish(_session_document(SESSION_B, 0))
+        read = reader.read()
+
+        assert isinstance(read, SnapshotRead)
+        assert read.seq == 0
+        assert read.document["session_id"] == SESSION_B
+        assert reader.last_seq == 0
+
+    def test_a_foreign_slot_cannot_shadow_this_sessions_through_a_torn_pointer(
+        self, tmp_path: Path
+    ) -> None:
+        """Probing both slots must not pick the dead session for its higher seq."""
+        layout = make_layout(tmp_path)
+        writer = SnapshotWriter(layout)
+        writer.publish(_session_document(SESSION_A, 900))
+        writer.publish(_session_document(SESSION_B, 0))
+        layout.snapshot_pointer.write_text("{", encoding="utf-8")
+
+        read = SnapshotReader(layout, session_id=SESSION_B).read()
+
+        assert isinstance(read, SnapshotRead)
+        assert read.seq == 0
+        assert read.document["session_id"] == SESSION_B
+
+    def test_a_document_naming_no_session_is_refused_by_a_bound_reader(
+        self, tmp_path: Path
+    ) -> None:
+        layout = make_layout(tmp_path)
+        SnapshotWriter(layout).publish(_document(3))
+
+        read = SnapshotReader(layout, session_id=SESSION_B).read()
+
+        assert isinstance(read, SnapshotMiss)
+        assert any("names no session" in diagnostic for diagnostic in read.diagnostics)
+
+    def test_an_unbound_reader_still_serves_whatever_it_finds(self, tmp_path: Path) -> None:
+        """The default is what every existing caller gets: no session filter."""
+        layout = make_layout(tmp_path)
+        SnapshotWriter(layout).publish(_session_document(SESSION_A, 900))
+
+        read = SnapshotReader(layout).read()
+
+        assert isinstance(read, SnapshotRead)
+        assert read.seq == 900
 
 
 def test_re_reading_the_same_snapshot_is_allowed(tmp_path: Path) -> None:

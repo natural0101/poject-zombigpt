@@ -240,6 +240,41 @@ do
   contains(detail, "getItems", "naming what could not be read")
 end
 
+Harness.group("an inventory that was never walked did not match nothing")
+do
+  -- The same rule as the group above, on the other side of the file: a search
+  -- answers a question the planner asked, and "nothing matched" is an answer.
+  -- A walk that could not be made produces no answer at all, and reporting the
+  -- empty result as one tells the sidecar the character is not carrying a
+  -- bandage on the strength of a reading nobody took.
+  local args = { edible = true }
+
+  local blind = scene()
+  ok(Search:validate(args, blind.ctx), "the search validates")
+  ok(Search:begin(args, blind.ctx), "and begins, because a search has nothing to queue")
+  blind.player.getInventory = nil
+  local evidence, code, detail = Search:verify(nil, Toolkit.observe(blind.player), args, blind.ctx)
+  isNil(evidence, "a character whose inventory could not be read matched nothing and proved nothing")
+  equal(code, REASON.CAPABILITY_UNAVAILABLE, "which is a capability gap, not an empty result")
+  contains(detail, "getInventory", "naming the accessor that did not answer")
+
+  local mute = scene()
+  mute.main.getItems = nil
+  local _, mainCode, mainDetail = Search:verify(nil, Toolkit.observe(mute.player), args, mute.ctx)
+  equal(mainCode, REASON.CAPABILITY_UNAVAILABLE, "and a main inventory that stopped answering is the same gap")
+  contains(mainDetail, "getItems", "naming what could not be read")
+
+  local bagged = scene()
+  bagged.satchel.getItems = nil
+  local _, bagCode = Search:verify(nil, Toolkit.observe(bagged.player), args, bagged.ctx)
+  equal(bagCode, REASON.CAPABILITY_UNAVAILABLE, "a bag inside it that could not be opened costs the answer too")
+
+  local whole = scene()
+  local proof = Search:verify(nil, Toolkit.observe(whole.player), args, whole.ctx)
+  ok(proof ~= nil, "while a walk that was actually made still reports what it saw")
+  equal(proof.match_count, 1, "including when the count is small")
+end
+
 Harness.group("ensure_main only ever moves things into the main inventory")
 do
   local s = scene()

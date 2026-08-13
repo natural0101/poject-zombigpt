@@ -36,9 +36,9 @@ about nothing.
 
 | Field | Value |
 | --- | --- |
-| archive | `pz-agent-windows-rc` (artifact 9015413488) |
-| archive sha256 | `2043f0c3884948c22c3e81c0c388688b064a0748bdafcac231c31e3686504807` |
-| source commit | `cab857c91f492b0596d9af38d292b23de8fc839b` |
-| workflow run | https://github.com/natural0101/poject-zombigpt/actions/runs/31278629560 |
-| certified by | every step of `windows package` green, both executables answering with PATH reduced to the system directories |
+| archive | `pz-agent-windows-rc` (artifact 9182819087), `pz-agent-windows-v1.0.0-rc1.zip`, 75 entries |
+| archive sha256 | `0417da48f55f1c035e79b28e732f96b6be7ecb67bbf3aa23cb342663592b1642` |
+| source commit | `0ad338bae53fec904864ab52b6e61f2163a5c82c` |
+| workflow run | https://github.com/natural0101/poject-zombigpt/actions/runs/31703932084 |
+| certified by | `check_release.py --rc` printing `CERTIFIED v1.0.0-rc1: 8 check(s) passed` — archive complete, all 11 wrappers at the root, **both executables in `bin/`**, 74 file digests matching, 8081 of 8122 tests passed with no failures, 31 MCP end-to-end testcases green, and the archive claiming no live-test evidence. The packaged pair also completed an MCP `initialize` over the RPC link with `PATH` reduced to the system directories |
 | current? | `docs/control/STATUS.json` → `release_candidate.status`; any code commit after the source commit makes it STALE until the workflow rebuilds it |

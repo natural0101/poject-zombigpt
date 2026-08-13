@@ -345,6 +345,46 @@ do
   equal(#journalRecords(fs), 0, "and writes nothing to the journal")
 end
 
+Harness.group("a new session does not inherit the authority the last one was granted")
+do
+  -- The one place a session change and the arming gate meet. Safety.disarm is
+  -- called on an explicit disarm and on a panic stop, and by nothing at all on
+  -- a session swap -- so an armed mod that accepts a second session carries the
+  -- first session's authority into it. The sidecar on the other end of that
+  -- second session never asked for it and has no way to know it holds it: it
+  -- believes it is in OBSERVE, and the mod will execute mutating commands.
+  getSpecificPlayer = function()
+    return Mock.newPlayer()
+  end
+  Mock.installActionQueue({})
+  local agent, fs = newAgent({ session = false })
+  putSidecarHeartbeat(fs, 1)
+  fs:put(PZ.Ipc.pathFor("session"), offerText())
+  Runtime.tick(agent, NOW)
+  equal(agent.session:id(), SESSION, "the first session is open")
+
+  -- Arm it, the way the first session's own arm command would.
+  local armed, reason = PZ.Safety.arm(agent.safety, Protocol.MODE.AUTONOMOUS, NOW, {
+    sessionId = agent.session:id(),
+    playerPresent = true,
+  })
+  ok(armed, "the first session arms, so there is authority to inherit: " .. tostring(reason))
+  equal(agent.safety.armed, true, "the mod is armed under the first session")
+
+  -- A second sidecar, a second session. Nobody armed it.
+  putSidecarHeartbeat(fs, 2)
+  fs:put(PZ.Ipc.pathFor("session"), offerText({
+    session_id = OTHER_SESSION,
+    nonce = "offer-two",
+    created_at_ms = NOW + 50,
+  }))
+  Runtime.tick(agent, NOW + 100)
+
+  equal(agent.session:id(), OTHER_SESSION, "the second session is the open one")
+  equal(agent.safety.armed, false, "and it starts disarmed, whatever the last session held")
+  equal(agent.safety.mode, Protocol.MODE.OFF, "the mode it inherited is off, not the old one")
+end
+
 Harness.group("a malformed offer is refused without touching the live session")
 do
   getSpecificPlayer = function()

@@ -347,6 +347,41 @@ do
   equal(proof.runtime_id, 21, "and the identity that was in it")
 end
 
+Harness.group("a worn set that stopped answering is not a garment taken off")
+do
+  -- Unequip's postcondition is an absence: the identity is in neither hand nor
+  -- the worn set. An absence only proves something when both sets were read.
+  -- A character whose worn list stopped answering is still wearing the jacket,
+  -- and an ack that calls that "item_unequipped" is what mints `verified` for
+  -- equipment_unequip on a build that took nothing off.
+  local s = scene({ wearing_jacket = true })
+  local args = { slot = "Jacket" }
+  ok(Unequip:validate(args, s.ctx), "a filled slot can be emptied")
+  ok(Unequip:begin(args, s.ctx), "and the command starts")
+  local before = Toolkit.observe(s.player)
+
+  Support.drainQueue(s.queue)
+  s.player.getWornItems = function()
+    error("kahlua gap", 0)
+  end
+  local after = Toolkit.observe(s.player)
+  isNil(after.worn[21], "the jacket is absent from a snapshot that read no worn items")
+  local evidence, code, detail = Unequip:verify(before, after, args, s.ctx)
+  isNil(evidence, "which is not the jacket having come off")
+  equal(code, REASON.CAPABILITY_UNAVAILABLE, "the gap is a capability, not an empty slot")
+  contains(detail, "getWornItems", "naming the accessor that stopped answering")
+
+  local handed = scene({ primary = true })
+  local handArgs = { hand = "primary" }
+  ok(Unequip:validate(handArgs, handed.ctx), "the same for a hand")
+  ok(Unequip:begin(handArgs, handed.ctx), "which starts")
+  local held = Toolkit.observe(handed.player)
+  handed.takeOff.actions[1]:perform()
+  handed.player.getPrimaryHandItem = nil
+  local _, handCode = Unequip:verify(held, Toolkit.observe(handed.player), handArgs, handed.ctx)
+  equal(handCode, REASON.CAPABILITY_UNAVAILABLE, "a hand nobody could look into was not proved empty")
+end
+
 Harness.group("the adapters are registered where the dispatcher looks for them")
 do
   equal(PZ.Adapters.BY_NAME["equipment.equip"], Equip, "equip is registered under its action name")

@@ -225,6 +225,45 @@ class TestOneTargetEver:
         assert mission.ended == ENDED_RETREATED
         assert mission.report["refusal"] == "group_over_limit"
 
+    def test_a_succeeded_shove_is_not_a_kill_when_the_target_vanishes(self) -> None:
+        """A window was *attempted* and failed; the only action that succeeded
+        is a shove, whose adapter proves "down **or further away**". The target
+        then leaves observation — which is exactly what a successful shove
+        makes likely — and that must read ``lost``, not ``complete``: the
+        absence rule is the engage adapter's, and no engage window ever
+        succeeded here."""
+        mission = EngageZombieMission(GOAL_ID)
+        window = step_of(mission.next_step(world(1, zombies=[a_zombie(distance=3.0)])))
+        assert window.action is ActionName.COMBAT_ENGAGE
+        mission.note_result(failed(window, seq=2, reason=ReasonCode.POSTCONDITION_FAILED))
+
+        shove = step_of(mission.next_step(world(3, zombies=[a_zombie(distance=1.5)])))
+        assert shove.action is ActionName.COMBAT_SHOVE
+        mission.note_result(
+            succeeded(shove, seq=4, evidence={"target_ref": TARGET_REF, "distance_after": 3.0})
+        )
+
+        ended = mission.next_step(world(5, zombies=[]))
+        assert isinstance(ended, MissionRefused), f"a shoved-away zombie is not a kill: {ended!r}"
+        assert ended.reason_code is ReasonCode.PRECONDITION_FAILED
+        assert mission.ended == ENDED_LOST
+
+    def test_a_succeeded_equip_is_not_a_kill_when_the_target_vanishes(self) -> None:
+        """The same gap through the other door: the equip that succeeded says
+        a weapon was drawn, nothing about the zombie."""
+        mission = EngageZombieMission(GOAL_ID, limits=CombatMissionLimits(max_windows=1))
+        window = step_of(mission.next_step(world(1, zombies=[a_zombie(distance=3.0)])))
+        assert window.action is ActionName.COMBAT_ENGAGE
+        mission.note_result(failed(window, seq=2, reason=ReasonCode.POSTCONDITION_FAILED))
+
+        equip = step_of(mission.next_step(world(3, zombies=[a_zombie(distance=3.0)], primary=None)))
+        assert equip.action is ActionName.COMBAT_EQUIP_BEST
+        mission.note_result(succeeded(equip, seq=4, evidence={"item_ref": WEAPON_REF}))
+
+        ended = mission.next_step(world(5, zombies=[]))
+        assert isinstance(ended, MissionRefused), f"a drawn weapon is not a kill: {ended!r}"
+        assert mission.ended == ENDED_LOST
+
     def test_a_target_that_leaves_unfought_ends_lost_not_complete(self) -> None:
         mission = EngageZombieMission(GOAL_ID)
         shove = step_of(mission.next_step(world(1)))

@@ -322,12 +322,40 @@ local function bandageVerify(_, before, after, args, ctx)
     bandaged_after = now.bandaged,
     item_ref = Toolkit.state(ctx).applied_ref,
   }
-  if now.bleeding == false or now.bandaged == true then
+  if now.bleeding == false then
     return observed
   end
-  return nil,
-    reasons.POSTCONDITION_FAILED,
-    string.format("%s is still bleeding and still reports no dressing", partName)
+  -- A dressing is only this command's own effect when it was not there before.
+  -- `bandaged` reads true over a soaked bandage the character was already
+  -- wearing, so accepting it on its own promotes "the part is bandaged" -- a
+  -- fact that holds whether ISApplyBandage landed or never ran at all -- into a
+  -- postcondition, on a wound that is still losing blood. The before/after pair
+  -- is what separates the two, and without a reading from before there is
+  -- nothing to separate them with, so nothing is claimed.
+  if now.bandaged ~= true then
+    if now.bleeding == nil then
+      -- No dressing was seen either, so the only postcondition left is "the
+      -- wound stopped", and this build will not answer that question. Refusing
+      -- names the gap; the sentence below would state as observed that the part
+      -- is still bleeding, which is the same fabricated reading one negation
+      -- away.
+      return Toolkit.unavailable("BodyPart.isBleeding")
+    end
+    return nil,
+      reasons.POSTCONDITION_FAILED,
+      string.format("%s is still bleeding and still reports no dressing", partName)
+  end
+  if was == nil then
+    return nil,
+      reasons.POSTCONDITION_FAILED,
+      string.format("%s is still bleeding and there is no reading from before to say what dressed it", partName)
+  end
+  if was.bandaged == true then
+    return nil,
+      reasons.POSTCONDITION_FAILED,
+      string.format("%s is still bleeding and already carried a dressing before this command", partName)
+  end
+  return observed
 end
 
 Bandage = toolkit().declare({

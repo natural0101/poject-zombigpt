@@ -286,6 +286,18 @@ def test_observed_bleeding_refuses_wounded() -> None:
     assert decision.refusal is CombatRefusal.WOUNDED
 
 
+def test_an_unread_body_refuses_wounded() -> None:
+    """Same rule as unreadable health, applied to the reader beside it.
+
+    ``is_bleeding`` is ``any(w.bleeding for w in wounds)``, and the mod publishes
+    an empty wound list both when nothing is wrong and when it could not read
+    the body -- declaring the second as ``observe.wounds_unknown``. Without
+    this, a fight is permitted on a body nobody read.
+    """
+    decision = decide(observed(stats={"observe.wounds_unknown": True}))
+    assert decision.refusal is CombatRefusal.WOUNDED
+
+
 def test_health_under_the_floor_refuses_wounded() -> None:
     decision = decide(observed(stats={"health": 0.3}))
     assert decision.refusal is CombatRefusal.WOUNDED

@@ -418,6 +418,15 @@ def render_status(report: StatusReport, printer: Printer) -> None:
     if game is not None and game.heartbeat is not None:
         beat = game.heartbeat
         printer.field("game", f"{'live' if game.alive else 'stale'} — {game.detail}")
+        if not game.alive:
+            # The five fields below are read out of that one document, so on a
+            # stale heartbeat they are what the game last said and not what is
+            # true now. Printed unqualified, "armed: yes" tells the owner of a
+            # game that crashed an hour ago that something has authority over
+            # their character this second. The fields stay — hiding the last
+            # word would lose the evidence — and what they are is said instead.
+            printer.line("    the five fields below are that silent heartbeat's last word,")
+            printer.line("    not the state now; nothing has reported since")
         printer.field("build", beat.build or "unknown")
         printer.field("armed", "yes" if beat.armed else "no")
         printer.field("mode", beat.mode.value if beat.mode is not None else "unknown")

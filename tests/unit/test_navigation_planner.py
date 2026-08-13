@@ -21,10 +21,29 @@ real :class:`~pz_agent_cli.runtime.ActionChannel` with no loop in between:
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import NoReturn
 
-from pz_agent_cli.navigation_planner import MAX_TRACKED_JOURNEYS, NavigatingPlanner
-from pz_agent_cli.runtime import ActionChannel
+from pz_agent_cli.avoid_mission import AvoidMission
+from pz_agent_cli.care_mission import TreatWoundsMission
+from pz_agent_cli.combat_mission import EngageZombieMission
+from pz_agent_cli.consume_mission import HUNGER, ConsumeMission
+from pz_agent_cli.explore_mission import ExploreMission
+from pz_agent_cli.loot_mission import ENDED_CANCELLED, LootMission
+from pz_agent_cli.navigation_planner import (
+    MAX_TRACKED_JOURNEYS,
+    UNADMITTED_STEP_DETAIL,
+    UNOBSERVED_STEP_DETAIL,
+    NavigatingPlanner,
+    _AvoidDrive,
+    _CareDrive,
+    _CombatDrive,
+    _ConsumeDrive,
+    _ExploreDrive,
+    _LootDrive,
+)
+from pz_agent_cli.runtime import ActionChannel, LoopError
 from pz_agent_core.actions.engine import ActionRequest
 from pz_agent_core.goals import (
     GoalKind,
@@ -35,15 +54,28 @@ from pz_agent_core.goals import (
     GoalState,
     to_planner_goal,
 )
+from pz_agent_core.goals.model import AreaScope, LootScope
+from pz_agent_core.loot import LootPolicy
 from pz_agent_core.planner import Goal as PlannerGoal
+from pz_agent_core.policy.config import DEFAULT_POLICY_CONFIG
 from pz_agent_core.protocol import (
     ActionName,
     ActionResult,
+    ContainerKind,
+    InventoryView,
+    JsonDict,
     Observation,
     Position,
     ReasonCode,
+    Wound,
 )
-from tests.fixtures import DEFAULT_SESSION, make_observation, make_player
+from tests.fixtures import (
+    DEFAULT_SESSION,
+    make_container,
+    make_item,
+    make_observation,
+    make_player,
+)
 from tests.fixtures.action_doubles import FakeClock
 
 
@@ -321,3 +353,268 @@ class TestRefusalsAreTypedAndJourneysAreBounded:
         record = navigate_goal(queue, x=1205, y=3400)
         wrapper.propose_for_goal(to_planner_goal(record), observed(8, 1200.0, 3400.0))
         assert wrapper.map.revision == 8
+
+
+# --------------------------------------------------------------------------
+# C1: the shared pending seam, for all six mission kinds at once
+# --------------------------------------------------------------------------
+
+
+#: An action id this channel never minted. ``ActionChannel.status`` answers
+#: None for it exactly as it does for an evicted record or one from a previous
+#: process — the three truths its docstring names are one fact to a mission.
+LOST_ACTION_ID = "action:never-minted-here"
+
+
+def lost_loot_drive(wrapper: NavigatingPlanner, goal_id: str) -> None:
+    drive = _LootDrive(
+        LootMission(
+            goal_id,
+            local_map=wrapper.map,
+            scope=LootScope.ROOM,
+            policy=LootPolicy(wanted=frozenset(), take_all=False),
+            is_reserved=lambda full_type: False,
+            container_unchanged=lambda tail, revision: False,
+        )
+    )
+    drive.pending_action_id = LOST_ACTION_ID
+    wrapper._missions[goal_id] = drive
+
+
+def lost_explore_drive(wrapper: NavigatingPlanner, goal_id: str) -> None:
+    drive = _ExploreDrive(ExploreMission(goal_id, local_map=wrapper.map, scope=AreaScope.RADIUS))
+    drive.pending_action_id = LOST_ACTION_ID
+    wrapper._explores[goal_id] = drive
+
+
+def lost_consume_drive(wrapper: NavigatingPlanner, goal_id: str) -> None:
+    drive = _ConsumeDrive(
+        ConsumeMission(
+            goal_id,
+            need=HUNGER,
+            local_map=wrapper.map,
+            policy=DEFAULT_POLICY_CONFIG,
+            is_reserved=lambda full_type: False,
+            known_containers=tuple,
+        )
+    )
+    drive.pending_action_id = LOST_ACTION_ID
+    wrapper._consumes[goal_id] = drive
+
+
+def lost_care_drive(wrapper: NavigatingPlanner, goal_id: str) -> None:
+    drive = _CareDrive(TreatWoundsMission(goal_id))
+    drive.pending_action_id = LOST_ACTION_ID
+    wrapper._cares[goal_id] = drive
+
+
+def lost_avoid_drive(wrapper: NavigatingPlanner, goal_id: str) -> None:
+    drive = _AvoidDrive(AvoidMission(goal_id, local_map=wrapper.map, safe_zones=tuple))
+    drive.pending_action_id = LOST_ACTION_ID
+    wrapper._avoids[goal_id] = drive
+
+
+def lost_combat_drive(wrapper: NavigatingPlanner, goal_id: str) -> None:
+    drive = _CombatDrive(EngageZombieMission(goal_id))
+    drive.pending_action_id = LOST_ACTION_ID
+    wrapper._combats[goal_id] = drive
+
+
+#: Every mission kind the shared seam serves, with the drive that holds one
+#: unanswerable step, the wrapper's live-drive count and its report accessor.
+MISSION_KINDS: list[
+    tuple[
+        GoalKind,
+        Callable[[NavigatingPlanner, str], None],
+        Callable[[NavigatingPlanner], int],
+        Callable[[NavigatingPlanner, str], JsonDict | None],
+    ]
+] = [
+    (
+        GoalKind.LOOT_AREA,
+        lost_loot_drive,
+        lambda wrapper: wrapper.tracked_missions,
+        lambda wrapper, goal_id: wrapper.loot_report(goal_id),
+    ),
+    (
+        GoalKind.EXPLORE_AREA,
+        lost_explore_drive,
+        lambda wrapper: wrapper.tracked_explores,
+        lambda wrapper, goal_id: wrapper.explore_report(goal_id),
+    ),
+    (
+        GoalKind.SATISFY_HUNGER,
+        lost_consume_drive,
+        lambda wrapper: wrapper.tracked_consumes,
+        lambda wrapper, goal_id: wrapper.consume_report(goal_id),
+    ),
+    (
+        GoalKind.TREAT_WOUNDS,
+        lost_care_drive,
+        lambda wrapper: wrapper.tracked_cares,
+        lambda wrapper, goal_id: wrapper.care_report(goal_id),
+    ),
+    (
+        GoalKind.AVOID_THREAT,
+        lost_avoid_drive,
+        lambda wrapper: wrapper.tracked_avoids,
+        lambda wrapper, goal_id: wrapper.avoid_report(goal_id),
+    ),
+    (
+        GoalKind.ENGAGE_SINGLE_ZOMBIE,
+        lost_combat_drive,
+        lambda wrapper: wrapper.tracked_combats,
+        lambda wrapper, goal_id: wrapper.combat_report(goal_id),
+    ),
+]
+
+
+class TestALostStepRecordEndsEveryMissionKind:
+    """One seam, six kinds, one ending.
+
+    ``_collect_mission_pending`` is shared by all six mission kinds, so the
+    answer it gives for a step the channel can no longer report must be acted
+    on the same way six times: the mission still holds that step in flight
+    and will decline every tick from here, so the goal ends ``FAILED`` with
+    ``CAPABILITY_UNAVAILABLE`` and the partial report is sealed. A seam that
+    ended five kinds this way and one another way would be a second defect.
+    """
+
+    def test_every_kind_fails_its_goal_by_the_same_named_reason(self) -> None:
+        for kind, install, tracked, report_of in MISSION_KINDS:
+            wrapper, queue, channel = bound_wrapper()
+            admission = queue.submit(GoalRequest(kind=kind, idempotency_key=f"key-{kind.value}"))
+            assert admission.goal is not None, admission.refusal
+            started = queue.activate_next()
+            assert started.goal is not None, started.refusal
+            record = started.goal
+            install(wrapper, record.goal_id)
+            assert tracked(wrapper) == 1
+            assert channel.status(LOST_ACTION_ID) is None
+
+            value = wrapper.propose_for_goal(to_planner_goal(record), observed(1, 1200.0, 3400.0))
+
+            assert value is None, kind
+            ended = queue.record(record.goal_id)
+            assert ended is not None
+            assert ended.state is GoalState.FAILED, kind
+            assert ended.reason_code is ReasonCode.CAPABILITY_UNAVAILABLE, kind
+            assert ended.detail == UNOBSERVED_STEP_DETAIL, kind
+            assert tracked(wrapper) == 0, kind
+            report = report_of(wrapper, record.goal_id)
+            assert report is not None and report["ended"] == ENDED_CANCELLED, kind
+            assert channel.pending_count == 0, kind
+
+
+# --------------------------------------------------------------------------
+# C2: a step the channel refuses to admit
+# --------------------------------------------------------------------------
+
+
+class RefusingChannel(ActionChannel):
+    """A channel whose admission fails *after* the wrapper's capacity check.
+
+    Both causes are named by :meth:`ActionChannel.submit` itself: another
+    submitter filled the queue between the check and the call — the MCP
+    router shares this channel from its own thread — or an idempotency key
+    was reused for a different request across a restart. The wrapper's
+    ``pending_count`` guard cannot close either one, because it reads the
+    count one call earlier.
+    """
+
+    def submit(self, request: ActionRequest) -> NoReturn:
+        raise LoopError("the remote action queue refused this admission")
+
+
+def wounded(seq: int) -> Observation:
+    """A player with one bleeding wound and a bandage to dress it with."""
+    return make_observation(
+        seq=seq,
+        player=make_player(
+            position=Position(x=1200.0, y=3400.0, z=0, direction="S"),
+            wounds=[
+                Wound(
+                    ref=f"wound:{DEFAULT_SESSION}:Head",
+                    kind="scratch",
+                    severity=0.5,
+                    bleeding=True,
+                )
+            ],
+        ),
+        inventory=InventoryView(
+            containers=[
+                make_container(f"container:{DEFAULT_SESSION}:main", ContainerKind.PLAYER_MAIN)
+            ],
+            items=[
+                make_item(
+                    f"item:{DEFAULT_SESSION}:tail:b1:0",
+                    f"container:{DEFAULT_SESSION}:main",
+                    full_type="Base.Bandage",
+                    display_name="Bandage",
+                    category="FirstAid",
+                    weight=0.1,
+                )
+            ],
+        ),
+    )
+
+
+class TestAStepTheChannelRefusesDoesNotWedgeItsMission:
+    """A step that never reached the channel must not silence the mission.
+
+    ``_submit_*_step`` catches the channel's :class:`LoopError` and returns,
+    but the mission has already recorded that step as in flight and only a
+    terminal result clears it — a result that can never arrive for a request
+    the channel never admitted. So the mission declines every later tick,
+    none of its own bounds advance, and the goal ends only when its wall
+    clock runs out: ``ACTION_TIMEOUT`` minutes later, saying nothing about
+    what happened. This is the same shape ``fb8539a`` ended typed for an
+    evicted step record, on the branch beside it.
+    """
+
+    def test_a_refused_admission_ends_the_goal_instead_of_going_quiet(self) -> None:
+        clock = FakeClock()
+        queue = GoalQueue(clock=clock)
+        channel = RefusingChannel(clock=clock)
+        wrapper = NavigatingPlanner(None)
+        wrapper.bind(Host(goals=queue, actions=channel))
+        admission = queue.submit(
+            GoalRequest(kind=GoalKind.TREAT_WOUNDS, idempotency_key="refused-admission")
+        )
+        assert admission.goal is not None, admission.refusal
+        started = queue.activate_next()
+        assert started.goal is not None, started.refusal
+        record = started.goal
+        wrapper._cares[record.goal_id] = _CareDrive(TreatWoundsMission(record.goal_id))
+        assert wrapper.tracked_cares == 1
+
+        value = wrapper.propose_for_goal(to_planner_goal(record), wounded(1))
+
+        assert value is None
+        assert channel.pending_count == 0, "nothing was admitted"
+        ended = queue.record(record.goal_id)
+        assert ended is not None
+        assert ended.state is GoalState.FAILED, (
+            "a step the channel refused leaves the mission holding it in flight; "
+            "the goal must end typed rather than wait out its wall clock"
+        )
+        assert ended.reason_code is ReasonCode.CAPABILITY_UNAVAILABLE
+        assert ended.detail == UNADMITTED_STEP_DETAIL, (
+            "a refused admission is its own fact: no record was ever minted, "
+            "which is not the same as one that was minted and lost"
+        )
+        assert wrapper.tracked_cares == 0
+
+    def test_the_mission_would_otherwise_decline_every_later_tick(self) -> None:
+        """The wedge itself, stated separately from how the wrapper ends it."""
+        mission = TreatWoundsMission("goal:wedge")
+        first = mission.next_step(wounded(1))
+        assert first is not None, "the mission had work to do"
+
+        # The wrapper drops this step: the channel refused to admit it, so no
+        # result will ever be reported for it. The mission is never told.
+        for seq in range(2, 8):
+            assert mission.next_step(wounded(seq)) is None, (
+                "a mission holding an unanswerable step declines for ever; "
+                "only note_result clears it, and no result is coming"
+            )

@@ -87,6 +87,16 @@ SPAWN_LOG_NAME: Final = "sidecar.out"
 #: staleness judgements cannot disagree about the same process.
 DEFAULT_STALE_AFTER_MS: Final = 15_000
 
+#: How far ahead of the reader's clock a pid record may be stamped and still be
+#: read as evidence about now. Beyond it the two readings come from clocks that
+#: disagree, and since :meth:`PidRecord.age_ms` clamps a future stamp to zero, a
+#: record stamped further ahead than this reads "refreshed 0 ms ago" for the
+#: whole of the skew — including every second after the process that wrote it
+#: died. Same tolerance and same reason as the future-skew bound
+#: :mod:`pz_agent_core.session.heartbeat` applies to the other liveness record
+#: in this system, and as the handshake's ``DEFAULT_CLOCK_SKEW_MS``.
+MAX_FUTURE_SKEW_MS: Final = 5_000
+
 #: Ceiling on the bytes read from a process listing. A machine cannot have
 #: enough processes to fill this; a command that hangs printing garbage can.
 MAX_PROCESS_OUTPUT_BYTES: Final = 1024 * 1024
@@ -938,6 +948,26 @@ class SidecarSupervisor:
             return SupervisorStatus(
                 state=SupervisorState.NEVER_STARTED,
                 detail="no sidecar has recorded itself in this state directory",
+                control_pending=pending,
+            )
+        ahead = record.refreshed_at_ms - moment
+        if ahead > MAX_FUTURE_SKEW_MS:
+            # Not a sidecar that refreshed itself into the future: a record
+            # written against a clock this one no longer agrees with. Left
+            # alone, ``age_ms``'s clamp would report it fresh for the whole
+            # skew, so a crashed run would keep ``start`` refused and let
+            # ``pz-agent arm`` report a request delivered to a pid that will
+            # never read it. Reported STOPPED rather than NEVER_STARTED: the
+            # record exists, and which of the two is true is the distinction
+            # this method exists to keep.
+            return SupervisorStatus(
+                state=SupervisorState.STOPPED,
+                detail=(
+                    f"pid {record.pid} last refreshed {ahead} ms ahead of this clock, "
+                    f"beyond {MAX_FUTURE_SKEW_MS} ms of skew; that record describes no "
+                    "moment on this clock, so it is not evidence that it is still ticking"
+                ),
+                record=record,
                 control_pending=pending,
             )
         age = record.age_ms(moment)

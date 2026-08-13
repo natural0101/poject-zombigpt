@@ -179,12 +179,16 @@ class NeedPlan:
 
 #: Which needs the agent can actually serve on its own, and with what.
 #:
-#: Bleeding and fatigue are deliberately absent. Both are real needs that
-#: :func:`derive_needs` reports, and neither has a verified action behind it —
-#: there is no first-aid or sleep command in the protocol's action set. A need
-#: with no plan escalates to the user, which is the honest answer; inventing a
-#: plan that queues nothing would report "handled" for a wound that is still
-#: bleeding.
+#: Bleeding and fatigue are deliberately absent, though not for the reason
+#: this gave before P3 landed: ``medical.bandage``, ``survival.rest`` and
+#: ``survival.sleep`` are all in the protocol's action set now, with adapters
+#: and with goal kinds (``TREAT_WOUNDS``, ``REST_UNTIL``,
+#: ``SLEEP_UNTIL_RESTED``) served by the care missions. They stay out of *this*
+#: table because it is the autonomy layer's own initiative, and treating a
+#: wound or lying down is work the user asks for through the goal channel
+#: rather than something the agent starts unprompted. A need with no plan here
+#: escalates, which remains the honest answer — but it escalates because the
+#: initiative is withheld, not because nothing could act.
 NEED_PLANS: Final[Mapping[str, NeedPlan]] = MappingProxyType(
     {
         NEED_THIRST: NeedPlan(
@@ -436,11 +440,12 @@ def derive_needs(
     Two rows of §17.1 are not derived here, and the omissions are deliberate
     rather than overlooked:
 
-    * **Low endurance.** The table lists it, but nothing in the protocol's
-      action set rests a character, so a need for it could only ever escalate —
-      and endurance crosses 0.15 every time the player sprints, which would turn
-      §7.8's brake into the only thing standing between the user and a question
-      per minute. It belongs to the loop that can answer it, not to this one.
+    * **Low endurance.** The table lists it, and ``survival.rest`` does rest a
+      character now — the premise this gave before P3 is stale. The reason it
+      stays out is the second one, which never depended on that: endurance
+      crosses 0.15 every time the player sprints, which would turn §7.8's brake
+      into the only thing standing between the user and a question per minute.
+      It belongs to the loop that can answer it, not to this one.
     * **The exit thresholds.** §17.1 pairs every trigger with an exit value, and
       §17 says up front that the numbers want hysteresis in production. What is
       implemented is the trigger edge; a need therefore keeps firing until the

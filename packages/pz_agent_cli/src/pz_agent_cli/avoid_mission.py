@@ -386,6 +386,18 @@ class AvoidMission:
         if self._final is not None:
             return self._final
         self._map.observe(observation)
+        if observation.nearby is None:
+            # The postcondition below is read off the zombies this tier
+            # reports, so no tier means no reading — not an empty one. Folded
+            # into "nothing observed" it would turn the one tick the mod
+            # failed to describe the world into a completed retreat, which is
+            # the reverse of what the user asked for; the combat mission
+            # refuses the same blindness with the same code.
+            return self._refuse(
+                ENDED_NO_PROGRESS,
+                ReasonCode.CAPABILITY_UNAVAILABLE,
+                "the mod sent no nearby tier this tick, so no threat picture can be observed",
+            )
         zombies = _observed_zombies(observation)
         nearest = min((max(0.0, zombie.distance) for zombie in zombies), default=None)
         if self._threats_at_start is None:
