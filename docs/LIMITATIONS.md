@@ -131,6 +131,34 @@ It survived a fully green suite because the sidecar's own fixtures mint the
 square objects the mod never sends (`tests/fixtures/adapter_worlds.py:a_square`),
 so each side was only ever tested against its own idea of the document.
 
+**A world container can be named but never resolved, so nothing loots.** The
+third gap of the square tier's shape, and the one that takes a whole goal kind
+with it.
+
+`InventoryView.container` searches `inventory.containers` and nothing else, and
+`resolve_container` refuses `INVALID_REF` for any reference not in that list.
+`container.inspect` needs it twice — once as a precondition and again to verify
+against the observation after — and `inventory.transfer` resolves its source the
+same way. The mod's inventory has exactly two roots: the main inventory, and each
+worn container, with `CARRIED` containers nested inside items. There is no third
+root, and no path anywhere adds a nearby crate to the tree.
+
+The crate is not invisible. `ObserveModel.buildObject` mints it a proper
+container reference whenever the descriptor carries both an `object_index` and a
+`container_index`, so a planner can see that a crate is there and can name it.
+What it cannot do is resolve it: the reference points into a list the crate was
+never added to. Every container action against it refuses `INVALID_REF` —
+"is not in the observed container tree" — and `loot_area` therefore cannot take
+anything out of anything.
+
+With the missing square tier above it, the loot mission is doubly blocked: it
+cannot walk to the crate, and it could not open it if it were standing there.
+
+Recorded rather than repaired, for the same reason as the other two: the missing
+half is a mod-side inventory tier for an open world container — deciding when a
+crate enters the tree, when it leaves, and what its contents cost to read every
+tick — and that is a contract addition whose only honest test is a live game.
+
 **The item-detail tier speaks two vocabularies, and neither side knows.** The
 same shape as the missing square tier, one layer down, and this time the data is
 present under other names. Measured field by field:

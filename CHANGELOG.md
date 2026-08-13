@@ -12,6 +12,33 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Added
 
+- **A world container can be named but never resolved, so nothing loots**
+  (`stabilize/arm-session-confirmation`). The third gap of the square tier's
+  shape, verified by hand from the agent sweep's claims rather than taken on
+  their word, and the one that takes a whole goal kind with it.
+
+  `InventoryView.container` searches `inventory.containers` alone and
+  `resolve_container` refuses `INVALID_REF` for anything not in it.
+  `container.inspect` needs that twice — as a precondition and again to verify
+  against the observation after — and `inventory.transfer` resolves its source
+  the same way. The mod's inventory has exactly two roots, the main inventory and
+  each worn container, with `CARRIED` containers nested inside items. There is no
+  third root and no path that adds a nearby crate.
+
+  The crate is not invisible: `buildObject` mints it a container reference
+  whenever the descriptor carries an `object_index` and a `container_index`, so a
+  planner can see it and name it. It simply cannot be resolved, because the
+  reference points into a list it was never added to. With the missing square
+  tier above it, the loot mission is blocked twice over — it cannot walk to the
+  crate, and could not open it if it were standing there.
+
+  Recorded, not repaired, and added to the dead-gate ledger with a pattern
+  checked both ways: no match today, a match when a `WORLD` root is spliced in
+  beside the `WORN` one. The missing half is a mod-side inventory tier for an
+  open world container — when a crate enters the tree, when it leaves, what its
+  contents cost to read every tick — and that is a contract addition whose only
+  honest test is a live game.
+
 - **The item-detail tier speaks two vocabularies** (`stabilize/arm-session-confirmation`).
   A deliberate sweep for the dead-gate class — the shape behind the missing
   square tier, five instances of which had all been found by accident — turned up

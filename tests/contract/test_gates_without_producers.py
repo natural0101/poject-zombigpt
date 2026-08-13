@@ -89,6 +89,23 @@ WITHOUT_PRODUCER: Final = {
         "different function) is 2296 in, so 1200 sees a real producer and not that.",
         r"function Ownership\.describe[\s\S]{0,1200}?action_type",
     ),
+    "a world container in observation.inventory.containers": (
+        "resolve_container refuses any ref not in inventory.containers, and "
+        "InventoryView.container searches that list alone, so container.inspect's "
+        "precondition (container.py:161) and its postcondition (:170) both need the "
+        "crate to be in the tree. The mod's inventory has exactly two roots -- the "
+        "main inventory and each worn container, plus CARRIED containers nested "
+        "inside items -- and no third one. A nearby crate is *referenced*: "
+        "buildObject mints it a container ref when the descriptor carries both an "
+        "object_index and a container_index. It is never listed. So a world "
+        "container can be named and never resolved, and every container action "
+        "against a crate refuses INVALID_REF. loot_area cannot take anything out of "
+        "anything. Recorded, not repaired: the missing half is a mod-side inventory "
+        "tier for an open world container, which is a contract addition no test "
+        "here can confirm. Pattern checked both ways -- no match today, matches when "
+        "a WORLD root is spliced in beside the WORN one.",
+        r"walkItemContainer\([\s\S]{0,200}?CONTAINER_KIND\.WORLD",
+    ),
     "a nearby zombie's position sub-table": (
         "ObserveModel.dangerFloor decides whether a zombie is on the player's floor "
         'with `type(zombie.position) ~= "table"`, and its only production caller '
