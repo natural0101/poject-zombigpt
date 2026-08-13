@@ -96,9 +96,19 @@ function Counters:observe(stream, seq)
   return true
 end
 
---- Reset every counter. Called when a new session is accepted: sequence numbers
---- are session-scoped, and carrying them across would make records from two
---- sessions look like one continuous stream.
+--- Reset every counter. Written for a new session being accepted, and never
+--- called there: accepting one runs Runtime.readSession -> Session Handle:offer,
+--- which disarms the safety state and stamps the offer marker without touching
+--- this handle, and agent.sequence is built once at OnGameStart and never
+--- rebuilt. The only caller in the repository is tests/lua/test_sequence.lua.
+---
+--- So counters are scoped to the *game* session rather than the handshake
+--- session, and records from two handshake sessions do read as one continuous
+--- stream. That is survivable only because nothing downstream compares a
+--- sequence number across a session boundary -- the sidecar keys its own
+--- freshness on the session id, which does change. Left as it is because
+--- calling reset here would renumber a live stream mid-run, which is the
+--- failure this counter exists to prevent.
 function Counters:reset()
   for index = 1, #Sequence.STREAMS do
     self.values[Sequence.STREAMS[index]] = -1

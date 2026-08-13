@@ -12,6 +12,40 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **The last six comment-audit survivors, verified and corrected**
+  (`stabilize/arm-session-confirmation`). All six were false, none needed a
+  behaviour change, and two turned out to matter more than prose.
+
+  `ObserveModel.dangerFloor` documents itself as reading "the same fields the
+  observation carries" and as counting zombies on another floor as present but
+  never as closing. It reads neither: its only production caller hands it the
+  raw reader table, whose zombies carry flat `x`/`y`/`z`, while the floor test
+  reads `zombie.position.z` — so the guard's own `type(...) ~= "table"` branch
+  fires for every zombie and a horde one storey up counts as closing. The error
+  runs toward caution, which is why the docstring was corrected and the code was
+  not: teaching it to read the flat `z` would make a safety guard *less*
+  conservative on static reasoning alone.
+
+  The wound reference is documented as having "no cross-language format to
+  match". It has one: `policy.medical.wound_body_part` splits the string and
+  reads segment three as the body part, yielding `""` — a part no command can
+  name — for anything that does not split into exactly three. The comment
+  invited precisely the change that would silently disable bandaging by
+  location.
+
+  The rest: `Counters:reset` is documented as called when a session is accepted
+  and has no production caller at all, so sequence counters are game-session
+  scoped rather than handshake-scoped; `PZAgent.Json` no longer refuses a
+  corrupt byte string (it escapes it as Latin-1, which its own header calls a
+  fallback), so the rule against splitting a long name now rests on honesty
+  rather than on a lost observation; and `autonomy.py` twice justified an
+  omission with "nothing in the protocol's action set" does this, when
+  `medical.bandage`, `survival.rest` and `survival.sleep` have been there since
+  P3, with goal kinds and care missions behind them. Both omissions stand — the
+  autonomy table is the agent's own initiative, and the low-endurance case had a
+  second reason that never depended on the false one — but they now say why
+  truthfully.
+
 - **A safety rung that has never fired, and a backstop that does not exist**
   (`stabilize/arm-session-confirmation`). The comment audit's remaining
   survivors were verified by hand rather than left on an agent's word. Three

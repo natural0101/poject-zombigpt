@@ -166,8 +166,13 @@ end
 
 --- Cut `text` to at most `limit` bytes without splitting a UTF-8 sequence.
 ---
---- Splitting one would leave a string PZAgent.Json refuses to encode, which
---- would drop the entire observation over one long item name.
+--- Splitting one used to leave a string PZAgent.Json refused to encode, which
+--- would drop the entire observation over one long item name. Json no longer
+--- refuses -- in the "bytes" model a byte that is not valid UTF-8 is escaped as
+--- Latin-1, which its own header calls a fallback and not a refusal -- so the
+--- cost of splitting is now a mangled name rather than a lost observation. The
+--- rule stands on the cheaper ground that a truncated name is honest and a
+--- half-character is not.
 local function truncateUtf8(text, limit)
   if #text <= limit then
     return text
@@ -531,8 +536,13 @@ local WOUND_KINDS = {
 --- A wound reference.
 ---
 --- PZAgent.Refs has no wound builder and neither does pz_agent_core.protocol.refs,
---- so there is no cross-language format to match; the only consumer is the diff,
---- which keys array entries by `ref`. It is still assembled from the Refs kind
+--- but that does not make the layout private: pz_agent_core.policy.medical's
+--- `wound_body_part` splits this string on the separator and reads segment
+--- three as the body part, returning "" -- a part no command can name -- for
+--- anything that does not split into exactly three. So `wound:<session>:<part>`
+--- IS a cross-language format contract, enforced by no symmetric builder and by
+--- nothing that would fail loudly. The diff, which keys array entries by `ref`,
+--- is not its only consumer. It is still assembled from the Refs kind
 --- constant, the Refs separator and the Refs segment validator, so
 --- `Refs.kindOf` and `Refs.belongsToSession` classify it like any other
 --- reference and a session's wounds cannot be mistaken for the next session's.
@@ -1337,9 +1347,19 @@ ObserveModel.DANGER_CROWD = 3
 
 --- Derive a conservative danger floor from an already-built `nearby` table.
 ---
---- Pure: it reads the same fields the observation carries, so a change to the
---- reported shape cannot leave this reading something that is no longer there.
---- Zombies on another floor are counted as present but never as closing —
+--- It does NOT read the fields the observation carries. Its only production
+--- caller (Observe.context) hands it the raw reader table from
+--- Observe.nearbyFields, whose zombies carry flat `x`, `y`, `z`; the `position`
+--- sub-table is added later, by ObserveModel.buildZombie. So the floor test
+--- below always takes its `type(zombie.position) ~= "table"` branch and every
+--- zombie counts as same-floor.
+--- Zombies on another floor are MEANT to be counted as present but never as
+--- closing, and are not: with no `position` to read, the same-floor test passes
+--- for all of them, so a horde one storey up counts as closing. The error runs
+--- toward caution -- the floor reads higher than the world warrants, never
+--- lower -- which is why it is recorded rather than quietly corrected: making
+--- it read the flat `z` would make this guard *less* conservative on static
+--- reasoning alone. Originally —
 --- a horde one storey up is a reason to be wary, not to abort.
 function ObserveModel.dangerFloor(nearby, playerPosition)
   local levels = protocol().DANGER
