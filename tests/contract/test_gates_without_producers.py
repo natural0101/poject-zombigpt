@@ -27,6 +27,22 @@ this seam, and the seam is a hand-written contract between two languages with no
 schema binding them. Expect more, and note that three of the eight are one root:
 the mod and the sidecar spelling the same fact differently.
 
+**The command direction has already been through this.** The observation seam
+is the one these rows are about; the seam running the other way — the args the
+sidecar sends against the args each mod adapter declares — was audited before,
+and the record of it is in ``adapters/movement.py``'s ``as_args`` docstring: the
+mod refuses any undeclared argument outright (``Toolkit``: "unknown argument"),
+and ``movement.move_to`` used to send a ``square_ref`` and four flags the mod
+never declared, so it "was therefore refused outright, every time". That is
+fixed. Anyone re-auditing that direction should know two things learned the hard
+way here: the mod's arg tables are declared three different ways — a literal, a
+function call (``drinkArgs()``) and a bare variable (``sourceArgs``) — so a
+regex over the Lua sees only some of them and quietly under-reports; and the
+mod's own test harness (``tests/lua/support/adapter_support.lua``) will load
+every adapter and let ``PZAgent.Adapters.ALL`` be read directly, which resolves
+all three. The right comparison is *sent ⊆ declared*, not equality, because an
+optional declared argument may be omitted.
+
 This is a **ledger, not a prohibition**. A dead gate is sometimes the right
 state: ``observation.full`` is always true and the partial-snapshot merge is
 simply unused, which is the safe direction. What must not happen is a dead gate
