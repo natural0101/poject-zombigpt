@@ -73,6 +73,29 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Added
 
+- **The STATUS choreography is in the working agreement instead of only in the
+  tooling** (`stabilize/arm-session-confirmation`). `reconcile_status.py` was
+  named in no document a contributor reads before committing — not `AGENTS.md`,
+  not anything under `docs/` — so the sequence could be skipped without breaking
+  a single written rule, which is exactly what happened: a code commit went out
+  with `STATUS.json` still describing its predecessor, and CI refused it on both
+  platforms while the local check had been green.
+
+  The trap is that the gate is *already* in `scripts/check.sh` and would have
+  caught it. Running the check before the commit passes it against a tree that
+  no longer exists once the commit is made. `AGENTS.md` now carries the order —
+  commit code, reconcile with the verdicts observed for the previous commit and
+  the SHA each belongs to, run the check against the tree that will be pushed,
+  commit STATUS alone, push — and the reason the STATUS commit must contain
+  nothing else: the gate allows a later verdict-recording commit only while
+  nothing outside `docs/control/` has changed.
+
+  It also pins the flag that was missed on the first attempt at the repair. A
+  reconcile that keeps an archive must pass `--rc-sha`, `--rc-run` and
+  `--rc-sha256`, `STALE` ones included; omitting them nulls the RC's identity,
+  which is not a modest claim but an empty one. `STALE` describes an archive's
+  relation to the tree and does not retract its name.
+
 - **A map of the contract seams, where the next person will look for it**
   (`stabilize/arm-session-confirmation`). `tests/contract/__init__.py` was
   empty; it now says which seams already have a standing agreement check and

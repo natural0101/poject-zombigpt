@@ -83,6 +83,33 @@ A task from `docs/blueprint/task_graph.yaml` is done when all of these hold:
 Small, meaningful commits referencing the task id (`T014: …`). Work on `dev` or
 a topic branch; `main` only receives merges that are green.
 
+**A code commit is followed by a STATUS commit, and `check.sh` is run after the
+code commit rather than before it.** `docs/control/STATUS.json` records a CI
+verdict *together with the commit it belongs to*, because a workflow result for
+one commit is no evidence about another. Committing code therefore invalidates
+it, and `check_master_plan.py` — which runs inside `scripts/check.sh` — refuses
+a plan whose STATUS claims a bare `GREEN` for a commit that is no longer `HEAD`.
+Run the gate before the commit and it passes on a tree that no longer exists;
+that is how a green local check ships a red CI.
+
+The sequence:
+
+1. Commit the code.
+2. `.venv/bin/python scripts/reconcile_status.py` with the verdicts *observed*
+   for the previous commit and the SHA each belongs to. Nothing here is typed
+   from memory, and a status with no SHA cannot be recorded at all.
+3. `bash scripts/check.sh` — now against the tree that will be pushed.
+4. Commit STATUS **alone**. The gate allows a later verdict-recording commit
+   only when nothing outside `docs/control/` changed, so anything else in that
+   commit turns the allowance off.
+5. Push.
+
+Pass the RC's identity (`--rc-sha`, `--rc-run`, `--rc-sha256`) on every
+reconcile that keeps an archive, `STALE` ones included. `STALE` describes the
+archive's relation to the tree; it does not retract its name. Omit the flags and
+the fields go null, which is not a modest claim but an empty one — an RC is
+*this* archive, from *this* commit, by *this* run.
+
 ## Forbidden endings
 
 Do not end work by declaring "the architecture is ready", "it only needs
