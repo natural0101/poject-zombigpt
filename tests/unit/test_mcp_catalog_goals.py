@@ -103,6 +103,22 @@ DOCUMENTED_KINDS: Final[frozenset[str]] = frozenset(
         # carrying the token is not a loophole — it is the one door, and the
         # caller types the kind.
         "engage_single_zombie",
+        # The crafting kind, on the same terms and for the sharper
+        # reason: typed submission is the only route to it, because the
+        # voice grammar declares it unspeakable (a transcript cannot
+        # spell an item type), no provider plans it, and nothing on the
+        # agent's own initiative decides what to destroy. The caller
+        # types the kind and types the product.
+        "craft_item",
+        # The building kind, on the crafting kind's terms and one rung
+        # stricter. Typed submission is again the only route — the voice
+        # grammar declares it unspeakable, no provider plans it, nothing
+        # mints it — and here the caller types four things rather than
+        # two: the blueprint and the square it goes on. Every action it
+        # issues is P4, which has no autonomous path at all, because a
+        # structure placed by this agent is one nothing in this build can
+        # take back down.
+        "build_structure",
     }
 )
 
@@ -658,6 +674,107 @@ def test_submit_hands_the_channel_typed_care_requests() -> None:
     assert treated.kind is GoalKind.TREAT_WOUNDS
     assert treated.params.present() == frozenset()
     assert treat["data"]["params"] == {}
+
+
+def test_submit_hands_the_channel_a_typed_craft_request() -> None:
+    """The craft's two parameters cross the boundary, neither dropped.
+
+    They did not, for the whole wave that published them: the schema
+    advertised ``product`` and ``count``, :meth:`ToolRouter._goal_request`
+    never read either, and every craft submitted through MCP came back
+    ``INVALID_ARGUMENT`` for missing the product the caller had supplied. That
+    is the exact failure ``test_submit_hands_the_channel_a_typed_navigation_request``
+    was written to catch for the coordinates; this is the same assertion for
+    the first kind whose work cannot be walked back.
+    """
+    router, goals, _ = wired()
+
+    payload = submit(router, kind="craft_item", product="Base.SpearCrude", count=2)
+
+    request = goals.submitted[0]
+    assert len(goals.submitted) == 1
+    assert request.kind is GoalKind.CRAFT_ITEM
+    assert request.params.product == "Base.SpearCrude"
+    assert request.params.count == 2
+    assert payload["data"]["kind"] == "craft_item"
+    assert payload["data"]["params"] == {"product": "Base.SpearCrude", "count": 2}
+
+
+def test_submit_hands_the_channel_a_typed_build_request() -> None:
+    """All four of the building kind's required parameters cross, none dropped.
+
+    The blueprint and the square travel together or not at all: a request that
+    lost either half would be refused by the channel as incomplete, and a
+    request that lost the *square* half while keeping the blueprint is the one
+    shape this kind must never take — the only square this side could fill in
+    unaided is the one the character is standing on.
+    """
+    router, goals, _ = wired()
+
+    payload = submit(
+        router,
+        kind="build_structure",
+        structure="WoodenWall",
+        target_x=1200,
+        target_y=3400,
+        target_z=0,
+    )
+
+    request = goals.submitted[0]
+    assert len(goals.submitted) == 1
+    assert request.kind is GoalKind.BUILD_STRUCTURE
+    assert request.params.structure == "WoodenWall"
+    assert (request.params.target_x, request.params.target_y, request.params.target_z) == (
+        1200,
+        3400,
+        0,
+    )
+    assert payload["data"]["kind"] == "build_structure"
+    assert payload["data"]["params"] == {
+        "structure": "WoodenWall",
+        "target_x": 1200,
+        "target_y": 3400,
+        "target_z": 0,
+    }
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        # A blueprint with no square: half a question, and the half this
+        # channel must not answer for itself.
+        {"kind": "build_structure", "structure": "WoodenWall"},
+        # A square with no blueprint: the other half.
+        {"kind": "build_structure", "target_x": 1200, "target_y": 3400, "target_z": 0},
+        # A count on a kind that has none, because one command raises one
+        # structure once and a number here is what a loop would read.
+        {
+            "kind": "build_structure",
+            "structure": "WoodenWall",
+            "target_x": 1200,
+            "target_y": 3400,
+            "target_z": 0,
+            "count": 2,
+        },
+    ],
+)
+def test_a_building_rule_the_schema_cannot_state_is_still_the_callers_mistake(
+    arguments: JsonDict,
+) -> None:
+    """The per-kind requirement table at the building kind's edges.
+
+    The schema subset cannot say "these four together and nothing else", so
+    the channel refuses with a ``ValueError`` — translated to
+    ``INVALID_ARGUMENT`` rather than left to become ``INTERNAL_ERROR`` and
+    blame this process for the caller's argument.
+    """
+    router, goals, _ = wired()
+
+    payload = submit(router, **arguments)
+
+    assert payload["ok"] is False
+    assert payload["reason_code"] == "INVALID_ARGUMENT"
+    assert goals.submitted == []
 
 
 def test_a_care_rule_the_schema_cannot_state_is_still_the_callers_mistake() -> None:

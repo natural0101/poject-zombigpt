@@ -43,6 +43,8 @@ Support.loadModules("", {
   "Rest",
   "Sleep",
   "Combat",
+  "Crafting",
+  "Building",
 })
 
 --- One adapter's argument declaration, as plain JSON-encodable values.

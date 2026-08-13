@@ -39,6 +39,8 @@ Support.loadModules("", {
   "Rest",
   "Sleep",
   "Combat",
+  "Crafting",
+  "Building",
 })
 
 local document = {}

@@ -1267,6 +1267,330 @@ class TestCombatGoalsAreServedByTheMission:
 
 
 # --------------------------------------------------------------------------
+# the crafting kind: craft_item in the loop
+# --------------------------------------------------------------------------
+
+SPEAR = "Base.SpearCrude"
+BRANCH = "Base.TreeBranch"
+TWINE = "Base.Twine"
+
+
+def a_workshop(*, materials: list[dict[str, object]] | None = None) -> InventoryView:
+    """One branch carrying the readout for a recipe that makes a spear.
+
+    Every recipe fact the policy reads rides on the observed item, because the
+    mod publishes the readout and this side owns no recipe table — which is
+    also why a world without one can only ever refuse.
+    """
+    branch = make_item(
+        f"item:{DEFAULT_SESSION}:player-main:branch1:0",
+        main_container_ref(),
+        full_type=BRANCH,
+        display_name="Tree Branch",
+        category="Item",
+        extra={
+            "crafting": {
+                "recipe_count": 1,
+                "known_recipe_count": 1,
+                "recipes": [
+                    {
+                        "name": "MakeSpear",
+                        "product": SPEAR,
+                        "display_name": "Make Crude Spear",
+                        "known": True,
+                        "needs_surface": False,
+                        "materials": materials
+                        if materials is not None
+                        else [{"full_type": BRANCH, "count": 1}],
+                    }
+                ],
+            }
+        },
+    )
+    return InventoryView(
+        containers=[make_container(main_container_ref(), ContainerKind.PLAYER_MAIN)],
+        items=[branch],
+    )
+
+
+def a_craft_goal(key: str = "craft-key") -> GoalRequest:
+    return GoalRequest(
+        kind=GoalKind.CRAFT_ITEM,
+        idempotency_key=key,
+        params=GoalParams(product=SPEAR),
+    )
+
+
+class TestCraftGoalsAreServedByTheMission:
+    """The fifteenth kind end to end through the loop, spy planner never asked.
+
+    The combat class's idiom: a real loop over a real exchange directory, the
+    wrapper standing where the shipped assembly puts it, the mod faked at the
+    files. The registry *does* carry the crafting adapters this wave adds, so
+    what these tests observe is the whole dispatch — the mission's one bounded
+    run reaching the engine through the ordinary gates, with no planner
+    involved — and the second half of the wave's promise: a craft the
+    character cannot afford ends the goal before any command exists to send.
+    """
+
+    def test_a_craft_step_reaches_the_engine_without_asking_the_planner(
+        self, tmp_path: Path
+    ) -> None:
+        spy = RecordingGoalPlanner()
+        world, wrapper = navigating_world(tmp_path, spy)
+        with world:
+            armed_autonomous(world)
+            record = submit(world, a_craft_goal())
+            world.observe(inventory=a_workshop())
+            world.loop.tick()
+
+            # Tick one: the mission's one run — the recipe the crafting policy
+            # chose from the observed readout — was submitted into the loop's
+            # action channel, never out the goal seam: a queued craft is not a
+            # product in the bag.
+            channel = world.loop.actions
+            assert channel is not None and channel.pending_count == 1
+            assert wrapper.tracked_crafts == 1
+            assert spy.goal_calls == [], "craft_item must never reach the wrapped planner"
+            assert spy.propose_calls == 0, "the goal outranks the planner's own initiative"
+
+            world.beat_game()
+            world.observe(inventory=a_workshop())
+            outcome = world.loop.tick()
+
+            # Tick two: the loop drained the submission through the same
+            # engine and the same gates every action takes. Whatever the gates
+            # answer for a capability this build has not confirmed, the join
+            # is what is pinned here — and the goal stays open while the
+            # mission's own budgets decide.
+            assert "crafting.craft" in [result.action for result in outcome.results]
+            assert spy.goal_calls == []
+            report = wrapper.craft_report(record.goal_id)
+            assert report is not None and report["recipes_tried"] == ["MakeSpear"]
+            assert report["product"] == SPEAR
+
+    def test_a_shortfall_fails_the_goal_typed_and_sends_nobody_looting(
+        self, tmp_path: Path
+    ) -> None:
+        """Materials missing: the goal ends FAILED with the mission's reason
+        and the shortfall named — never a step out to go and find them, and
+        never a planner consulted."""
+        spy = RecordingGoalPlanner()
+        world, wrapper = navigating_world(tmp_path, spy)
+        with world:
+            armed_autonomous(world)
+            record = submit(world, a_craft_goal("craft-short"))
+            world.observe(
+                inventory=a_workshop(
+                    materials=[
+                        {"full_type": BRANCH, "count": 1},
+                        {"full_type": TWINE, "count": 2},
+                    ]
+                )
+            )
+
+            world.loop.tick()
+
+            channel = world.loop.actions
+            assert channel is not None and channel.pending_count == 0
+            ended = record_of(world, record.goal_id)
+            assert ended.state is GoalState.FAILED
+            assert ended.reason_code is ReasonCode.RECIPE_MATERIALS_MISSING
+            assert TWINE in ended.detail
+            assert spy.goal_calls == [] and spy.propose_calls == 0
+            report = wrapper.craft_report(record.goal_id)
+            assert report is not None and report["ended"] == "refused"
+            assert wrapper.tracked_crafts == 0, "the mission dies with its goal"
+
+
+# --------------------------------------------------------------------------
+# the building kind: build_structure in the loop
+# --------------------------------------------------------------------------
+
+WALL = "WoodenWall"
+PLANK = "Base.Plank"
+NAILS = "Base.Nails"
+BUILD_HOME = (1200, 3400, 0)
+BUILD_TARGET = (1201, 3400, 0)
+
+
+def a_square(x: int, y: int, *, blocked: bool = False) -> NearbyObject:
+    return NearbyObject(
+        ref=f"square:{DEFAULT_SESSION}:{x}:{y}:0",
+        kind="square",
+        distance=float(max(abs(x - BUILD_HOME[0]), abs(y - BUILD_HOME[1]))),
+        position=Position(x=float(x), y=float(y), z=0),
+        semantics=["loaded"] + (["blocked"] if blocked else []),
+    )
+
+
+def a_building_site(*, sealed: bool = False) -> NearbyView:
+    """A three-by-three window around the character.
+
+    ``sealed`` blocks everything in it but the character's own square and the
+    target, which makes the target the last exit this observation can see.
+    """
+    squares: list[NearbyObject] = []
+    for dx in (-1, 0, 1):
+        for dy in (-1, 0, 1):
+            x, y = BUILD_HOME[0] + dx, BUILD_HOME[1] + dy
+            own = (dx, dy) == (0, 0)
+            target = (x, y) == BUILD_TARGET[:2]
+            squares.append(a_square(x, y, blocked=sealed and not (own or target)))
+    return NearbyView(objects=squares)
+
+
+def a_lumber_yard(*, materials: list[dict[str, object]] | None = None) -> InventoryView:
+    """One plank carrying the readout for a wall the character can build."""
+    plank = make_item(
+        f"item:{DEFAULT_SESSION}:player-main:plank1:0",
+        main_container_ref(),
+        full_type=PLANK,
+        display_name="Plank",
+        category="Item",
+        extra={
+            "building": {
+                "structure_count": 1,
+                "known_structure_count": 1,
+                "structures": [
+                    {
+                        "name": WALL,
+                        "display_name": "Wooden Wall",
+                        "known": True,
+                        "blocks_movement": True,
+                        "materials": materials
+                        if materials is not None
+                        else [{"full_type": PLANK, "count": 1}],
+                    }
+                ],
+            }
+        },
+    )
+    return InventoryView(
+        containers=[make_container(main_container_ref(), ContainerKind.PLAYER_MAIN)],
+        items=[plank],
+    )
+
+
+def a_build_goal(key: str = "build-key") -> GoalRequest:
+    return GoalRequest(
+        kind=GoalKind.BUILD_STRUCTURE,
+        idempotency_key=key,
+        params=GoalParams(
+            structure=WALL,
+            target_x=BUILD_TARGET[0],
+            target_y=BUILD_TARGET[1],
+            target_z=BUILD_TARGET[2],
+        ),
+    )
+
+
+class TestBuildGoalsAreServedByTheMission:
+    """The sixteenth kind end to end through the loop, spy planner never asked.
+
+    The craft class's idiom over the one action that leaves something standing
+    in the world. Two halves are worth the whole file's weight: the one
+    ``building.build`` reaches the engine through the ordinary gates — which is
+    where the P4 ladder stands, so a build that got there any other way would
+    be a build nobody granted — and a placement that would seal the character
+    into the observed window ends the goal before a command exists to send.
+    """
+
+    def test_a_build_step_reaches_the_engine_without_asking_the_planner(
+        self, tmp_path: Path
+    ) -> None:
+        spy = RecordingGoalPlanner()
+        world, wrapper = navigating_world(tmp_path, spy)
+        with world:
+            armed_autonomous(world)
+            record = submit(world, a_build_goal())
+            world.observe(inventory=a_lumber_yard(), nearby=a_building_site())
+            world.loop.tick()
+
+            # Tick one: the mission's one placement — the square the user named
+            # and the blueprint they named — was submitted into the loop's
+            # action channel, never out the goal seam.
+            channel = world.loop.actions
+            assert channel is not None and channel.pending_count == 1
+            assert wrapper.tracked_builds == 1
+            assert spy.goal_calls == [], "build_structure must never reach the wrapped planner"
+            assert spy.propose_calls == 0, "the goal outranks the planner's own initiative"
+
+            world.beat_game()
+            world.observe(inventory=a_lumber_yard(), nearby=a_building_site())
+            outcome = world.loop.tick()
+
+            # Tick two: the loop drained the submission through the same engine
+            # and the same gates every action takes — and for this action those
+            # gates include the P4 rung, which is exactly why the join and not
+            # the verdict is what is pinned here.
+            assert ActionName.BUILDING_BUILD.value in [result.action for result in outcome.results]
+            assert spy.goal_calls == []
+            report = wrapper.build_report(record.goal_id)
+            assert report is not None
+            assert report["structure"] == WALL
+            assert report["square"] == {"x": 1201, "y": 3400, "z": 0}
+
+    def test_a_trapping_placement_fails_the_goal_before_anything_is_queued(
+        self, tmp_path: Path
+    ) -> None:
+        """The wave's central refusal, inside the running loop: the goal ends
+        FAILED with WOULD_TRAP_PLAYER, the channel stays empty, and no second
+        square is tried on the agent's own initiative."""
+        spy = RecordingGoalPlanner()
+        world, wrapper = navigating_world(tmp_path, spy)
+        with world:
+            armed_autonomous(world)
+            record = submit(world, a_build_goal("build-trap"))
+            world.observe(inventory=a_lumber_yard(), nearby=a_building_site(sealed=True))
+
+            world.loop.tick()
+
+            channel = world.loop.actions
+            assert channel is not None and channel.pending_count == 0
+            ended = record_of(world, record.goal_id)
+            assert ended.state is GoalState.FAILED
+            assert ended.reason_code is ReasonCode.WOULD_TRAP_PLAYER
+            assert "no way out" in ended.detail
+            assert spy.goal_calls == [] and spy.propose_calls == 0
+            report = wrapper.build_report(record.goal_id)
+            assert report is not None and report["ended"] == "refused"
+            assert report["placed"] is False
+            assert wrapper.tracked_builds == 0, "the mission dies with its goal"
+
+    def test_a_shortfall_fails_the_goal_typed_and_sends_nobody_looting(
+        self, tmp_path: Path
+    ) -> None:
+        spy = RecordingGoalPlanner()
+        world, wrapper = navigating_world(tmp_path, spy)
+        with world:
+            armed_autonomous(world)
+            record = submit(world, a_build_goal("build-short"))
+            world.observe(
+                inventory=a_lumber_yard(
+                    materials=[
+                        {"full_type": PLANK, "count": 1},
+                        {"full_type": NAILS, "count": 4},
+                    ]
+                ),
+                nearby=a_building_site(),
+            )
+
+            world.loop.tick()
+
+            channel = world.loop.actions
+            assert channel is not None and channel.pending_count == 0
+            ended = record_of(world, record.goal_id)
+            assert ended.state is GoalState.FAILED
+            assert ended.reason_code is ReasonCode.RECIPE_MATERIALS_MISSING
+            assert NAILS in ended.detail
+            assert spy.goal_calls == [] and spy.propose_calls == 0
+            report = wrapper.build_report(record.goal_id)
+            assert report is not None and report["ended"] == "refused"
+            assert wrapper.tracked_builds == 0, "the mission dies with its goal"
+
+
+# --------------------------------------------------------------------------
 # goals survive a sidecar restart, honestly
 # --------------------------------------------------------------------------
 

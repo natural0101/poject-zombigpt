@@ -35,7 +35,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import FrozenInstanceError, fields, replace
 from enum import Enum
 from types import NoneType
-from typing import Any, get_args, get_type_hints
+from typing import Any, Final, get_args, get_type_hints
 
 import pytest
 
@@ -168,6 +168,10 @@ def params_for(kind: GoalKind) -> GoalParams:
         return GoalParams(target_x=1200, target_y=3400, target_z=0)
     if kind is GoalKind.REST_UNTIL:
         return GoalParams(target_endurance=0.9)
+    if kind is GoalKind.CRAFT_ITEM:
+        return GoalParams(product="Base.SpearCrude")
+    if kind is GoalKind.BUILD_STRUCTURE:
+        return GoalParams(structure="WoodenWall", target_x=1201, target_y=3400, target_z=0)
     return GoalParams()
 
 
@@ -199,12 +203,39 @@ def a_record(**overrides: Any) -> GoalRecord:
 #: the question is "is every one of these safe to act on".
 MAX_CLOSED_VOCABULARY: int = 32
 
-#: The string parameters that are token *lists* rather than enum members —
-#: closed all the same, because the constructor resolves every comma-joined
-#: token against a closed enum and refuses the rest. Each entry here must have
-#: its closure proven behaviourally in :class:`TestLootParameters`; the
-#: structural walk exempts exactly these names and nothing else.
-CLOSED_TOKEN_LIST_PARAMS: frozenset[str] = frozenset({"categories"})
+#: The string parameters the structural walk exempts, each for a stated reason
+#: and each with its closure proven behaviourally elsewhere in this file. The
+#: walk exempts exactly these names and nothing else, so a new ``str`` field
+#: still fails until it is reviewed onto this list.
+#:
+#: ``categories`` is a token *list* — closed all the same, because the
+#: constructor resolves every comma-joined token against a closed enum and
+#: refuses the rest (:class:`TestLootParameters`).
+#:
+#: ``product`` is the harder case and the reason this is a list of exceptions
+#: rather than one: what a build can craft is the build's fact, so there is no
+#: closed enum here to resolve against and a table written in this process
+#: would be a second, drifting copy of the game's. What replaces closure is
+#: shape — bounded length, the item-type alphabet, no space or line break, no
+#: interpretation and no echo on refusal — proven in
+#: :class:`TestCraftParameters`.
+#:
+#: ``structure`` is ``product``'s twin one wave later and exempt for the same
+#: reason at a higher stake: what a build can *raise* is the build's fact, so
+#: there is no enum to resolve a blueprint name against, and shape is again what
+#: replaces closure — the same bound, the same alphabet, the same compiled
+#: pattern, proven in :class:`TestBuildParameters`.
+CLOSED_TOKEN_LIST_PARAMS: frozenset[str] = frozenset({"categories", "product", "structure"})
+
+#: The parameters :meth:`TestTypedParameterSurface.
+#: test_no_parameter_accepts_a_string_at_all` cannot speak for: ``product``
+#: accepts a string *by design*, which is the whole of what makes it the
+#: reviewed exception above. Its own refusals are walked in
+#: :class:`TestCraftParameters` instead, including the no-echo promise this
+#: test exists to keep for every other name.
+#: ``structure`` joins it for the same reason, walked in
+#: :class:`TestBuildParameters`.
+STRING_SHAPED_PARAMS: frozenset[str] = frozenset({"product", "structure"})
 
 
 def atoms(annotation: object) -> tuple[type, ...]:
@@ -250,7 +281,7 @@ def outside_values(name: str) -> tuple[object, object]:
 
 
 class TestClosedVocabulary:
-    def test_goal_kinds_are_exactly_these_fourteen(self) -> None:
+    def test_goal_kinds_are_exactly_these_sixteen(self) -> None:
         # Hand-written. Adding a kind is a reviewed change to three tables, and
         # this literal is the thing that makes the review happen.
         assert {k.value for k in GoalKind} == {
@@ -268,6 +299,8 @@ class TestClosedVocabulary:
             "sleep_until_rested",
             "avoid_threat",
             "engage_single_zombie",
+            "craft_item",
+            "build_structure",
         }
 
     def test_trainable_skills_are_exactly_these_eleven(self) -> None:
@@ -322,7 +355,7 @@ class TestClosedVocabulary:
         # strips deliberately; the constructor does neither.
         with pytest.raises(ValueError, match="is not a valid"):
             GoalKind(unknown)
-        assert len(GoalKind) == 14
+        assert len(GoalKind) == 16
 
     def test_no_lookup_hook_invents_a_member(self) -> None:
         # ``_missing_`` is the one hook that can turn an unrecognised value into
@@ -385,6 +418,19 @@ class TestClosedVocabulary:
             # observation it came from — a stale kill order — and was
             # refused; the reasoning lives on the kind's docstring.
             "engage_single_zombie": (set(), set()),
+            # The product is the goal: a craft with nothing named has no
+            # postcondition to observe, and no default this channel could
+            # pick would be anything but a guess at what to destroy materials
+            # for. The count is optional and an absent one means one run.
+            "craft_item": ({"product"}, {"count"}),
+            # Four required and nothing optional, the widest required set in
+            # the table: this kind puts something permanent on a square, so
+            # both halves of "what, and where" come from the person asking.
+            # There is no count — one command builds one structure once, and a
+            # number here is the first thing a loop would read — and no default
+            # square, because the only square this side could pick unaided is
+            # the one the character is standing on.
+            "build_structure": ({"structure", "target_x", "target_y", "target_z"}, set()),
         }
         actual = {
             kind.value: (set(spec.required), set(spec.optional))
@@ -419,6 +465,20 @@ class TestNoFreeText:
             "categories": "str | None",
             "target_endurance": "float | None",
             "hours": "int | None",
+            # The second string field, and the one whose vocabulary this
+            # process cannot hold: what a build can craft is the build's fact.
+            # It is not free text all the same — the constructor bounds it and
+            # restricts it to the item-type alphabet, which the craft-parameter
+            # tests below pin. A widening of that check does not fail this
+            # line; it fails those.
+            "product": "str | None",
+            "count": "int | None",
+            # The third string field and the last, on the product field's exact
+            # terms: what a build can *raise* is the build's fact too. Same
+            # bound, same alphabet, same compiled shape — the build-parameter
+            # tests below pin it, and a widening of that check fails those
+            # rather than this line.
+            "structure": "str | None",
         }
         assert tuple(annotations) == PARAM_NAMES
 
@@ -535,10 +595,15 @@ class TestTypedParameterSurface:
                         assert math.isfinite(span.minimum), where
                         assert math.isfinite(span.maximum), where
 
-    @pytest.mark.parametrize("name", PARAM_NAMES)
+    @pytest.mark.parametrize(
+        "name", [name for name in PARAM_NAMES if name not in STRING_SHAPED_PARAMS]
+    )
     def test_no_parameter_accepts_a_string_at_all(self, name: str) -> None:
         # The behavioural half: whatever the annotation says, a string does not
         # get through — and the refusal does not carry the string back out.
+        # ``product`` and ``structure`` are excluded because they take a
+        # string on purpose; see STRING_SHAPED_PARAMS, and TestCraftParameters
+        # and TestBuildParameters for their own versions of both promises.
         for candidate in ("carpentry", "7", "x" * 100_000):
             with pytest.raises(ValueError) as caught:
                 GoalParams(**{name: candidate})  # type: ignore[arg-type]
@@ -588,6 +653,9 @@ class TestTypedParameterSurface:
             "categories": "food,medical",
             "target_endurance": 0.8,
             "hours": 8,
+            "product": "Base.SpearCrude",
+            "count": 2,
+            "structure": "WoodenWall",
         }
         assert set(samples) == set(PARAM_NAMES)
         for kind, spec in GOAL_SPECS.items():
@@ -634,6 +702,9 @@ class TestTypedParameterSurface:
             "categories": "food,medical",
             "target_endurance": 0.8,
             "hours": 8,
+            "product": "Base.SpearCrude",
+            "count": 2,
+            "structure": "WoodenWall",
         }
         for kind, spec in GOAL_SPECS.items():
             declared = spec.required | spec.optional
@@ -753,6 +824,245 @@ class TestLootParameters:
         assert goal_model.AreaScope is goal_model.LootScope
 
 
+class TestCraftParameters:
+    """The fifteenth kind's parameter surface: an identifier, not a phrase.
+
+    ``product`` is the one value the channel carries whose vocabulary belongs
+    to the installed build rather than to this process — a table of craftable
+    types written here would be a second, drifting copy of the game's — so the
+    structural string ban is satisfied a different way than ``categories``
+    satisfies it: bounded, restricted to the item-type alphabet, never
+    interpreted, never echoed on refusal. That is what this class proves, and
+    what the module's docstring claims on the strength of it.
+    """
+
+    @pytest.mark.parametrize(
+        "product",
+        ["Base.SpearCrude", "Base.Twine", "Mod_Thing-2", "A", "9lives", "x" * 64],
+        ids=["vanilla", "plain", "punctuated", "single", "leading-digit", "at-the-bound"],
+    )
+    def test_an_item_type_is_admitted(self, product: str) -> None:
+        params = GoalParams(product=product)
+        assert params.present() == {"product"}
+        assert params.product == product
+
+    @pytest.mark.parametrize(
+        "product",
+        [
+            "a spear, the big one",
+            "",
+            ".Base",
+            "-Base",
+            "Base/Spear",
+            "Base.Spear\n",
+            "копьё",
+            "x" * 65,
+        ],
+        ids=[
+            "a-phrase",
+            "empty",
+            "leading-dot",
+            "leading-dash",
+            "path-shaped",
+            "trailing-newline",
+            "cyrillic",
+            "over-long",
+        ],
+    )
+    def test_anything_that_is_not_an_item_type_is_refused_without_echoing(
+        self, product: str
+    ) -> None:
+        # The branch a model-authored sentence reaches. The refusal describes
+        # the shape; it must not put the sentence in a traceback.
+        with pytest.raises(ValueError, match="product must be") as caught:
+            GoalParams(product=product)
+        for fragment in ("spear, the big one", "копьё", "Base/Spear"):
+            assert fragment not in str(caught.value)
+
+    def test_a_non_string_product_is_refused_rather_than_coerced(self) -> None:
+        with pytest.raises(ValueError, match="product must be"):
+            GoalParams(product=42)  # type: ignore[arg-type]
+
+    def test_the_count_is_bounded_at_the_consent_ceiling(self) -> None:
+        assert GoalParams(product="Base.Twine", count=goal_model.MAX_CRAFT_GOAL_COUNT).count == 4
+        for bad in (0, goal_model.MAX_CRAFT_GOAL_COUNT + 1):
+            with pytest.raises(ValueError, match="count must be within"):
+                GoalParams(product="Base.Twine", count=bad)
+        # ``True`` is an ``int`` in Python — the annotation admits it, which is
+        # exactly why the constructor has to refuse it: a boolean is not a
+        # number of irreversible runs.
+        with pytest.raises(ValueError, match="count must be a whole number"):
+            GoalParams(product="Base.Twine", count=True)
+
+    def test_a_bare_craft_goal_names_its_product_and_nothing_else(self) -> None:
+        # «сделай копьё»: the product is required because it is the goal, and
+        # the absent count means one run.
+        request = GoalRequest(
+            kind=GoalKind.CRAFT_ITEM,
+            idempotency_key="k",
+            params=GoalParams(product="Base.SpearCrude"),
+        )
+        assert request.params.present() == {"product"}
+        assert request.params.count is None
+        assert request.effective_budget == GOAL_SPECS[GoalKind.CRAFT_ITEM].budget
+
+    def test_a_craft_goal_with_no_product_is_refused_at_the_door(self) -> None:
+        with pytest.raises(ValueError, match="requires"):
+            GoalRequest(kind=GoalKind.CRAFT_ITEM, idempotency_key="k")
+
+    def test_no_other_kind_accepts_the_craft_parameters(self) -> None:
+        # The parameters belong to one kind, and a swap between rows would
+        # round-trip through the module perfectly without this.
+        for kind in GoalKind:
+            spec = GOAL_SPECS[kind]
+            declared = spec.required | spec.optional
+            assert ({"product", "count"} & declared == set()) is (kind is not GoalKind.CRAFT_ITEM)
+
+
+class TestBuildParameters:
+    """The sixteenth kind's parameter surface: a blueprint and a square, both required.
+
+    ``structure`` satisfies the structural string ban the way ``product`` does
+    and for the same reason — what a build can raise belongs to the installed
+    build, not to this process — so the proof is again shape rather than
+    closure: bounded, restricted to the identifier alphabet, never interpreted,
+    never echoed on refusal. What is new here is that the *square* is required
+    beside it. That is the safety property this class exists to pin: the only
+    square this channel could supply for itself is the one the character is
+    standing on, and walling in the square somebody is standing on is the
+    mistake the whole wave is built to refuse.
+    """
+
+    SQUARE: Final[dict[str, int]] = {"target_x": 1201, "target_y": 3400, "target_z": 0}
+
+    @pytest.mark.parametrize(
+        "structure",
+        ["WoodenWall", "Mod_Wall-2", "A", "9lives", "wall.frame", "x" * 64],
+        ids=["vanilla", "punctuated", "single", "leading-digit", "dotted", "at-the-bound"],
+    )
+    def test_a_blueprint_name_is_admitted(self, structure: str) -> None:
+        params = GoalParams(structure=structure)
+        assert params.present() == {"structure"}
+        assert params.structure == structure
+
+    @pytest.mark.parametrize(
+        "structure",
+        [
+            "the wall by the door",
+            "",
+            ".Wall",
+            "-Wall",
+            "Base/Wall",
+            "WoodenWall\n",
+            "\u0441\u0442\u0435\u043d\u0430",
+            "x" * 65,
+        ],
+        ids=[
+            "a-phrase",
+            "empty",
+            "leading-dot",
+            "leading-dash",
+            "path-shaped",
+            "trailing-newline",
+            "cyrillic",
+            "over-long",
+        ],
+    )
+    def test_anything_that_is_not_a_blueprint_is_refused_without_echoing(
+        self, structure: str
+    ) -> None:
+        with pytest.raises(ValueError, match="structure must be") as caught:
+            GoalParams(structure=structure)
+        for fragment in ("the wall by the door", "\u0441\u0442\u0435\u043d\u0430", "Base/Wall"):
+            assert fragment not in str(caught.value)
+
+    def test_a_non_string_structure_is_refused_rather_than_coerced(self) -> None:
+        with pytest.raises(ValueError, match="structure must be"):
+            GoalParams(structure=42)  # type: ignore[arg-type]
+
+    def test_the_blueprint_bound_is_the_product_bound_and_the_same_shape(self) -> None:
+        # Not a coincidence and not a copy: a blueprint name and an item type
+        # are one kind of value, so they share one compiled pattern. Two
+        # patterns would be two things to keep in step, and the one that
+        # drifted wider would be the one that lets a sentence travel as a
+        # lookup key.
+        assert goal_model.MAX_STRUCTURE_NAME_CHARS == goal_model.MAX_PRODUCT_TYPE_CHARS
+        assert goal_model._STRUCTURE_SHAPE is goal_model._PRODUCT_SHAPE
+
+    def test_a_build_goal_names_a_structure_and_a_whole_square(self) -> None:
+        request = GoalRequest(
+            kind=GoalKind.BUILD_STRUCTURE,
+            idempotency_key="k",
+            params=GoalParams(
+                structure="WoodenWall",
+                target_x=self.SQUARE["target_x"],
+                target_y=self.SQUARE["target_y"],
+                target_z=self.SQUARE["target_z"],
+            ),
+        )
+        assert request.params.present() == {"structure", "target_x", "target_y", "target_z"}
+        assert request.effective_budget == GOAL_SPECS[GoalKind.BUILD_STRUCTURE].budget
+
+    @pytest.mark.parametrize("dropped", ["structure", "target_x", "target_y", "target_z"])
+    def test_a_build_goal_missing_any_half_is_refused_at_the_door(self, dropped: str) -> None:
+        # Neither half may be defaulted: a structure with no square would have
+        # to be placed somewhere, and a square with no structure names nothing
+        # to place. The refusal happens before a goal id exists.
+        supplied: dict[str, object] = {"structure": "WoodenWall", **self.SQUARE}
+        del supplied[dropped]
+        with pytest.raises(ValueError, match=rf"build_structure requires .*{dropped}"):
+            GoalRequest(
+                kind=GoalKind.BUILD_STRUCTURE,
+                idempotency_key="k",
+                params=GoalParams(**supplied),  # type: ignore[arg-type]
+            )
+
+    def test_the_kind_takes_no_count_of_any_kind(self) -> None:
+        # One command builds one structure once. A count on this kind is the
+        # first thing a loop would read, so it is not merely unused here — the
+        # spec refuses it.
+        declared = GOAL_SPECS[GoalKind.BUILD_STRUCTURE]
+        assert "count" not in (declared.required | declared.optional)
+        with pytest.raises(ValueError, match=r"build_structure takes no \['count'\]"):
+            GoalRequest(
+                kind=GoalKind.BUILD_STRUCTURE,
+                idempotency_key="k",
+                params=GoalParams(
+                    structure="WoodenWall",
+                    count=2,
+                    target_x=self.SQUARE["target_x"],
+                    target_y=self.SQUARE["target_y"],
+                    target_z=self.SQUARE["target_z"],
+                ),
+            )
+
+    def test_no_other_kind_accepts_the_structure_parameter(self) -> None:
+        for kind in GoalKind:
+            spec = GOAL_SPECS[kind]
+            declared = spec.required | spec.optional
+            assert ("structure" in declared) is (kind is GoalKind.BUILD_STRUCTURE)
+
+    def test_the_square_is_the_navigate_square_and_carries_its_bounds(self) -> None:
+        # One coordinate triple for both kinds, deliberately: a second set of
+        # fields would be a second declaration of where the world ends, and the
+        # copy that drifted would be the one that admits a placement off it.
+        for axis in ("target_x", "target_y", "target_z"):
+            span = NUMERIC_RANGES[axis]
+            outside = int(span.maximum) + 1
+            with pytest.raises(ValueError, match=f"{axis} must be within"):
+                GoalParams(structure="WoodenWall", **{**self.SQUARE, axis: outside})  # type: ignore[arg-type]
+
+    def test_the_budget_expires_a_stale_placement_sooner_than_a_stale_craft(self) -> None:
+        # The deliberate difference between the two irreversible kinds: a craft
+        # order describes the character's own bags, which do not wander off
+        # while the goal waits; a build order describes a square in the world
+        # that somebody can walk onto.
+        build = GOAL_SPECS[GoalKind.BUILD_STRUCTURE].budget
+        craft = GOAL_SPECS[GoalKind.CRAFT_ITEM].budget
+        assert build.pending_ttl_ms < craft.pending_ttl_ms
+        assert build.max_wall_ms <= craft.max_wall_ms
+
+
 # --------------------------------------------------------------------------
 # bounded parameters
 # --------------------------------------------------------------------------
@@ -781,6 +1091,10 @@ class TestNumericRanges:
             # channel's narrower MAX_SLEEP_GOAL_HOURS — "until rested" is not
             # a request for the adapter's sixteen-hour maximum.
             "hours": (1, 12),
+            # Runs one craft_item submission authorises. Crafting is the one
+            # thing the agent does that destroys what it spends, so the
+            # ceiling is the smallest number here that is more than one.
+            "count": (1, 4),
         }
 
     def test_the_loot_radius_ceiling_is_the_single_move_distance(self) -> None:
@@ -794,8 +1108,11 @@ class TestNumericRanges:
         declared: set[str] = set()
         for spec in GOAL_SPECS.values():
             declared |= spec.required | spec.optional
-        # The non-numeric exemptions are each closed by their own check: the
-        # two enums, the boolean, and the token-list string proven above.
+        # The non-numeric exemptions are each bounded by their own check: the
+        # two enums, the boolean, and the three exempted strings — the token
+        # list proven above, the shape-checked item type proven in
+        # :class:`TestCraftParameters` and the shape-checked blueprint name
+        # proven in :class:`TestBuildParameters`.
         closed_otherwise = {"skill", "scope", "take_all"} | CLOSED_TOKEN_LIST_PARAMS
         assert declared - closed_otherwise <= set(NUMERIC_RANGES)
 

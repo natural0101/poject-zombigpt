@@ -10,7 +10,65 @@ drift out of sync with `pz_agent_core.version`.
 
 ## [Unreleased]
 
+### Added
+
+- **The crafting and building wave is merged into the line** (`dev`). Six
+  commits, 19 097 insertions across 80 files, carrying `craft_item` and
+  `build_structure` as the twelfth and thirteenth deterministic goal kinds, the
+  policies behind them, and the mod-side readers they need. Four files
+  conflicted and each was resolved by keeping both sides rather than picking
+  one; the two that mattered are recorded under *Fixed* below, because in both
+  the merge would otherwise have silently dropped a safety property this branch
+  had added.
+
+  Two producers arrive with it that close standing gaps. The literature block's
+  three drifted key names are renamed on the mod's side (`pages` →
+  `pages_total`, `skill_level_min`/`skill_level_max` → `min_level`/`max_level`)
+  and `unread_recipes` gains a real reader, so that block's vocabularies now
+  agree on all six keys the mod sends — the first of the three divergent blocks
+  to be repaired, and the worked example for `food` and `fluid`. And squares are
+  observed at last, as a `nearby.squares` tier with `loaded`/`passable`/`free`/
+  `floor` read tri-state, published for the build policy's path check.
+
 ### Fixed
+
+- **The merge would have wedged craft and build missions, and mypy caught it**
+  (`dev`). `_collect_mission_pending` returns a three-state `_Pending` on this
+  branch — `RUNNING`, `SETTLED`, `LOST` — while the arriving craft and build
+  handlers read it as a boolean, and every enum member is truthy, so both
+  handlers returned `None` on every tick and neither mission could ever take a
+  step. `--strict` reported it as two unreachable statements rather than as the
+  dead goal kind it was. Both now branch on the three states exactly as the
+  other six do, including ending the goal typed on `LOST`.
+
+  Their submit paths carried the original defect too, with the same borrowed
+  comment ("the mission decides again from the next observation"), which is
+  false for a mission: `CraftItemMission` and `BuildStructureMission` both set
+  `_pending_action` when they *emit* a step and decline every tick while it
+  stands, so a swallowed `LoopError` left the goal to die on its wall clock
+  reporting a timeout for what was a refused admission. Both now end the goal
+  `CAPABILITY_UNAVAILABLE`/`UNADMITTED_STEP_DETAIL`, as the other six do. It
+  bites hardest on build, the one irreversible thing the agent does, where a
+  goal that runs out of clock says nothing about whether the placement was
+  attempted.
+
+- **The dead-gate ledger nearly retired the largest gap in the build on a
+  comment** (`dev`). The arriving squares section opens by explaining that
+  `movement` has been scanning `nearby.objects` for `kind = "square"` entries
+  nobody publishes — and that sentence matched the very pattern standing guard
+  over the gap, so the ledger reported the producer as written. It is not: the
+  wave publishes a separate `nearby.squares` tier, and `movement.py` still scans
+  `nearby.objects` and still finds nothing, so **the agent still cannot walk**.
+  `_mod_sources` now strips Lua line comments before matching, and
+  `LIMITATIONS.md` states the changed reason: the fix is no longer to write the
+  producer but to point one side at the other, which is a contract decision a
+  live game has to settle.
+
+  `_mod_keys` had the mirror-image blind spot: it pinned readers to exactly
+  `(item)`, so `itemLiterature(item, isKnown)` — a reader that grew a second
+  argument in order to answer honestly — read as a reader that had vanished.
+  Both extractors now survive the seam getting better, which is the failure mode
+  that quietly retires ledger rows.
 
 - **Nothing could ever be picked to learn a recipe from**
   (`stabilize/arm-session-confirmation`). `LiteratureView.unread_recipes` was
@@ -872,6 +930,106 @@ drift out of sync with `pz_agent_core.version`.
   blocker 2 from a guess into a fact.
 
 ### Added
+
+- **The character can build, and the check that matters is the one that refuses**
+  (`epic/p5-crafting-building`, wave 2). Two actions: `building.inspect`,
+  read-only and published on every install because it is what a user consults
+  *before* granting the authority, and `building.build`, **P4 flat** — no
+  escalation ladder, because there is no tier above it and no case where placing
+  a permanent object is less than the top one. P4 has no autonomous path in any
+  mode, so no arbiter, planner or initiative table can ever raise a wall; a test
+  pins all three routes shut. There is **no demolition action**, deliberately:
+  removing what somebody put there is a different authority and this build does
+  not have it, which is exactly why the placement is refused so carefully.
+  Refusals are typed and land before anything is queued — `SQUARE_OCCUPIED`
+  naming what stands in the way (the agent never clears a square),
+  `RECIPE_MATERIALS_MISSING` naming each shortfall, and **`WOULD_TRAP_PLAYER`**,
+  the reason this wave exists: a bounded flood fill over the observed window,
+  with the proposed structure treated as impassable, refuses any placement that
+  removes the last route from the character's square to open ground. The bound
+  is stated rather than hidden — the check cannot prove the character is not
+  already enclosed by something beyond the window; it proves this placement does
+  not remove the last exit it can see — and an unreadable map is a **refusal**,
+  not a pass, because that is the case where a trapping wall is most likely.
+  `build_structure` (16th kind) runs at most one attempt: a failed craft can be
+  re-run because its materials are still countable, a failed build may or may
+  not have placed something, so a second command would be a second irreversible
+  attempt on the agent's own initiative. It reports `ENDED_UNCONFIRMED` instead.
+- **The mod now describes the ground.** A bounded 7×7 window of squares is
+  published in the vocabulary the sidecar already read (`loaded`/`blocked`/
+  `drop`, plus a new `occupied`), which nothing had ever emitted. Every semantic
+  is a positive reading: a fact no reader would answer produces no token at all,
+  so "we could not tell" can never pass for "there is a way out".
+- **A live route for both new capabilities.** `S21_CRAFT` and `S22_BUILD` join
+  the playbook (22 scenarios), and S22 makes the `WOULD_TRAP_PLAYER` refusal an
+  explicit operator step: ask for the wall that would seal the character in and
+  confirm the refusal *before* asking for one that would not.
+
+### Fixed
+
+- **`craft_item` was unreachable through `pz_goal_submit` from the wave that
+  shipped it.** The MCP router never read `product` or `count` out of the
+  validated arguments, so every craft goal submitted through the tool was
+  refused as missing the product the caller had supplied. Both are read and
+  echoed now, pinned by tests on the typed request the channel receives.
+
+### Documented
+
+- **An `experimental` capability cannot be promoted by a live run** — and this
+  had never been written down. `CapabilityReport.usable()` is false for
+  `experimental`, the action engine refuses an unusable capability before
+  sending anything, and `safety.disabled_capabilities` only subtracts; so the
+  very run that would confirm `building`, `crafting`, `combat_assist`,
+  `survival_sleep` or `drink_world_source` cannot be issued. The playbook,
+  `COMPATIBILITY.md`, `LIMITATIONS.md` and `GAME_API_VERIFICATION.md` now say
+  so, and the two new scenarios are shaped around it: reading halves run
+  anywhere, write halves record `BLOCKED` with the reason rather than an
+  invented PASS.
+
+- **The character can make things** (`epic/p5-crafting-building`, wave 1 —
+  crafting only; placing structures is a later wave and nothing here claims
+  it). Two protocol actions: `crafting.inspect`, read-only on both sides
+  because it reads recipe tables and materials already carried and moves
+  nobody, and `crafting.craft`, behind a new `crafting` capability that starts
+  EXPERIMENTAL — so the craft tool is *withheld* on every install until a live
+  run promotes it, while the free inspection is published. One command crafts
+  one item once: there is no loop in the mod, and a recipe that could run again
+  is a report rather than a retry. Success is the product **observed** in the
+  inventory afterwards with an ingredient observed to have fallen; a queued
+  craft is never success. Refusals are typed before anything is queued —
+  `RECIPE_UNKNOWN` names the token, `RECIPE_MATERIALS_MISSING` names each
+  shortfall as held-of-needed — and a craft whose postcondition could not be
+  read is not started at all. The 15th goal kind `craft_item` runs on a
+  deterministic mission (bounded attempts, recipes and consecutive failures; a
+  failed recipe is retired rather than re-run, because this is the first goal
+  whose work cannot be walked back) and it does **not** go looting when
+  materials are short — it fails honestly saying what is missing.
+- **The risk tier follows the recipe, not the tool.** Crafting is P3 for
+  spending what the character carries and escalates to P4 — no autonomous path
+  at all — when the recipe may need a surface or a material line is only
+  covered from a world container. Because `may_need_surface` is true unless the
+  build positively says otherwise, on any install whose readout is silent every
+  craft is P4. That outcome is stated in the catalogue, the tool docs and the
+  knowledge corpus rather than left for a reader to infer from "escalates
+  sometimes".
+- **A crafting knowledge domain** — 13 rules, nine `verified_script` against
+  real code and tests, four `unverified` about the game itself with wiki
+  sources. Nothing is `verified_live`: this wave has no live evidence.
+
+### Fixed
+
+- **`learn_recipe` was dead end to end, and nothing said so.** The literature
+  policy picked recipe magazines by reading `unread_recipes` off each item, and
+  the mod's reader never published that key — so every real observation was
+  rejected and the goal could not succeed on any machine. Three more keys were
+  drifting the same quiet way: the mod wrote `pages`, `skill_level_min` and
+  `skill_level_max` where the sidecar read `pages_total`, `min_level` and
+  `max_level`. The reader now publishes the names the policy reads, counts
+  unread recipes against the character's known set, and — this is the part that
+  keeps it honest — reports the count as **absent** rather than `0` whenever it
+  could not be established. A book that genuinely teaches nothing reports zero;
+  a reader that could not tell says nothing, and the policy treats the two
+  differently instead of quietly calling both "no recipes here".
 
 - **A terminal is enough to play** (`epic/ux-one-command-play`, wave 1). The
   agent had a goal channel with two ways in — an MCP tool call, which needs a

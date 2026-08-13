@@ -745,7 +745,238 @@ do
     player = Observe.playerFields(furnishedPlayer()),
     nearby = Observe.nearbyFields(furnishedPlayer(), position),
   })
-  equal(#document.nearby.objects, Model.MAX_OBJECTS, "and the document is still filled to its cap")
+  -- The two populations in `nearby.objects` are capped separately, and this is
+  -- the scene that proves it: a warehouse floor full of shelves must not be
+  -- what costs the build policy its map of the squares, and the map must not
+  -- be what costs the planner its shelves.
+  local emitted = document.nearby.objects
+  local shelves, described = 0, 0
+  for index = 1, #emitted do
+    if emitted[index].kind == Model.SQUARE_KIND then
+      described = described + 1
+    else
+      shelves = shelves + 1
+    end
+  end
+  equal(shelves, Model.MAX_OBJECTS, "the document is still filled to its object cap")
+  equal(described, Observe.MAX_DESCRIBED_SQUARES, "and the square window rides beside it, whole")
+  removeCell()
+end
+
+-- ---------------------------------------------------------------------------
+-- squares
+--
+-- The description the movement adapter has been reading since it was written
+-- and the build policy now walks. Building is the one thing this agent does
+-- that it has no action to undo, so the sidecar refuses a placement that would
+-- seal the character in -- and every one of those refusals is computed from
+-- what these groups publish. The question each of them asks is the usual one in
+-- this file, with more riding on the answer: when the engine does not say, does
+-- the reader leave the fact out, or does it make one up?
+-- ---------------------------------------------------------------------------
+
+--- A grid square exposing exactly the readers a case names, so deleting one is
+--- how "this build cannot tell" is expressed.
+local function gridSquare(fields)
+  fields = fields or {}
+  local square = {
+    getObjects = function()
+      return Support.list(fields.objects or {})
+    end,
+  }
+  if fields.solid ~= nil then
+    square.isSolid = function()
+      return fields.solid
+    end
+  end
+  if fields.solid_trans ~= nil then
+    square.isSolidTrans = function()
+      return fields.solid_trans
+    end
+  end
+  if fields.free ~= nil then
+    square.isFree = function(_, forZombie)
+      -- The engine's own signature, and the flag the reader must pass: a double
+      -- that ignored it would hide a caller that forgot it.
+      if forZombie ~= false then
+        return nil
+      end
+      return fields.free
+    end
+  end
+  if fields.floor ~= nil then
+    square.getFloor = function()
+      -- `false` stands for the reader that exists and answers nothing, which is
+      -- a square with no floor -- a fall, not an unread square.
+      if fields.floor == false then
+        return nil
+      end
+      return { getName = function()
+        return "floor"
+      end }
+    end
+  end
+  return square
+end
+
+Harness.group("a square answers three questions, and absent is an answer of its own")
+do
+  equal(Observe.squarePassable(gridSquare({ solid = false })), true, "a square that is not solid can be crossed")
+  equal(Observe.squarePassable(gridSquare({ solid = true })), false, "and one that is solid cannot")
+  equal(
+    Observe.squarePassable(gridSquare({ solid = false, solid_trans = true })),
+    false,
+    "either solidity reader answering true is enough to call it blocked"
+  )
+  isNil(
+    Observe.squarePassable(gridSquare({})),
+    "a build with neither reader claims nothing -- absent must never read as a way out"
+  )
+
+  equal(Observe.squareFree(gridSquare({ free = true })), true, "a clear square reads free")
+  equal(Observe.squareFree(gridSquare({ free = false })), false, "and an occupied one does not")
+  isNil(Observe.squareFree(gridSquare({})), "with no isFree reader the field stays absent, never true")
+  isNil(
+    Observe.squareFree(gridSquare({ free = "yes" })),
+    "and a reader that answers something other than a boolean has not answered"
+  )
+
+  equal(Observe.squareFloor(gridSquare({ floor = true })), true, "a square with a floor says so")
+  equal(
+    Observe.squareFloor(gridSquare({ floor = false })),
+    false,
+    "and a reader that answers no floor is a fall, which is a reading of its own"
+  )
+  isNil(Observe.squareFloor(gridSquare({})), "while a build with no floor reader has said nothing about the floor")
+end
+
+Harness.group("the square window is bounded, nearest first, and an unread square says so")
+do
+  local position = { x = 100, y = 200, z = 0 }
+  local radius = Observe.DESCRIBE_RADIUS
+  local function fill(hole)
+    local squares = {}
+    for dx = -radius, radius do
+      for dy = -radius, radius do
+        local key = string.format("%d,%d,%d", position.x + dx, position.y + dy, position.z)
+        if key ~= hole then
+          squares[key] = gridSquare({ solid = false, free = dx ~= 0 or dy ~= 0, floor = true })
+        end
+      end
+    end
+    return squares
+  end
+
+  local removeCell = Support.installCell(fill(nil), {})
+  local reading = Observe.describeSquares(position)
+  equal(#reading.squares, Observe.MAX_DESCRIBED_SQUARES, "the whole window is described")
+  equal(
+    Observe.MAX_DESCRIBED_SQUARES,
+    (2 * radius + 1) ^ 2,
+    "the cap is exactly the window, so it bites only if one grows without the other"
+  )
+  equal(reading.truncated, false, "nothing was cut short")
+  equal(reading.dropped, 0, "and nothing went undescribed")
+  equal(reading.squares[1].distance, 0, "the square the character stands on is read first")
+  equal(reading.squares[1].loaded, true, "and it answered")
+  equal(reading.squares[1].free, false, "the character is standing on it, so it is not free to build on")
+  equal(reading.squares[1].passable, true, "though it is still ground a character can cross")
+  equal(reading.squares[#reading.squares].distance, radius, "and the farthest ring is read last")
+
+  local hole = string.format("%d,%d,%d", position.x + 1, position.y, position.z)
+  Support.installCell(fill(hole), {})
+  local partial = Observe.describeSquares(position)
+  equal(#partial.squares, Observe.MAX_DESCRIBED_SQUARES, "a square the cell will not hand over is still described")
+  local unread = nil
+  for index = 1, #partial.squares do
+    local entry = partial.squares[index]
+    if entry.x == position.x + 1 and entry.y == position.y then
+      unread = entry
+    end
+  end
+  equal(unread.loaded, false, "as one that was looked at and did not answer")
+  isNil(unread.passable, "claiming no passability")
+  isNil(unread.free, "and nothing about being free to build on")
+
+  local window = Observe.MAX_DESCRIBED_SQUARES
+  Observe.MAX_DESCRIBED_SQUARES = 9
+  Support.installCell(fill(nil), {})
+  local capped = Observe.describeSquares(position)
+  equal(#capped.squares, 9, "past the entry cap the reading stops")
+  equal(capped.truncated, true, "and says so")
+  equal(capped.dropped, (2 * radius + 1) ^ 2 - 9, "counting every square it did not publish")
+  equal(capped.squares[1].distance, 0, "keeping the near squares, which are the ones a build is reached from")
+  Observe.MAX_DESCRIBED_SQUARES = window
+
+  removeCell()
+  local blind = Observe.describeSquares(position)
+  equal(#blind.squares, 0, "with no cell there is no square reading at all")
+  equal(blind.truncated, false, "and no claim that one was cut short")
+end
+
+Harness.group("the square descriptions reach the document beside the objects, never instead of them")
+do
+  local position = { x = 100, y = 200, z = 0 }
+  local squares = {}
+  for dx = -Observe.DESCRIBE_RADIUS, Observe.DESCRIBE_RADIUS do
+    for dy = -Observe.DESCRIBE_RADIUS, Observe.DESCRIBE_RADIUS do
+      local wall = dx == 2 and dy == 0
+      squares[string.format("%d,%d,%d", position.x + dx, position.y + dy, position.z)] =
+        gridSquare({ solid = wall, free = not wall, floor = not (dx == -2 and dy == 0) })
+    end
+  end
+  -- One real object, on a square the description also covers: the two
+  -- populations describe the same tile from two directions and must not be
+  -- confused for one another.
+  squares[string.format("%d,%d,%d", position.x + 1, position.y, position.z)] =
+    Support.square({ Support.worldObject({ name = "Fridge", container_type = "fridge" }) })
+  local removeCell = Support.installCell(squares, {})
+
+  local document = Model.build({
+    session_id = SESSION,
+    seq = 12,
+    timestamp_ms = NOW,
+    game = { build = "42.20" },
+    player = Observe.playerFields(furnishedPlayer()),
+    nearby = Observe.nearbyFields(furnishedPlayer(), position),
+  })
+
+  local byRef = {}
+  local describedCount, objectCount = 0, 0
+  for index = 1, #document.nearby.objects do
+    local entry = document.nearby.objects[index]
+    if entry.kind == Model.SQUARE_KIND then
+      describedCount = describedCount + 1
+      byRef[entry.ref] = entry
+    else
+      objectCount = objectCount + 1
+    end
+  end
+  equal(describedCount, Observe.MAX_DESCRIBED_SQUARES, "every square in the window reaches the document")
+  equal(objectCount, 1, "and the fridge is still an object, not a square")
+
+  local wall = byRef["square:" .. SESSION .. ":102:200:0"]
+  same(wall.semantics, { "blocked", "loaded", "occupied" }, "a solid square is blocked, and it is not free either")
+  same(wall.position, { x = 102, y = 200, z = 0 }, "with the coordinates a build command names back")
+
+  local open = byRef["square:" .. SESSION .. ":100:201:0"]
+  same(open.semantics, { "loaded" }, "an empty square carries the one token it could positively claim")
+
+  local fall = byRef["square:" .. SESSION .. ":98:200:0"]
+  same(fall.semantics, { "drop", "loaded" }, "a square whose floor reader answered nothing is a fall")
+
+  -- The square the fridge stands on exposes none of the square readers, which
+  -- is the case that matters most: it is still described, it says it was
+  -- loaded, and it claims nothing else.
+  local unread = byRef["square:" .. SESSION .. ":101:200:0"]
+  ok(unread ~= nil, "a square whose readers are missing is still described")
+  same(unread.semantics, { "loaded" }, "with no claim about crossing it or building on it")
+  equal(
+    document.player.stats[Model.LIMIT_PREFIX .. "passable_unknown"],
+    true,
+    "and the document declares that a square went unread rather than passing for open"
+  )
+  equal(document.player.stats[Model.LIMIT_PREFIX .. "occupied_unknown"], true, "for both readings")
   removeCell()
 end
 
@@ -1190,6 +1421,386 @@ do
     "and the counter stays silent, so it means what it says when it appears"
   )
   removeCell()
+end
+
+-- ---------------------------------------------------------------------------
+-- literature and recipes
+--
+-- The doubles for these live here rather than in support/observe_support.lua
+-- for the reason that file gives for its own: a reader is proved by what it
+-- does when an accessor is missing, so each case builds exactly the accessors
+-- it wants to talk about.
+-- ---------------------------------------------------------------------------
+
+--- A book. `taught` is the recipes it would teach, absent when this build has
+--- no reader for them.
+local function book(fields)
+  local item = {
+    getID = function()
+      return fields.id
+    end,
+    getFullType = function()
+      return fields.full_type or "Base.Magazine"
+    end,
+    getName = function()
+      return fields.name or "Magazine"
+    end,
+    getDisplayCategory = function()
+      return "Literature"
+    end,
+    getUnequippedWeight = function()
+      return 0.2
+    end,
+    getNumberOfPages = function()
+      return fields.pages or 10
+    end,
+    getAlreadyReadPages = function()
+      return fields.pages_read or 0
+    end,
+  }
+  if fields.skill ~= nil then
+    item.getSkillTrained = function()
+      return fields.skill
+    end
+    item.getLvlSkillTrained = function()
+      return fields.min_level or 0
+    end
+    item.getMaxLevelTrained = function()
+      return fields.max_level or 2
+    end
+  end
+  if fields.taught ~= nil then
+    item.getTeachedRecipes = function()
+      return Support.list(fields.taught)
+    end
+  end
+  return item
+end
+
+--- A character carrying `items`, knowing `known` recipes. `contains` chooses
+--- which shape the known collection takes: a Java set that answers membership,
+--- or a bare list that has to be walked.
+local function reader(items, known, options)
+  options = options or {}
+  local player = Support.player({ inventory = Support.container(items) })
+  if known ~= nil then
+    local collection = Support.list(known)
+    if options.contains ~= false then
+      collection.contains = function(_, name)
+        for index = 1, #known do
+          if known[index] == name then
+            return true
+          end
+        end
+        return false
+      end
+    end
+    if options.unlistable then
+      collection.size = nil
+    end
+    player.getKnownRecipes = function()
+      return collection
+    end
+  end
+  return player
+end
+
+Harness.group("the literature payload is spelled the way the sidecar reads it")
+do
+  local magazine = book({ id = 1, skill = "Carpentry", min_level = 1, max_level = 3, pages = 12, pages_read = 4 })
+  local roots = Observe.inventoryRoots(reader({ magazine }, { "MakeCrate" }))
+  local payload = roots[1].items[1].literature
+  ok(payload ~= nil, "a book carries a literature payload")
+  equal(payload.pages_total, 12, "the page count arrives under the key Python reads")
+  equal(payload.pages_read, 4, "beside the pages already read")
+  equal(payload.min_level, 1, "the level window's floor is min_level")
+  equal(payload.max_level, 3, "and its ceiling is max_level")
+  equal(payload.skill, "Carpentry", "with the skill it trains")
+  isNil(payload.pages, "the old `pages` spelling is gone")
+  isNil(payload.skill_level_min, "and so are the two level keys nothing on the other side read")
+  isNil(payload.skill_level_max, "either of them")
+
+  -- Through the document, which is what actually reaches the sidecar.
+  local document = Model.build({
+    session_id = SESSION,
+    seq = 20,
+    timestamp_ms = NOW,
+    game = { build = "42.20" },
+    player = Observe.playerFields(reader({ magazine }, { "MakeCrate" })),
+    inventory = roots,
+  })
+  equal(document.inventory.items[1].literature.pages_total, 12, "the key survives into the document")
+  equal(document.inventory.items[1].literature.min_level, 1, "with the window the policy filters on")
+end
+
+Harness.group("unread recipes are counted, and absent whenever they cannot be")
+do
+  local taught = book({ id = 2, taught = { "MakeCrate", "MakeChair" } })
+  local known = Observe.inventoryRoots(reader({ taught }, { "MakeCrate" }))
+  equal(known[1].items[1].literature.unread_recipes, 1, "one of the two recipes is still unknown")
+
+  local learned = Observe.inventoryRoots(reader({ taught }, { "MakeCrate", "MakeChair" }))
+  equal(learned[1].items[1].literature.unread_recipes, 0, "a magazine whose recipes are known has none unread")
+
+  local walked = Observe.inventoryRoots(reader({ taught }, { "MakeCrate" }, { contains = false }))
+  equal(walked[1].items[1].literature.unread_recipes, 1, "a list with no membership test is walked instead")
+
+  -- The three ways the count cannot be established, all of them absent rather
+  -- than zero: zero is what makes the sidecar refuse the book.
+  local blind = Observe.inventoryRoots(reader({ taught }, nil))
+  isNil(blind[1].items[1].literature.unread_recipes, "a build with no known-recipe reader counts nothing")
+
+  local mute = reader({ taught }, { "MakeCrate" }, { contains = false, unlistable = true })
+  local unlistable = Observe.inventoryRoots(mute)
+  isNil(
+    unlistable[1].items[1].literature.unread_recipes,
+    "and neither does a collection that can be neither asked nor walked"
+  )
+
+  local plain = book({ id = 3 })
+  local unreadable = Observe.inventoryRoots(reader({ plain }, { "MakeCrate" }))
+  isNil(unreadable[1].items[1].literature.unread_recipes, "a book with no taught-recipe reader carries no count")
+
+  local teaches = book({ id = 4, taught = {} })
+  local nothing = Observe.inventoryRoots(reader({ teaches }, { "MakeCrate" }))
+  equal(nothing[1].items[1].literature.unread_recipes, 0, "but a book that teaches nothing genuinely has none")
+end
+
+Harness.group("what the character can make rides the stats map, or nothing does")
+do
+  --- A recipe script over `inputs`, each `{ types = {...}, count = n }`.
+  local function recipe(name, inputs)
+    local entries = {}
+    for index = 1, #(inputs or {}) do
+      local input = inputs[index]
+      entries[index] = {
+        getItems = function()
+          return Support.list(input.types)
+        end,
+        getCount = function()
+          return input.count
+        end,
+      }
+    end
+    local object = {
+      getName = function()
+        return name
+      end,
+    }
+    if inputs ~= nil then
+      object.getInputs = function()
+        return Support.list(entries)
+      end
+    end
+    return object
+  end
+
+  local function plank(id)
+    return Support.item({ id = id, full_type = "Base.Plank", name = "Plank" })
+  end
+
+  local crate = recipe("MakeCrate", { { types = { "Base.Plank" }, count = 2 } })
+  local chair = recipe("Make Chair", { { types = { "Base.Plank" }, count = 8 } })
+  local blind = recipe("MakeMystery", nil)
+
+  local manager = {
+    getCraftRecipe = function(_, name)
+      return ({ MakeCrate = crate, ["Make Chair"] = chair, MakeMystery = blind })[name]
+    end,
+  }
+  _G["getScriptManager"] = function()
+    return manager
+  end
+
+  local player = reader({ plank(1), plank(2), plank(3) }, { "MakeCrate", "Make Chair" })
+  local roots = Observe.inventoryRoots(player)
+  local fields = Observe.craftingFields(player, roots)
+  ok(fields ~= nil, "a build that lists recipes publishes a crafting reading")
+  equal(fields.known, 2, "with the engine's own count of what is known")
+  equal(#fields.recipes, 2, "and an entry per published recipe")
+  equal(fields.recipes[1].ready, false, "eight planks are not three, so the chair is not ready")
+  equal(fields.recipes[2].ready, true, "while the crate's two planks are on the character")
+
+  local document = Model.build({
+    session_id = SESSION,
+    seq = 21,
+    timestamp_ms = NOW,
+    game = { build = "42.20" },
+    player = Observe.playerFields(player),
+  })
+  isNil(document.player.stats["crafting.known"], "playerFields alone publishes nothing about recipes")
+
+  local stats = Model.applyCrafting({}, fields)
+  equal(stats["crafting.known"], 2, "the reading folds into the stats map")
+  equal(stats["crafting.listed"], 2, "naming how many keys followed")
+  equal(stats["crafting.ready"], 1, "and how many of them can be made now")
+  equal(stats["crafting.recipe.MakeCrate"], true, "the ready recipe is keyed by its token")
+  equal(stats["crafting.recipe.Make_Chair"], false, "and the unready one by its normalised token")
+
+  -- A build that names the recipes and will not say what they need.
+  local mystery = reader({ plank(4) }, { "MakeMystery" })
+  local mysteryFields = Observe.craftingFields(mystery, Observe.inventoryRoots(mystery))
+  equal(#mysteryFields.recipes, 1, "the recipe is still named")
+  isNil(mysteryFields.recipes[1].ready, "with no verdict on its materials")
+  local mysteryStats = Model.applyCrafting({}, mysteryFields)
+  equal(mysteryStats["crafting.known"], 1, "the count still travels")
+  isNil(mysteryStats["crafting.recipe.MakeMystery"], "but no key claims a verdict nobody made")
+  equal(mysteryStats["crafting.materials_unknown"], true, "and the silence is declared as its own fact")
+
+  local silent = reader({ plank(5) }, nil)
+  isNil(Observe.craftingFields(silent, nil), "a build with no known-recipe reader publishes nothing at all")
+
+  _G["getScriptManager"] = nil
+end
+
+Harness.group("the crafting reading is bounded and deterministic")
+do
+  local names = {}
+  for index = 1, Observe.MAX_RECIPES + 6 do
+    names[index] = string.format("Recipe%03d", index)
+  end
+  local player = reader({}, names)
+  local fields = Observe.craftingFields(player, {})
+  equal(fields.known, #names, "the engine's count is reported whole")
+  equal(#fields.recipes, Observe.MAX_RECIPES, "while the published entries stop at the cap")
+  equal(fields.truncated, true, "and the reading says it stopped short")
+  equal(fields.recipes[1].name, "Recipe001", "the published entries are the first in name order")
+  equal(fields.recipes[Observe.MAX_RECIPES].name, string.format("Recipe%03d", Observe.MAX_RECIPES), "and stay sorted")
+
+  local stats = Model.applyCrafting({}, fields)
+  equal(stats["crafting.truncated"], true, "which the document carries too")
+  isNil(stats["crafting.listed"], "no recipe was judged, so no key was published")
+  equal(stats["crafting.materials_unknown"], true, "and the reason is stated")
+end
+
+Harness.group("the recipes ride the ingredients they consume, once each")
+do
+  local function ingredientRecipe(name, types, count, near)
+    local object = {
+      getName = function()
+        return name
+      end,
+      getInputs = function()
+        return Support.list({
+          {
+            getItems = function()
+              return Support.list(types)
+            end,
+            getCount = function()
+              return count
+            end,
+          },
+        })
+      end,
+      getOutputs = function()
+        return Support.list({
+          {
+            getItems = function()
+              return Support.list({ "Base.WoodenCrate" })
+            end,
+          },
+        })
+      end,
+    }
+    if near ~= nil then
+      object.getNearItem = function()
+        return near
+      end
+    end
+    return object
+  end
+
+  local crate = ingredientRecipe("MakeCrate", { "Base.Plank" }, 2)
+  local player = reader({
+    Support.item({ id = 71, full_type = "Base.Plank", name = "Plank" }),
+    Support.item({ id = 72, full_type = "Base.Plank", name = "Plank" }),
+    Support.item({ id = 73, full_type = "Base.Nails", name = "Nails" }),
+  }, { crate })
+  local roots = Observe.inventoryRoots(player)
+  local crafting = Observe.craftingFields(player, roots)
+  Observe.attachRecipes(roots, crafting)
+
+  local items = roots[1].items
+  ok(items[1].crafting ~= nil, "the first plank carries the recipe it feeds")
+  equal(items[1].crafting.recipes[1].name, "MakeCrate", "named as the recipe")
+  equal(items[1].crafting.recipes[1].product, "Base.WoodenCrate", "with what it makes")
+  equal(items[1].crafting.recipes[1].materials[1].count, 2, "and how much of this item it takes")
+  equal(items[1].crafting.recipes[1].known, true, "read off the character's own known recipes")
+  isNil(items[2].crafting, "the second plank carries no copy of it")
+  isNil(items[3].crafting, "and an item the recipe does not consume carries none at all")
+
+  -- Through the document: the item tier is where the sidecar's crafting policy
+  -- reads this, so it has to survive the model's shaping.
+  local document = Model.build({
+    session_id = SESSION,
+    seq = 22,
+    timestamp_ms = NOW,
+    game = { build = "42.20" },
+    player = Observe.playerFields(player),
+    inventory = roots,
+  })
+  local carried = nil
+  for index = 1, #document.inventory.items do
+    if document.inventory.items[index].crafting ~= nil then
+      carried = document.inventory.items[index]
+    end
+  end
+  ok(carried ~= nil, "exactly one item in the document carries the readout")
+  equal(carried.crafting.recipe_count, 1, "with the count of entries on it")
+  equal(carried.crafting.known_recipe_count, 1, "and how many of them the character knows")
+  equal(carried.crafting.recipes[1].materials[1].full_type, "Base.Plank", "naming the type it consumes")
+  isNil(carried.crafting.recipes[1].needs_surface, "a build with no near-item reader claims nothing about surfaces")
+
+  -- The surface reading is tri-state, and only a positive answer is published.
+  local bench = ingredientRecipe("MakeTable", { "Base.Plank" }, 1, "Workbench")
+  local free = ingredientRecipe("MakeStake", { "Base.Plank" }, 1, "")
+  equal(Observe.recipeNeedsSurface(bench), true, "a named near item is a surface the character must stand at")
+  equal(Observe.recipeNeedsSurface(free), false, "an empty one is a positive reading of no surface")
+  isNil(Observe.recipeNeedsSurface(crate), "and a build with no reader says nothing either way")
+
+  local unreadable = {
+    getName = function()
+      return "MakeMystery"
+    end,
+  }
+  local blindPlayer = reader({ Support.item({ id = 74, full_type = "Base.Plank", name = "Plank" }) }, { unreadable })
+  local blindRoots = Observe.inventoryRoots(blindPlayer)
+  Observe.attachRecipes(blindRoots, Observe.craftingFields(blindPlayer, blindRoots))
+  isNil(blindRoots[1].items[1].crafting, "a recipe whose product and inputs cannot be read is stamped nowhere")
+end
+
+Harness.group("the crafting reading reaches the document through the tick")
+do
+  local restore = installCore("42.20")
+  local agent = newAgent()
+  local plank = Support.item({ id = 61, full_type = "Base.Plank", name = "Plank" })
+  local crate = {
+    getName = function()
+      return "MakeCrate"
+    end,
+    getInputs = function()
+      return Support.list({
+        {
+          getItems = function()
+            return Support.list({ "Base.Plank" })
+          end,
+          getCount = function()
+            return 1
+          end,
+        },
+      })
+    end,
+  }
+  local player = reader({ plank }, { crate })
+  agent.player = player
+  agent.capability_revision = 1
+  agent.queue_description = { ownership = "none", busy = false }
+
+  local document = Observe.tick(agent, NOW)
+  ok(document ~= nil, "the tick publishes")
+  equal(document.player.stats["crafting.known"], 1, "and the character's recipes ride the stats map")
+  equal(document.player.stats["crafting.recipe.MakeCrate"], true, "with the verdict on each published one")
+  restore()
 end
 
 Harness.finish("observe")

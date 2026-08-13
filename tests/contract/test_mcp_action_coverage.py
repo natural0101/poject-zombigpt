@@ -76,6 +76,14 @@ ENVELOPE: Final[frozenset[str]] = frozenset({"idempotency_key", "timeout_ms"})
 #: deterioration lives there, not in a single command); the tools exist so a
 #: user driving one bounded window at a time is not forced through a goal
 #: queue to do it.
+#:
+#: The crafting pair never sat here at all. ``crafting.inspect`` and
+#: ``crafting.craft`` were published in the same wave that gave them adapters,
+#: because withholding them would have been the wrong lever: what keeps a craft
+#: from happening on an unproven build is the ``crafting`` capability resolving
+#: to ``experimental``, which withholds ``pz_action_craft`` per install and says
+#: why — an answer a caller can read — whereas an entry here would hide the
+#: action from every install including the one that proves it.
 UNPUBLISHED_ACTIONS: Final[dict[ActionName, str]] = {}
 
 #: Actions whose argument check cannot be driven from a published example, with

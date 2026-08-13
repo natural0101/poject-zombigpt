@@ -454,7 +454,9 @@ _QUARANTINE: Final = "untrusted_text"
 #: Every capability any tool names. A report that marks all of them usable is
 #: what makes the running server publish the whole catalogue.
 _ALL_CAPABILITIES: Final[tuple[str, ...]] = (
+    "building",
     "combat_assist",
+    "crafting",
     "door_toggle",
     "drink_carried",
     "drink_world_source",
@@ -482,6 +484,11 @@ _EVERY_TOOL: Final[tuple[str, ...]] = (
     "pz_action_inspect_world",
     "pz_action_inspect_container",
     "pz_action_search_inventory",
+    "pz_action_inspect_recipe",
+    # The building rung's read half, published beside the other looks and free
+    # on every install: it is the reading a user consults before granting the
+    # P4 that raises something permanent.
+    "pz_action_inspect_buildable",
     "pz_action_move_to",
     "pz_action_move_near",
     "pz_action_open_container",
@@ -502,6 +509,14 @@ _EVERY_TOOL: Final[tuple[str, ...]] = (
     "pz_action_shove",
     "pz_action_engage",
     "pz_action_retreat",
+    # The crafting rung's write half, published after the combat block and
+    # before the survival pair — where the catalogue puts it and therefore
+    # where a client's picker shows it.
+    "pz_action_craft",
+    # The building rung's write half, after the craft and before the survival
+    # pair. P4 flat and behind an experimental capability, so on a clean
+    # install a picker shows the reading above and not this.
+    "pz_action_build",
     "pz_action_rest",
     "pz_action_sleep",
     "pz_action_wait",

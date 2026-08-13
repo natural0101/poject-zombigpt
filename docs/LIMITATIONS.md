@@ -14,7 +14,7 @@ running game — see [`PROGRESS.md`](PROGRESS.md).
 **1. Live game validation has never run.** Not once. No probe in
 `pz_agent_core.capabilities` has ever been confirmed against a running Project
 Zomboid; every row in `docs/GAME_API_VERIFICATION.md` is `requires_live` with an
-empty "Actual" column, 52 symbols in total; all twenty scenarios in
+empty "Actual" column, 168 symbol rows in total; all twenty-two scenarios in
 `pz_agent_cli.livetest` are `NOT_RUN`; the sixteen files under
 `tests/game-smoke/` have never been executed against a game. That includes
 `ISTakeWaterAction`, whose argument order the document flags as unconfirmed and
@@ -101,6 +101,32 @@ vehicle's storage can be named as a container, and `survival.sleep` takes an
 **Anything requiring an unverified capability.** `_capability_gate` refuses, and
 on the agent's own initiative even `available_unverified` is not enough.
 
+**Build on the agent's own initiative — or take anything down at all.** This
+build *can* place a structure: `building.build`, one blueprint on one observed
+square, one command. Two limitations come with it and neither is a formality.
+It is `P4` and the tier never moves, and `_p4_gate` has no autonomous path at
+all, so a wall is raised on your own initiative with an explicit grant per call
+and never on the agent's — no arbiter, no initiative table and no plan provider
+can mint a `build_structure` goal. And **nothing in this project removes a
+structure**: there is no demolition action in the protocol, in the adapters or
+in the mod, because taking down what somebody put there is a different authority
+this build does not have. A placement is the one thing the agent does that
+neither it nor a later observation can walk back, which is why the building
+policy refuses an occupied square, a placement that would take away the last way
+out the observation can see, and a map it could not read — all before anything
+is queued. `pz_action_build` is also withheld on every install this project can
+ship to; see *Not published, and why* below.
+
+**Craft on the agent's own initiative.** `crafting.craft` is `P3` because it
+destroys what it spends, and `P4` whenever the recipe may need a surface or
+world-container materials — and `_p4_gate` has no autonomous path at all. No
+needs arbiter, no initiative table and no plan provider mints a craft: the
+`craft_item` goal is reached by an explicit user submission and by nothing else,
+because a provider planning a craft would be a model deciding which of the
+character's possessions to destroy. Nor does the mission go shopping for what is
+missing — a recipe short of materials ends the goal naming the shortfall, and
+whether to loot for it is the user's next sentence.
+
 **Write game statistics directly.** Setting `hunger = 0` always "succeeds",
 which is precisely why it is forbidden.
 
@@ -111,25 +137,39 @@ which is precisely why it is forbidden.
 These are not design trades. They are places where a component exists, is
 tested, and is not connected to the thing that would use it.
 
-**The agent cannot walk: the mod emits no square tier.** This is the largest gap
-in the build and it blocks every scenario involving movement.
+**The agent still cannot walk — and the reason has changed.** This is the
+largest gap in the build and it blocks every scenario involving movement.
 
 `movement.move_to`, `movement.move_near`, `world.inspect` and the navigation
 local map all locate the destination square by scanning `nearby.objects` for an
 entry whose `kind` is the literal `square`, reading `loaded` / `blocked` /
-`closed_window` / `drop` from its `semantics`. The mod has no code path that
-emits one: `Observe.nearbyObjects` sets each entry's `kind` from the container
-type, from `getObjectName` lowercased, or to the literal `corpse`;
-`Refs.KIND.SQUARE` occurs only where reference *strings* are minted and parsed;
-`Observe.nearbyFields` exports `objects` and `zombies` and no square tier; and
-the strings `"loaded"`, `"blocked"` and `"closed_window"` appear nowhere in the
-mod's Lua. Driven against a document shaped the way `Observe.nearbyObjects`
-shapes it, a one-square walk east refuses `TARGET_NOT_LOADED` — "no loaded
-square was reported at (1201, 3400, 0)".
+`closed_window` / `drop` from its `semantics` (`movement.py`,
+`_find_square`). Nothing puts such an entry there: `Observe.nearbyObjects` sets
+each entry's `kind` from the container type, from `getObjectName` lowercased, or
+to the literal `corpse`, and `Refs.KIND.SQUARE` occurs only where reference
+*strings* are minted and parsed. Driven against a document shaped the way
+`Observe.nearbyObjects` shapes it, a one-square walk east refuses
+`TARGET_NOT_LOADED` — "no loaded square was reported at (1201, 3400, 0)".
 
-It survived a fully green suite because the sidecar's own fixtures mint the
+What changed is that squares are now **observed**, just not where movement
+looks. The crafting/building wave needed a path check of its own — a structure
+the agent raises is one it has no action to remove, so a placement that would
+seal the character in must be refused — and it publishes
+`Observe.describeSquares` into a separate `nearby.squares` tier with `loaded`,
+`passable`, `free` and `floor` read tri-state. So the fix is no longer "write the
+producer"; it is to point `movement` at the tier that now exists, or to have the
+mod mint the object entries as well. Neither was done here, because which side
+moves is a contract decision whose only real test is a live game, and because
+the earlier attempt at the object-entry form was rejected under adversarial
+verification for colliding with the refs `buildObject` already mints.
+
+The gap survived a fully green suite because the sidecar's own fixtures mint the
 square objects the mod never sends (`tests/fixtures/adapter_worlds.py:a_square`),
-so each side was only ever tested against its own idea of the document.
+so each side was only ever tested against its own idea of the document. That is
+also why `tests/contract/test_gates_without_producers.py` keeps a row for it:
+the row's pattern was briefly satisfied by the new section's own *comment*
+explaining the gap, which would have retired the largest limitation in the build
+on a sentence, so the ledger now strips Lua comments before it looks.
 
 **A world container can be named but never resolved, so nothing loots.** The
 third gap of the square tier's shape, and the one that takes a whole goal kind
@@ -166,24 +206,33 @@ present under other names. Measured field by field:
 | block | sidecar reads | mod sends | overlap |
 | --- | --- | --- | --- |
 | `food` | 22 | 8 | 6 |
-| `literature` | 11 | 5 | 2 |
+| `literature` | 11 | 6 | 6 |
 | `fluid` | 16 | 3 | 1 |
+
+**`literature` is repaired; it is kept in the table as the worked example.** The
+crafting wave renamed the mod's three drifted keys to the sidecar's spelling
+(`pages` → `pages_total`, `skill_level_min`/`skill_level_max` → `min_level`/
+`max_level`) and gave `unread_recipes` a real producer, so every key the mod
+sends in this block is now one the sidecar reads. `food` and `fluid` still
+diverge, and the paragraphs below are about them.
 
 `ObserveModel.domain` passes keys through verbatim — it sorts, caps and shapes
 values but never renames — and `FoodView.from_payload` and its siblings read
 `item.food` / `item.literature` / `item.fluid` straight off the observation. So
-the names have to agree, and mostly they do not. The clearest cases are the same
-fact under two names: the mod sends `pages`, `skill_level_min`, `skill_level_max`
-while the sidecar reads `pages_total`, `min_level`, `max_level`; the mod sends
-`amount` and `capacity` while the sidecar reads `remaining_units` and
-`capacity_units`; the mod sends `rotten` as a boolean while the sidecar asks
-whether `freshness == "rotten"`.
+the names have to agree, and for two of the three blocks they do not. The
+clearest cases are the same fact under two names: the mod sends `amount` and
+`capacity` while the sidecar reads `remaining_units` and `capacity_units`; the
+mod sends `rotten` as a boolean while the sidecar asks whether
+`freshness == "rotten"`. Literature had three more of exactly this shape —
+`pages`, `skill_level_min`, `skill_level_max` against `pages_total`,
+`min_level`, `max_level` — and they are the ones now fixed, on the mod's side,
+so one spelling goes over the wire.
 
 Because every reader defaults a missing key (`read_str` to `""`, the numeric
 readers to zero or a supplied default), nothing errors. The decisions simply come
 out as though the world were uniformly bland: **`FoodView.is_rotten` is always
-false**, a book's length and read-progress are unknown, and a bottle's remaining
-volume is not what the mod measured.
+false** and a bottle's remaining volume is not what the mod measured. A book's
+length and read-progress used to be in that list and are not any more.
 
 What survives the mismatch is worth stating precisely, because it is the
 difference between a sharp hazard and a dull one — and the precise version is
@@ -197,7 +246,17 @@ reads as false on that key. Whether the game ever flags them that way is a
 live-game question, not one this side can answer.
 
 What is lost outright is the softer judgement — rot, freshness, portions left,
-pages left, alcohol.
+alcohol. Pages left has been recovered.
+
+**And a fourth free-form block has since opened.** The crafting wave stamps a
+`crafting` table onto each item, which `policy/crafting.py` and
+`observation/compact.py` read back out of `ItemView.extra`. That is the same
+untyped passthrough the three blocks above went through, with the same nothing
+forcing the two vocabularies to agree — the divergence is not present today and
+no test compares them, which is exactly the state `food`, `literature` and
+`fluid` were in before anyone measured. `tests/contract/test_item_domain_vocabularies.py`
+records it in `STRUCTURAL_FREEFORM` so the tier's "agrees key for key" claim
+stays honest about what it does not cover.
 
 **One of these is now repaired without its producer, and it shows what the other
 repairs look like.** `unread_recipes` is read by the sidecar and sent by nobody,
@@ -550,13 +609,48 @@ to interrupt and no queue entry to cancel, and a panic stop cannot reach them.
 water action as unconfirmed. A missing tool here is a capability answer, not an
 error, and `pz://capabilities` says which ones are withheld and why.
 
-**`world.inspect`, `container.inspect` and `inventory.search` carry no
-capability evidence at all.** They gate on the observation tier they read rather
-than on a probe, because everything they read is reached through Java accessors
-that never appear in the game's Lua — a probe over those names would report
-`unsupported` on a perfectly healthy install. So "the scan says nothing about
-these three" is by design, and it does mean they are the three actions whose
-availability rests on no runtime evidence.
+**`pz_action_craft` is absent from `list_tools` on every install this project
+can ship to.** Its `crafting` capability is `experimental` for two reasons at
+once. Build 42 rewrote crafting, so every recipe accessor the mod names — the
+known-recipe collection, the script-manager lookup, the ingredient and output
+readers, the craft action class itself — is an unconfirmed guess probed through
+a closed candidate list; the crafting rows in `docs/GAME_API_VERIFICATION.md`
+are jointly the least certain in that document. And a wrong guess is paid for
+differently here than anywhere else: a craft that goes wrong has already spent
+the materials by the time anyone finds out, and no observation returns them.
+Only a live run — the recipe's product observed in the inventory afterwards —
+promotes the capability. `pz_action_inspect_recipe` is deliberately *not*
+withheld with it, because reading a recipe spends nothing.
+
+**`pz_action_build` is absent from `list_tools` on every install this project
+can ship to, and `pz_action_inspect_buildable` is not.** That split is the whole
+shape of the building rung on a clean install: the reading is published, the
+placement is not. `building` is `experimental` for the crafting capability's two
+reasons — Build 42 rewrote construction, so every blueprint accessor the mod
+names is an unconfirmed guess probed through a closed candidate list — plus one
+that has no counterpart anywhere else here: a placement that goes wrong has put
+an object into the world and nothing in this project takes it out again. Only a
+live run, with the structure observed standing on the square, promotes it. The
+reading is not withheld with it because it is what a user consults *before*
+granting the P4, and taking it away would make that decision less informed
+rather than safer.
+
+**An experimental capability cannot be promoted from a running session.** It is
+not usable, the action engine refuses an unusable capability before it sends
+anything, and `safety.disabled_capabilities` only ever subtracts — so the live
+run that would confirm `survival_sleep`, `drink_world_source`, `combat_assist`,
+`crafting` or `building` cannot itself be issued on a stock install. Promotion
+is a deliberate change to this project, not an operator step, and
+`docs/LIVE_TEST_PLAYBOOK.md` says so where it bites: S21 and S22 reach their
+reading halves on any install and their write halves on none.
+
+**`world.inspect`, `container.inspect`, `inventory.search`, `crafting.inspect`
+and `building.inspect` carry no capability evidence at all.** They gate on the
+observation tier they read rather than on a probe, because everything they read
+is reached through Java accessors that never appear in the game's Lua — a probe
+over those names would report `unsupported` on a perfectly healthy install. So
+"the scan says nothing about these five" is by design, and it does mean they are
+the five actions whose availability rests on no runtime evidence.
 
 **`allow_windows` is not published.** The movement adapter refuses it with
 `POLICY_DENIED`, so offering it would advertise something policy forbids.
@@ -566,17 +660,21 @@ availability rests on no runtime evidence.
 ## Things mocks do not prove
 
 `tests/lua/` runs the mod's real modules under a plain Lua interpreter with
-mocked engine globals — 26 suites covering the command dispatcher, the action
+mocked engine globals — suites covering the command dispatcher, the action
 runtime, the safety layer, the observation model, ownership, sequence handling
-and all ten adapter files. The cross-language reference agreement is asserted
+and every adapter file. The cross-language reference agreement is asserted
 from the Python side, in `tests/unit/test_lua_observation_contract.py`, which
 runs the mod's own observation builder and puts its bytes through the schema and
 the dataclasses.
 
-It does **not** prove that `ISInventoryTransferAction`, `ISEatFoodAction` or
-`ISReadABook` behave as expected in Build 42.20. Only a live session does that.
+It does **not** prove that `ISInventoryTransferAction`, `ISEatFoodAction`,
+`ISReadABook`, `ISCraftRecipeAction` or `ISBuildAction` behave as expected in
+Build 42.20. Only a live session does that. The crafting and building readers
+are the sharpest case: a mocked `getKnownRecipes` answers because the mock was
+written to answer, and whether Build 42 spells it that way at all — or spells a
+blueprint lookup `getBuildRecipe` — is exactly the open question.
 
-Two catalogues track those runs — `pz_agent_cli.livetest` (20 scenarios, which
+Two catalogues track those runs — `pz_agent_cli.livetest` (22 scenarios, which
 the release gate enforces) and `tests/game-smoke/` (15 plus an endurance run,
 judged by a reviewer) — and their numbering collides, so a scenario id is
 ambiguous unless the catalogue is named with it. See `docs/RELEASE.md`.

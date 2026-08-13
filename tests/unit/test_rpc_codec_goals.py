@@ -130,6 +130,20 @@ REQUIRED_PARAMS: dict[GoalKind, GoalParams] = {
     # contract) — putting a kill order on the remote link is a protocol
     # change nobody makes by accident.
     GoalKind.ENGAGE_SINGLE_ZOMBIE: GoalParams(),
+    # The crafting kind is the first whose required parameter is a game
+    # identifier rather than a number or a closed token, so unlike its
+    # neighbours it cannot be admitted bare: a craft order with no product
+    # names nothing to make. The parameter crosses this codec (pinned below);
+    # the kind itself still rides the not-on-the-wire carve-out, because a
+    # remote link that could spend a character's materials is a protocol
+    # change, not a table entry.
+    GoalKind.CRAFT_ITEM: GoalParams(product="Base.SpearCrude"),
+    # The building kind needs four: what to raise, and the square to raise it
+    # on. The square reuses navigate_to's coordinates rather than minting a
+    # second triple — one place for "where the world ends", not two.
+    GoalKind.BUILD_STRUCTURE: GoalParams(
+        structure="carpentry_wall", target_x=1200, target_y=3400, target_z=0
+    ),
 }
 
 #: Tokens that are not goals. None of them resolves through ``parse_kind`` —

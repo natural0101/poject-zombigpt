@@ -68,6 +68,50 @@ ObserveModel.MAX_ITEMS_PER_CONTAINER = 128
 ObserveModel.MAX_DEPTH = 4
 ObserveModel.MAX_OBJECTS = 64
 ObserveModel.MAX_ZOMBIES = 64
+
+--- Square descriptions one observation publishes, and the kind that separates
+--- them from the objects they ride beside.
+---
+--- They travel inside `nearby.objects` because that array is the only place in
+--- schemas/observation.schema.json a new nearby shape can go: the nearby block
+--- is `additionalProperties: false`, while each entry inside it is open. The
+--- kind token is what tells the two populations apart, and the two caps are
+--- separate for a reason -- a talkative floor must never be what pushes the
+--- doors and the containers out of the document. Set to the reader's own window
+--- (Observe.MAX_DESCRIBED_SQUARES), so the cap here only ever bites on a caller
+--- that sent more than the window holds.
+ObserveModel.MAX_SQUARE_ENTRIES = 49
+ObserveModel.SQUARE_KIND = "square"
+
+--- The vocabulary a square description speaks, and the whole of it.
+---
+--- Not invented here. `pz_agent_core.actions.adapters.movement` has read these
+--- exact tokens off `nearby.objects` since it was written -- `loaded` gates
+--- move_to, `blocked` fails it, `drop` and `closed_window` refuse it -- and
+--- `pz_agent_core.navigation.local_map` and `pz_agent_core.policy.building`
+--- read the same ones. Nothing in the mod emitted them until the build policy
+--- needed a map, which is why they are declared here as a table rather than
+--- spelled inline: one place decides what the planner sees, and a test can
+--- assert the set instead of restating it.
+---
+--- Each token is a POSITIVE reading and never a default. A square whose
+--- passability no reader would answer carries no `blocked` -- it carries no
+--- claim at all, and the limit counters below say the reading was missing, so
+--- a consumer can tell "there is a way through" from "we could not tell".
+---
+--- `closed_window` and `stairs` are absent on purpose: both are facts about an
+--- object standing on a square rather than about the square, and the object
+--- entries already carry them. Emitting them here would be the same fact in two
+--- places, free to disagree.
+ObserveModel.SQUARE_SEMANTIC = {
+  LOADED = "loaded",
+  BLOCKED = "blocked",
+  DROP = "drop",
+  -- Not part of the movement vocabulary: this one is the build policy's, and it
+  -- is the engine's own answer to "is anything standing here", which is a
+  -- different question from whether a character could walk through.
+  OCCUPIED = "occupied",
+}
 ObserveModel.MAX_MOODLES = 24
 ObserveModel.MAX_WOUNDS = 24
 ObserveModel.MAX_STATS = 48
@@ -80,6 +124,39 @@ ObserveModel.MAX_HASH_INPUT_BYTES = 512
 --- Namespace for the observer's own limit reporting inside `player.stats`.
 --- The dot cannot appear in a Java accessor name, so no game stat collides.
 ObserveModel.LIMIT_PREFIX = "observe."
+
+--- Namespace for what the character can make, inside the same map.
+---
+--- `player.stats` is where this has to go. The schema is
+--- `additionalProperties: false` at every level except item and nearby
+--- entries, so a `crafting` block of its own would be a protocol change; the
+--- stats map is the one open scalar map that survives Observation.from_dict,
+--- which is why the observer's limits and the equipped weapon's wear already
+--- live there. The dot keeps the namespace clear of any game stat, exactly as
+--- LIMIT_PREFIX does.
+---
+--- Scalars are all this map can hold, so what travels is a count of what is
+--- known, a count of what is ready, and one boolean per published recipe --
+--- the recipe's own token as the key, "its materials are on the character" as
+--- the value. The requirement lists cannot travel here at all, which is why
+--- they ride the item tier instead (see `itemCrafting`); this map is the
+--- standing "what can this character make" a planner watches.
+ObserveModel.CRAFTING_PREFIX = "crafting."
+ObserveModel.RECIPE_PREFIX = ObserveModel.CRAFTING_PREFIX .. "recipe."
+
+--- Recipe keys one observation publishes. Well under MAX_STATS, because these
+--- keys sort ahead of most game stats and the character's own readings must
+--- not be the ones that fall off the end of the cap.
+ObserveModel.MAX_RECIPE_KEYS = 12
+
+--- Recipe entries one item may carry, and requirement lines one entry may
+--- name. The item tier is the other place the schema leaves open, and it is
+--- where a recipe's requirement list has to travel: it is a list of objects,
+--- and the stats map holds scalars only. Both bounds are the sidecar's
+--- (`pz_agent_core.policy.crafting`), mirrored here so a document this file
+--- produced is never one that side would truncate on arrival.
+ObserveModel.MAX_ITEM_RECIPES = 8
+ObserveModel.MAX_RECIPE_MATERIALS = 8
 
 --- Reported when the game exposed no readable save identity. A literal, not a
 --- hash: sixteen hex characters mean "this save", and inventing them for a save
@@ -357,6 +434,10 @@ local function newLimits()
     stats_omitted = 0,
     objects_truncated = false,
     objects_omitted = 0,
+    squares_truncated = false,
+    squares_omitted = 0,
+    passable_unknown = false,
+    occupied_unknown = false,
     zombies_truncated = false,
     zombies_omitted = 0,
     zombies_unknown = false,
@@ -381,6 +462,16 @@ local LIMIT_KEYS = {
   "stats_omitted",
   "objects_truncated",
   "objects_omitted",
+  "squares_truncated",
+  "squares_omitted",
+  -- The two readings a square description can be missing. They are limit keys
+  -- rather than per-square tokens because they are a property of the build --
+  -- either the accessor is there or it is not -- and because the alternative
+  -- is emitting a token for something nobody read. A consumer that needs the
+  -- square map must treat either of these as "this map cannot be trusted to
+  -- show a way out", which is what the build policy does with them.
+  "passable_unknown",
+  "occupied_unknown",
   "zombies_truncated",
   "zombies_omitted",
   "zombies_unknown",
@@ -406,6 +497,173 @@ function ObserveModel.applyLimits(stats, limits)
     if value == true or (type(value) == "number" and value > 0) then
       stats[ObserveModel.LIMIT_PREFIX .. key] = value
     end
+  end
+  return stats
+end
+
+-- ---------------------------------------------------------------------------
+-- crafting
+-- ---------------------------------------------------------------------------
+
+--- One recipe's segment inside the crafting namespace, or nil when the
+--- engine's name cannot be carried as a token.
+---
+--- Spaces become underscores, exactly as `place` does it and for the same
+--- reason: this token is how a `crafting.craft` command names the recipe back,
+--- so both sides have to spell it the same way, and one substitution applied
+--- identically everywhere is a spelling rather than a guess. Any other byte
+--- outside the reference alphabet drops the entry -- a recipe the sidecar
+--- could not name back is one it must not be shown.
+function ObserveModel.recipeToken(name)
+  if type(name) ~= "string" or #name == 0 then
+    return nil
+  end
+  return ObserveModel.token((name:gsub(" ", "_")))
+end
+
+--- One requirement line, or nil when it cannot be carried whole.
+local function materialNeed(raw)
+  if type(raw) ~= "table" then
+    return nil
+  end
+  local fullType = ObserveModel.token(raw.full_type)
+  local count = ObserveModel.integer(raw.count)
+  if fullType == nil or count == nil or count < 1 then
+    return nil
+  end
+  return { full_type = fullType, count = count }
+end
+
+--- The crafting readout one item carries, shaped and bounded, or nil.
+---
+--- All-or-nothing per entry, matching the sidecar's own reader: an entry that
+--- cannot name what it makes has no postcondition, and one whose requirement
+--- list is only partly readable would understate what the craft is about to
+--- spend. Either failing drops that entry rather than trimming it.
+---
+--- Ordered by name so the same inventory always produces the same bytes, and
+--- deliberately NOT passed through `domain`: that function keeps scalars only,
+--- which is right for food and fluid and would silently discard the one field
+--- here that matters most.
+function ObserveModel.itemCrafting(raw)
+  if type(raw) ~= "table" or type(raw.recipes) ~= "table" then
+    return nil
+  end
+  local recipes = {}
+  local known = 0
+  for index = 1, #raw.recipes do
+    if #recipes >= ObserveModel.MAX_ITEM_RECIPES then
+      break
+    end
+    local entry = raw.recipes[index]
+    if type(entry) == "table" and type(entry.materials) == "table" then
+      local name = ObserveModel.recipeToken(entry.name)
+      local product = ObserveModel.token(entry.product)
+      local materials = {}
+      local whole = #entry.materials > 0 and #entry.materials <= ObserveModel.MAX_RECIPE_MATERIALS
+      for line = 1, #entry.materials do
+        local need = materialNeed(entry.materials[line])
+        if need == nil then
+          whole = false
+          break
+        end
+        materials[line] = need
+      end
+      if name ~= nil and product ~= nil and whole then
+        local recipe = {
+          name = name,
+          product = product,
+          display_name = ObserveModel.text(entry.display_name) or name,
+          materials = json().array(materials),
+        }
+        -- Tri-state on both flags: absent means the build did not say, and the
+        -- sidecar reads absence as the cautious answer rather than the
+        -- convenient one. A fabricated boolean here would spend that caution.
+        if type(entry.known) == "boolean" then
+          recipe.known = entry.known
+          if entry.known then
+            known = known + 1
+          end
+        end
+        if type(entry.needs_surface) == "boolean" then
+          recipe.needs_surface = entry.needs_surface
+        end
+        recipes[#recipes + 1] = recipe
+      end
+    end
+  end
+  if #recipes == 0 then
+    return nil
+  end
+  sort(recipes, function(left, right)
+    return left.name < right.name
+  end)
+  return {
+    recipes = json().array(recipes),
+    recipe_count = #recipes,
+    known_recipe_count = known,
+  }
+end
+
+--- Fold the crafting reading into `stats`, emitting only what was read.
+---
+--- The counts are derived here, from the entries that actually survived
+--- tokenising, rather than taken from the reader: two places counting the same
+--- list is how a document ends up saying it published four recipes beside three
+--- keys. Silence means the build said nothing about recipes at all -- it never
+--- means "this character can make nothing", which is why `crafting.known` is
+--- emitted whenever the count was read, including when it is zero.
+function ObserveModel.applyCrafting(stats, fields)
+  if type(stats) ~= "table" or type(fields) ~= "table" then
+    return stats
+  end
+  local prefix = ObserveModel.CRAFTING_PREFIX
+  local known = ObserveModel.integer(fields.known)
+  if known ~= nil and known >= 0 then
+    stats[prefix .. "known"] = known
+  end
+
+  local recipes = type(fields.recipes) == "table" and fields.recipes or {}
+  local entries = {}
+  local judged = 0
+  for index = 1, #recipes do
+    local entry = recipes[index]
+    if type(entry) == "table" then
+      local token = ObserveModel.recipeToken(entry.name)
+      -- A recipe whose materials could not be judged carries no key: the value
+      -- would have to be a boolean, and either boolean is a claim about
+      -- ingredients nobody read. The counts below say how many there were.
+      if token ~= nil and type(entry.ready) == "boolean" then
+        judged = judged + 1
+        entries[judged] = { key = ObserveModel.RECIPE_PREFIX .. token, ready = entry.ready }
+      end
+    end
+  end
+  sort(entries, function(left, right)
+    return left.key < right.key
+  end)
+
+  local listed, ready = 0, 0
+  for index = 1, judged do
+    if listed >= ObserveModel.MAX_RECIPE_KEYS then
+      break
+    end
+    listed = listed + 1
+    stats[entries[index].key] = entries[index].ready
+    if entries[index].ready then
+      ready = ready + 1
+    end
+  end
+  if listed > 0 then
+    stats[prefix .. "listed"] = listed
+    stats[prefix .. "ready"] = ready
+  elseif #recipes > 0 then
+    -- Recipes were named and not one of them could be judged. Saying so is what
+    -- keeps a planner from reading the silence as "nothing can be made".
+    stats[prefix .. "materials_unknown"] = true
+  end
+  if fields.truncated == true or judged > listed then
+    stats[prefix .. "truncated"] = true
   end
   return stats
 end
@@ -694,6 +952,13 @@ function ObserveModel.player(sessionId, fields, limits)
   else
     limits.wounds_unknown = true
   end
+  -- After the stat map is shaped, not before, and for the reason LIMIT_PREFIX
+  -- is: these keys are the observer's own reporting rather than a reading off
+  -- the character, and they carry their own cap. Folded in beforehand they
+  -- would spend the MAX_STATS budget the character's real stats need -- the
+  -- crafting namespace sorts ahead of `endurance`, so a talkative recipe list
+  -- would be exactly what pushed hunger off the end of it.
+  ObserveModel.applyCrafting(player.stats, fields.crafting)
   return player
 end
 
@@ -845,6 +1110,12 @@ local function buildItem(sessionId, containerRef, containerTail, descriptor)
   item.food = ObserveModel.domain(descriptor.food)
   item.literature = ObserveModel.domain(descriptor.literature)
   item.fluid = ObserveModel.domain(descriptor.fluid)
+  -- The item tier is `additionalProperties: true` in the schema, and the
+  -- sidecar collects anything it does not type under `ItemView.extra`, which is
+  -- where its crafting policy reads this from. Absent unless the reader
+  -- actually produced entries -- an item with no recipes on it is an item the
+  -- crafting reading had nothing to say about.
+  item.crafting = ObserveModel.itemCrafting(descriptor.crafting)
   return item
 end
 
@@ -1055,6 +1326,80 @@ local function buildObject(sessionId, descriptor)
   return object
 end
 
+--- One square description, or nil when the square cannot be named.
+---
+--- Named by its square reference, which is the reference `movement.move_to`
+--- and `building.build` both take, so the square a planner reasons about and
+--- the square a command names are the same string rather than two spellings
+--- that have to agree.
+---
+--- That choice has a cost and it is paid deliberately. An object with no
+--- container and no object index is also named by its square, so a description
+--- can carry the same `ref` as an object entry beside it; `observation.diff`
+--- keys a ref array by `ref` and requires those to be unique, so an array
+--- holding such a pair is diffed whole rather than entry by entry. The
+--- alternative was a reference of some other kind, which would be a reference
+--- no command could take -- and a square the planner can reason about but not
+--- name back is worth less than a compact delta. Nothing is corrupted either
+--- way: the diff falls back, it does not mis-key.
+---
+--- Every semantic is a positive reading. A fact the reader could not establish
+--- produces no token and raises a limit instead, because the consumers here are
+--- a walk that must not step into a wall and a placement that must not seal
+--- somebody in -- and for both of those, a fabricated token is the one value
+--- that turns "we could not tell" into "there is a way out".
+local function buildSquare(sessionId, descriptor, limits)
+  if type(descriptor) ~= "table" then
+    return nil
+  end
+  local distance = ObserveModel.clamp(descriptor.distance, 0, math.huge)
+  local ref = refs().buildSquare(
+    sessionId,
+    ObserveModel.integer(descriptor.x),
+    ObserveModel.integer(descriptor.y),
+    ObserveModel.integer(descriptor.z)
+  )
+  if ref == nil or distance == nil then
+    return nil
+  end
+  local names = ObserveModel.SQUARE_SEMANTIC
+  local semantics = {}
+  local loaded = descriptor.loaded == true
+  if loaded then
+    semantics[#semantics + 1] = names.LOADED
+  end
+  if descriptor.passable == false then
+    semantics[#semantics + 1] = names.BLOCKED
+  elseif loaded and type(descriptor.passable) ~= "boolean" and type(limits) == "table" then
+    -- Loaded, and this build would not say whether it can be crossed. Declared
+    -- once for the document rather than guessed at per square.
+    limits.passable_unknown = true
+  end
+  if descriptor.free == false then
+    semantics[#semantics + 1] = names.OCCUPIED
+  elseif loaded and type(descriptor.free) ~= "boolean" and type(limits) == "table" then
+    limits.occupied_unknown = true
+  end
+  if descriptor.floor == false then
+    -- The floor reader answered, and answered that there is none. A missing
+    -- reader leaves this out entirely: `drop` refuses a square outright, and
+    -- refusing solid ground because nobody could read its floor would be the
+    -- same fabrication pointing the other way.
+    semantics[#semantics + 1] = names.DROP
+  end
+  local entry = {
+    ref = ref,
+    kind = ObserveModel.SQUARE_KIND,
+    distance = distance,
+    semantics = tokenList(semantics, nil, ObserveModel.MAX_SEMANTICS),
+  }
+  local position = nearbyPosition(descriptor)
+  if position ~= nil then
+    entry.position = position
+  end
+  return entry
+end
+
 --- One zombie. `visible` and `chasing` are omitted when the reader could not
 --- read them, and the omission is declared through the limit counters -- the
 --- sidecar reads a missing `chasing` as false, which understates the threat, so
@@ -1122,10 +1467,32 @@ local function boundedNearby(built, cap, truncatedKey, omittedKey, limits)
   return json().array(built)
 end
 
+--- Two separately capped populations in one array, still nearest first.
+---
+--- The caps are applied before the merge and the order after it, so the square
+--- descriptions can neither displace an object nor break the "nearest first"
+--- promise the whole array makes. Ties fall back to the reference, exactly as
+--- byDistance does everywhere else, so the same world produces the same bytes.
+local function mergeNearby(objects, squares)
+  if #squares == 0 then
+    return objects
+  end
+  local merged = {}
+  for index = 1, #objects do
+    merged[index] = objects[index]
+  end
+  for index = 1, #squares do
+    merged[#merged + 1] = squares[index]
+  end
+  sort(merged, byDistance)
+  return json().array(merged)
+end
+
 --- The nearby block: what is around the player, nearest first.
 function ObserveModel.nearby(sessionId, fields, limits)
   local objects = {}
   local zombies = {}
+  local squares = {}
   if type(fields) == "table" then
     local rawObjects = type(fields.objects) == "table" and fields.objects or {}
     for index = 1, #rawObjects do
@@ -1145,9 +1512,26 @@ function ObserveModel.nearby(sessionId, fields, limits)
         zombies[#zombies + 1] = zombie
       end
     end
+    local rawSquares = type(fields.squares) == "table" and fields.squares or {}
+    for index = 1, #rawSquares do
+      local entry = buildSquare(sessionId, rawSquares[index], limits)
+      if entry == nil then
+        limits.squares_omitted = limits.squares_omitted + 1
+      else
+        squares[#squares + 1] = entry
+      end
+    end
     if fields.objects_truncated == true then
       limits.objects_truncated = true
       limits.objects_omitted = limits.objects_omitted + (ObserveModel.integer(fields.objects_dropped) or 1)
+    end
+    if fields.squares_truncated == true then
+      -- The reader's own count of squares it never described, which no cap here
+      -- can see. It has to travel: a square nobody described sits at the edge
+      -- of the window, and the edge of the window is where a trap check stops
+      -- and calls it a way out.
+      limits.squares_truncated = true
+      limits.squares_omitted = limits.squares_omitted + (ObserveModel.integer(fields.squares_dropped) or 1)
     end
     if fields.zombies_truncated == true then
       limits.zombies_truncated = true
@@ -1162,7 +1546,10 @@ function ObserveModel.nearby(sessionId, fields, limits)
     end
   end
   return {
-    objects = boundedNearby(objects, ObserveModel.MAX_OBJECTS, "objects_truncated", "objects_omitted", limits),
+    objects = mergeNearby(
+      boundedNearby(objects, ObserveModel.MAX_OBJECTS, "objects_truncated", "objects_omitted", limits),
+      boundedNearby(squares, ObserveModel.MAX_SQUARE_ENTRIES, "squares_truncated", "squares_omitted", limits)
+    ),
     zombies = boundedNearby(zombies, ObserveModel.MAX_ZOMBIES, "zombies_truncated", "zombies_omitted", limits),
   }
 end

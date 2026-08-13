@@ -38,7 +38,7 @@ POLICY: Final = REPO_ROOT / "packages" / "pz_agent_core" / "src" / "pz_agent_cor
 #: reads it, and the counts measured when this was written).
 DOMAINS: Final = {
     "food": ("itemFood", "food.py", 22, 8, 6),
-    "literature": ("itemLiterature", "literature.py", 11, 5, 2),
+    "literature": ("itemLiterature", "literature.py", 11, 6, 6),
     "fluid": ("itemFluid", "drink.py", 16, 3, 1),
 }
 
@@ -75,16 +75,20 @@ UNSENT: Final = {
         "total_portions",
         "unhappy_change",
     },
+    # Four keys left this set when the crafting wave landed, and they left the
+    # right way: `pages_total`, `min_level` and `max_level` were the mod
+    # spelling the same facts as `pages`, `skill_level_min` and
+    # `skill_level_max`, and it now spells them the way the sidecar reads them;
+    # `unread_recipes` gained a real producer rather than a rename. This block
+    # is the one of the three whose vocabularies now agree on every key the mod
+    # sends -- 6 of 6 -- so it is also the worked example for repairing `food`
+    # and `fluid`.
     "literature": {
         "already_read",
         "boredom_change",
         "destroyed",
         "kind",
-        "max_level",
-        "min_level",
-        "pages_total",
         "unhappy_change",
-        "unread_recipes",
     },
     "fluid": {
         "alcohol_units",
@@ -107,10 +111,20 @@ UNSENT: Final = {
 
 
 def _mod_keys(reader: str) -> set[str]:
-    """The keys one of the mod's item readers puts in its returned table."""
+    """The keys one of the mod's item readers puts in its returned table.
+
+    The parameter list is matched loosely past the item, because a reader that
+    needs something the item cannot answer for itself takes it as a second
+    argument — ``itemLiterature(item, isKnown)`` needs the character to say
+    which recipes are already known. Pinning the signature to exactly ``(item)``
+    made this file fail with "no longer a local function taking one item" for a
+    reader that was still right there, still returning a table: the same blind
+    spot ``_sidecar_keys`` had, where the seam growing a capability reads as the
+    seam disappearing.
+    """
     source = OBSERVE_LUA.read_text(encoding="utf-8")
-    match = re.search(rf"local function {reader}\(item\)(.*?)\nend", source, re.S)
-    assert match is not None, f"{reader} is no longer a local function taking one item"
+    match = re.search(rf"local function {reader}\(item[^)]*\)(.*?)\nend", source, re.S)
+    assert match is not None, f"{reader} is no longer a local function taking an item"
     return set(re.findall(r"^\s{4}(\w+) =", match.group(1), re.M))
 
 
@@ -276,6 +290,18 @@ STRUCTURAL: Final = {
     ),
 }
 
+#: Keys a structural tier sends that its typed dataclass does not name, because
+#: they ride ``ItemView.extra`` instead. Not a drift to be closed by adding a
+#: field: this is the *fourth* free-form block, and it arrived with the crafting
+#: wave. The other three -- ``food``, ``literature``, ``fluid`` -- are exactly
+#: where the two sides came to spell the same facts differently, because nothing
+#: about a ``JsonDict`` forces agreement, and ``crafting`` is now open to the
+#: same thing: the mod fills it in ``Observe.attachRecipes``, the sidecar reads
+#: it back through ``item.extra["crafting"]`` in ``policy/crafting.py`` and
+#: ``observation/compact.py``, and no test compares those two vocabularies.
+#: Listed here so the exactness claim below stays honest about what it covers.
+STRUCTURAL_FREEFORM: Final = {"item": {"crafting"}}
+
 MODEL_LUA: Final = (
     REPO_ROOT / "pz-mod" / "42" / "media" / "lua" / "shared" / "PZAgent" / "ObserveModel.lua"
 )
@@ -318,11 +344,14 @@ def test_the_structural_tiers_agree_key_for_key() -> None:
     already have. Asserting the exactness keeps that argument true.
     """
     for block, (pattern, cls, expected) in STRUCTURAL.items():
-        mod = _structural_mod_keys(block, pattern)
+        mod = _structural_mod_keys(block, pattern) - STRUCTURAL_FREEFORM.get(block, set())
         side = _structural_sidecar_keys(cls)
         assert mod, f"{block}: extracted no keys from the mod"
         assert side, f"{block}: extracted no keys from {cls}"
-        assert len(mod) == expected, f"{block}: mod now sends {len(mod)} keys, not {expected}"
+        assert len(mod) == expected, (
+            f"{block}: mod now sends {len(mod)} typed keys, not {expected} "
+            f"(free-form keys excluded: {sorted(STRUCTURAL_FREEFORM.get(block, set()))})"
+        )
         assert mod == side, (
             f"{block}: the structural tier has drifted.\n"
             f"  read but not sent: {sorted(side - mod)}\n"

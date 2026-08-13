@@ -10,12 +10,21 @@ Three properties hold here, and each of them is checked rather than documented:
 
 * **Closed.** :class:`GoalKind` and :class:`TrainableSkill` are enums, and the
   only route from a string to either of them is :func:`parse_kind` /
-  :func:`parse_skill`, which resolve against the enum or return ``None``. There
-  is no field anywhere in this module that carries free text into the core. The
-  one caller-supplied string that exists — the idempotency key — is a *handle*:
-  it is shape-checked, never interpreted, never stored on a public object and
-  never rendered, because a refusal that echoed it would put a caller's bytes in
-  a traceback.
+  :func:`parse_skill`, which resolve against the enum or return ``None``. No
+  field anywhere in this module carries free text into the core. Three strings
+  do exist on the surface and none of them is free text: the idempotency key is
+  a *handle* — shape-checked, never interpreted, never stored on a public object
+  and never rendered, because a refusal that echoed it would put a caller's
+  bytes in a traceback; ``categories`` is a comma-joined list of closed tokens
+  that :func:`parse_loot_categories` resolves against an enum; and ``product``
+  and ``structure`` are shape-checked *identifiers*, the two values here that no
+  closed vocabulary in this process can hold, because what a build can craft and
+  what it can raise are the build's facts and a table of either written here
+  would be a second, drifting copy of the game's. Both are bounded, restricted
+  to the same identifier alphabet, never interpreted, and compared only for
+  equality against strings the observation itself reported — a product no
+  observed recipe makes and a structure no observed item participates in are
+  refusals, never instructions.
 * **Bounded.** Every numeric parameter has a range in :data:`NUMERIC_RANGES` and
   is checked against it at construction. Every goal carries a
   :class:`GoalBudget` — wall-clock *and* step count *and* a pending time to live
@@ -58,6 +67,7 @@ from ..protocol import ReasonCode
 __all__ = [
     "DEFAULT_BUDGETS",
     "GOAL_SPECS",
+    "MAX_CRAFT_GOAL_COUNT",
     "MAX_DETAIL_CHARS",
     "MAX_EVIDENCE_KEYS",
     "MAX_GOAL_STEPS",
@@ -67,9 +77,11 @@ __all__ = [
     "MAX_LOOT_RADIUS",
     "MAX_PARSED_TOKEN_CHARS",
     "MAX_PENDING_TTL_MS",
+    "MAX_PRODUCT_TYPE_CHARS",
     "MAX_RENDERED_VALUE_CHARS",
     "MAX_SKILL_LEVEL",
     "MAX_SLEEP_GOAL_HOURS",
+    "MAX_STRUCTURE_NAME_CHARS",
     "MAX_SUSPENSIONS_PER_GOAL",
     "MAX_TARGET_FLOOR",
     "MAX_TARGET_SQUARE",
@@ -191,6 +203,41 @@ MAX_LOOT_CATEGORIES_CHARS: Final = 128
 #: the floor and the rest target's bounds are the adapters' own, imported
 #: rather than restated so the two layers cannot drift apart.
 MAX_SLEEP_GOAL_HOURS: Final = 12
+
+#: Longest ``product`` a ``craft_item`` goal may name, and the alphabet it may
+#: be written in. A product is a game item type (``Base.SpearCrude``-shaped),
+#: so the bound is not an opinion about names: a longer or differently-spelled
+#: string names nothing this build files a recipe under, and refusing it here
+#: keeps a model-authored sentence from travelling as a lookup key. The
+#: alphabet is what makes the value safe to carry — it admits no space, no
+#: quote, no control character and no line break — which is why this one
+#: identifier can be quoted in a diagnostic where a caller's other bytes never
+#: are. The shape is anchored with ``\Z`` for :data:`_KEY_SHAPE`'s reason.
+MAX_PRODUCT_TYPE_CHARS: Final = 64
+_PRODUCT_SHAPE: Final = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-]{0,63}\Z")
+
+#: Longest ``structure`` a ``build_structure`` goal may name, and — deliberately
+#: — :data:`MAX_PRODUCT_TYPE_CHARS` *by* it rather than beside it. A blueprint
+#: name (``WoodenWall``-shaped) is a game identifier of exactly the kind a
+#: product is: same alphabet, same width, same "the build's fact, not this
+#: process's vocabulary" reasoning, and the same bound is enforced one layer
+#: down by ``actions.adapters.building.MAX_BLUEPRINT_NAME_LEN``. Two numbers and
+#: two patterns for one shape would be two things to keep in step, and the one
+#: that drifted wider would be the one that lets a model-authored sentence
+#: travel as a lookup key — so the shape below is the same compiled pattern,
+#: not a copy of it.
+MAX_STRUCTURE_NAME_CHARS: Final = MAX_PRODUCT_TYPE_CHARS
+_STRUCTURE_SHAPE: Final = _PRODUCT_SHAPE
+
+#: Runs one ``craft_item`` submission may authorise. Deliberately the smallest
+#: number in this table that is more than one: crafting is the first thing the
+#: agent does that *destroys* what it spends, one command runs exactly one
+#: recipe once (``actions.adapters.crafting.MAX_CRAFT_COUNT``), and a
+#: submission is the unit a user consents in. Four covers "make me a few
+#: bandages" without letting one sentence authorise an afternoon of spending;
+#: a fifth run is another submission, through the policy, the permission gate
+#: and the safety stop again.
+MAX_CRAFT_GOAL_COUNT: Final = 4
 
 #: Postcondition field *names* kept on a finished goal. Values are deliberately
 #: not kept: evidence values are forwarded from the mod, which forwards them
@@ -326,6 +373,67 @@ class GoalKind(StrEnum):
     standing in a safe zone with nothing chasing.
     :class:`~pz_agent_core.planner.provider.NullProvider` refuses it by name
     like the rest of the deterministic column.
+
+    ``CRAFT_ITEM`` is the first kind whose work cannot be walked back. A
+    journey can be re-walked, a bandage can be re-applied, a swing costs the
+    character nothing it keeps; two planks and a nail spent on a spear are
+    spent, and no later observation puts them back. Everything about the kind
+    follows from that. It names a *product*, not a recipe: "make me a spear"
+    is the sentence a user says, and which recipe spends which planks is
+    :mod:`pz_agent_core.policy.crafting`'s deterministic answer, re-asked
+    against a fresh observation before every run — the sandwich rule, applied
+    to the materials. It carries a ``count`` because "make two" is a real
+    request, and that count is bounded at :data:`MAX_CRAFT_GOAL_COUNT` because
+    a submission is the unit a user consents in: one command crafts one item
+    once, the mission issues one command per run, and a run that could happen
+    again is a report rather than a retry. Success is the product *observed*
+    in the inventory afterwards, never the craft being queued. Served by the
+    CLI's deterministic craft mission (``pz_agent_cli.craft_mission``);
+    :class:`~pz_agent_core.planner.provider.NullProvider` refuses it by name
+    like the rest of the deterministic column, because a provider planning a
+    craft would be a model deciding which of the character's possessions to
+    destroy. What the mission will *not* do is go and fetch what is missing:
+    a known recipe short of materials ends the goal with
+    :attr:`~pz_agent_core.protocol.ReasonCode.RECIPE_MATERIALS_MISSING`
+    naming the shortfall, and whether to loot for it is the user's next
+    sentence, not this goal's private decision.
+
+    ``BUILD_STRUCTURE`` is ``CRAFT_ITEM``'s sibling one rung stricter, and the
+    rung is the whole difference: a craft spends what the character carries,
+    while a build puts a permanent object *into the world* — and this project
+    ships no action that takes one back down, because removing what somebody
+    put there is a different authority and this build does not have it. Four
+    consequences, and none of them is negotiable at this layer. The action the
+    kind reaches is P4 always (``actions.adapters.building.BuildingBuildAdapter``
+    declares the tier as a constant, with no ``risk_for`` to compute it down),
+    and P4 has no autonomous path anywhere in this codebase:
+    :data:`~pz_agent_core.policy.permissions.MODE_LIMITS` names no P4 ceiling in
+    any mode and the gate demands the user's own initiative plus an explicit
+    per-call grant, so the agent may never raise a wall on its own initiative,
+    in any mode, ever. The kind is therefore user-submitted only, exactly as
+    ``ENGAGE_SINGLE_ZOMBIE`` is: the needs arbiter's trigger table never names
+    it, the autonomy planner's initiative table never mints it, and
+    :class:`~pz_agent_core.planner.provider.NullProvider` refuses it by name —
+    each absence pinned by its own test. The square is *required* and it is the
+    user's: one command builds one structure once, and a placement the policy
+    refuses is reported rather than retried somewhere else, because picking a
+    different square is a decision nobody delegated. Which structure may stand
+    on which square is :mod:`pz_agent_core.policy.building`'s deterministic
+    answer, re-asked against a fresh observation before the one command — and
+    the refusal this wave exists for is
+    :attr:`~pz_agent_core.protocol.ReasonCode.WOULD_TRAP_PLAYER`: a wall the
+    agent raises cannot be taken down by the agent, so a wall that seals the
+    character in is a mistake with no undo. What that check can prove is
+    bounded and stated as such wherever it is reported — the observed map is a
+    window, so it cannot show the character is not already enclosed by
+    something outside it; what it does show is that this placement does not
+    remove the last exit in view. Success is the structure *observed* standing
+    on the square afterwards, never the build being queued. Served by the CLI's
+    deterministic build mission (``pz_agent_cli.build_mission``), which — like
+    the craft mission and for the same reason — never goes gathering: short of
+    materials it ends the goal with
+    :attr:`~pz_agent_core.protocol.ReasonCode.RECIPE_MATERIALS_MISSING` naming
+    the shortfall.
     """
 
     SATISFY_HUNGER = "satisfy_hunger"
@@ -342,6 +450,8 @@ class GoalKind(StrEnum):
     SLEEP_UNTIL_RESTED = "sleep_until_rested"
     AVOID_THREAT = "avoid_threat"
     ENGAGE_SINGLE_ZOMBIE = "engage_single_zombie"
+    CRAFT_ITEM = "craft_item"
+    BUILD_STRUCTURE = "build_structure"
 
 
 class LootScope(StrEnum):
@@ -549,15 +659,25 @@ NUMERIC_RANGES: Final[Mapping[str, NumericRange]] = MappingProxyType(
         # The floor is the sleep adapter's own; the ceiling is the channel's
         # narrower MAX_SLEEP_GOAL_HOURS, documented on that constant.
         "hours": NumericRange(MIN_SLEEP_HOURS, MAX_SLEEP_GOAL_HOURS),
+        # Runs a craft_item goal may authorise, one command each. The ceiling
+        # is the channel's own consent bound, documented on the constant.
+        "count": NumericRange(1, MAX_CRAFT_GOAL_COUNT),
     }
 )
 
 #: The parameters that are not numbers, restated so :func:`_check_tables` can
 #: insist that everything else a spec declares has a row in
-#: :data:`NUMERIC_RANGES`. Each entry here is validated by its own closed
-#: check in :class:`GoalParams` instead: an enum member, a boolean, or the
-#: closed-token string :func:`parse_loot_categories` owns.
-_NON_NUMERIC_PARAMS: Final[frozenset[str]] = frozenset({"skill", "scope", "take_all", "categories"})
+#: :data:`NUMERIC_RANGES`. Each entry here is validated by its own check in
+#: :class:`GoalParams` instead: an enum member, a boolean, the closed-token
+#: string :func:`parse_loot_categories` owns, or — for ``product`` and
+#: ``structure`` — the bounded identifier shape :data:`_PRODUCT_SHAPE` admits,
+#: which is as closed as a value can be made when the vocabulary belongs to the
+#: installed build rather than to this process. The two identifiers share one
+#: shape because they are one kind of thing: a name the game files something
+#: under, checked here and resolved only against what the observation reported.
+_NON_NUMERIC_PARAMS: Final[frozenset[str]] = frozenset(
+    {"skill", "scope", "take_all", "categories", "product", "structure"}
+)
 
 
 def _require_whole(value: object, *, name: str) -> int:
@@ -620,9 +740,13 @@ class GoalParams:
     target_level: int | None = None
     satisfy_to: float | None = None
     pages: int | None = None
-    #: Where a ``navigate_to`` goal walks to: the world square, floor included.
-    #: Whole squares, like the movement adapter's own targets — a fractional
-    #: coordinate aims between two cells and can only be refused downstream.
+    #: Where a ``navigate_to`` goal walks to, and where a ``build_structure``
+    #: goal puts its one structure: the world square, floor included. One
+    #: triple for both kinds rather than a second set of coordinate fields —
+    #: the ranges are the same ranges and a second copy of them is how two
+    #: kinds come to disagree about where the world ends. Whole squares, like
+    #: the movement adapter's own targets — a fractional coordinate aims
+    #: between two cells and can only be refused downstream.
     target_x: int | None = None
     target_y: int | None = None
     target_z: int | None = None
@@ -650,6 +774,31 @@ class GoalParams:
     #: sleep adapter's own default — the mission omits the argument rather
     #: than restating the number here.
     hours: int | None = None
+    #: What a ``craft_item`` goal makes: the item type the product must be,
+    #: as the build spells it (``Base.SpearCrude``). Not a recipe name — which
+    #: recipe makes it is the crafting policy's deterministic choice — and not
+    #: free text: :data:`_PRODUCT_SHAPE` bounds it and restricts it to the
+    #: item-type alphabet at construction, and nothing in this process ever
+    #: interprets it, only compares it to product strings the observation
+    #: itself reported.
+    product: str | None = None
+    #: How many of the product a ``craft_item`` goal wants made. One run per
+    #: item and one command per run, so this is equally "how many crafts this
+    #: submission authorises". Absent means one — the count a bare «сделай
+    #: копьё» asks for.
+    count: int | None = None
+    #: What a ``build_structure`` goal raises: the blueprint as the build
+    #: spells it (``WoodenWall``). Required beside the three coordinates,
+    #: because a structure with no square and a square with no structure are
+    #: each half a question — and the half this channel could fill in for
+    #: itself is the one it must not, since the only square a goal could pick
+    #: unaided is the one the character stands on, and walling in the square
+    #: somebody is standing on is the exact mistake this wave exists to
+    #: refuse. Not free text: :data:`_STRUCTURE_SHAPE` bounds it and restricts
+    #: it to the identifier alphabet at construction, and nothing here ever
+    #: interprets it — it is compared only against the structure names the
+    #: observation itself reported.
+    structure: str | None = None
 
     def __post_init__(self) -> None:
         if self.skill is not None and not isinstance(self.skill, TrainableSkill):
@@ -668,7 +817,7 @@ class GoalParams:
         if self.pages is not None:
             pages = _require_whole(self.pages, name="pages")
             NUMERIC_RANGES["pages"].check(pages, name="pages")
-        for name in ("target_x", "target_y", "target_z", "radius", "hours"):
+        for name in ("target_x", "target_y", "target_z", "radius", "hours", "count"):
             value = getattr(self, name)
             if value is not None:
                 coordinate = _require_whole(value, name=name)
@@ -686,6 +835,30 @@ class GoalParams:
             # caller's (checked) spelling and the mission re-parses it through
             # the same single door.
             parse_loot_categories(self.categories)
+        if self.product is not None and (
+            not isinstance(self.product, str) or not _PRODUCT_SHAPE.match(self.product)
+        ):
+            # The refusal describes the shape and does not quote the value.
+            # This is the branch a model-authored sentence reaches — "a spear,
+            # the big one" — and echoing it would put that sentence in a
+            # traceback, which is the one thing this module never does with
+            # text it did not assemble.
+            raise ValueError(
+                f"product must be 1..{MAX_PRODUCT_TYPE_CHARS} characters of letters, "
+                "digits, '.', '_' or '-', starting with a letter or digit; it names an "
+                "item type the build makes, not a phrase"
+            )
+        if self.structure is not None and (
+            not isinstance(self.structure, str) or not _STRUCTURE_SHAPE.match(self.structure)
+        ):
+            # The product check's shape and the product check's silence: this
+            # is the branch a spoken sentence reaches, and a refusal that
+            # echoed it would put that sentence in a traceback.
+            raise ValueError(
+                f"structure must be 1..{MAX_STRUCTURE_NAME_CHARS} characters of letters, "
+                "digits, '.', '_' or '-', starting with a letter or digit; it names a "
+                "blueprint the build can raise, not a phrase"
+            )
 
     def present(self) -> frozenset[str]:
         """Names of the parameters that were actually supplied."""
@@ -714,6 +887,9 @@ PARAM_NAMES: Final[tuple[str, ...]] = (
     "categories",
     "target_endurance",
     "hours",
+    "product",
+    "count",
+    "structure",
 )
 
 
@@ -852,6 +1028,39 @@ _AVOID_BUDGET: Final = GoalBudget(
 #: expiring it honestly beats swinging at a remembered position.
 _COMBAT_BUDGET: Final = GoalBudget(max_wall_ms=120_000, max_steps=8, pending_ttl_ms=30_000)
 
+#: The craft budget. The wall clock is sized to the work: the craft adapter
+#: gives one run sixty seconds, the channel bound admits at most
+#: :data:`MAX_CRAFT_GOAL_COUNT` runs, and five minutes covers all four with
+#: room for the re-observation between them — a craft still unfinished after
+#: that is a report, not a longer wait. ``max_steps`` bounds only the requests
+#: dispatched *through the goal seam*, and the craft mission's own steps do
+#: not go that way: every ``crafting.craft`` travels the loop's action channel
+#: precisely because a queued craft is not a product in the bag. What the four
+#: cover is the completion probe the mission emits when the product turns up
+#: without its command ever succeeding — the loot mission's arrangement, and
+#: the only goal-seam request this kind can make. The pending TTL is the
+#: ordinary two minutes: unlike a kill order, a craft order describes the
+#: character's own bags, which do not wander off while the goal waits.
+_CRAFT_BUDGET: Final = GoalBudget(max_wall_ms=300_000, max_steps=4, pending_ttl_ms=120_000)
+
+#: The build budget — the craft budget's sibling, tightened on the two axes
+#: where building differs from crafting. The wall clock is sized to the work
+#: and no larger: the build adapter gives its one placement thirty seconds
+#: (``actions.adapters.building.DEFAULT_BUILD_TIMEOUT_MS``, pinned by a test
+#: rather than imported — the channel keeps no dependency on the action layer)
+#: and one command is all a submission authorises, so two minutes covers the
+#: command, the re-observation that proves the structure standing, and nothing
+#: else. ``max_steps`` bounds only the goal-seam requests, which for this kind
+#: is the completion probe alone: the ``building.build`` itself travels the
+#: loop's action channel, because a queued build is not a wall. The pending TTL
+#: is *half* the craft kind's, and that is the deliberate difference between
+#: them: a craft order describes the character's own bags, which do not wander
+#: off while the goal waits, while a build order describes a square in the
+#: world that a zombie, a player or another survivor can walk onto — and a
+#: placement decided from a minute-old picture is exactly the placement the
+#: policy would have to refuse anyway. Expiring it honestly costs one sentence.
+_BUILD_BUDGET: Final = GoalBudget(max_wall_ms=120_000, max_steps=4, pending_ttl_ms=60_000)
+
 #: The whole channel in one table. Adding a kind without adding a row here
 #: fails :func:`_check_tables` at import time, not at the first submission.
 GOAL_SPECS: Final[Mapping[GoalKind, GoalSpec]] = MappingProxyType(
@@ -959,6 +1168,30 @@ GOAL_SPECS: Final[Mapping[GoalKind, GoalSpec]] = MappingProxyType(
             required=frozenset(),
             optional=frozenset(),
             budget=_COMBAT_BUDGET,
+        ),
+        # The product is required because it *is* the goal: a craft with
+        # nothing named has no postcondition to observe, and no default this
+        # channel could pick would be anything but a guess at what to destroy
+        # materials for. The count is optional because a bare «сделай копьё»
+        # asks for one spear, and the mission reads the absence as one rather
+        # than restating the number anywhere else.
+        GoalKind.CRAFT_ITEM: GoalSpec(
+            required=frozenset({"product"}),
+            optional=frozenset({"count"}),
+            budget=_CRAFT_BUDGET,
+        ),
+        # Four required parameters and nothing optional — the widest required
+        # set in the table, and every one of them required for the same
+        # reason: this kind puts something permanent on a square, so both
+        # halves of "what, and where" have to come from the person asking.
+        # There is no count, because one command builds one structure once and
+        # a number here is the first thing a loop would read; and there is no
+        # default square, because the only square this side could pick unaided
+        # is the one the character is standing on.
+        GoalKind.BUILD_STRUCTURE: GoalSpec(
+            required=frozenset({"structure", "target_x", "target_y", "target_z"}),
+            optional=frozenset(),
+            budget=_BUILD_BUDGET,
         ),
     }
 )
@@ -1364,6 +1597,18 @@ _PLANNER_KIND: Final[Mapping[GoalKind, PlannerGoalKind]] = MappingProxyType(
         # and NullProvider refuses it by name — a provider must never be the
         # thing that decides a fight is safe.
         GoalKind.ENGAGE_SINGLE_ZOMBIE: PlannerGoalKind.ENGAGE_SINGLE_ZOMBIE,
+        # The crafting kind, on the same no-provider terms and for the
+        # sharpest version of the reason: the CLI's deterministic craft
+        # mission serves it behind the wrapper, and NullProvider refuses it
+        # by name — a provider must never be the thing that decides which of
+        # the character's possessions to spend.
+        GoalKind.CRAFT_ITEM: PlannerGoalKind.CRAFT_ITEM,
+        # The building kind, on those same terms with the last of the room for
+        # argument gone: the CLI's deterministic build mission serves it behind
+        # the wrapper, and NullProvider refuses it by name — a provider must
+        # never be the thing that decides a permanent object may stand on a
+        # square, because nothing in this build can take one back down.
+        GoalKind.BUILD_STRUCTURE: PlannerGoalKind.BUILD_STRUCTURE,
     }
 )
 

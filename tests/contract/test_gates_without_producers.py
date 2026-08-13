@@ -62,7 +62,28 @@ MOD_ROOT: Final = REPO_ROOT / "pz-mod"
 
 
 def _mod_sources() -> str:
-    return "\n".join(p.read_text(encoding="utf-8") for p in sorted(MOD_ROOT.rglob("*.lua")))
+    """Every line of the mod's Lua that the engine would actually run.
+
+    Comments are stripped, and that is load-bearing rather than tidy. A row here
+    is retired when the mod gains a *producer*, so a pattern matching prose
+    retires it on a sentence. It happened: the crafting wave's ``squares``
+    section opens by explaining that ``movement`` has been reading
+    ``kind = "square"`` entries nobody published, and that explanation matched
+    the very pattern standing guard over the gap — reporting the largest gap in
+    the build as closed by the comment describing it. The squares that wave
+    publishes are a separate ``nearby.squares`` tier; ``movement.py`` still
+    scans ``nearby.objects`` for ``kind == "square"`` and still finds nothing.
+
+    Line comments only. Lua's ``--[[ ]]`` blocks are left alone deliberately:
+    stripping them needs a real parser to avoid eating a long string, and every
+    false positive seen so far has been a ``--`` line.
+    """
+    lines: list[str] = []
+    for path in sorted(MOD_ROOT.rglob("*.lua")):
+        for line in path.read_text(encoding="utf-8").splitlines():
+            code = line.split("--", 1)[0] if line.lstrip().startswith("--") else line
+            lines.append(code)
+    return "\n".join(lines)
 
 
 #: Gates the sidecar makes decisions on, whose triggering value the mod has no

@@ -1,7 +1,7 @@
 <!--
   GENERATED FILE - DO NOT EDIT BY HAND.
   Generator: pz_agent_core.knowledge.docgen.render_behavior_reference
-  Corpus revision: 7e8169d348d5b434 (sha256/16 of the canonical corpus)
+  Corpus revision: 0a01c0921b02a5a0 (sha256/16 of the canonical corpus)
   Edit knowledge/gameplay/*.yaml and regenerate; the drift test
   byte-compares this file against a fresh render.
 -->
@@ -14,6 +14,422 @@ does, what proves it, and what happens when it fails. The status badge is the
 honesty contract: `verified_script` restates behaviour this repository's tested
 code enforces, `verified_live` was observed in a live session, `unverified` is
 a hypothesis and drives nothing by itself.
+
+## Building (`building`)
+
+### `building_placement_is_p4_and_never_the_agents_own_idea`
+
+**Status:** `verified_script` · **Source:** `code` — `packages/pz_agent_core/src/pz_agent_core/actions/adapters/building.py::BuildingBuildAdapter` · **Build:** 42 · **Risk:** P4
+
+building.build is P4 and the tier is a constant: there is no argument that makes placing a permanent object cheaper, no escalation to reach it and no tier above it, and P4 has no autonomous path in this codebase at all.
+
+- **Goals:** `build_structure`
+
+**Preconditions**
+
+- The command names a blueprint and a square, both required
+
+**Actions**
+
+- `building.build`
+
+**Decision** — The adapter declares risk as a class constant and grows no risk_for, unlike crafting.craft which escalates P3 to P4 per recipe. MODE_LIMITS names no P4 ceiling in any mode and _p4_gate demands the user's own initiative plus an explicit per-call grant, so no configuration and no mode lets the agent raise a wall on its own.
+
+**Postconditions**
+
+- None recorded.
+
+**Fallback** — A P4 command reached on the agent's initiative is refused by the permission engine before anything is queued; the refusal names the tier, not the blueprint.
+
+**Proven by:** `tests/unit/test_adapters_building.py`, `tests/unit/test_mcp_catalog_actions.py`
+
+### `building_nothing_in_this_build_takes_a_structure_down`
+
+**Status:** `verified_script` · **Source:** `code` — `packages/pz_agent_core/src/pz_agent_core/protocol/enums.py::ActionName` · **Build:** 42 · **Risk:** P0
+
+There is no demolition action in this build: the protocol carries building.inspect and building.build and nothing that removes an object, so every placement the agent makes is one the agent cannot reverse — which is why the gates around it refuse more readily than crafting's.
+
+- **Goals:** `build_structure`
+
+**Preconditions**
+
+- None recorded.
+
+**Actions**
+
+- None — the rule drives no action.
+
+**Decision** — Not a decision made per command: it is the shape of the action census. ActionName holds no removal verb, no adapter implements one, and the mod registers none, so a planner asking to undo a build has nothing to name. The consequence is written into the policy rather than left implicit — a refused wall costs a sentence, a wall in the wrong place is permanent.
+
+**Postconditions**
+
+- None recorded.
+
+**Fallback** — A request to remove something is refused as an unknown action; nothing approximates it by building over the square or by clearing it.
+
+**Proven by:** `tests/unit/test_mcp_catalog.py`, `tests/lua/test_adapter_registry.lua`
+
+### `building_a_placement_that_would_seal_the_character_in_is_refused`
+
+**Status:** `verified_script` · **Source:** `code` — `packages/pz_agent_core/src/pz_agent_core/policy/building.py::enclosure_after` · **Build:** 42 · **Risk:** P4
+
+A structure that would leave the square the character stands on with no remaining route to open ground is refused with WOULD_TRAP_PLAYER before anything is queued, and the check is a four-connected flood fill over the observed window with the placement treated as a wall.
+
+- **Goals:** `build_structure`
+- **Observed inputs:** `player.position`, `nearby.objects[].position`, `nearby.objects[].semantics`
+
+**Preconditions**
+
+- The observation described a window of squares on the character's floor
+
+**Actions**
+
+- `building.build`
+
+**Decision** — enclosure_after fills from the character's own square and succeeds only on reaching a square at the edge of the described window. Diagonals are deliberately absent — whether a character may cut a wall's corner is an engine question this side cannot answer — and a door counts as a way out only when the observer positively read it as neither locked nor barricaded.
+
+**Postconditions**
+
+- None recorded.
+
+**Fallback** — WOULD_TRAP_PLAYER, carrying the enclosure answer and the claim it is entitled to make. The command does not exist yet, so nothing is cancelled and nothing is half-built.
+
+**Numbers**
+
+- `max_flood_squares` = 1024 squares — `verified_script`
+- `max_window_squares` = 1024 squares — `verified_script`
+
+**Proven by:** `tests/unit/test_policy_building.py`, `tests/unit/test_adapters_building.py`
+
+### `building_the_enclosure_claim_is_bounded_by_what_was_observed`
+
+**Status:** `verified_script` · **Source:** `code` — `packages/pz_agent_core/src/pz_agent_core/policy/building.py::EnclosureCheck` · **Build:** 42 · **Risk:** P4
+
+A passing enclosure check proves less than it looks: it cannot show the character is not already shut in by something outside the observed window, only that this placement removes no exit the observation itself found — and every way the check can fail to run is a refusal rather than a pass.
+
+- **Goals:** `build_structure`
+- **Observed inputs:** `player.position`, `nearby.objects[].semantics`
+
+**Preconditions**
+
+- None recorded.
+
+**Actions**
+
+- `building.build`
+- `building.inspect`
+
+**Decision** — The window is a bounded reading, so the claim EnclosureCheck carries is stated in the answer rather than inferred by the reader. An unreadable window, a character whose own square was not described, and a fill that reached MAX_FLOOD_SQUARES all refuse: an unreadable map is where a trapping wall is most likely, not least, and a search that ran out of budget has proven nothing.
+
+**Postconditions**
+
+- None recorded.
+
+**Fallback** — The refusal is WOULD_TRAP_PLAYER whichever of the three it was, with the detail naming which; erring toward refusal is the direction chosen, because a refused wall costs a sentence and a wall that traps the character costs the save.
+
+**Proven by:** `tests/unit/test_policy_building.py`
+
+### `building_an_occupied_square_is_never_cleared_to_make_room`
+
+**Status:** `verified_script` · **Source:** `code` — `packages/pz_agent_core/src/pz_agent_core/policy/building.py::assess_placement` · **Build:** 42 · **Risk:** P4
+
+Something already standing on the target square refuses the placement with SQUARE_OCCUPIED naming what was found; the agent never removes it, and a square that merely could not be read as clear counts as occupied too.
+
+- **Goals:** `build_structure`
+- **Observed inputs:** `nearby.objects[].position`, `nearby.objects[].semantics`, `nearby.objects[].kind`
+
+**Preconditions**
+
+- The observation described the target square on the character's floor
+
+**Actions**
+
+- `building.build`
+- `building.inspect`
+
+**Decision** — The gate order is fixed — window, structure, square readable, square free, enclosure, materials — so a picture failing several always reports the most fundamental refusal. In the mod the same question is asked again at accept time and once more before the timed action is queued, because a square that was clear at validate may not be clear now.
+
+**Postconditions**
+
+- None recorded.
+
+**Fallback** — SQUARE_OCCUPIED with the blocker named where the build would say what it was; the mission's next move is another square, never clearing this one.
+
+**Proven by:** `tests/unit/test_policy_building.py`, `tests/lua/test_adapter_building.lua`
+
+### `building_one_command_raises_one_structure_once`
+
+**Status:** `verified_script` · **Source:** `code` — `packages/pz_agent_core/src/pz_agent_core/actions/adapters/building.py::MAX_BLUEPRINT_NAME_LEN` · **Build:** 42 · **Risk:** P4
+
+One building.build command raises one structure on one square. There is no count argument anywhere on the wire — deliberately unlike crafting, which publishes its one — and no branch in the mod re-queues, so a second structure is a second command through every gate again.
+
+- **Goals:** `build_structure`
+
+**Preconditions**
+
+- The command carries a bounded blueprint identifier and a square reference this session minted
+
+**Actions**
+
+- `building.build`
+
+**Decision** — The adapter's argument set is blueprint and square and nothing else; the mod declares the same two. A count argument is exactly what a loop would read, and an orientation argument is one more thing a P4 approval would have to cover, so neither exists.
+
+**Postconditions**
+
+- Exactly one timed action was queued, and the command is terminal whether or not it produced anything
+
+**Fallback** — A window that closes with nothing standing is POSTCONDITION_FAILED carrying the object counts; whether to try again is the next submission's question.
+
+**Numbers**
+
+- `max_blueprint_name_len` = 64 characters — `verified_script`
+- `build_window_ms` = 30000 ms — `verified_script`
+
+**Proven by:** `tests/unit/test_adapters_building.py`, `tests/lua/test_adapter_building.lua`
+
+### `building_success_is_the_structure_observed_on_the_square`
+
+**Status:** `verified_script` · **Source:** `code` — `packages/pz_agent_core/src/pz_agent_core/actions/adapters/building.py::BuildingBuildAdapter` · **Build:** 42 · **Risk:** P4
+
+A build succeeds only when the re-observed square carries something it did not before — a new object, or the assessment turning to blocked — and the mod wants the blueprint's own sprite standing there; an ack is a statement about the queue.
+
+- **Goals:** `build_structure`
+- **Observed inputs:** `nearby.objects[].ref`, `nearby.objects[].position`, `nearby.objects[].semantics`
+
+**Preconditions**
+
+- A reading of the square from before the build exists to compare against
+
+**Actions**
+
+- `building.build`
+
+**Decision** — verify compares the two observations and answers nothing when the square reads exactly as it did. Both readings are differences, so an unreadable before is an unproven postcondition rather than a lenient one — a square with something on it is as true of a square that always had it.
+
+**Postconditions**
+
+- An object stands on the square that the preceding observation did not carry, or the square turned from clear to blocked
+- In the mod, an object under the blueprint's sprite stands there and the square no longer reads free
+
+**Fallback** — POSTCONDITION_FAILED with the object counts. Nothing is retried on the assumption the build is still running: the window closed.
+
+**Proven by:** `tests/unit/test_adapters_building.py`, `tests/lua/test_adapter_building.lua`
+
+### `building_reading_a_square_places_nothing`
+
+**Status:** `verified_script` · **Source:** `code` — `packages/pz_agent_core/src/pz_agent_core/actions/adapters/building.py::BuildingInspectAdapter` · **Build:** 42 · **Risk:** P0
+
+building.inspect is read-only in fact as well as in the protocol — the character does not move and touches nothing — and it answers each observed blueprint with the verdict a build on that square would reach, so a refusal is seen before the P4 is granted rather than after.
+
+- **Goals:** `build_structure`
+- **Observed inputs:** `inventory.items[].extra`, `nearby.objects[].position`, `nearby.objects[].semantics`
+
+**Preconditions**
+
+- The observation carries an inventory tier and a nearby tier
+
+**Actions**
+
+- `building.inspect`
+
+**Decision** — The adapter sits at P0 in READ_ONLY_ACTIONS beside the other four reads and names no capability, for their reason: a probe over the Java accessors behind a blueprint table would report unsupported on a healthy install. adapters/Building.lua declares capability = nil for the same action, which is the agreement the two halves of the wire owe each other.
+
+**Postconditions**
+
+- The answer names the square, whether it is free, and one entry per readable blueprint with its verdict
+
+**Fallback** — An observation carrying no building readout, or no window to read the square out of, is reported as a failed reading — never as 'nothing can be built here'.
+
+**Proven by:** `tests/unit/test_adapters_building.py`
+
+### `building_materials_are_counted_by_the_crafting_rule`
+
+**Status:** `verified_script` · **Source:** `code` — `packages/pz_agent_core/src/pz_agent_core/policy/building.py::assess_placement` · **Build:** 42 · **Risk:** P4
+
+A placement short of materials is refused with the crafting rung's own codes — RECIPE_MATERIALS_MISSING naming each shortfall, RESOURCE_RESERVED when a reserve would cover it — on the crafting policy's tally, imported rather than copied.
+
+- **Goals:** `build_structure`
+- **Observed inputs:** `inventory.items[].full_type`, `inventory.items[].extra`
+
+**Preconditions**
+
+- The square is readable, free, and the placement passed the enclosure check
+
+**Actions**
+
+- `building.build`
+
+**Decision** — The materials gate runs last of the six, because 'you cannot build here at all' outranks 'you are two planks short' and because a reserved plank is a question the user can answer while a trapping wall is not. Reserved items are counted separately and never added to what may be spent.
+
+**Postconditions**
+
+- None recorded.
+
+**Fallback** — The sidecar refuses before any command exists, with each short line reported as held-of-needed; the mission does not go looting to cover it.
+
+**Numbers**
+
+- `max_reported_shortfalls` = 6 lines — `verified_script`
+
+**Proven by:** `tests/unit/test_policy_building.py`
+
+### `building_capability_is_withheld_until_a_live_run`
+
+**Status:** `verified_script` · **Source:** `code` — `packages/pz_agent_core/src/pz_agent_core/capabilities/probes.py::PROBES` · **Build:** 42 · **Risk:** P4
+
+The building capability declares itself experimental, so pz_action_build is withheld on every install this project can ship to and only a live build — the structure observed standing on the square — promotes it; the square reading is not withheld with it, because reading places nothing.
+
+- **Goals:** `build_structure`
+
+**Preconditions**
+
+- A capability report exists for the installed build
+
+**Actions**
+
+- `building.build`
+
+**Decision** — The probe requires only the walk-and-queue symbols a static scan can see; the blueprint definitions, the learned test and the entry point that puts an object on a square are Java accessors and build-specific tables no Lua scan resolves. The runtime confirmation is the build's own evidence keys, blueprint and square.
+
+**Postconditions**
+
+- None recorded.
+
+**Fallback** — An unusable capability means the tool is not listed and not callable, with the reason in pz://capabilities; a goal that reaches the action engine ends CAPABILITY_UNAVAILABLE rather than being attempted.
+
+**Proven by:** `tests/unit/test_mcp_catalog_actions.py`
+
+### `building_the_goal_names_both_the_blueprint_and_the_square`
+
+**Status:** `verified_script` · **Source:** `code` — `packages/pz_agent_core/src/pz_agent_core/goals/model.py::GOAL_SPECS` · **Build:** 42 · **Risk:** P4
+
+A build_structure goal requires four parameters — the structure and the three coordinates — and takes nothing optional: the one square this side could fill in unaided is the one the character is standing on, and walling in the square somebody is standing on is the mistake this rung exists to refuse.
+
+- **Goals:** `build_structure`
+
+**Preconditions**
+
+- An explicit typed submission: the voice grammar declares the kind unspeakable, no provider plans it and no arbiter mints it
+
+**Actions**
+
+- `building.build`
+- `building.inspect`
+
+**Decision** — The channel's spec table declares the four as required with no optional set, so a submission missing either half is refused before a mission exists. The blueprint is a bounded identifier compared only against names the observation reported; nothing in this process interprets it.
+
+**Postconditions**
+
+- The structure is observed standing on the named square
+
+**Fallback** — A refusal from the building policy ends the goal with the policy's own reason code; the mission does not pick another square and does not go looting for materials.
+
+**Proven by:** `tests/unit/test_mcp_catalog_goals.py`, `tests/unit/test_voice_intents.py`
+
+### `building_build42_rewrote_construction`
+
+**Status:** `unverified` · **Source:** `official` — `https://projectzomboid.com/blog/news/2024/12/build-42-unstable-released/ — Build 42's new crafting and construction system` · **Build:** 42 · **Risk:** P0
+
+Build 42 replaced Build 41's construction model with a new recipe and script system, so every blueprint accessor this mod probes is a guess: none of the spellings has been seen answering in a live session, and each is probed through a short closed candidate list.
+
+**Preconditions**
+
+- None recorded.
+
+**Actions**
+
+- None — the rule drives no action.
+
+**Decision** — Not a decision this repository makes: it is why the mod probes candidate spellings and refuses naming every candidate rather than assuming one, and why the capability starts experimental with both tools' evidence still outstanding.
+
+**Postconditions**
+
+- None recorded.
+
+**Fallback** — A spelling that does not answer costs one CAPABILITY_UNAVAILABLE naming every candidate that was looked for; docs/GAME_API_VERIFICATION.md carries the rows.
+
+**Proven by:** nothing — which is why the status says so.
+
+### `building_blueprints_must_be_known_before_they_can_be_raised`
+
+**Status:** `unverified` · **Source:** `wiki` — `https://pzwiki.net/wiki/Carpentry — construction recipes, carpentry level and what unlocks them` · **Build:** 42 · **Risk:** P0
+
+A character can only raise structures it knows how to build — gated in Project Zomboid by skill level, profession and read literature — and this repository has never observed how Build 42 reports that knowledge for a construction recipe.
+
+- **Goals:** `build_structure`
+- **Observed inputs:** `inventory.items[].extra`
+
+**Preconditions**
+
+- None recorded.
+
+**Actions**
+
+- None — the rule drives no action.
+
+**Decision** — Not decided here. The policy asks the observation whether the character knows the blueprint and refuses as STRUCTURE_UNKNOWN when the build will not say — the tri-state rule the door and crafting policies established, where an absent flag is never read as the convenient answer.
+
+**Postconditions**
+
+- None recorded.
+
+**Fallback** — An unreadable knowledge flag is a refusal, never an attempt; nothing here infers a blueprint from a skill level or an occupation.
+
+**Proven by:** nothing — which is why the status says so.
+
+### `building_a_raised_wall_changes_where_anything_can_walk`
+
+**Status:** `unverified` · **Source:** `wiki` — `https://pzwiki.net/wiki/Construction — walls, doorframes and how built tiles block movement` · **Build:** 42 · **Risk:** P0
+
+A structure raised in Project Zomboid blocks movement for the character, for zombies and for pathfinding alike, and how Build 42 recomputes routes around a newly placed tile has not been observed from this repository.
+
+- **Goals:** `build_structure`
+
+**Preconditions**
+
+- None recorded.
+
+**Actions**
+
+- None — the rule drives no action.
+
+**Decision** — Not decided here, and it is the reason the enclosure check exists rather than a fact the check relies on: this side treats a solid blueprint as impassable when it asks whether a way out remains, which is the cautious reading whichever way the engine actually recomputes.
+
+**Postconditions**
+
+- None recorded.
+
+**Fallback** — A route that a raised wall invalidated shows up as a movement failure — PATH_NOT_FOUND — on the next journey, not as a build failure.
+
+**Proven by:** nothing — which is why the status says so.
+
+### `building_material_costs_and_placement_rules_are_unmeasured`
+
+**Status:** `unverified` · **Source:** `wiki` — `https://pzwiki.net/wiki/Construction — material costs, tools required and where a tile may be placed` · **Build:** 42 · **Risk:** P0
+
+What a given blueprint costs, which tools must be carried, and which squares Project Zomboid itself considers legal to build on are unmeasured here: no number about the game's own construction costs appears anywhere in this repository.
+
+- **Goals:** `build_structure`
+- **Observed inputs:** `inventory.items[].extra`
+
+**Preconditions**
+
+- None recorded.
+
+**Actions**
+
+- None — the rule drives no action.
+
+**Decision** — Nothing plans on a cost. The requirement list is read from the observation per command and counted against what is carried, and a square the game refuses for a reason this side cannot see ends as a build that queued and produced nothing — which is the shape that failure takes.
+
+**Postconditions**
+
+- None recorded.
+
+**Fallback** — POSTCONDITION_FAILED with the observed object counts, and no second attempt on the assumption that it was a placement rule rather than a missing plank.
+
+**Proven by:** nothing — which is why the status says so.
 
 ## Containers and loot (`containers_loot`)
 
@@ -225,6 +641,376 @@ A loot mission finishes on a provable criterion — every reachable container in
 - `default_loot_radius` = 10 squares — `verified_script`
 
 **Proven by:** `tests/unit/test_loot_mission.py`
+
+## Crafting (`crafting`)
+
+### `crafting_recipe_is_chosen_deterministically`
+
+**Status:** `verified_script` · **Source:** `code` — `packages/pz_agent_core/src/pz_agent_core/policy/crafting.py::recipes_for_product` · **Build:** 42 · **Risk:** P0
+
+A craft goal names a product, never a recipe: which recipe spends which materials is deterministic policy, ranked known-first, then no-surface-first, then the shorter requirement list, then the name — so two runs over one observation always weigh the same recipe first.
+
+- **Goals:** `craft_item`
+- **Observed inputs:** `inventory.items[].full_type`, `inventory.items[].extra`, `inventory.containers[].kind`, `inventory.containers[].accessible`
+
+**Preconditions**
+
+- The observation carries an inventory tier; nothing else is consulted
+
+**Actions**
+
+- None — the rule drives no action.
+
+**Decision** — recipes_for_product filters the observed crafting readout to the requested product and sorts by a total key; assess_craft takes the first candidate that may run, and reports the best candidate's refusal when none may. There is no recipe database in this package and there will not be one — a table written here would be a second, drifting copy of the game's.
+
+**Postconditions**
+
+- None recorded.
+
+**Fallback** — Nothing observed participating in a recipe for the product is RECIPE_UNKNOWN naming the product, never a substitute recipe.
+
+**Numbers**
+
+- `max_candidate_recipes` = 8 recipes — `verified_script`
+- `max_recipes_per_item` = 16 entries — `verified_script`
+- `max_materials_per_recipe` = 8 lines — `verified_script`
+
+**Proven by:** `tests/unit/test_policy_crafting.py`
+
+### `crafting_unreadable_is_never_the_convenient_reading`
+
+**Status:** `verified_script` · **Source:** `code` — `packages/pz_agent_core/src/pz_agent_core/policy/crafting.py::assess_recipe` · **Build:** 42 · **Risk:** P0
+
+Both crafting flags are tri-state and neither absence is read as the convenient answer: an unreported 'known' refuses the recipe as unknown, and an unreported 'needs_surface' is treated as needing one — which costs a permission tier rather than a craft queued where it cannot run.
+
+- **Goals:** `craft_item`
+- **Observed inputs:** `inventory.items[].extra`
+
+**Preconditions**
+
+- The mod published a crafting readout for at least one observed item
+
+**Actions**
+
+- `crafting.inspect`
+
+**Decision** — RecipeView.is_known is true only when the build said so; may_need_surface is true unless the build positively said false. The gate order in assess_recipe is fixed — knowledge, then materials, then whose materials they are — so one picture always produces the most fundamental refusal rather than an arbitrary one.
+
+**Postconditions**
+
+- None recorded.
+
+**Fallback** — An unreadable knowledge flag ends as RECIPE_UNKNOWN whose detail says the build would not say, which is a different sentence from 'the character has not learned it'.
+
+**Proven by:** `tests/unit/test_policy_crafting.py`
+
+### `crafting_reserved_materials_get_their_own_refusal`
+
+**Status:** `verified_script` · **Source:** `code` — `packages/pz_agent_core/src/pz_agent_core/policy/crafting.py::assess_recipe` · **Build:** 42 · **Risk:** P3
+
+A user-reserved item is never spent by a craft, and when reserves are the only reason a recipe is short the refusal says so with its own token — so the user answers 'release the reserve?' instead of being told the materials do not exist.
+
+- **Goals:** `craft_item`
+- **Observed inputs:** `inventory.items[].full_type`, `inventory.items[].extra`
+
+**Preconditions**
+
+- The recipe is known and at least one requirement line is short
+
+**Actions**
+
+- `crafting.craft`
+
+**Decision** — _tally counts reserved items separately from free ones and never adds them to what may be spent; the refusal is MATERIALS_RESERVED only when every short line would be covered by releasing reserves, and a genuine shortage outranks a reserved one.
+
+**Postconditions**
+
+- None recorded.
+
+**Fallback** — The sidecar refuses before any command exists: RESOURCE_RESERVED for the reserved case, RECIPE_MATERIALS_MISSING with each shortfall's needed/free/reserved counts otherwise.
+
+**Numbers**
+
+- `max_reported_shortfalls` = 6 lines — `verified_script`
+
+**Proven by:** `tests/unit/test_policy_crafting.py`
+
+### `crafting_one_command_runs_one_recipe_once`
+
+**Status:** `verified_script` · **Source:** `code` — `packages/pz_agent_core/src/pz_agent_core/actions/adapters/crafting.py::MAX_CRAFT_COUNT` · **Build:** 42 · **Risk:** P3
+
+One crafting.craft command runs one recipe once. The count is on the wire rather than defaulted by the mod, both halves cap it at one, and there is no loop and no retry behind the command id: a recipe that could run again is a report, and running it again is another command.
+
+- **Goals:** `craft_item`
+
+**Preconditions**
+
+- The command carries a bounded recipe identifier; a pattern or a phrase is INVALID_ARGUMENT
+
+**Actions**
+
+- `crafting.craft`
+
+**Decision** — MAX_CRAFT_COUNT is 1 in the sidecar adapter and Crafting.MAX_COUNT is 1 in the mod; the mod fixes the fan-out at accept time and no branch re-queues. Raising either is a visible change on both halves of the wire, not a bound that quietly moved.
+
+**Postconditions**
+
+- Exactly one run was queued, and the command is terminal whether or not it produced anything
+
+**Fallback** — A window that closes with nothing made is POSTCONDITION_FAILED carrying the observed counts; the next run is the mission's decision, taken where safety.stop and the reflex guard can reach it.
+
+**Numbers**
+
+- `max_craft_count` = 1 runs — `verified_script`
+- `max_recipe_name_len` = 64 characters — `verified_script`
+- `craft_timeout_ms` = 60000 ms — `verified_script`
+
+**Proven by:** `tests/unit/test_adapters_crafting.py`, `tests/lua/test_adapter_crafting.lua`
+
+### `crafting_success_is_the_product_observed`
+
+**Status:** `verified_script` · **Source:** `code` — `packages/pz_agent_core/src/pz_agent_core/actions/adapters/crafting.py::CraftingCraftAdapter` · **Build:** 42 · **Risk:** P3
+
+A craft succeeds only when the re-observed inventory holds more of the recipe's product than before; the mod requires the second half too — that something the recipe consumes is measurably gone — because a product that appeared while nothing was spent did not come out of this recipe.
+
+- **Goals:** `craft_item`
+- **Observed inputs:** `inventory.items[].full_type`, `inventory.items[].extra`
+
+**Preconditions**
+
+- The product type was read from the observation taken before the craft
+
+**Actions**
+
+- `crafting.craft`
+
+**Decision** — verify counts the product type in the before and after observations and answers only if the count rose; an unreadable inventory on either side leaves the postcondition unproven rather than assumed. The product is read from the before observation on purpose: a successful craft consumes the materials, and with them the readout entry naming what the recipe makes.
+
+**Postconditions**
+
+- The following observation holds strictly more of the product type than the preceding one
+- In the mod, a material line the recipe consumes fell as well
+
+**Fallback** — POSTCONDITION_FAILED with the counts in the detail. An ack saying the craft finished is a statement about the queue, and it is never accepted as evidence.
+
+**Proven by:** `tests/unit/test_adapters_crafting.py`, `tests/lua/test_adapter_crafting.lua`
+
+### `crafting_risk_escalates_from_the_arguments`
+
+**Status:** `verified_script` · **Source:** `code` — `packages/pz_agent_core/src/pz_agent_core/actions/adapters/crafting.py::CraftingCraftAdapter` · **Build:** 42 · **Risk:** P4
+
+Spending what the character carries is P3 because it is irreversible; the same command becomes P4 — never automatic — when the named recipe may need a surface or is only afforded by items in a world container, which is the escalate-by-arguments rule move_to applies off-radius.
+
+- **Goals:** `craft_item`
+- **Observed inputs:** `inventory.items[].extra`, `inventory.containers[].kind`
+
+**Preconditions**
+
+- The recipe named by the command was found in the observed readout
+
+**Actions**
+
+- `crafting.craft`
+
+**Decision** — risk_for re-assesses the recipe against the current observation and answers P4 when CraftingDecision.needs_travel holds, never below the declared P3. The tool publishes P3 as the floor because neither fact is visible from the action name; there is no argument on the tool naming a station or a world container, because this rung crafts from the character's own bags.
+
+**Postconditions**
+
+- None recorded.
+
+**Fallback** — A P4 craft on the agent's own initiative is refused by the permission engine's _p4_gate before anything is queued, and no configuration raises it.
+
+**Proven by:** `tests/unit/test_adapters_crafting.py`
+
+### `crafting_reading_a_recipe_spends_nothing`
+
+**Status:** `verified_script` · **Source:** `code` — `packages/pz_agent_core/src/pz_agent_core/actions/adapters/crafting.py::CraftingInspectAdapter` · **Build:** 42 · **Risk:** P0
+
+crafting.inspect is read-only in fact as well as in the protocol: the character does not move and touches nothing, the answer comes off the crafting readout the observer already produces, and a recipe that was not found is a finding rather than a failure.
+
+- **Goals:** `craft_item`
+- **Observed inputs:** `inventory.items[].extra`
+
+**Preconditions**
+
+- The observation carries an inventory tier at all
+
+**Actions**
+
+- `crafting.inspect`
+
+**Decision** — The adapter sits at P0 in READ_ONLY_ACTIONS beside the other three reads and names no capability, for their reason: a probe over the Java recipe accessors no Lua scan can see would report unsupported on a healthy install. Its own postcondition is that some observed item carries a crafting readout — 'nobody described any recipe' is the failure, not 'this recipe is unknown'.
+
+**Postconditions**
+
+- The answer names the recipe that was asked about and whether it was found
+
+**Fallback** — An observation carrying no crafting readout at all is reported as a failed reading, never as an absent recipe.
+
+**Proven by:** `tests/unit/test_adapters_crafting.py`
+
+### `crafting_goal_bounds_what_one_submission_spends`
+
+**Status:** `verified_script` · **Source:** `code` — `packages/pz_agent_cli/src/pz_agent_cli/craft_mission.py::CraftItemMission` · **Build:** 42 · **Risk:** P3
+
+A craft_item goal names a product and at most four runs, one command each, and the mission will not go and fetch what is missing: a known recipe short of materials ends the goal naming the shortfall, and whether to loot for it is the user's next submission.
+
+- **Goals:** `craft_item`
+- **Observed inputs:** `inventory.items[].full_type`, `inventory.items[].extra`
+
+**Preconditions**
+
+- An explicit user submission: no plan provider serves this kind and no arbiter mints it
+- The product is a bounded item-type identifier, compared only against observed products
+
+**Actions**
+
+- `crafting.craft`
+- `crafting.inspect`
+
+**Decision** — The mission re-asks the crafting policy against a fresh observation before every run, submits one crafting.craft per item, and stops at its own attempt, recipe and consecutive-failure ceilings. A submission is the unit a user consents in, which is why the channel caps count rather than the adapter.
+
+**Postconditions**
+
+- The requested number of the product is observed in the inventory
+
+**Fallback** — RECIPE_UNKNOWN or RECIPE_MATERIALS_MISSING naming the shortfall ends the goal; a partial run reports how many were actually made, never how many were asked for.
+
+**Numbers**
+
+- `max_craft_goal_count` = 4 runs — `verified_script`
+- `max_craft_attempts` = 6 attempts — `verified_script`
+- `max_recipes_tried` = 3 recipes — `verified_script`
+
+**Proven by:** `tests/unit/test_craft_mission.py`, `tests/unit/test_goal_channel.py`
+
+### `crafting_capability_is_withheld_until_a_live_run`
+
+**Status:** `verified_script` · **Source:** `code` — `packages/pz_agent_core/src/pz_agent_core/capabilities/probes.py::PROBES` · **Build:** 42 · **Risk:** P3
+
+The crafting capability declares itself experimental, so pz_action_craft is withheld on every install this project can ship to and only a live craft — the recipe's product observed in the inventory afterwards — promotes it; the recipe reading is not withheld with it, because reading spends nothing.
+
+**Preconditions**
+
+- A capability report exists for the installed build
+
+**Actions**
+
+- `crafting.craft`
+
+**Decision** — The probe requires only the walk-and-queue symbols a scan can see; the recipe tables, the learned test and the craft entry point are Java accessors no Lua scan reaches, so naming them would report unsupported on a healthy install and omitting them means a static scan cannot confirm them. The runtime confirmation is the craft's own evidence keys, recipe and product.
+
+**Postconditions**
+
+- None recorded.
+
+**Fallback** — An unusable capability means the tool is not listed and not callable, with the reason in pz://capabilities; a goal that reaches the action engine ends CAPABILITY_UNAVAILABLE rather than being attempted.
+
+**Proven by:** `tests/unit/test_mcp_catalog_actions.py`
+
+### `crafting_build42_rewrote_the_system`
+
+**Status:** `unverified` · **Source:** `official` — `https://projectzomboid.com/blog/news/2024/12/build-42-unstable-released/ — Build 42 crafting and the new recipe/script model` · **Build:** 42 · **Risk:** P0
+
+Build 42 replaced Build 41's crafting model with a new recipe and script system, so every recipe accessor this mod probes is a guess: none of the spellings has been seen answering in a live session, and each is probed through a short closed candidate list.
+
+**Preconditions**
+
+- None recorded.
+
+**Actions**
+
+- None — the rule drives no action.
+
+**Decision** — Not a decision this repository makes: it is why the mod probes candidate spellings and refuses naming the symbol rather than assuming one, and why the capability starts experimental.
+
+**Postconditions**
+
+- None recorded.
+
+**Fallback** — A spelling that does not answer costs one CAPABILITY_UNAVAILABLE naming every candidate that was looked for; docs/GAME_API_VERIFICATION.md carries the rows.
+
+**Proven by:** nothing — which is why the status says so.
+
+### `crafting_recipes_are_learned_before_they_can_be_run`
+
+**Status:** `unverified` · **Source:** `wiki` — `https://pzwiki.net/wiki/Crafting — recipe knowledge, skill books and magazines` · **Build:** 42 · **Risk:** P0
+
+A character can only craft recipes it has learned — some known from the start or from an occupation, others taught by reading a magazine or skill book — and this repository has never observed how Build 42 reports that knowledge.
+
+- **Goals:** `learn_recipe`, `craft_item`
+- **Observed inputs:** `inventory.items[].literature`, `inventory.items[].extra`
+
+**Preconditions**
+
+- None recorded.
+
+**Actions**
+
+- None — the rule drives no action.
+
+**Decision** — Not decided here. The policy asks the observation whether the character knows a recipe and refuses when the build will not say; the learn_recipe goal reads magazines, and whether reading one actually teaches what the observation counted as unread is exactly what a live session has to establish.
+
+**Postconditions**
+
+- None recorded.
+
+**Fallback** — An unreadable knowledge flag is a refusal, never an attempt; nothing here infers knowledge from an occupation or a skill level.
+
+**Proven by:** nothing — which is why the status says so.
+
+### `crafting_some_recipes_need_a_surface_or_a_station`
+
+**Status:** `unverified` · **Source:** `wiki` — `https://pzwiki.net/wiki/Crafting — recipes requiring a nearby item, workstation or heat source` · **Build:** 42 · **Risk:** P4
+
+Some Project Zomboid recipes require the character to be at or near something — a workbench, a fire, a specific nearby item — rather than merely holding the materials, and how Build 42 expresses that requirement has not been observed from this repository.
+
+- **Goals:** `craft_item`
+- **Observed inputs:** `inventory.items[].extra`
+
+**Preconditions**
+
+- None recorded.
+
+**Actions**
+
+- None — the rule drives no action.
+
+**Decision** — This wave crafts only from materials counted on the character; nothing in the mod's adapter reads a crafting surface or a world container. The requirement is honoured defensively instead: an unread surface flag escalates the command to P4, which is a permission cost rather than a craft queued where it cannot run.
+
+**Postconditions**
+
+- None recorded.
+
+**Fallback** — A craft that queues and produces nothing ends POSTCONDITION_FAILED with the observed counts, which is the shape a missed surface requirement would take.
+
+**Proven by:** nothing — which is why the status says so.
+
+### `crafting_yield_and_skill_effects_are_unmeasured`
+
+**Status:** `unverified` · **Source:** `wiki` — `https://pzwiki.net/wiki/Crafting — outputs, success chance and skill effects` · **Build:** 42 · **Risk:** P0
+
+How much a recipe yields, whether a craft can fail or produce a lower-quality result, and what a skill level changes about any of it are unmeasured here: no number about Project Zomboid's own crafting outcomes appears anywhere in this repository.
+
+- **Goals:** `craft_item`
+
+**Preconditions**
+
+- None recorded.
+
+**Actions**
+
+- None — the rule drives no action.
+
+**Decision** — Nothing plans on a yield. The postcondition is the product count rising by the amount the command asked for, so a recipe that yields more than one satisfies it and a recipe that fails does not — the agent finds out by observing, not by predicting.
+
+**Postconditions**
+
+- None recorded.
+
+**Fallback** — A craft whose product count did not rise fails honestly with the counts; no retry is attempted on the assumption that it was a chance failure.
+
+**Proven by:** nothing — which is why the status says so.
 
 ## Doors and windows (`doors_windows`)
 

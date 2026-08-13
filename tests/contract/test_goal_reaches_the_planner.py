@@ -131,6 +131,8 @@ CHANNEL_KINDS: Final[frozenset[str]] = frozenset(
         "sleep_until_rested",
         "avoid_threat",
         "engage_single_zombie",
+        "craft_item",
+        "build_structure",
     }
 )
 
@@ -159,6 +161,19 @@ CHANNEL_KINDS: Final[frozenset[str]] = frozenset(
 #: behind the per-window combat policy, and refused by name by every
 #: provider, because a model deciding a fight is safe is the proposal this
 #: whole architecture exists to make impossible.
+#: ``craft_item`` joins on the same terms, with the argument turned from
+#: safety to property: driven by the deterministic craft mission
+#: (``pz_agent_cli.craft_mission``) behind the crafting policy's per-run
+#: decision, and refused by name by every provider, because a craft
+#: *destroys* what it spends and a model choosing which of the character's
+#: possessions to destroy is a proposal no refusal could take back.
+#: ``build_structure`` closes the set and takes that argument as far as it
+#: goes: driven by the deterministic build mission
+#: (``pz_agent_cli.build_mission``) behind the building policy's per-placement
+#: decision — the square free, the materials present, and the placement not
+#: sealing the character in — and refused by name by every provider, because a
+#: craft destroys what it spends while a build leaves something standing that
+#: nothing in this project can take back down.
 EXECUTOR_KINDS: Final[frozenset[str]] = frozenset(
     {
         "navigate_to",
@@ -172,6 +187,8 @@ EXECUTOR_KINDS: Final[frozenset[str]] = frozenset(
         "sleep_until_rested",
         "avoid_threat",
         "engage_single_zombie",
+        "craft_item",
+        "build_structure",
     }
 )
 
@@ -623,16 +640,16 @@ class TestNavigateToIsServedByTheExecutor:
     def test_every_channel_kind_is_owned_by_exactly_one_server(self) -> None:
         """Provider-served and executor-served partition the vocabulary.
 
-        The arithmetic is stated in full: fourteen kinds in the channel,
-        eleven of them deterministic (four navigation-and-mission kinds, the
-        two rerouted consume kinds, the three care kinds, the retreat kind,
-        the combat kind), three left to a plan provider. A kind added to one
-        census and not the other fails here.
+        The arithmetic is stated in full: sixteen kinds in the channel,
+        thirteen of them deterministic (four navigation-and-mission kinds, the
+        two rerouted consume kinds, the three care kinds, the retreat kind, the
+        combat kind, the craft kind, the build kind), three left to a plan
+        provider. A kind added to one census and not the other fails here.
         """
         assert EXECUTOR_KINDS <= CHANNEL_KINDS
         assert {kind.value for kind in GoalKind} == CHANNEL_KINDS
-        assert len(CHANNEL_KINDS) == 14
-        assert len(EXECUTOR_KINDS) == 11
+        assert len(CHANNEL_KINDS) == 16
+        assert len(EXECUTOR_KINDS) == 13
         assert {
             "read_for_boredom",
             "train_skill",
@@ -1246,6 +1263,420 @@ class TestEngageSingleZombieIsServedByTheMission:
         }
         minted = {kind.value for kind in INITIATIVE_GOALS.values()}
         assert combat not in minted
+        assert minted == {"satisfy_hunger", "satisfy_thirst", "read_for_boredom"}
+
+
+class TestCraftItemIsServedByTheMission:
+    """The fifteenth kind's half of the seam: the craft mission, no provider.
+
+    The same joins proven for the other deterministic kinds, over the one
+    action in the vocabulary that cannot be taken back: a real queue admits
+    and activates the goal *with its product parameter*, the real
+    ``to_planner_goal`` widens it, and the real :class:`NavigatingPlanner`
+    drives the crafting policy's chosen recipe into the loop's action channel
+    — one run, ``count`` on the wire — while the wrapped planner, a spy, is
+    never asked anything. And the shortfall pin: a recipe the character knows
+    and cannot afford ends the goal typed, without a single step going out to
+    look for the materials.
+    """
+
+    SPEAR: Final = "Base.SpearCrude"
+    BRANCH: Final = "Base.TreeBranch"
+    TWINE: Final = "Base.Twine"
+
+    def workshop(self, *, materials: list[dict[str, object]] | None = None) -> Observation:
+        """One branch, carrying the readout for a recipe that makes a spear.
+
+        The readout is the mod's, not this side's: every recipe fact the
+        policy reads — the name, the product, whether the character has
+        learned it, what one run consumes — rides on the observed item, which
+        is why a world with no readout can only ever refuse.
+        """
+        branch_ref = f"item:{DEFAULT_SESSION}:player-main:branch1:0"
+        branch = make_item(
+            branch_ref,
+            f"container:{DEFAULT_SESSION}:player-main",
+            full_type=self.BRANCH,
+            display_name="Tree Branch",
+            category="Item",
+            extra={
+                "crafting": {
+                    "recipe_count": 1,
+                    "known_recipe_count": 1,
+                    "recipes": [
+                        {
+                            "name": "MakeSpear",
+                            "product": self.SPEAR,
+                            "display_name": "Make Crude Spear",
+                            "known": True,
+                            "needs_surface": False,
+                            "materials": materials
+                            if materials is not None
+                            else [{"full_type": self.BRANCH, "count": 1}],
+                        }
+                    ],
+                }
+            },
+        )
+        return planner_observation(inventory=inventory(branch), player=make_player())
+
+    def craft_goal(self, queue: GoalQueue, *, key: str = "seam-craft") -> GoalRecord:
+        return activated(
+            queue,
+            GoalKind.CRAFT_ITEM,
+            params=GoalParams(product=self.SPEAR),
+            key=key,
+        )
+
+    def test_null_provider_refuses_craft_item_by_name(self) -> None:
+        """The deterministic provider's honest answer is a typed refusal.
+
+        The property that keeps a mis-assembled loop from spending the
+        character's possessions: a goal-capable planner with no navigating
+        wrapper refuses the kind and lets its budgets end it — it never
+        approximates a craft with a plan for something else.
+        """
+        record = self.craft_goal(channel())
+
+        proposal = proposed_for(record, world(pantry(), needy()))
+
+        assert proposal.refused
+        assert proposal.reason_code is ReasonCode.CAPABILITY_UNAVAILABLE
+        assert "craft mission" in proposal.detail
+
+    def test_the_wrapper_drives_the_mission_and_never_asks_the_planner(self) -> None:
+        queue = channel()
+        spy = SpyGoalPlanner()
+        wrapper = NavigatingPlanner(spy)
+        actions = ActionChannel(clock=FakeClock())
+        wrapper.bind(ExecutorHost(goals=queue, actions=actions))
+        record = self.craft_goal(queue)
+
+        value = wrapper.propose_for_goal(to_planner_goal(record), self.workshop())
+
+        # Every craft travels the action channel, never the goal seam: a
+        # queued craft is not a product in the bag, so no step's own success
+        # may end the goal.
+        assert value is None
+        assert actions.pending_count == 1
+        taken = actions.take_next()
+        assert taken is not None
+        _, request = taken
+        assert request.action is ActionName.CRAFTING_CRAFT
+        # The recipe is the policy's choice from the observed readout, and the
+        # count is on the wire so the mod never guesses a default.
+        assert request.args == {"recipe": "MakeSpear", "count": 1}
+        # Attribution, as everywhere in this file: the request is the goal's.
+        assert request.idempotency_key.startswith(f"craft:{record.goal_id}")
+        assert spy.goal_calls == [] and spy.propose_calls == 0, (
+            "craft_item must never reach a plan provider"
+        )
+        report = wrapper.craft_report(record.goal_id)
+        assert report is not None and report["recipes_tried"] == ["MakeSpear"]
+
+    def test_a_shortfall_ends_the_goal_typed_and_sends_nobody_looting(self) -> None:
+        """Materials missing is a report, not an errand.
+
+        The wave's own boundary: chaining a craft onto a loot is a decision
+        about the user's time and the character's safety, and this goal does
+        not make it. The channel stays empty — not one step goes out.
+        """
+        queue = channel()
+        spy = SpyGoalPlanner()
+        wrapper = NavigatingPlanner(spy)
+        actions = ActionChannel(clock=FakeClock())
+        wrapper.bind(ExecutorHost(goals=queue, actions=actions))
+        record = self.craft_goal(queue)
+        short = self.workshop(
+            materials=[
+                {"full_type": self.BRANCH, "count": 1},
+                {"full_type": self.TWINE, "count": 2},
+            ]
+        )
+
+        value = wrapper.propose_for_goal(to_planner_goal(record), short)
+
+        assert value is None
+        assert actions.pending_count == 0, "a shortfall must not send the character anywhere"
+        ended = queue.record(record.goal_id)
+        assert ended is not None
+        assert ended.state.value == "failed"
+        assert ended.reason_code is ReasonCode.RECIPE_MATERIALS_MISSING
+        assert self.TWINE in ended.detail
+        assert spy.goal_calls == [] and spy.propose_calls == 0
+
+    def test_neither_the_arbiter_nor_the_initiative_path_can_mint_the_kind(self) -> None:
+        """Only an explicit user submission reaches crafting — pinned by census.
+
+        The combat kind's pin, for the same reason one rung along: the two
+        tables by which the system mints a goal for itself must never name a
+        kind that spends the character's possessions. The provider refusal
+        above closes the third route.
+        """
+        craft = GoalKind.CRAFT_ITEM.value
+        assert craft not in {kind.value for kind in TRIGGER_KINDS.values()}
+        assert craft not in {kind.value for kind in INITIATIVE_GOALS.values()}
+
+
+class TestBuildStructureIsServedByTheMission:
+    """The sixteenth kind's half of the seam, and the strictest one in the file.
+
+    Everything proven for the craft kind is proven again here, over the one
+    action in this whole vocabulary that leaves something *in the world*: a
+    real queue admits and activates the goal with its blueprint and its whole
+    square, the real ``to_planner_goal`` widens it, and the real
+    :class:`NavigatingPlanner` drives one ``building.build`` into the loop's
+    action channel — one command, no count anywhere on the wire — while the
+    wrapped planner, a spy, is never asked anything.
+
+    Then the two refusals this wave exists for, both of them landing *before*
+    anything is queued: a square something already stands on, and a placement
+    that would seal the character into the squares this observation described.
+    Neither is retried at another square: the square is the user's choice, and
+    picking a different one is a decision nobody delegated.
+    """
+
+    WALL: Final = "WoodenWall"
+    PLANK: Final = "Base.Plank"
+    HOME: Final = (1200, 3400, 0)
+    TARGET: Final = (1201, 3400, 0)
+
+    def square(self, x: int, y: int, *, blocked: bool = False) -> NearbyObject:
+        marks = ["loaded"] + (["blocked"] if blocked else [])
+        return NearbyObject(
+            ref=f"square:{DEFAULT_SESSION}:{x}:{y}:0",
+            kind="square",
+            distance=float(max(abs(x - self.HOME[0]), abs(y - self.HOME[1]))),
+            position=Position(x=float(x), y=float(y), z=0),
+            semantics=marks,
+        )
+
+    def window(self, *, sealed: bool = False) -> NearbyView:
+        """A three-by-three block around the character.
+
+        ``sealed`` blocks every square in it except the character's own and the
+        target, so the target square is the last way out the observation can
+        see — which is exactly the picture in which raising a wall there is the
+        mistake with no undo.
+        """
+        squares: list[NearbyObject] = []
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                x, y = self.HOME[0] + dx, self.HOME[1] + dy
+                own = (dx, dy) == (0, 0)
+                target = (x, y) == (self.TARGET[0], self.TARGET[1])
+                squares.append(self.square(x, y, blocked=sealed and not (own or target)))
+        return NearbyView(objects=squares)
+
+    def site(
+        self,
+        *,
+        materials: list[dict[str, object]] | None = None,
+        sealed: bool = False,
+        occupied: bool = False,
+    ) -> Observation:
+        """One plank carrying the wall's readout, and a window to build in.
+
+        The readout is the mod's, exactly as the crafting one is: what the
+        structure is called, whether the character has learned it, whether what
+        it places can be walked through, and what one placement consumes all
+        ride on the observed item — so a world with no readout can only refuse.
+        """
+        plank = make_item(
+            f"item:{DEFAULT_SESSION}:player-main:plank1:0",
+            f"container:{DEFAULT_SESSION}:player-main",
+            full_type=self.PLANK,
+            display_name="Plank",
+            category="Item",
+            extra={
+                "building": {
+                    "structure_count": 1,
+                    "known_structure_count": 1,
+                    "structures": [
+                        {
+                            "name": self.WALL,
+                            "display_name": "Wooden Wall",
+                            "known": True,
+                            "blocks_movement": True,
+                            "materials": materials
+                            if materials is not None
+                            else [{"full_type": self.PLANK, "count": 1}],
+                        }
+                    ],
+                }
+            },
+        )
+        nearby = self.window(sealed=sealed)
+        if occupied:
+            nearby = NearbyView(
+                objects=[
+                    *nearby.objects,
+                    NearbyObject(
+                        ref=f"object:{DEFAULT_SESSION}:crate1:0",
+                        kind="container",
+                        distance=1.0,
+                        position=Position(x=float(self.TARGET[0]), y=float(self.TARGET[1]), z=0),
+                        semantics=["container"],
+                    ),
+                ]
+            )
+        return planner_observation(inventory=inventory(plank), player=make_player(), nearby=nearby)
+
+    def build_goal(self, queue: GoalQueue, *, key: str = "seam-build") -> GoalRecord:
+        return activated(
+            queue,
+            GoalKind.BUILD_STRUCTURE,
+            params=GoalParams(
+                structure=self.WALL,
+                target_x=self.TARGET[0],
+                target_y=self.TARGET[1],
+                target_z=self.TARGET[2],
+            ),
+            key=key,
+        )
+
+    def wrapper_over(
+        self, queue: GoalQueue
+    ) -> tuple[NavigatingPlanner, ActionChannel, SpyGoalPlanner]:
+        spy = SpyGoalPlanner()
+        wrapper = NavigatingPlanner(spy)
+        actions = ActionChannel(clock=FakeClock())
+        wrapper.bind(ExecutorHost(goals=queue, actions=actions))
+        return wrapper, actions, spy
+
+    def test_null_provider_refuses_build_structure_by_name(self) -> None:
+        """The deterministic provider's honest answer is a typed refusal.
+
+        The property that keeps a mis-assembled loop from putting something
+        permanent on a square: a goal-capable planner with no navigating
+        wrapper refuses the kind and lets its budgets end it.
+        """
+        record = self.build_goal(channel())
+
+        proposal = proposed_for(record, self.site())
+
+        assert proposal.refused
+        assert proposal.reason_code is ReasonCode.CAPABILITY_UNAVAILABLE
+        assert "build mission" in proposal.detail
+
+    def test_the_wrapper_drives_one_command_and_never_asks_the_planner(self) -> None:
+        queue = channel()
+        wrapper, actions, spy = self.wrapper_over(queue)
+        record = self.build_goal(queue)
+
+        value = wrapper.propose_for_goal(to_planner_goal(record), self.site())
+
+        # The build travels the action channel, never the goal seam: that is
+        # where the P4 gate stands, and a queued build is not a wall besides.
+        assert value is None
+        assert actions.pending_count == 1
+        taken = actions.take_next()
+        assert taken is not None
+        _, request = taken
+        assert request.action is ActionName.BUILDING_BUILD
+        # Two arguments and no third. A ``count`` here is the first thing a
+        # loop in the mod would read, and there is none anywhere on this rung.
+        assert request.args == {
+            "blueprint": self.WALL,
+            "square": f"square:{DEFAULT_SESSION}:1201:3400:0",
+        }
+        assert request.idempotency_key.startswith(f"build:{record.goal_id}")
+        assert spy.goal_calls == [] and spy.propose_calls == 0, (
+            "build_structure must never reach a plan provider"
+        )
+
+    def test_a_placement_that_would_seal_the_character_in_is_refused_before_anything_is_queued(
+        self,
+    ) -> None:
+        """The refusal this wave exists for, and it costs one sentence.
+
+        The character's own square has exactly one remaining exit in the
+        observed window, and the goal asks for a wall on it. Nothing is
+        submitted, the goal ends typed, and the mission does not go and try the
+        next square along — that square is the user's choice, and a wall this
+        agent raises is a wall this agent cannot take back down.
+        """
+        queue = channel()
+        wrapper, actions, spy = self.wrapper_over(queue)
+        record = self.build_goal(queue, key="seam-build-trap")
+
+        value = wrapper.propose_for_goal(to_planner_goal(record), self.site(sealed=True))
+
+        assert value is None
+        assert actions.pending_count == 0, "a trapping placement must not reach the engine"
+        ended = queue.record(record.goal_id)
+        assert ended is not None
+        assert ended.state.value == "failed"
+        assert ended.reason_code is ReasonCode.WOULD_TRAP_PLAYER
+        assert "no way out" in ended.detail
+        assert spy.goal_calls == [] and spy.propose_calls == 0
+        report = wrapper.build_report(record.goal_id)
+        assert report is not None and report["placed"] is False
+        # The report says what the check could see, in the words the policy is
+        # entitled to: a bounded window, and a claim about that window only.
+        enclosure = report["enclosure"]
+        assert isinstance(enclosure, dict) and enclosure["passed"] is False
+
+    def test_an_occupied_square_is_refused_and_nothing_is_cleared(self) -> None:
+        queue = channel()
+        wrapper, actions, spy = self.wrapper_over(queue)
+        record = self.build_goal(queue, key="seam-build-taken")
+
+        value = wrapper.propose_for_goal(to_planner_goal(record), self.site(occupied=True))
+
+        assert value is None
+        assert actions.pending_count == 0, "clearing a square is not something this agent does"
+        ended = queue.record(record.goal_id)
+        assert ended is not None
+        assert ended.reason_code is ReasonCode.SQUARE_OCCUPIED
+        assert spy.goal_calls == [] and spy.propose_calls == 0
+
+    def test_a_shortfall_ends_the_goal_typed_and_sends_nobody_looting(self) -> None:
+        """Materials missing is a report, not an errand — the craft wave's
+        precedent, applied to a wall."""
+        queue = channel()
+        wrapper, actions, spy = self.wrapper_over(queue)
+        record = self.build_goal(queue, key="seam-build-short")
+        short = self.site(
+            materials=[
+                {"full_type": self.PLANK, "count": 1},
+                {"full_type": "Base.Nails", "count": 4},
+            ]
+        )
+
+        value = wrapper.propose_for_goal(to_planner_goal(record), short)
+
+        assert value is None
+        assert actions.pending_count == 0, "a shortfall must not send the character anywhere"
+        ended = queue.record(record.goal_id)
+        assert ended is not None
+        assert ended.state.value == "failed"
+        assert ended.reason_code is ReasonCode.RECIPE_MATERIALS_MISSING
+        assert "Base.Nails" in ended.detail
+        assert spy.goal_calls == [] and spy.propose_calls == 0
+
+    def test_neither_the_arbiter_nor_the_initiative_path_can_mint_the_kind(self) -> None:
+        """Only an explicit user submission reaches building — pinned by census.
+
+        The combat and craft kinds' pin, and the one it matters most for. Three
+        tables own every route by which this system mints a goal for itself:
+        the needs arbiter's trigger table, the autonomy planner's initiative
+        table, and the plan providers (closed by the refusal above). A goal
+        that places a permanent structure must come from a person, in every
+        mode, always — which is the same statement the permission ladder makes
+        one layer down, where P4 has no autonomous path at all.
+        """
+        build = GoalKind.BUILD_STRUCTURE.value
+        triggered = {kind.value for kind in TRIGGER_KINDS.values()}
+        assert build not in triggered
+        assert triggered == {
+            "treat_wounds",
+            "avoid_threat",
+            "satisfy_thirst",
+            "satisfy_hunger",
+        }
+        minted = {kind.value for kind in INITIATIVE_GOALS.values()}
+        assert build not in minted
         assert minted == {"satisfy_hunger", "satisfy_thirst", "read_for_boredom"}
 
 

@@ -99,18 +99,29 @@ one.
 
 ## What the server publishes
 
-Forty-five tools, in eight groups. The names are stable and the schemas are served
+Forty-nine tools, in ten groups. The names are stable and the schemas are served
 with them:
 
 - **session** — `pz_session_status`, `pz_session_arm`, `pz_session_disarm`
 - **observation** — `pz_observe_snapshot`, `pz_observe_inventory`,
   `pz_observe_nearby`
 - **query** — `pz_action_inspect_world`, `pz_action_inspect_container`,
-  `pz_action_search_inventory`. These submit an action and return an action id
-  like any other, and they need no arming, because the actions behind them only
-  read. `pz_action_open_container` is deliberately *not* here: its name reads
-  like a query, but opening a container is a timed action the character
-  performs.
+  `pz_action_search_inventory`, `pz_action_inspect_recipe`,
+  `pz_action_inspect_buildable`. These submit an
+  action and return an action id like any other, and they need no arming,
+  because the actions behind them only read. `pz_action_inspect_recipe` reads
+  one recipe — what it makes, what it consumes, whether the character has
+  learned it, whether it could run right now — off the crafting readout the
+  observer already produces; nothing moves and nothing is spent, and a recipe
+  the character has not learned is reported as a finding rather than refused.
+  `pz_action_inspect_buildable` reads one square the same way — what the
+  character knows how to raise, whether the materials are carried, whether the
+  square is free, and whether a solid structure there would still leave a way
+  out — and it is the reading to make *before* granting the P4 that
+  `pz_action_build` needs, because it shows a `SQUARE_OCCUPIED` or a
+  `WOULD_TRAP_PLAYER` coming rather than after.
+  `pz_action_open_container` is deliberately *not* here: its name reads like a
+  query, but opening a container is a timed action the character performs.
 - **action** — `pz_action_move_to`, `pz_action_move_near`,
   `pz_action_open_container`, the three door verbs `pz_action_open_door`,
   `pz_action_close_door` and `pz_action_unlock_door` — all riding the single
@@ -144,6 +155,46 @@ with them:
   `engage_single_zombie` goal is the mission form of the same primitives,
   with the policy re-run before every window and retreat on deterioration
   mandatory.
+- **crafting** — `pz_action_craft`. One recipe, one run, and the first
+  published action that *destroys* what it spends: P3 for crafting from
+  materials the character carries, escalating per command to P4 when the recipe
+  may need a surface to run on or is only afforded by materials in a world
+  container. There is no argument naming a station or a container — this rung
+  crafts from the character's own bags — so the escalation comes off the recipe,
+  read from the observation and re-assessed before every command. There is no
+  loop and no retry: a recipe that could run again is a report, and running it
+  again is another call through the crafting policy, the permission gate and the
+  safety stop. That policy refuses a recipe the character has not learned
+  (`RECIPE_UNKNOWN`), one short of materials (`RECIPE_MATERIALS_MISSING`, naming
+  each shortfall) and one short only because you reserved what it needs
+  (`RESOURCE_RESERVED`) — before anything is sent. Success is the product
+  observed in the inventory afterwards, never the craft being queued. Its
+  capability is `crafting`, `experimental` on a clean scan, so this tool is
+  withheld on every install until a live run promotes it. The `craft_item` goal
+  is the mission form: it names a *product*, the policy picks the recipe, and
+  one submission authorises at most four runs of one command each.
+- **building** — `pz_action_build`. One structure, one square, one command, and
+  the first published action whose work *stays in the world*: a craft spends
+  planks and the world is where it was, a wall is a new fact on a square, and
+  **there is no demolition action anywhere in this build** — taking down what
+  somebody put there is a different authority and this project does not have
+  it. So the tier is P4 and it never moves: P4 has no autonomous path in this
+  codebase at all, which means a wall is raised on your initiative and an
+  explicit grant per call, never on the agent's. There is no `count` argument,
+  because one command raises one structure and a number there is what a loop
+  would read. The deterministic building policy refuses before anything is
+  queued: `SQUARE_OCCUPIED` when something already stands there (the agent
+  never clears a square), `WOULD_TRAP_PLAYER` when the placement would take
+  away the last way out of the square the character stands on that the
+  observation can see, and `RECIPE_MATERIALS_MISSING` / `RESOURCE_RESERVED` for
+  the materials. That enclosure check reads a *bounded* window: it cannot prove
+  the character is not already shut in by something outside it, and what it
+  does prove is that this placement removes no exit the observation found — an
+  unreadable map refuses rather than waves through. Success is the structure
+  observed standing on the square afterwards. Its capability is `building`,
+  `experimental` on a clean scan, so this tool is withheld on every install
+  until a live run promotes it. The `build_structure` goal is the mission form:
+  it names the blueprint and the square, both typed by the caller.
 - **plan** — `pz_plan_execute`, `pz_plan_status`
 - **goal** — `pz_goal_submit`, `pz_goal_status`, `pz_goal_cancel`. The typed
   goal channel: a closed set of kinds with per-kind typed, range-checked
@@ -162,6 +213,20 @@ and no queue entry to cancel, so a panic stop cannot reach them. The four
 combat tools will usually be absent for the matching reason: the attack entry
 points live behind Java accessors no static Lua scan can see, so `combat_assist`
 is `experimental` until a live shove's re-observed evidence confirms them.
+`pz_action_craft` will be absent on **every** install this project can ship to,
+for both of those reasons at once: Build 42 rewrote crafting and none of the
+recipe accessors has been seen answering, and a craft that goes wrong has
+already spent the materials by the time anyone finds out. `pz_action_inspect_recipe`
+is not withheld with it — reading a recipe spends nothing, and a build that
+cannot answer says so per call.
+
+`pz_action_build` is absent on **every** install for the same two reasons taken
+one step further: Build 42 rewrote construction, none of the blueprint
+accessors has been seen answering, and a build that goes wrong has put an
+object in the world that nothing in this project can take out again.
+`pz_action_inspect_buildable` is not withheld with it, and that split is the
+whole shape of this rung on a clean install: **the reading is published, the
+placement is not.**
 
 Seven resources are published beside them: `pz://session/current`,
 `pz://observation/latest`, `pz://inventory/current`, `pz://capabilities`,
