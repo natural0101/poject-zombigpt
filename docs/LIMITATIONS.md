@@ -163,6 +163,27 @@ moves is a contract decision whose only real test is a live game, and because
 the earlier attempt at the object-entry form was rejected under adversarial
 verification for colliding with the refs `buildObject` already mints.
 
+**And the same missing producer now takes the building half of P5 with it.**
+`policy/building.read_window` builds the enclosure window from that identical
+scan — `nearby.objects`, `kind == SQUARE_OBJECT_KIND` — and returns `None` when
+it collected no square, which against the shipped mod is always. Its caller
+refuses `WOULD_TRAP_PLAYER` on `None` ("the mod described no window this side
+can read whole"), so **every `build_structure` placement is refused**, and the
+refusal blames the map rather than the seam. The direction is the safe one and
+deliberately so — an unreadable map is where a trapping wall is most likely, not
+least — but the goal cannot succeed once, exactly as `LEARN_RECIPE` could not
+before its producer arrived.
+
+This is established by reading both sides plus the ledger's producer check, not
+by driving a mod-shaped document through the sidecar: the mod emits no
+`kind = "square"` in code (`tests/contract/test_gates_without_producers.py`
+asserts it, comments stripped), and `read_window` fills `semantics` from nothing
+else.
+
+So one contract decision — where a square lives — unblocks three things at once:
+movement, the enclosure check, and `loot_area`'s approach to a container. That is
+the argument for settling it rather than working around it in any single caller.
+
 The gap survived a fully green suite because the sidecar's own fixtures mint the
 square objects the mod never sends (`tests/fixtures/adapter_worlds.py:a_square`),
 so each side was only ever tested against its own idea of the document. That is

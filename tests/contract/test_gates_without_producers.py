@@ -113,8 +113,17 @@ WITHOUT_PRODUCER: Final = {
         "movement.move_to, movement.move_near, world.inspect and the navigation "
         "local map all locate a destination square by scanning nearby.objects for "
         'kind == "square". The mod emits no such entry, so movement refuses '
-        "every real observation with TARGET_NOT_LOADED. See LIMITATIONS.md for "
-        "the full account and the two blockers a fix must still solve.",
+        "every real observation with TARGET_NOT_LOADED. The crafting/building "
+        "wave gave this gate a SECOND consumer without giving it a producer: "
+        "policy/building.read_window builds its enclosure window from the same "
+        "scan, finds no square, and returns None -- so build_structure refuses "
+        "every placement WOULD_TRAP_PLAYER, blaming the map rather than the "
+        "seam, and the building half of P5 cannot run at all. That wave does "
+        "publish squares, as a separate nearby.squares tier for its own path "
+        "check; neither consumer reads it. One contract decision -- where a "
+        "square lives -- unblocks movement, the enclosure check and loot_area's "
+        "approach together. See LIMITATIONS.md for the account and the blockers "
+        "a fix must still solve.",
         r'kind\s*=\s*[\'"]square[\'"]',
     ),
     "ActionState.type": (

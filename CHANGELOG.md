@@ -32,6 +32,30 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **The building half of P5 cannot succeed once, for the reason the agent
+  cannot walk** (`dev`). Found by asking the merge the question the dead-gate
+  ledger exists for: does the arriving sidecar logic decide on values the mod
+  has no path to produce? The crafting vocabulary came back clean — every key
+  `policy/crafting.py` reads has a producer. The building one did not.
+
+  `policy/building.read_window` builds its enclosure window by scanning
+  `nearby.objects` for `kind == "square"` — the identical scan `movement` has
+  been failing on since it was written — and returns `None` when it collected
+  none, which against the shipped mod is always. Its caller refuses
+  `WOULD_TRAP_PLAYER` on `None`, so **every `build_structure` placement is
+  refused**, blaming the map rather than the seam. The direction is the safe
+  one and deliberately so — an unreadable map is where a trapping wall is most
+  likely, not least — but the goal cannot succeed, exactly as `LEARN_RECIPE`
+  could not before its producer arrived.
+
+  The wave *does* publish squares, as a separate `nearby.squares` tier for its
+  own path check. Neither consumer reads it. Not repaired here, because which
+  side moves is the same cross-language contract decision the square tier has
+  always been — but the case for settling it is now three-for-one: movement,
+  the enclosure check and `loot_area`'s approach all wait on it. Recorded on
+  the existing ledger row rather than a new one, since it is one missing
+  producer with a second consumer.
+
 - **The merge would have wedged craft and build missions, and mypy caught it**
   (`dev`). `_collect_mission_pending` returns a three-state `_Pending` on this
   branch — `RUNNING`, `SETTLED`, `LOST` — while the arriving craft and build
