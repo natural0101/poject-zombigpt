@@ -157,6 +157,14 @@ local function squareWindow()
       })
     end
   end
+  -- One crate standing on a nearby square. It is the last live gap in the
+  -- build: `buildObject` mints it a container reference a planner can name,
+  -- and `resolve_container` searches `inventory.containers`, which the crate
+  -- is never added to. Putting it in the document is what turns that from a
+  -- ledger row into a refusal something can be pointed at.
+  squares["103,200,0"] = gridSquare({
+    objects = { Support.worldObject({ name = "Crate", container_type = "crate" }) },
+  })
   return squares
 end
 

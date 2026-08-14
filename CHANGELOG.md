@@ -12,6 +12,23 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Added
 
+- **The last live gap is now a refusal something can be pointed at** (`dev`).
+  The dumper stands a crate on a nearby square. The mod's `buildObject` mints it
+  a proper `container:` reference — a planner sees it and can name it in a goal —
+  and `InventoryView.container` returns `None` for that reference, because
+  `inventory.containers` holds only the character's own roots and nothing ever
+  adds a world container to them.
+
+  Both halves are asserted, because the gap is the gap *between* them: nameable
+  and unresolvable. That is why `loot_area` cannot take anything out of
+  anything, and it is the only one of this build's three known gaps that still
+  costs a whole goal kind. Until now it was a row in a ledger and a paragraph in
+  `LIMITATIONS.md`; it is now a document a reader can run.
+
+  With this the round trip covers all four tiers of the observation document —
+  items, squares, zombies, containers — and each was verified by breaking the
+  mod rather than by reasoning about it.
+
 - **The round trip reaches the zombie tier, which is the one where being wrong
   is dangerous** (`dev`). The document now carries two zombies built by the mod:
   one with a readable target, one whose target reader the build does not expose.

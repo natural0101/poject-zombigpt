@@ -289,3 +289,52 @@ def test_an_unreadable_chase_arrives_as_unknown_rather_than_calm(
         "prevent — check ObserveModel.buildZombie and NearbyZombie together"
     )
     assert False not in by_chase
+
+
+def test_a_crate_the_planner_can_name_and_nothing_can_open(
+    document: dict[str, Any],
+) -> None:
+    """The last live gap in the build, shown as a refusal instead of a row.
+
+    The mod puts a crate in ``nearby.objects`` and ``buildObject`` mints it a
+    proper ``container:`` reference, so a planner sees it and can name it in a
+    goal. ``InventoryView.container`` searches ``inventory.containers`` and
+    nothing else, and the crate is never added there — the mod's inventory has
+    exactly two roots, the main one and each worn container, with carried
+    containers nested inside items.
+
+    So the reference resolves to nothing and every container action against it
+    refuses ``INVALID_REF``. This is why ``loot_area`` cannot take anything out
+    of anything, and it is the only one of this build's three known gaps that
+    still costs a whole goal kind.
+
+    Both halves are asserted, because the gap is precisely the gap *between*
+    them: the crate is nameable, and it is unresolvable. A repair closes the
+    second without touching the first.
+    """
+    observation = Observation.from_dict(document)
+    nearby = observation.nearby
+    inventory = observation.inventory
+    assert nearby is not None
+    assert inventory is not None
+
+    crates = [
+        entry
+        for entry in nearby.objects
+        if entry.kind != SQUARE_OBJECT_KIND and entry.ref.startswith("container:")
+    ]
+    assert len(crates) == 1, (
+        "the dumper stands one crate on a nearby square; without it this test "
+        "is asserting the absence of something that was never there"
+    )
+    crate = crates[0]
+    assert "world" in crate.ref, "the crate's reference is a world-container reference"
+
+    assert inventory.container(crate.ref) is None, (
+        "the world container now resolves out of inventory.containers, which "
+        "means the last of this build's three gaps has been closed — retire its "
+        "row in test_gates_without_producers.py, rewrite the entry in "
+        "docs/LIMITATIONS.md and §9 6c of the final report, and change this "
+        "assertion to the positive one"
+    )
+    assert inventory.container("container:x:player-main") is None
