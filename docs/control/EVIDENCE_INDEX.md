@@ -36,10 +36,10 @@ about nothing.
 
 | Field | Value |
 | --- | --- |
-| archive | `pz-agent-windows-rc` (artifact 9216014552), `pz-agent-windows-v1.0.0-rc1.zip`, 77 entries |
-| archive sha256 | `55ac84ebcd9d5b2e9bd208e9a24e21d82645ae3b6db62d057965791029036176` |
-| source commit | `400a01c670e7d0d502fc8402b52e55b201973347` |
-| workflow run | https://github.com/natural0101/poject-zombigpt/actions/runs/31791518096 |
+| archive | `pz-agent-windows-rc` (artifact 9221011778), `pz-agent-windows-v1.0.0-rc1.zip`, 77 entries |
+| archive sha256 | `c4d00d7f5bc217b08725eb6575941b659ab1995c027450adc279597d56e551a1` |
+| source commit | `0a9ebe1aa1ac715ed3fe58c109c71cdd8e7a36b3` |
+| workflow run | https://github.com/natural0101/poject-zombigpt/actions/runs/31804195213 |
 | certified by | `check_release.py --rc` printing `CERTIFIED v1.0.0-rc1: 8 check(s) passed` — archive complete, all 11 wrappers at the root, **both executables in `bin/`**, 76 file digests matching, 8469 of 8518 tests passed with no failures, 31 MCP end-to-end testcases green, and the archive claiming no live-test evidence. The packaged pair also completed an MCP `initialize` over the RPC link with `PATH` reduced to the system directories |
-| what this RC does *not* certify | the passed count has been 8469 for five RCs while collected climbed 8510 → 8518 and skips 41 → 49. The eight added tests are the observation-seam round trip, and they skip here for want of a Lua interpreter on the runner. That is not new and not a gap in this artefact: `test_adapter_args_agreement` — the command seam's equivalent, years older — skips on exactly the same condition, so **neither seam check has ever been part of RC certification**. Both run on Linux CI and locally, both verify a contract between the mod and the sidecar that has nothing to do with the host OS, and putting Lua on the release runner would add a dependency to the release path for no coverage that is not already taken. Stated here so the growing skip count is read as what it is |
+| what this RC does *not* certify | the passed count has been 8469 for six RCs while collected climbed 8510 → 8518 and skips 41 → 49. The eight added tests are the observation-seam round trip, and they skip here for want of a Lua interpreter on the runner. That is not new and not a gap in this artefact: `test_adapter_args_agreement` — the command seam's equivalent, years older — skips on exactly the same condition, so **neither seam check has ever been part of RC certification**. Both run on Linux CI and locally, both verify a contract between the mod and the sidecar that has nothing to do with the host OS, and putting Lua on the release runner would add a dependency to the release path for no coverage that is not already taken. Stated here so the growing skip count is read as what it is |
 | current? | `docs/control/STATUS.json` → `release_candidate.status`; any code commit after the source commit makes it STALE until the workflow rebuilds it |
