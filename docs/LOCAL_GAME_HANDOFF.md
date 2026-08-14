@@ -255,16 +255,31 @@ Everything below ran and passed in the remote environment:
 
 ## 4. What requires a real game — and was therefore not done
 
-**Read this before you spend a session: eight parts of the sidecar are wired to
-a mod that cannot drive them. Two of them mean the agent cannot walk and cannot
-loot, and one is a safety rung that has never fired.** None of this is your
-install. Reporting it as a bug costs you the session, which is the only resource
-in this project that can produce live evidence at all.
+**Read this before you spend a session: parts of the sidecar are wired to a mod
+that cannot drive them. One of them means the agent cannot loot, and one is a
+safety rung that has never fired.** None of this is your install. Reporting it as
+a bug costs you the session, which is the only resource in this project that can
+produce live evidence at all.
+
+**You can see all of it without the game.** One test builds an observation
+through the mod's own readers and reads it back with the sidecar's own decoder:
+
+```
+pytest tests/contract/test_observation_document_round_trip.py -v
+```
+
+That is worth ten minutes before you start, because this table has been wrong
+before. A previous revision of it said the agent could not walk at all and that
+every placement would be refused; both were produced by a checker that searched
+the sources for a spelling the mod does not use, and both were retracted. The
+rows below are the ones that survive a test which runs the mod instead of
+reading it.
 
 | What you will see | Why | Do |
 | --- | --- | --- |
-| **Every `movement.move_to` and `movement.move_near` refuses `TARGET_NOT_LOADED`** — "no loaded square was reported at (x, y, z)", including the square next to the character | The sidecar finds a destination square by scanning `nearby.objects` for an entry whose `kind` is `square`; the mod emits no such entry. `world.inspect` reports zero squares described for the same reason, and the local map never learns any square is blocked | Skip every scenario that walks. Do **not** relax the precondition to get past it — it exists to stop the character being walked onto ground nothing assessed |
-| **Every container action against a crate, cupboard or corpse refuses `INVALID_REF`** — "is not in the observed container tree" | The mod's inventory has two roots, the main inventory and each worn container, with carried containers nested inside items. A nearby world container is *referenced* — `buildObject` mints it a proper container ref — but never listed, and `resolve_container` searches the list alone | Skip `loot_area` entirely. It is blocked twice over: it cannot walk to the crate and could not open it standing there |
+| **A move that changes storey refuses `PATH_NOT_FOUND`** — a move on one floor is fine | `movement._check_square` wants the `stairs` semantic on the *square* entry; the mod puts it on the staircase *object* standing there, deliberately, so as not to write one fact in two places. The gate is restrictive when the token is missing, so this costs journeys between storeys and nothing else | Walk on one floor. Do **not** relax the precondition — it refuses toward caution |
+| **A square behind a closed window is refused as `blocked`, not `closed_window`** | The dedicated `POLICY_DENIED` branch never fires — no such token is produced anywhere — but `Observe.squarePassable` reads the square as impassable, so the refusal still happens under another name | Nothing. Only the *name* of the refusal is wrong |
+| **Every container action against a crate, cupboard or corpse refuses `INVALID_REF`** — "is not in the observed container tree" | The mod's inventory has two roots, the main inventory and each worn container, with carried containers nested inside items. A nearby world container is *referenced* — `buildObject` mints it a proper container ref — but never listed, and `resolve_container` searches the list alone | Skip `loot_area`. The mission can now walk to the crate and is refused **at** the crate. This is the one remaining gap that costs a whole goal kind |
 | A rotten meal, an empty bottle and a finished book all read as fine | The mod sends `rotten`, `pages`, `amount`/`capacity`; the sidecar reads `freshness`, `pages_total`, `remaining_units`. Different names for the same facts, so every one of them reads as its type's default. `poisonous` (food) and `tainted` (fluid) *do* cross, so the two sharpest hazards are still refused | Do not trust a food or drink *choice* as evidence of anything. Whether it was eaten is still observed honestly; **which** item the policy picked was decided blind |
 | A zombie arriving during a meal or a book does not interrupt it until the danger is high enough to stop everything | §17.2's interrupt rung matches `ActionState.type`, and the mod never fills that field | Worth timing if you can: the flee rung above it does fire, so the character should still stop — later than the spec asks. If it does **not** stop at all, that is a finding |
 | Containers are never refused as unreachable | `container.accessible` is always true: five sidecar sites refuse on it and nothing in the mod ever sets it false | Nothing. Expect a locked or blocked container to be attempted and to fail at the game rather than be refused early |
@@ -272,39 +287,46 @@ in this project that can produce live evidence at all.
 | Snapshots are always full, never deltas | `Observe.context` sets `full = true` unconditionally | Nothing. The merge path in `store.py` is simply unused |
 | A horde one storey up counts as closing | `dangerFloor` tests `zombie.position.z`, and its caller passes the raw reader table where the position is three flat fields | Nothing. The error runs toward caution — the floor reads higher than the world warrants, never lower |
 
-`tests/contract/test_gates_without_producers.py` is the ledger for all eight and
-`tests/contract/test_item_domain_vocabularies.py` measures the third;
-`LIMITATIONS.md` carries the full account and, for the square tier, the two
-blockers a fix must still solve.
+`tests/contract/test_gates_without_producers.py` is the ledger for all of these
+and `tests/contract/test_item_domain_vocabularies.py` measures the item blocks;
+`LIMITATIONS.md` carries the full account. Both compare the two sides by
+*pattern*, which is how one row came to be wrong for four commits — prefer
+`test_observation_document_round_trip.py`, which runs the mod.
 
-**So what is worth doing with a live session?** Everything that does not walk,
-and one thing above all others:
+**So what is worth doing with a live session?** Almost everything, and one thing
+above all others:
 
 1. **Confirm the 52 engine symbols in `docs/GAME_API_VERIFICATION.md`.** This is
    the highest-information hour available, because almost every remaining
-   unknown is downstream of it — including whether the square tier is even
-   buildable. A first attempt at that tier was rejected partly because it read
-   solidity from `isSolid`/`isSolidTrans` and published a wall as open ground
-   when a build exposed one and not the other. **Those two are not yet rows in
-   that document.** Add them and confirm them, and blocker 2 stops being a
-   guess. Start with `ISTakeWaterAction`, whose argument order the document
-   flags as wrong-filling silently if the build differs.
+   unknown is downstream of it. The square tier is now built and published — the
+   round-trip test proves the two sides agree about it — but that agreement says
+   nothing about whether `isSolid`, `isSolidTrans`, `isFree` and `getFloor`
+   answer at all on this build, and a wall published as open ground is the
+   failure that sank an earlier attempt at the tier. **Those four are not yet
+   rows in that document.** Add them and confirm them. Start with
+   `ISTakeWaterAction`, whose argument order the document flags as wrong-filling
+   silently if the build differs.
 2. **Arm, disarm, panic stop, manual takeover.** These need no movement, and
    they are the safety guarantees the README makes.
-3. **The observation tiers** — player, inventory, nearby. Whether `getTarget`,
+3. **Walk one square, then walk across a room.** This is newly worth doing: the
+   square tier exists, so a walk should now be attempted rather than refused at
+   the precondition. What a live run settles is whether the squares the mod
+   publishes describe the world correctly — the round trip only proves the
+   sidecar reads what the mod writes.
+4. **The observation tiers** — player, inventory, nearby. Whether `getTarget`,
    `getZombieList` and the body readers exist on this build decides how much of
    the threat assessment is running on measured readings rather than on the
    conservative substitutes this branch installed for their absence. Check the
    `unread` block in the planner's view and the `observe.*` counters in
    `player.stats`: **if any of them fire on a healthy install, that is the
    finding**, not a nuisance.
-4. **Eat and drink from the inventory, equip, unequip, bandage, read.** These
+5. **Eat and drink from the inventory, equip, unequip, bandage, read.** These
    reach the game without a step being taken. Watch the *choice* rather than the
    act: the vocabulary mismatch above means the policy picked that sandwich
    without being able to read rot, portions or pages. If the agent eats
    something visibly spoiled, that is the mismatch showing, not a new bug — and
    it is worth reporting as confirmation that it bites in a real save.
-5. **One thing to time, if the session allows.** Start a read or a meal and let
+6. **One thing to time, if the session allows.** Start a read or a meal and let
    a zombie approach. §17.2 asks for an interrupt at the lower threshold; that
    rung is dead, so the character should stop only when the danger reaches the
    flee threshold. Confirming *that it stops at all* is the safety-relevant

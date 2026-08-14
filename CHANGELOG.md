@@ -12,6 +12,27 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Added
 
+- **The handoff still carried the retracted claims, and it is the one document a
+  live session is planned from** (`dev`). `LOCAL_GAME_HANDOFF.md` §4 opened with
+  "eight parts of the sidecar are wired to a mod that cannot drive them. Two of
+  them mean the agent cannot walk and cannot loot", and its first row told the
+  operator to *skip every scenario that walks*. The walking claim was retracted
+  several commits ago; the document was not. That is the same stale-document
+  defect this pass exists to remove, aimed at the person who would have spent a
+  session obeying it.
+
+  The row is replaced by the two narrow gaps that survived — a floor-changing
+  move refuses, a closed-window square is refused under the wrong name — and the
+  container row no longer says "blocked twice over", because the mission can now
+  reach the crate and is refused at it. The priority list gains walking as
+  something newly worth doing, and the symbol row now names `isSolid`,
+  `isSolidTrans`, `isFree` and `getFloor` as the four the square tier's
+  correctness actually rests on.
+
+  The section also now opens with the command that shows all of it without the
+  game, and says why that matters here: this table has been wrong before, and
+  the test runs the mod instead of reading it.
+
 - **The last live gap is now a refusal something can be pointed at** (`dev`).
   The dumper stands a crate on a nearby square. The mod's `buildObject` mints it
   a proper `container:` reference — a planner sees it and can name it in a goal —
