@@ -12,6 +12,35 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Added
 
+- **The protocol vocabularies the regex could not see** (`dev`).
+  `tests/unit/test_lua_mod_contract.py` holds `Protocol.lua` against the Python
+  enums by matching `KEY = "value"` pairs in the file's text. Four tables are not
+  written that way — `ACTIONS`, `TERMINAL_STATUSES`, `MUTATING_MODES` and
+  `DANGER_RANK` are built by `toSet(...)` and by keying off other tables — so the
+  pattern found nothing in any of them and they were left unchecked. Three carry
+  decisions that have to hold on both sides of the wire: when the mod stops
+  tracking an action, which session modes accept a world-changing command, and
+  the order the reflex guard compares danger against.
+
+  They agreed already; nothing was broken. What was missing was anything keeping
+  them that way. `tests/lua/support/dump_protocol_tables.lua` now loads the module
+  the way the game loads it and prints the tables it ends up holding, and
+  `tests/contract/test_protocol_tables_agreement.py` compares fourteen of them to
+  the Python side. This is the fourth seam checked by running the producer rather
+  than by reading the source, after adapter args, adapter capabilities and the
+  observation document — and it is the retraction's lesson applied on purpose: a
+  producer written through a constant was invisible to a regex once already.
+
+  Demonstrated both directions on the real mod, not on a synthetic. Dropping
+  `Protocol.STATUS.LOST` from `TERMINAL_STATUSES` — an action the sidecar retires
+  and the mod would nurse forever, which is the NEVER TERMINAL family by name —
+  leaves the entire existing Lua contract suite green and fails the new check.
+  Ranking `HIGH` equal to `MEDIUM` in `DANGER_RANK` does the same. Both were
+  reverted; the tree is unchanged.
+
+  These fourteen need a Lua interpreter and so skip on the Windows release
+  runner, like the two seam checks before them; CI's Linux leg runs them.
+
 - **The final report re-measured at the current head** (`dev`). Every figure in
   it was produced by running something, and the plan's regeneration moved most
   of them: 480 tasks → 484 and 3104 weight → 3144, so 74.3% → **73.3%**; LIVE
