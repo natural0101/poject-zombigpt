@@ -12,6 +12,33 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Added
 
+- **A gap `docs/PROGRESS.md` still listed as open had been closed** (`dev`).
+  Its "Requires a live game session" section said of the restore guard:
+  *"Nothing yet supplies it from an actual process check; whoever wires the CLI
+  must, and a wrong answer here is the one that corrupts a save."* Not true, and
+  not true for some time: `supervisor.probe_game_running` asks the game heartbeat
+  first and falls back to the process table, `game_running_for_restore` collapses
+  its three-valued verdict toward refusing, and `saves.py` passes that boolean to
+  `BackupManager.restore`. Five tests in `test_cli_saves.py` hold the path,
+  including the refusal when a process names the game and no heartbeat exists.
+
+  Overstating what is left is the mirror of understating it, and this is the
+  document the next reader starts from.
+
+  The entry is narrowed to what a live install is genuinely still owed: the
+  fallback matches the literal `GAME_PROCESS_MARKER`, `"zomboid"`, case-folded,
+  and nobody has read the process table of a machine with Build 42.20 open. The
+  direction of a wrong marker is the safe one — unreadable, truncated and
+  non-matching listings all yield `MAY_BE_RUNNING` and refuse the restore — so it
+  costs a refusal to work around, never a lost save.
+
+  `docs/LOCAL_GAME_HANDOFF.md` §13 now asks for it, because the answer takes
+  five seconds at the machine that has the game: `tasklist | findstr /i zomboid`.
+  Stated as a question rather than a blocker, with why it is safe either way.
+
+  `docs/SAFETY.md` and the handoff's own §14 table were checked and are accurate;
+  only `PROGRESS.md` carried the stale claim.
+
 - **The last mile of the operator's work, checked across the seam** (`dev`).
   The operator runs the scenarios inside Project Zomboid — the catalogue's
   declared budget is 20 460 seconds, five hours and forty-one minutes — then

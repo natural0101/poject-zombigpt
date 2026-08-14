@@ -528,11 +528,23 @@ Two non-scenario items also need a real installation:
   `known=False` with the reason recorded, never a substituted `TARGET_BUILD` —
   but which path actually exists is unknown until someone runs `pz-agent
   doctor` against the game.
-- **A real "is the game running" probe.** `BackupManager.restore` requires
-  `game_running` as a keyword with no default and no override, so the rule
-  cannot be bypassed by accident. Nothing yet supplies it from an actual
-  process check; whoever wires the CLI must, and a wrong answer here is the one
-  that corrupts a save.
+- **Whether `"zomboid"` is what the running game calls itself.** This entry
+  used to read *"nothing yet supplies it from an actual process check; whoever
+  wires the CLI must"*. That is no longer true and had stopped being true some
+  time ago: `supervisor.probe_game_running` asks the game heartbeat first and
+  falls back to the process table, `game_running_for_restore` collapses its
+  three-valued verdict toward refusing, and `saves.py` passes that boolean to
+  `BackupManager.restore` — which still takes `game_running` as a keyword with
+  no default and no override, so the rule cannot be bypassed by accident.
+
+  What a live install is still owed is narrower and worth stating exactly: the
+  fallback matches a process whose name contains `GAME_PROCESS_MARKER`, which is
+  the literal `"zomboid"`, case-folded. Nobody has read the process table of a
+  machine with Build 42.20 open, so whether the real name contains it is
+  unconfirmed. The direction of a wrong answer is the safe one — an unreadable,
+  truncated or non-matching listing all yield `MAY_BE_RUNNING`, and a restore is
+  refused rather than allowed — so the cost of the marker being wrong is a
+  refusal a person has to work around, not a corrupted save.
 
 | Scenario | Status | Blocked on |
 | --- | --- | --- |

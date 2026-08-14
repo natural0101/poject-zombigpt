@@ -535,6 +535,24 @@ pz-agent restore-save <backup-id>
 `restore-save` **refuses while Project Zomboid is running**, and that refusal is
 load-bearing: restoring over an open save destroys it. Close the game first.
 
+**One thing to check while you are there, and it takes five seconds.** With the
+game open, run:
+
+```
+tasklist | findstr /i zomboid
+```
+
+The refusal has two sources: a live game heartbeat, which is proof, and — when
+there is no heartbeat — the process table, which is matched against the literal
+`"zomboid"`, case-folded. Nobody has read the process table of a machine with
+Build 42.20 open, so whether the real process name contains it is unconfirmed.
+Send whatever that command prints, or that it printed nothing.
+
+The direction of a wrong guess is the safe one: an unreadable listing, a
+truncated one, and one that matches nothing all yield `MAY_BE_RUNNING`, and the
+restore is refused. So a wrong marker costs you a refusal to work around, never
+a lost save — which is why this is a question rather than a blocker.
+
 Backups are hash-manifested, so a restore verifies what it is about to write.
 A backup that does not verify is refused rather than restored partially.
 
