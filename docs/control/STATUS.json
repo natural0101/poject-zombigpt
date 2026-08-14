@@ -13,9 +13,9 @@
     "NOT_STARTED": 84,
     "PASS": 400
   },
-  "head_commit": "b91828ff26eed4eb0faffd9c24caed5cdb5ee00f",
+  "head_commit": "1a5feb4601ada7f3a3bedd4a6836b4041e40a26e",
   "linux_ci": {
-    "commit": "b91828f",
+    "commit": "1a5feb4",
     "describes_current_head": true,
     "status": "PENDING"
   },
@@ -75,7 +75,7 @@
   "total_weight": 3144,
   "weighted_progress_percent": 73.31,
   "windows_ci": {
-    "commit": "b91828f",
+    "commit": "1a5feb4",
     "describes_current_head": true,
     "status": "PENDING"
   }
