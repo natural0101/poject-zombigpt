@@ -12,6 +12,34 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Added
 
+- **The mod's identity is spelled in six places and was checked in none**
+  (`dev`). `modinstall.py` carries `MOD_ID: Final = "pz_agent_bridge"` under a
+  comment reading *"Directory name under `Zomboid/mods`. Matches `id=` in
+  `mod.info`"*. The comment stated a relationship; nothing tested it. Both
+  `mod.info` files declare the id independently, and `installer/INSTALL.md` and
+  `docs/QUICKSTART.md` print the path a user checks by hand.
+
+  They agree. Nothing held them together, and the outage they would cause is one
+  this project has already met twice: `test_mod_info_declares_the_same_mod_version`
+  records that on 2026-08-08, against Build 42.20.2, **the mod simply did not
+  appear in the mod list** — once for `pzversion`, once for an empty `require=`
+  line. That test pins both of those in both files. It does not pin `id`.
+
+  A divergence is quiet in the worst way: the installer writes
+  `Zomboid/mods/<MOD_ID>/mod.info` whose `id=` says something else, the verifier
+  and the documents follow the constant, the game reads the file, and the user is
+  told the mod is installed and does not find it.
+
+  `tests/contract/test_mod_identity_agreement.py` holds the five declarations
+  together. Proved by planting each divergence separately against the real tree —
+  a renamed id in `pz-mod/42/mod.info`, a renamed `MOD_ID`, a stale path in
+  `INSTALL.md`. Two of the three are caught *only* here: the versioned
+  `mod.info` and the install document both pass `test_lua_mod_contract.py` and
+  `test_cli_modinstall.py` unchanged.
+
+  Test fixtures that write `id=pz_agent_bridge` are deliberately excluded — they
+  are inputs to tests, not declarations of the product.
+
 - **The ack seam, checked in the one direction nothing could see** (`dev`).
   Written expecting to find the ack unchecked, the way the observation document
   was. It is not: `Handle:ack` is pinned hard by `tests/lua/test_action_runtime.lua`,
