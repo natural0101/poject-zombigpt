@@ -12,6 +12,37 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Added
 
+- **The last mile of the operator's work, checked across the seam** (`dev`).
+  The operator runs the scenarios inside Project Zomboid — the catalogue's
+  declared budget is 20 460 seconds, five hours and forty-one minutes — then
+  `pz-agent live-test finalize` writes `release/evidence-manifest.json` and
+  `check_release.py --release` reads it. Nothing had ever put one side's output
+  into the other's reader: `test_livetest_runner` asserts what `finalize`
+  writes, `test_check_release` builds manifests by hand and asserts what the
+  gate makes of them. Each side tested against its own idea of the document.
+
+  The cost of that gap is not a red build. It is discovered *after* the hours in
+  the game, and the evidence has to be produced again.
+
+  `tests/contract/test_evidence_manifest_round_trip.py` drives a real evidence
+  tree, calls the real `finalize`, and feeds the manifest to the gate's own
+  `_scenario_verdicts` and `_artefact_digests`. It also tampers with a recorded
+  artefact and requires the gate to catch it, so the pair is shown working
+  rather than merely agreeing.
+
+  Demonstrated on the realistic direction — the gate tightening, which no runner
+  test can see. Changing the gate's comparison from `"PASS"` to `"PASSED"` left
+  the runner's 116 tests green while every scenario of a completed run would
+  have been rejected; the round trip fails.
+
+  Scope is stated in the file rather than implied: two scenarios are driven, not
+  twenty-two. The fixture supplies observations shaped per scenario, and
+  inventing them for the other twenty to satisfy a postcondition is what this
+  repository refuses on the critical path. So the file checks the *document*
+  across the seam and passes the scenario list explicitly; completeness stays
+  `finalize`'s own guard, which `test_livetest_runner` already proves refuses a
+  tree that is missing, unpassed or tampered with.
+
 - **"Documented" meant a transcription of the document, not the document**
   (`dev`). `tests/unit/test_mcp_catalog.py` carries `DOCUMENTED_TOOLS` and
   `DOCUMENTED_RESOURCES` — literals whose comment reads *"the set named by
