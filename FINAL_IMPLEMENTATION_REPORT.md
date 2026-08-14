@@ -740,23 +740,33 @@ sides of the seam, and recorded in
 [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md). A live session should not spend
 its time diagnosing them.
 
-**A previous revision of this section led with "the agent will not walk" and
-"`build_structure` will refuse every placement". Both were wrong** — see
-`LIMITATIONS.md` for how the check that produced them fooled itself. The square
-tier is real: `ObserveModel.buildSquare` mints `kind = "square"` entries and
-`mergeNearby` folds them into `nearby.objects`, which is exactly where movement
-and the enclosure check look. What is left is smaller:
+**Each of the three is now demonstrated by a test rather than argued from two
+files.** `tests/contract/test_observation_document_round_trip.py` builds one
+observation through the mod's own readers and `ObserveModel.build`, decodes it
+with the sidecar's own `Observation.from_dict`, and asserts what each consumer
+then reads. Run it before the session if you want to see the failures without a
+game: `pytest tests/contract/test_observation_document_round_trip.py -v`. That
+matters here because the previous revision of this section led with two *larger*
+claims — "the agent will not walk" and "`build_structure` will refuse every
+placement" — and both were wrong, produced by a checker that searched the
+sources for a spelling the mod does not use. The square tier is real:
+`ObserveModel.buildSquare` mints `kind = "square"` entries, `mergeNearby` folds
+them into `nearby.objects`, and both movement and the enclosure check find them.
+What is left is smaller, and this time it is executable:
 
 6a. **A floor-changing move will always refuse `PATH_NOT_FOUND`.**
     `movement._check_square` requires the `stairs` semantic on the *square*
     entry; the mod puts it on the staircase *object* standing there, on purpose.
     The gate runs toward caution, so this costs journeys between storeys and
     nothing else.
+    *Demonstrated by* `test_the_two_square_semantics_the_sidecar_reads_off_the_square`.
 
 6b. **A square behind a closed window reports the wrong refusal.** The dedicated
     `closed_window` / `POLICY_DENIED` branch never fires — no such token is
     produced anywhere — but the square reads as not passable and is refused as
     `blocked`. The refusal stands; only its name is wrong.
+    *Demonstrated by the same test*, which asserts both tokens absent from every
+    square the mod built.
 
 6c. **Nothing will loot a world container.** A nearby crate is minted a
     reference the planner can name, but `resolve_container` searches only
@@ -764,11 +774,19 @@ and the enclosure check look. What is left is smaller:
     `container.inspect` and `inventory.transfer` refuse `INVALID_REF`. The
     mission can now reach the crate and is refused at the crate instead of
     before it.
+    *Demonstrated by* `test_a_crate_the_planner_can_name_and_nothing_can_open`,
+    which asserts both halves — the crate is nameable, and it is unresolvable —
+    because the gap is precisely the distance between them.
 
 6c is the one that still costs a whole goal kind, and it is the highest-value
 thing a live session can settle: the missing half is a mod-side inventory tier
 for an open world container, and what it costs to read every tick is a question
 only a running game answers.
+
+**What the round trip does not do.** It runs the mod's Lua against fakes that
+stand in for the engine, so it proves the two sides agree about the document.
+It proves nothing about whether the engine answers those accessors at all on
+Build 42.20 — that is §2's list, and it is what the live session is for.
 
 ### The twenty-two live scenarios
 
