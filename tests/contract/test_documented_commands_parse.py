@@ -241,6 +241,88 @@ def test_the_server_parser_accepts_what_the_document_names(
 
 
 # ---------------------------------------------------------------------------
+# the report's operator section, which the RECORDS exemption would otherwise cover
+# ---------------------------------------------------------------------------
+
+#: ``FINAL_IMPLEMENTATION_REPORT.md`` is exempt above, and rightly: it quotes the
+#: three defects this file was written for — ``logs --redact``, ``memory
+#: --forget``, ``status --explain`` — and a report describing a broken command
+#: has to be able to print it. But the exemption is file-wide, and one section of
+#: that file is not a record at all. Section 9 is the operator's step list, the
+#: thing a person reads with the game in front of them, and a command that fails
+#: there fails at the worst possible moment.
+#:
+#: So the exemption is narrowed by structure rather than by trust: the quoting
+#: sections stay exempt, section 9 is parsed. Nothing here goes stale when the
+#: report is rewritten, because the section is found by its heading rather than
+#: by line number.
+_REPORT: Final = REPO_ROOT / "FINAL_IMPLEMENTATION_REPORT.md"
+
+#: The heading that opens the operator section, matched on its number so a
+#: reworded title still resolves.
+_OPERATOR_SECTION: Final = re.compile(r"^##\s*9\.\s")
+_ANY_SECTION: Final = re.compile(r"^##\s")
+
+
+def _report_operator_lines() -> list[tuple[int, str]]:
+    """Section 9 of the report, as numbered lines."""
+    inside = False
+    found: list[tuple[int, str]] = []
+    for number, line in enumerate(_REPORT.read_text(encoding="utf-8").splitlines(), start=1):
+        if _OPERATOR_SECTION.match(line):
+            inside = True
+            continue
+        if inside and _ANY_SECTION.match(line):
+            break
+        if inside:
+            found.append((number, line))
+    return found
+
+
+def _report_invocations() -> list[tuple[str, str, list[str]]]:
+    built: list[tuple[str, str, list[str]]] = []
+    fenced = False
+    for number, line in _report_operator_lines():
+        if _FENCE.match(line):
+            fenced = not fenced
+            continue
+        for raw in _commands_on(line, fenced=fenced):
+            argv = _clean(raw)
+            if not argv or argv[0].startswith("-"):
+                continue
+            if not fenced and len(argv) == 1:
+                continue
+            built.append((f"FINAL_IMPLEMENTATION_REPORT.md:{number}", raw.strip(), argv))
+    return built
+
+
+_REPORT_CASES: Final = _report_invocations()
+
+
+def test_the_operator_section_is_found_and_is_not_empty() -> None:
+    """A heading that stopped matching would silently exempt the section again."""
+    body = _report_operator_lines()
+    assert body, "section 9 of the report was not located by its heading"
+    assert len(body) > 40, f"section 9 resolved to only {len(body)} line(s)"
+    assert _REPORT_CASES, "no invocations found in the operator section"
+
+
+@pytest.mark.parametrize(
+    ("where", "raw", "argv"),
+    _REPORT_CASES,
+    ids=[f"{where} {raw[:36]}" for where, raw, _ in _REPORT_CASES],
+)
+def test_the_parser_accepts_what_the_report_tells_an_operator_to_run(
+    where: str, raw: str, argv: list[str]
+) -> None:
+    parser = build_parser()
+    try:
+        parser.parse_args(argv)
+    except SystemExit:
+        pytest.fail(f"{where} says to run `pz-agent {raw}`, and the parser rejects it")
+
+
+# ---------------------------------------------------------------------------
 # the plan of record, which is a document an operator works from
 # ---------------------------------------------------------------------------
 

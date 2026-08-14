@@ -4,17 +4,17 @@ Prepared to the gate in [`docs/RELEASE.md`](docs/RELEASE.md), whose "The final
 report" section lists nine things this document must state. They are §1 to §9
 below, in that order.
 
-**Base commit:** `87373fe`, which `main`, `dev` and
+**Base commit:** `c4320f0`, which `main`, `dev` and
 `claude/workflows-routines-docs-l294qp` all point at — the three branches were
-brought onto one commit here, with no divergence between them. `87373fe` is a
-control-plane-only commit over `7452ab7` (it touches `docs/control/STATUS.json`
-and `docs/control/EVIDENCE_INDEX.md` and nothing else), so `7452ab7` is the code
+brought onto one commit here, with no divergence between them. `c4320f0` is a
+control-plane-only commit over `f397d21` (it touches `docs/control/STATUS.json`
+and `docs/control/EVIDENCE_INDEX.md` and nothing else), so `f397d21` is the code
 tree every CI verdict below names.
 **Versions:** product 0.1.0 · protocol 1.1 · rpc protocol 1.0 · schema 1.0 · mod 0.1.0 · supported build 42.20
 
 A report cannot name the commit that contains it — the hash does not exist until
 the commit is made. The hash above is this report's parent. Check
-`git log 87373fe..HEAD` before trusting any number here against a newer tree.
+`git log c4320f0..HEAD` before trusting any number here against a newer tree.
 
 **Note the version.** The release candidate is named `v1.0.0-rc1`, and every
 version constant in the tree says `0.1.0`. No `1.0.0` exists in `version.py`,
@@ -23,16 +23,17 @@ filename is a target, not a state.
 
 Every figure below was produced by running something at this commit:
 `bash scripts/check.sh` (exit 0, `All checks passed`),
-`.venv/bin/python -m pytest --collect-only` (**8508 collected across 229
+`.venv/bin/python -m pytest --collect-only` (**8586 collected across 230
 files**), the Lua harness (**4821 assertions across 32 suites, 0 failed**, summed
 from its own per-suite lines), `.venv/bin/python scripts/master_report.py` (the
 weighted figures in §1), and CI's own release gate for §8 — not a local
 re-derivation of it.
 
-The suite has grown from the 6737 the previous revision measured because the
-crafting and building wave was merged into the line here, and CI's gate agrees
-with the collector from the other side: it reports **8467 of 8508 passed, 41
-skipped, no failures and no errors**, which is the same 8508 counted by a
+The suite has grown from the 6737 an earlier revision measured — the crafting
+and building wave, then the observation-seam round trip, then the checks that
+put the plan's own command lines through the CLI parser — and CI's gate agrees
+with the collector from the other side: it reports **8537 of 8586 passed, 49
+skipped, no failures and no errors**, which is the same 8586 counted by a
 different program on a different operating system. Numbers are re-measured at
 each revision and never carried over; that is why this paragraph can say the
 two agree rather than assuming it.
@@ -42,11 +43,11 @@ two agree rather than assuming it.
 ## The short version
 
 The plan of record is [`docs/control/MASTER_PLAN.yaml`](docs/control/MASTER_PLAN.yaml):
-480 weighted tasks, measured at this commit by `scripts/master_report.py` at
-**74.3% (2305 of 3104 weight)** — 400 tasks `PASS`, 80 `NOT_STARTED`, zero
+484 weighted tasks, measured at this commit by `scripts/master_report.py` at
+**73.3% (2305 of 3144 weight)** — 400 tasks `PASS`, 84 `NOT_STARTED`, zero
 `FAIL`, zero `BLOCKED`. Five bands are complete: CODE IMPLEMENTATION,
 WINDOWS COMPATIBILITY, MCP OPERABILITY, VOICE OPERABILITY and RC PACKAGING
-each read **100.0**. The two at **0.0** — LIVE GAME VALIDATION (599 weight)
+each read **100.0**. The two at **0.0** — LIVE GAME VALIDATION (639 weight)
 and FINAL RELEASE (200 weight) — **cannot move in this environment, because
 there is no Project Zomboid installation here.** They are not deferred for
 convenience; they are physically blocked, and §9 is the complete list of what
@@ -77,10 +78,10 @@ The plan of record, measured at this commit by `scripts/master_report.py`:
 | MCP OPERABILITY | 264 | **100.0** |
 | VOICE OPERABILITY | 324 | **100.0** |
 | RC PACKAGING | 202 | **100.0** |
-| LIVE GAME VALIDATION | 599 | **0.0 — needs the game** |
+| LIVE GAME VALIDATION | 639 | **0.0 — needs the game** |
 | FINAL RELEASE | 200 | **0.0 — gated on the band above** |
 
-480 tasks: 400 `PASS`, 80 `NOT_STARTED`, 0 `FAIL`, 0 `BLOCKED`. Of the plan's
+484 tasks: 400 `PASS`, 84 `NOT_STARTED`, 0 `FAIL`, 0 `BLOCKED`. Of the plan's
 54 integration checks, 48 pass; the six open are E14's and E15's — the
 live-game statements only a machine with the game can establish. The historical
 graph, kept in `docs/PROGRESS.md`:
@@ -398,22 +399,22 @@ Two symbols deserve naming individually, because their failure modes are quiet:
 `bash scripts/check.sh` at this commit, every step — and it exits 0:
 
 ```
-ruff format        ok      530 files already formatted
+ruff format        ok      531 files already formatted
 ruff lint          ok      all checks passed
-mypy               ok      no issues found in 436 source files
+mypy               ok      no issues found in 437 source files
 forbidden patterns ok      no forbidden patterns found
 version sync       ok      product=0.1.0 protocol=1.1 schema=1.0 mod=0.1.0
 schema validity    ok      11 schema(s) valid
 playbook in sync   ok      docs/LIVE_TEST_PLAYBOOK.md matches its 22 scenarios
-pytest             ok      8503 passed, 5 skipped of 8508 collected
-luacheck           ok      0 warnings / 0 errors in 74 files
+pytest             ok      8581 passed, 5 skipped of 8586 collected
+luacheck           ok      0 warnings / 0 errors in 75 files
 lua tests          ok      4821 assertions across 32 suites, 0 failed
 ```
 
-Both workflows are green against `7452ab7`, the code tree of this exact head
-(`87373fe` differs from it only in the two control documents): `windows
-package` run 31734696473 rebuilt and certified the release candidate from that
-tree (§8), CI run 31734696533 is green for the same commit, and both verdicts
+Both workflows are green against `f397d21`, the code tree these figures were
+measured on (`c4320f0` differs from it only in the two control documents):
+`windows package` run 31814473578 rebuilt and certified the release candidate
+from that tree (§8), CI run 31814473620 is green for the same commit, and both verdicts
 are recorded in `docs/control/STATUS.json` — whose reconciler refuses to call a
 workflow green for any commit other than the one it actually ran against, and
 whose gate refuses the whole plan if the tree has moved since. That gate is not
@@ -422,9 +423,11 @@ reconciliation, and the sequence that prevents it is now written into
 `AGENTS.md` rather than living only in the tooling.
 
 **The two platforms disagree about skips, and that is expected.** Linux here
-skips 5 of 8508; CI's Windows gate reports 8467 passed and **41** skipped of the
-same 8508. The extra 36 are Windows-only suites' Linux counterparts and vice
-versa — neither run has a failure or an error, and the collected total is
+skips 5 of 8586; CI's Windows gate reports 8537 passed and **49** skipped of the
+same 8586. The extra 44 are Windows-only suites' Linux counterparts and vice
+versa, together with the two seam checks — the observation round trip and
+`test_adapter_args_agreement` — which want a Lua interpreter the release runner
+does not carry — neither run has a failure or an error, and the collected total is
 identical, which is the number that says the two are looking at the same suite.
 
 **The five skips, named rather than summarised.** One is a capability-tier
@@ -604,13 +607,14 @@ Full walkthrough: [`docs/QUICKSTART.md`](docs/QUICKSTART.md).
 
 ## 7. The commit hash
 
-`87373fe` — a control-plane-only commit whose code tree is `7452ab7`, the commit
-both workflows ran against. See the header for why this is the parent rather
-than the containing commit; `git log 87373fe..HEAD --oneline` shows anything
-this document does not cover.
+`c4320f0` — a control-plane-only commit whose code tree is `f397d21`, the commit
+both workflows ran against. Every figure above was measured with that tree
+checked out; this document's own commit sits on top of it and changes nothing
+but documentation. `git log c4320f0..HEAD --oneline` shows anything this
+document does not cover.
 
-`main`, `dev` and `claude/workflows-routines-docs-l294qp` all point at
-`87373fe`. There is no divergence to reconcile and nothing stranded on a side
+`main`, `dev` and `claude/workflows-routines-docs-l294qp` all pointed at
+`c4320f0` when it was measured. There is no divergence to reconcile and nothing stranded on a side
 branch: the crafting and building wave, which had been living only on the third
 of those, was merged into the line rather than force-replaced, so all of it is
 in the release branch.
@@ -633,37 +637,38 @@ in §1 was earned back. `docs/control/BLOCKERS.md` carries every record.
 
 ## 8. The release artefact and its checksum
 
-**The artefact of record is CI's.** `windows package` run 31734696473 built
-both executables from `7452ab7` — this head's code tree — and **CERTIFIED
+**The artefact of record is CI's.** `windows package` run 31814473578 built
+both executables from `f397d21` — this head's code tree — and **CERTIFIED
 v1.0.0-rc1**:
 
 ```
-pz-agent-windows-v1.0.0-rc1.zip  (CI artifact pz-agent-windows-rc, id 9195088385)
-  sha256   1540df7898071569cfbc089ec13686b572f669d00fbfe4a9c479ca881763ebf8
+pz-agent-windows-v1.0.0-rc1.zip  (CI artifact pz-agent-windows-rc, id 9225004153)
+  sha256   8be6712c6bce60f97b0f44e3c85d28348e67bba3d9619c1044b33ef7cb8276c1
   entries  77 — the 76 digested files plus BUILD-MANIFEST.json
 ```
 
 **Read that digest from the gate, not from the artifacts API.** The API — and
 the workflow log's own upload step — report the SHA-256 of the *upload wrapper*
-zip, which for this run is `f6bbdd6b…` and is not the archive. The archive's own
+zip, which for this run is `c45b61b4…` and is not the archive. The archive's own
 digest appears in exactly two places, `build_rc.py`'s summary and the gate's
 `[ok  ] archive:` line, and they agree. Anyone re-deriving this number should
 check which of the two they are holding.
 
 Certification means every gate rule green: archive complete, all 11 wrappers at
-the root, both executables in `bin/`, 76 file digests matching, **8467 of 8508
-tests passed with no failures and no errors** (41 skipped), 31 MCP end-to-end
+the root, both executables in `bin/`, 76 file digests matching, **8537 of 8586
+tests passed with no failures and no errors** (49 skipped), 31 MCP end-to-end
 testcases run and passed, and the archive claiming no live-test evidence. It
 also includes the workflow step in which the **packaged `pz-agent.exe` serves
 the Core RPC link for real and the packaged `pz-agent-mcp.exe` completes a
 JSON-RPC `initialize` through it** — both with PATH reduced to the system
 directories, no Python reachable.
 
-This is the first RC carrying the crafting and building wave: the suite grew
-from 8127 tests to 8508 and the archive from 75 entries to 77.
+The archive has been 77 entries since the crafting and building wave; what has
+moved since is the suite, 8508 → 8586, as the observation-seam round trip and
+the plan's parsed command lines were added.
 
 `docs/control/STATUS.json` records this RC `CURRENT`; by its own rule, any code
-commit after `7452ab7` makes it STALE until the workflow rebuilds it. Note that
+commit after `f397d21` makes it STALE until the workflow rebuilds it. Note that
 the build is **not** reproducible — identical inputs produce different digests —
 so this hash identifies *that run*, not the tree. That is why the RC is stated
 as archive plus source commit plus run, and why naming one of the three is not
@@ -675,8 +680,8 @@ fresh `pytest --junitxml` run fed to `scripts/check_release.py --rc`:
 
 ```
 dist/pz-agent-windows-v1.0.0-rc1.zip
-  sha256   36f7357b52aa74863e8e37cb1c160eb2f53d7e00eab2c65bd3ee9323702f8e35
-  size     487 448 bytes
+  sha256   fdf277685ca11e6b8bea0e5a7ec9925c84ad0dd75e31fd4f5368428a3fbaa76c
+  size     488 741 bytes
   entries  75 (74 files plus BUILD-MANIFEST.json)
 
 [ok  ] archive:          pz-agent-windows-v1.0.0-rc1.zip, 75 entr(ies)
@@ -685,7 +690,7 @@ dist/pz-agent-windows-v1.0.0-rc1.zip
 [ok  ] archive.bat:      all 11 wrappers are at the root
 [FAIL] archive.bin:      missing from bin/: pz-agent.exe, pz-agent-mcp.exe
 [ok  ] archive.digests:  74 file(s) match the digests recorded for them
-[ok  ] tests:            8503 of 8508 test(s) passed, no failures and no errors; 5 skipped
+[ok  ] tests:            8581 of 8586 test(s) passed, no failures and no errors; 5 skipped
 [ok  ] tests.mcp-e2e:    31 testcase(s) from tests.contract.test_mcp_subprocess_e2e ran and passed
 
 REFUSED v1.0.0-rc1: 2 of 8 check(s) failed.
@@ -854,12 +859,12 @@ Build 42.20 — that is §2's list, and it is what the live session is for.
 It does not say the architecture is ready and only needs testing. It does not
 say a user can take it from here.
 
-It says: the remote stage is complete by its own weighted plan — 74.3%
-overall (2305 of 3104 weight, 400 of 480 tasks), with every band a container
+It says: the remote stage is complete by its own weighted plan — 73.3%
+overall (2305 of 3144 weight, 400 of 484 tasks), with every band a container
 can move at 100.0 and the two the game owns at zero; the tree is covered by
-8508 Python tests and 4821 Lua assertions across 32 suites — 8503 passed and 5
-named skips here, 8467 passed and 41 skips on CI's Windows leg of the same
-8508, with `scripts/check.sh` exiting 0 and both workflows green against this
+8586 Python tests and 4821 Lua assertions across 32 suites — 8581 passed and 5
+named skips here, 8537 passed and 49 skips on CI's Windows leg of the same
+8586, with `scripts/check.sh` exiting 0 and both workflows green against this
 head's code tree; the release candidate was rebuilt and certified by CI from
 that same tree, its packaged executables proving the served link between
 themselves; and §9 is the complete list of what a running game — and nothing
@@ -867,7 +872,7 @@ else — still has to settle.
 
 It also says something the previous revisions could not: **the tests pass
 because each side of the seam is tested against its own idea of the observation
-document, so "8467 tests passed" is not "the agent plays the game".** Three
+document, so "8581 tests passed" is not "the agent plays the game".** Three
 known gaps remain — a floor-changing move always refuses, a closed-window square
 is refused under the wrong name, and nothing loots a world container. Each is a
 refusal rather than a crash. §9 6a–6c states them; `LIMITATIONS.md` carries the

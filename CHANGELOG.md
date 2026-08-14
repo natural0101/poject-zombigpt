@@ -12,6 +12,32 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Added
 
+- **The final report re-measured at the current head** (`dev`). Every figure in
+  it was produced by running something, and the plan's regeneration moved most
+  of them: 480 tasks → 484 and 3104 weight → 3144, so 74.3% → **73.3%**; LIVE
+  GAME VALIDATION 599 → 639; the suite 8508 collected → **8586**, 8503 passed
+  and 5 skipped here, 8537 and 49 on CI's Windows leg. The RC identity is now
+  `f397d21` / run 31814473578 / `8be6712c…`, and the local executable-less
+  archive block was rebuilt rather than edited — `fdf27768…`, 75 entries, the
+  same two `[FAIL]` lines, which is the gate refusing a build without its
+  executables and therefore working.
+
+  §7 and the header now name `c4320f0` over code tree `f397d21`. The percentage
+  went down, which is what a corrected denominator does; nothing regressed.
+
+- **The report's operator section is no longer exempt from the command checker**
+  (`dev`). `FINAL_IMPLEMENTATION_REPORT.md` is in `RECORDS` — the three files
+  allowed to quote a broken command, because a report describing `pz-agent logs
+  --redact` has to be able to print it. But the exemption is file-wide, and §9
+  is not a record: it is the operator's step list, read with the game running,
+  where a command that fails costs the most.
+
+  The exemption is now narrowed by structure rather than by trust. §9 is located
+  by its heading — so it survives a rewrite — and every invocation in it goes
+  through the parser; the quoting sections stay exempt. Verified by planting
+  `pz-agent capabilities --verify` in §9 and watching the check refuse it, then
+  removing it and watching the check pass.
+
 - **Twenty-nine plan tasks told the operator to run commands that do not exist**
   (`dev`). `tests/contract/test_documented_commands_parse.py` has put every
   `pz-agent …` line in every shipped document through the real parser since two
