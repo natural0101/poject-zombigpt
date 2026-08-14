@@ -36,9 +36,9 @@ about nothing.
 
 | Field | Value |
 | --- | --- |
-| archive | `pz-agent-windows-rc` (artifact 9203275522), `pz-agent-windows-v1.0.0-rc1.zip`, 77 entries |
-| archive sha256 | `6053cbce2f2c8436c46eb45dbfcbb60dccaf91fae17011b7742bbcb382ead9cf` |
-| source commit | `c98c52265164c07c2f41ceea6040202e40895715` |
-| workflow run | https://github.com/natural0101/poject-zombigpt/actions/runs/31756579175 |
-| certified by | `check_release.py --rc` printing `CERTIFIED v1.0.0-rc1: 8 check(s) passed` — archive complete, all 11 wrappers at the root, **both executables in `bin/`**, 76 file digests matching, 8468 of 8509 tests passed with no failures, 31 MCP end-to-end testcases green, and the archive claiming no live-test evidence. The packaged pair also completed an MCP `initialize` over the RPC link with `PATH` reduced to the system directories. The suite is 8509 rather than the 8508 the previous RC counted because the retraction added a second positive control to the dead-gate ledger |
+| archive | `pz-agent-windows-rc` (artifact 9206571008), `pz-agent-windows-v1.0.0-rc1.zip`, 77 entries |
+| archive sha256 | `b02bc6846e3a5c942208836ba9e8dbb99fc5d6b8aaf81aaa9e09b0a6efec35fc` |
+| source commit | `19f29819e5b6669fa4904480984f37b1c706c1b5` |
+| workflow run | https://github.com/natural0101/poject-zombigpt/actions/runs/31765997897 |
+| certified by | `check_release.py --rc` printing `CERTIFIED v1.0.0-rc1: 8 check(s) passed` — archive complete, all 11 wrappers at the root, **both executables in `bin/`**, 76 file digests matching, 8469 of 8510 tests passed with no failures, 31 MCP end-to-end testcases green, and the archive claiming no live-test evidence. The packaged pair also completed an MCP `initialize` over the RPC link with `PATH` reduced to the system directories. The suite has grown by one at each of the last two RCs, and both are positive controls added to the contract ledgers after a row in one of them turned out to be wrong |
 | current? | `docs/control/STATUS.json` → `release_candidate.status`; any code commit after the source commit makes it STALE until the workflow rebuilds it |
