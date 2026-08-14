@@ -144,6 +144,37 @@ def _sidecar_keys(module: str) -> set[str]:
     return set(re.findall(r'(?:payload,\s*|payload\.get\()"(\w+)"', source))
 
 
+def test_the_mod_extractor_is_not_reading_by_indentation_alone() -> None:
+    """The second positive control, borrowed from a mistake in the other ledger.
+
+    ``_mod_keys`` finds a reader's keys with ``^\\s{4}(\\w+) =`` — exactly four
+    spaces. That is true of every reader today and is not a property of Lua: a
+    key inside a nested table, or a reader indented one level deeper after a
+    refactor, would simply vanish from the extracted set. And a key that vanishes
+    does not fail loudly here. It lands in ``UNSENT``, where it reads as *the mod
+    does not send this*, which is the same false negative that put a retracted
+    row in ``test_gates_without_producers.py`` for four commits.
+
+    So the count is taken twice, once strictly and once at any indentation, and
+    the two must agree. When they stop agreeing the extractor has started
+    dropping keys and this file's absence claims are worth nothing until it is
+    fixed — which is a different failure from the seam actually changing, and
+    has to be told apart from it.
+    """
+    source = OBSERVE_LUA.read_text(encoding="utf-8")
+    for block, (reader, _module, _reads, _sends, _overlap) in DOMAINS.items():
+        match = re.search(rf"local function {reader}\(item[^)]*\)(.*?)\nend", source, re.S)
+        assert match is not None, f"{reader} is no longer a local function taking an item"
+        body = match.group(1)
+        strict = set(re.findall(r"^\s{4}(\w+) =", body, re.M))
+        any_indent = set(re.findall(r"^\s+(\w+) =", body, re.M))
+        assert strict == any_indent, (
+            f"{block}: _mod_keys reads at four spaces and would miss "
+            f"{sorted(any_indent - strict)}. Widen the pattern before trusting any "
+            f"absence claim in this file — a dropped key reads as an unsent one."
+        )
+
+
 def test_both_extractors_see_something() -> None:
     """The positive control.
 

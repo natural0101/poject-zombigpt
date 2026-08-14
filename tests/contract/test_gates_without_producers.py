@@ -46,8 +46,8 @@ ever done. The world-container row is now the expensive one, and the only row
 left that takes a whole goal kind with it: ``loot_area`` cannot open anything.
 The square row used to be the other, and it was retracted — its place in the
 count is held by the narrower ``closed_window`` row that replaced it, so there
-are still eight. The
-lesson has changed shape — the first three were accidents, so the count read as
+are still eight. The lesson has changed shape — the first three were accidents,
+so the count read as
 bad luck; five deliberate finds in two sweeps says this class is *systematic* at
 this seam, and the seam is a hand-written contract between two languages with no
 schema binding them. Expect more, and note that three of the eight are one root:
@@ -95,10 +95,12 @@ def _mod_sources() -> str:
     retires it on a sentence. It happened: the crafting wave's ``squares``
     section opens by explaining that ``movement`` has been reading
     ``kind = "square"`` entries nobody published, and that explanation matched
-    the very pattern standing guard over the gap — reporting the largest gap in
-    the build as closed by the comment describing it. The squares that wave
-    publishes are a separate ``nearby.squares`` tier; ``movement.py`` still
-    scans ``nearby.objects`` for ``kind == "square"`` and still finds nothing.
+    the very pattern standing guard over the gap.
+
+    That row is retracted now — the producer was real, written through a
+    constant the pattern could not see — but the comment-stripping stays, for
+    the reason it was added: prose about a gap must never be mistaken for the
+    thing that closes it. See the module docstring for the retraction.
 
     Line comments only. Lua's ``--[[ ]]`` blocks are left alone deliberately:
     stripping them needs a real parser to avoid eating a long string, and every

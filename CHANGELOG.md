@@ -32,6 +32,30 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **The retraction's own file still carried the retracted claim** (`dev`).
+  `_mod_sources`' docstring in `test_gates_without_producers.py` went on saying
+  that the wave's squares are a separate tier and that "`movement.py` still
+  scans `nearby.objects` for `kind == "square"` and still finds nothing" — the
+  sentence the retraction had just disproved, sitting in the file the retraction
+  was about. The module docstring was corrected and this one was missed.
+  Comment-stripping stays, for the reason it was added rather than the reason it
+  was written down: prose about a gap must not be mistaken for the thing that
+  closes it.
+
+- **The vocabulary ledger's extractor now proves it is not reading by
+  indentation alone** (`dev`). `_mod_keys` finds a reader's keys with
+  `^\s{4}(\w+) =` — exactly four spaces, true of every reader today and not a
+  property of Lua. A key nested one level deeper would vanish from the extracted
+  set, and a vanished key does not fail loudly: it lands in `UNSENT`, where it
+  reads as *the mod does not send this*. That is the same false negative that
+  kept a retracted row alive for four commits, one file over.
+
+  The count is now taken twice, strictly and at any indentation, and the two
+  must agree. Verified in the direction that matters — against a synthetic body
+  written *unlike* the pattern, where the control does fire — rather than
+  against one written the same way the pattern is, which is precisely the check
+  that fooled itself last time.
+
 - **Every other dead-gate row re-verified after the retraction; all held**
   (`dev`). One row having been wrong for four commits is a reason to distrust
   the other seven, since all were checked the same flawed way — a pattern
