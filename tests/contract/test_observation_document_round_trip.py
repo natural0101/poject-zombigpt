@@ -256,3 +256,36 @@ def test_the_enclosure_check_reads_the_squares_the_mod_sends(
         "refuses every placement and LIMITATIONS.md needs the entry back"
     )
     assert len(window) > 1
+
+
+def test_an_unreadable_chase_arrives_as_unknown_rather_than_calm(
+    document: dict[str, Any],
+) -> None:
+    """The tri-state that matters most, carried by a document the mod built.
+
+    ``NearbyZombie.chasing`` is ``bool | None`` on the sidecar and omitted on the
+    mod when the build exposes no target reader, and the mod says why in its own
+    comment: "we could not tell" must not look like "it is not chasing". A
+    ``False`` arriving where nothing was read would understate the threat, and
+    the reflex guard is downstream of it.
+
+    Both cases are in one document here. One zombie has a readable target and
+    arrives ``chasing=True``; the other's reader is absent and arrives with the
+    key *missing*, which is what keeps the sidecar's ``None`` reachable at all.
+    Asserted on the decoded view rather than on the raw payload, because the
+    defect this guards against would live in the decoding.
+    """
+    observation = Observation.from_dict(document)
+    nearby = observation.nearby
+    assert nearby is not None
+    assert len(nearby.zombies) == 2, "the dumper puts two zombies in the cell"
+
+    by_chase = {z.chasing for z in nearby.zombies}
+    assert True in by_chase, "the zombie with a readable target must arrive chasing"
+    assert None in by_chase, (
+        "the zombie whose target reader is absent arrived with a decided value. "
+        "If that value is False the seam has started reporting an unread chase "
+        "as a calm one, which is the understatement the tri-state exists to "
+        "prevent — check ObserveModel.buildZombie and NearbyZombie together"
+    )
+    assert False not in by_chase

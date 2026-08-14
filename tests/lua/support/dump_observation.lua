@@ -168,7 +168,14 @@ local player = Support.player({
   inventory = Support.container({ rottenMeal(), skillBook(), taintedBottle() }, 30),
 })
 
-local removeCell = Support.installCell(squareWindow(), {})
+local removeCell = Support.installCell(squareWindow(), {
+  -- One chasing the character, one whose target reader this build does not
+  -- expose. The second is the safety-relevant case: "we could not tell" must
+  -- not arrive looking like "it is not chasing", and only a document built by
+  -- the mod can show which of the two the sidecar receives.
+  Support.zombie({ id = 71, online_id = -1, x = 101, y = 200, has_target = true, target = player }),
+  Support.zombie({ id = 72, online_id = -1, x = 102, y = 201 }),
+})
 
 local playerFields = Observe.playerFields(player)
 local inventoryRoots = Observe.inventoryRoots(player)

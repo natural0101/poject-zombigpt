@@ -12,6 +12,23 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Added
 
+- **The round trip reaches the zombie tier, which is the one where being wrong
+  is dangerous** (`dev`). The document now carries two zombies built by the mod:
+  one with a readable target, one whose target reader the build does not expose.
+  The first arrives `chasing=True`; the second arrives with the key **absent**,
+  which is what keeps `NearbyZombie.chasing`'s `None` reachable at all.
+
+  That distinction is the mod's own stated rule — "we could not tell" must not
+  look like "it is not chasing" — and it had never been checked across the seam,
+  only asserted on each side separately. A `False` arriving where nothing was
+  read understates the threat, and the reflex guard is downstream of it.
+
+  Sensitivity verified through the producer again: making `buildZombie` decide
+  an unread chase as `false` fails the test on exactly that assertion. Three
+  tiers of the observation document are now round-tripped — items, squares and
+  zombies — and each was checked by breaking the mod rather than by reasoning
+  about it.
+
 - **The round trip now covers the tier where the retraction happened** (`dev`).
   The first version walked the inventory only. The `nearby` tier is where a row
   claimed for four commits that the mod emitted no `kind = "square"` entry — the
