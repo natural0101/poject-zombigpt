@@ -6,11 +6,34 @@ that reaches one of them. The suite is green because each side is exercised
 against its own idea of the document; the behaviour is dead in the shipped
 system and nobody could tell.
 
-The square tier was the expensive one — ``movement.move_to`` refuses every real
-observation because no ``kind="square"`` entry exists to find, and the sidecar's
-fixtures mint the entries the mod never sends. It was found by hand while
-chasing something unrelated. So were the two after it. That is three for three
-found by accident, which is the reason this file exists.
+**One row in this file was wrong for four commits, and how it was wrong is the
+first thing to read.** It claimed the mod emitted no ``kind = "square"`` entry,
+so movement refused every real observation. ``ObserveModel.buildSquare`` had
+been minting exactly that entry since the crafting and building wave, with
+``kind = ObserveModel.SQUARE_KIND`` and ``SQUARE_KIND = "square"`` declared once
+at the top of the file, and ``mergeNearby`` folding the result into
+``nearby.objects``. The pattern searched for the literal. The row's
+both-directions check — no match today, a match when a plausible producer is
+spliced in — was done by splicing in a producer written the same literal way the
+pattern was, so it tested the pattern against itself and proved nothing. The
+one match it ever found was a *comment* explaining the gap.
+
+Two consequences are now permanent here. ``_mod_sources`` strips line comments,
+and ``test_a_producer_written_through_a_constant_is_visible_too`` fails unless
+this file can see the mod's own idiom. And when that retraction landed, every
+other row was re-verified the way the square row should have been — by finding
+every assignment of the key and asking which function it belongs to, not by
+matching a literal. All of them held: ``accessible``, ``full`` and ``present``
+are written ``true`` at every production site; ``action_type`` exists in the mod
+but on ``Ownership.panicPlan``'s records, not on the ``describe`` table
+``ObserveModel.action`` reads; ``CONTAINER_KIND.WORLD`` is minted in
+``buildObject`` as a reference for a nearby object, which is what the row says,
+and nothing adds the crate to ``inventory.containers``. The pattern is the
+alarm, not the argument — read the reason, then go and look.
+
+The square tier was the expensive one while it stood, and it was found by hand
+while chasing something unrelated. So were the two after it. That is three for
+three found by accident, which is the reason this file exists.
 
 Everything after the third row was found on purpose. Two came out of an audit
 asking, of every comment claiming a guarantee, whether the code it named gives
@@ -19,8 +42,11 @@ behind a comment saying it had. ``ActionState.type`` is that one: a safety rung
 the spec asks for, dead since it was written.
 
 The last three came from sweeping for this class deliberately, which nobody had
-ever done. The world-container row is the expensive one: it takes ``loot_area``
-with it, the same way the square tier takes movement. Eight rows now, and the
+ever done. The world-container row is now the expensive one, and the only row
+left that takes a whole goal kind with it: ``loot_area`` cannot open anything.
+The square row used to be the other, and it was retracted — its place in the
+count is held by the narrower ``closed_window`` row that replaced it, so there
+are still eight. The
 lesson has changed shape — the first three were accidents, so the count read as
 bad luck; five deliberate finds in two sweeps says this class is *systematic* at
 this seam, and the seam is a hand-written contract between two languages with no

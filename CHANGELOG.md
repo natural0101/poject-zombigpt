@@ -32,6 +32,25 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **Every other dead-gate row re-verified after the retraction; all held**
+  (`dev`). One row having been wrong for four commits is a reason to distrust
+  the other seven, since all were checked the same flawed way — a pattern
+  matched against a producer written the same way the pattern was. Each was
+  re-derived by finding *every* assignment of the key in the mod and asking
+  which function it belongs to: `accessible`, `full` and `present` are written
+  `true` at every production site; `action_type` does exist in the mod, on
+  `Ownership.panicPlan`'s per-entry records, and not on the `describe` table
+  `ObserveModel.action` actually reads, so the §17.2 rung is still dead;
+  `CONTAINER_KIND.WORLD` is minted inside `buildObject` as a reference for a
+  nearby object, which is exactly what its row claims, and nothing adds the
+  crate to `inventory.containers`; the mod builds no `extra` table at all, so
+  the weapon row stands. The re-derivation and its method are recorded in the
+  file's own docstring — the pattern is the alarm, not the argument.
+
+  Also fixed: `EVIDENCE_INDEX.md`'s "certified by" row still read 8467 of 8508
+  after the archive, digest, commit and run rows had been moved to the newer
+  RC. It now reads 8468 of 8509 and says why the suite grew by one.
+
 - **Retracted: the agent can walk, and `build_structure` is not dead** (`dev`).
   This branch asserted twice, in `LIMITATIONS.md`, `PROGRESS.md` and the final
   report's §9 and §10, that the mod emits no `kind = "square"` entry — that no
