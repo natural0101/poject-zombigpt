@@ -109,22 +109,25 @@ WITHOUT_PRODUCER: Final = {
         "direction — but the merge is untested against anything real.",
         r"full\s*=\s*false",
     ),
-    'nearby object kind "square"': (
-        "movement.move_to, movement.move_near, world.inspect and the navigation "
-        "local map all locate a destination square by scanning nearby.objects for "
-        'kind == "square". The mod emits no such entry, so movement refuses '
-        "every real observation with TARGET_NOT_LOADED. The crafting/building "
-        "wave gave this gate a SECOND consumer without giving it a producer: "
-        "policy/building.read_window builds its enclosure window from the same "
-        "scan, finds no square, and returns None -- so build_structure refuses "
-        "every placement WOULD_TRAP_PLAYER, blaming the map rather than the "
-        "seam, and the building half of P5 cannot run at all. That wave does "
-        "publish squares, as a separate nearby.squares tier for its own path "
-        "check; neither consumer reads it. One contract decision -- where a "
-        "square lives -- unblocks movement, the enclosure check and loot_area's "
-        "approach together. See LIMITATIONS.md for the account and the blockers "
-        "a fix must still solve.",
-        r'kind\s*=\s*[\'"]square[\'"]',
+    'square semantic "closed_window"': (
+        "movement._check_square reads the *square entry's* semantics and refuses "
+        "a destination reachable only through a closed window, with "
+        "POLICY_DENIED. No token of that name exists anywhere in the mod. Its "
+        "sibling `stairs` is the same disagreement without being the same kind "
+        "of absence, so it gets no row of its own: the mod does emit `stairs`, "
+        "in ObserveModel.BASE_SEMANTICS, on the *staircase object* standing on "
+        "the square -- deliberately, saying both are facts about an object "
+        "rather than about the square and that emitting them twice would let "
+        "the two copies disagree. _check_square looks on the square. So the "
+        "cross-floor branch (`changes_floor and not (allow_stairs and STAIRS in "
+        "semantics)`) can never see the token it needs and every floor-changing "
+        "move refuses PATH_NOT_FOUND. That runs toward caution; this one is "
+        "narrow too, because a square behind a closed window reads as not "
+        "passable and is refused as `blocked` anyway, so what is lost is which "
+        "refusal is reported. Both are recorded in LIMITATIONS.md as a "
+        "square-versus-object placement disagreement, not repaired from this "
+        "side.",
+        r'[\'"]closed_window[\'"]',
     ),
     "ActionState.type": (
         "safety/reflex.py matches DEFAULT_VULNERABLE_ACTIONS against it to serve "
@@ -226,6 +229,38 @@ def test_a_present_producer_is_visible_to_this_check() -> None:
     assert re.search(r'kind\s*=\s*[\'"]corpse[\'"]', sources), (
         "the mod demonstrably emits a corpse object, and this check cannot see it, "
         "so its pattern matching proves nothing about the rows below"
+    )
+
+
+def test_a_producer_written_through_a_constant_is_visible_too() -> None:
+    """The second positive control, and the one this file learned the hard way.
+
+    The corpse control above proves only that a *literal* is visible, and a
+    literal is not how this mod usually writes a token. A row here once claimed
+    the mod emitted no ``kind = "square"`` entry, which was true of that exact
+    spelling and false of the mod: ``ObserveModel.buildSquare`` writes
+    ``kind = ObserveModel.SQUARE_KIND`` with ``SQUARE_KIND = "square"`` declared
+    at the top of the file, and ``mergeNearby`` folds those entries into
+    ``nearby.objects``. The producer had been there since the building wave. The
+    row survived because the pattern was checked against a simulated producer
+    written the same literal way the pattern was — a both-directions check that
+    tested the pattern against itself.
+
+    So the control is: the square semantics the mod demonstrably *does* send
+    must be findable here. If they are not, this file cannot be trusted to say
+    any token is missing, whatever its rows claim.
+    """
+    sources = _mod_sources()
+    for token in ("loaded", "blocked", "drop", "occupied"):
+        assert re.search(rf'[\'"]{token}[\'"]', sources), (
+            f"the mod names the square semantic {token!r} in "
+            f"ObserveModel.SQUARE_SEMANTIC and this check cannot see it, so its "
+            f"absence claims about closed_window and stairs prove nothing"
+        )
+    assert re.search(r'SQUARE_KIND\s*=\s*[\'"]square[\'"]', sources), (
+        "the square entry's kind is declared through a constant; a checker that "
+        "cannot see that declaration will report the square tier as unproduced, "
+        "which is exactly the false negative this control exists to prevent"
     )
 
 

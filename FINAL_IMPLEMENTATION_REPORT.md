@@ -58,11 +58,11 @@ one engine symbol has been confirmed against a running game. All twenty-two
 live-test scenarios are `NOT_RUN`, and the runner's initial state is `NOT_RUN`
 precisely so a scenario nobody ran cannot report a pass.
 
-And three abilities are known **not** to work against the shipped mod, from
-reading both sides of the seam rather than from a live run: the agent cannot
-walk, `build_structure` refuses every placement, and nothing loots a world
-container. §9 6a–6c states each with its mechanism. They are refusals rather
-than crashes, and two of the three are the same missing producer.
+Three narrower gaps are known from reading both sides of the seam rather than
+from a live run: a floor-changing move always refuses, a square behind a closed
+window is refused under the wrong name, and nothing loots a world container.
+§9 6a–6c states each with its mechanism. All three are refusals rather than
+crashes, and only the third costs a whole goal kind.
 
 ---
 
@@ -733,38 +733,42 @@ operator; only then may `v1.0.0` exist.
 6. **`ISTakeWaterAction`'s argument order.** A wrong order fills the wrong thing
    and does not error.
 
-### Three things that will fail, and are not the session's fault
+### Things that will fail, and are not the session's fault
 
 These are known before the operator starts, reproduced from the sources on both
 sides of the seam, and recorded in
 [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md). A live session should not spend
 its time diagnosing them.
 
-6a. **The agent will not walk.** `movement.move_to`, `move_near`,
-    `world.inspect` and the navigation local map all find a destination by
-    scanning `nearby.objects` for an entry whose `kind` is `square`. The mod
-    emits no such entry. Every navigation leg refuses `TARGET_NOT_LOADED`.
-    Squares *are* observed since the building wave — as a separate
-    `nearby.squares` tier — but no consumer reads that tier.
+**A previous revision of this section led with "the agent will not walk" and
+"`build_structure` will refuse every placement". Both were wrong** — see
+`LIMITATIONS.md` for how the check that produced them fooled itself. The square
+tier is real: `ObserveModel.buildSquare` mints `kind = "square"` entries and
+`mergeNearby` folds them into `nearby.objects`, which is exactly where movement
+and the enclosure check look. What is left is smaller:
 
-6b. **`build_structure` will refuse every placement.** `policy/building.read_window`
-    uses the identical scan, collects nothing, and returns `None`; its caller
-    refuses `WOULD_TRAP_PLAYER`. The refusal blames the map, not the seam. The
-    direction is the safe one deliberately — an unreadable map is where a
-    trapping wall is most likely — but the goal cannot succeed once.
+6a. **A floor-changing move will always refuse `PATH_NOT_FOUND`.**
+    `movement._check_square` requires the `stairs` semantic on the *square*
+    entry; the mod puts it on the staircase *object* standing there, on purpose.
+    The gate runs toward caution, so this costs journeys between storeys and
+    nothing else.
+
+6b. **A square behind a closed window reports the wrong refusal.** The dedicated
+    `closed_window` / `POLICY_DENIED` branch never fires — no such token is
+    produced anywhere — but the square reads as not passable and is refused as
+    `blocked`. The refusal stands; only its name is wrong.
 
 6c. **Nothing will loot a world container.** A nearby crate is minted a
     reference the planner can name, but `resolve_container` searches only
     `inventory.containers`, which the crate is never added to, so
-    `container.inspect` and `inventory.transfer` refuse `INVALID_REF`. With 6a
-    above it, `loot_area` is blocked twice over.
+    `container.inspect` and `inventory.transfer` refuse `INVALID_REF`. The
+    mission can now reach the crate and is refused at the crate instead of
+    before it.
 
-6a and 6b are **one** missing producer with two consumers, so one contract
-decision — where a square lives — unblocks navigation, the enclosure check and
-`loot_area`'s approach together. That decision is which side renames, and it is
-the kind of change only a live game can confirm, which is why this branch
-recorded it rather than guessing. It is the single highest-value thing a live
-session can settle.
+6c is the one that still costs a whole goal kind, and it is the highest-value
+thing a live session can settle: the missing half is a mod-side inventory tier
+for an open world container, and what it costs to read every tick is a question
+only a running game answers.
 
 ### The twenty-two live scenarios
 
@@ -784,10 +788,10 @@ session can settle.
    player-queued action running alongside a mod-queued one, a zombie allowed to
    notice the character mid-read — and the playbook says which.
 
-   Expect `S04_MOVE` and `S05_BLOCKED_PATH` to fail on 6a, `S22_BUILD` on 6b,
-   and `S11_CONTAINER` on 6c. They are still worth running: what they produce is
-   the observation document the mod actually sends, which is the input the
-   contract decision needs.
+   Expect `S11_CONTAINER` to fail on 6c, and any leg that changes storey on 6a.
+   Every scenario is worth running regardless: what they produce is the
+   observation document the mod actually sends, and this branch has now twice
+   been wrong about that document while reading only the sources.
 
 8. **Measured p50/p95 latencies.** Only the three scenarios flagged
    `measures_latency` record them. Any number produced without running them
@@ -843,17 +847,24 @@ that same tree, its packaged executables proving the served link between
 themselves; and §9 is the complete list of what a running game — and nothing
 else — still has to settle.
 
-It also says something the previous revisions could not, and it belongs here
-rather than in a footnote: **three of the agent's headline abilities do not
-work against the shipped mod, and this is known rather than suspected.** The
-agent cannot walk, `build_structure` refuses every placement, and nothing loots
-a world container. None is a crash or a wrong answer — each is a refusal, which
-is the safe direction — but a reader who took "8467 tests passed" as "the agent
-plays the game" would be wrong, and the tests pass because each side of the
-seam is tested against its own idea of the observation document. Two of the
-three are one missing producer. §9 6a–6c states them; `LIMITATIONS.md` carries
-the measurements; `tests/contract/test_gates_without_producers.py` fails if any
-of them is quietly closed or quietly widened.
+It also says something the previous revisions could not: **the tests pass
+because each side of the seam is tested against its own idea of the observation
+document, so "8467 tests passed" is not "the agent plays the game".** Three
+known gaps remain — a floor-changing move always refuses, a closed-window square
+is refused under the wrong name, and nothing loots a world container. Each is a
+refusal rather than a crash. §9 6a–6c states them; `LIMITATIONS.md` carries the
+measurements; `tests/contract/test_gates_without_producers.py` fails if any is
+quietly closed or quietly widened.
+
+And it says one thing about its own method. A previous revision of this document
+asserted three *larger* gaps — that the agent could not walk at all and that
+`build_structure` refused every placement — on the strength of a contract check
+that searched the mod for a literal spelling the mod does not use. The producer
+had been there the whole time, one file over, behind a named constant. The
+checker now carries a control that fails if it cannot see the mod's own idiom.
+The lesson is the document's own subject matter: a claim about the far side of a
+seam, made without running the seam, is a hypothesis — and this one was stated
+as a finding twice before it was caught.
 
 Where a claim could not be checked, this report says so rather than rounding up.
 That is the same rule the code follows: success means a postcondition was

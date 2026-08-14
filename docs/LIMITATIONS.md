@@ -137,64 +137,58 @@ which is precisely why it is forbidden.
 These are not design trades. They are places where a component exists, is
 tested, and is not connected to the thing that would use it.
 
-**The agent still cannot walk — and the reason has changed.** This is the
-largest gap in the build and it blocks every scenario involving movement.
+**The square tier exists. This entry used to say the agent could not walk at
+all, and that is no longer true — it was the largest gap in the build, and the
+crafting and building wave closed it.**
 
 `movement.move_to`, `movement.move_near`, `world.inspect` and the navigation
-local map all locate the destination square by scanning `nearby.objects` for an
-entry whose `kind` is the literal `square`, reading `loaded` / `blocked` /
-`closed_window` / `drop` from its `semantics` (`movement.py`,
-`_find_square`). Nothing puts such an entry there: `Observe.nearbyObjects` sets
-each entry's `kind` from the container type, from `getObjectName` lowercased, or
-to the literal `corpse`, and `Refs.KIND.SQUARE` occurs only where reference
-*strings* are minted and parsed. Driven against a document shaped the way
-`Observe.nearbyObjects` shapes it, a one-square walk east refuses
-`TARGET_NOT_LOADED` — "no loaded square was reported at (1201, 3400, 0)".
+local map locate a destination by scanning `nearby.objects` for an entry whose
+`kind` is `square`, reading `loaded` / `blocked` / `closed_window` / `drop` /
+`stairs` from its `semantics`. `ObserveModel.buildSquare` mints exactly that
+entry — `kind = ObserveModel.SQUARE_KIND` with `SQUARE_KIND = "square"`, a
+`Refs.buildSquare` reference, a position and a semantics list — and
+`mergeNearby` folds the bounded square list into `objects` before the block is
+returned, nearest first. `policy/building.read_window` reads the same entries
+for its enclosure check. Both consumers are served.
 
-What changed is that squares are now **observed**, just not where movement
-looks. The crafting/building wave needed a path check of its own — a structure
-the agent raises is one it has no action to remove, so a placement that would
-seal the character in must be refused — and it publishes
-`Observe.describeSquares` into a separate `nearby.squares` tier with `loaded`,
-`passable`, `free` and `floor` read tri-state. So the fix is no longer "write the
-producer"; it is to point `movement` at the tier that now exists, or to have the
-mod mint the object entries as well. Neither was done here, because which side
-moves is a contract decision whose only real test is a live game, and because
-the earlier attempt at the object-entry form was rejected under adversarial
-verification for colliding with the refs `buildObject` already mints.
+What remains is narrower and is about **where a semantic lives**, not whether
+squares exist. Three of the five tokens movement reads cross the seam —
+`loaded`, `blocked`, `drop` — and `occupied` crosses for the build policy. The
+other two do not, for a reason the mod states: `closed_window` and `stairs` are
+"facts about an object standing on a square rather than about the square, and
+the object entries already carry them", so emitting them on the square too
+would be one fact in two places, free to disagree. `movement._check_square`
+looks for them on the square. The consequences are asymmetric and both are
+bounded:
 
-**And the same missing producer now takes the building half of P5 with it.**
-`policy/building.read_window` builds the enclosure window from that identical
-scan — `nearby.objects`, `kind == SQUARE_OBJECT_KIND` — and returns `None` when
-it collected no square, which against the shipped mod is always. Its caller
-refuses `WOULD_TRAP_PLAYER` on `None` ("the mod described no window this side
-can read whole"), so **every `build_structure` placement is refused**, and the
-refusal blames the map rather than the seam. The direction is the safe one and
-deliberately so — an unreadable map is where a trapping wall is most likely, not
-least — but the goal cannot succeed once, exactly as `LEARN_RECIPE` could not
-before its producer arrived.
+- **`stairs`** — the cross-floor branch is `changes_floor and not (allow_stairs
+  and SEMANTIC_STAIRS in semantics)`, so it can never find the token and every
+  floor-changing move refuses `PATH_NOT_FOUND`. That runs toward caution.
+- **`closed_window`** — the dedicated `POLICY_DENIED` refusal never fires, but a
+  square behind a closed window reads as not passable through
+  `Observe.squarePassable` and is refused as `blocked` anyway. What is lost is
+  which refusal is reported, not the refusal.
 
-This is established by reading both sides plus the ledger's producer check, not
-by driving a mod-shaped document through the sidecar: the mod emits no
-`kind = "square"` in code (`tests/contract/test_gates_without_producers.py`
-asserts it, comments stripped), and `read_window` fills `semantics` from nothing
-else.
+Neither is repaired from this side: agreeing on which entry carries an
+object-fact is a contract decision, and the mod's argument for keeping it in one
+place is a good one.
 
-So one contract decision — where a square lives — unblocks three things at once:
-movement, the enclosure check, and `loot_area`'s approach to a container. That is
-the argument for settling it rather than working around it in any single caller.
-
-The gap survived a fully green suite because the sidecar's own fixtures mint the
-square objects the mod never sends (`tests/fixtures/adapter_worlds.py:a_square`),
-so each side was only ever tested against its own idea of the document. That is
-also why `tests/contract/test_gates_without_producers.py` keeps a row for it:
-the row's pattern was briefly satisfied by the new section's own *comment*
-explaining the gap, which would have retired the largest limitation in the build
-on a sentence, so the ledger now strips Lua comments before it looks.
+**How this entry came to be wrong is worth more than the entry.** The claim that
+no producer existed was checked against
+`tests/contract/test_gates_without_producers.py`, whose row searched the mod for
+the literal `kind = "square"`. The mod does not write tokens that way; it
+declares `SQUARE_KIND` once and refers to it. The row's both-directions check —
+"no match today, a match when a plausible producer is spliced in" — was
+performed by splicing in a producer written the same literal way the pattern
+was, so it tested the pattern against itself and proved nothing. The ledger now
+carries a second positive control asserting that the semantics the mod
+demonstrably *does* send are findable, and that the `SQUARE_KIND` declaration is
+visible, because a checker that cannot see the mod's own spelling style cannot
+be trusted to report an absence.
 
 **A world container can be named but never resolved, so nothing loots.** The
-third gap of the square tier's shape, and the one that takes a whole goal kind
-with it.
+same shape as the entries above, and now the only one of them that still takes a
+whole goal kind with it.
 
 `InventoryView.container` searches `inventory.containers` and nothing else, and
 `resolve_container` refuses `INVALID_REF` for any reference not in that list.
@@ -212,8 +206,9 @@ never added to. Every container action against it refuses `INVALID_REF` —
 "is not in the observed container tree" — and `loot_area` therefore cannot take
 anything out of anything.
 
-With the missing square tier above it, the loot mission is doubly blocked: it
-cannot walk to the crate, and it could not open it if it were standing there.
+This used to be stated as a double block — no walk to the crate and no way to
+open it standing there. Only the second half survives: the square tier exists,
+so the mission can reach the crate and is refused at the container instead.
 
 Recorded rather than repaired, for the same reason as the other two: the missing
 half is a mod-side inventory tier for an open world container — deciding when a

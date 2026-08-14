@@ -32,6 +32,41 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **Retracted: the agent can walk, and `build_structure` is not dead** (`dev`).
+  This branch asserted twice, in `LIMITATIONS.md`, `PROGRESS.md` and the final
+  report's §9 and §10, that the mod emits no `kind = "square"` entry — that no
+  navigation leg could succeed and that every placement refused
+  `WOULD_TRAP_PLAYER`. Both claims were false. `ObserveModel.buildSquare` mints
+  the entry with `kind = ObserveModel.SQUARE_KIND` (`SQUARE_KIND = "square"`), a
+  square reference, a position and a semantics list, and `mergeNearby` folds the
+  bounded square list into `objects` before `ObserveModel.nearby` returns. Both
+  `movement._find_square` and `policy/building.read_window` find what they scan
+  for. The producer arrived with the crafting and building wave.
+
+  **How the check that produced the claim fooled itself matters more than the
+  claim.** The ledger row searched the mod for a *literal* `kind = "square"`;
+  the mod declares the token once as a constant and refers to it everywhere. The
+  row's both-directions discipline — no match today, a match when a plausible
+  producer is spliced in — was satisfied by splicing in a producer written the
+  same literal way the pattern was, so it tested the pattern against itself. The
+  one match it ever found was a *comment* in the new section explaining the gap,
+  and stripping comments made it pass for the wrong reason.
+
+  `test_gates_without_producers.py` now carries a second positive control: the
+  square semantics the mod demonstrably sends must be findable, and the
+  `SQUARE_KIND` declaration must be visible. A checker blind to the producer's
+  spelling cannot report an absence, whatever its rows say.
+
+  What survives is narrower and is about **where** a semantic lives. Three of
+  movement's five square tokens cross — `loaded`, `blocked`, `drop` — plus
+  `occupied` for the build policy. `closed_window` and `stairs` are read off the
+  square entry and put by the mod on the *object* standing there, deliberately:
+  "emitting them here would be the same fact in two places, free to disagree."
+  So a floor-changing move always refuses `PATH_NOT_FOUND` (toward caution), and
+  a square behind a closed window is refused as `blocked` rather than under its
+  own name. One ledger row covers both; the world-container gap is now the only
+  one of the three that still costs a whole goal kind.
+
 - **The final report is re-measured at the merged head, and §9 names what will
   fail** (`dev`). `FINAL_IMPLEMENTATION_REPORT.md` was pinned to `3d8078d`, some
   150 commits back, and its §8 still named an artefact from a run two RCs ago.
