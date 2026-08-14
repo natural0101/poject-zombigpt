@@ -31,11 +31,22 @@ independently-written halves and has caught real drift:
 **The seam that had none, and what it cost.** Nothing compared the *observation
 document's field vocabularies*: the mod builds a document, the sidecar reads it,
 and each side's tests use its own fixtures. Eight dead gates accumulated there
-before anybody swept for them, including the three that matter most — the agent
-cannot walk, nothing loots, and a safety rung that has never fired. Those are
-recorded in ``test_gates_without_producers`` and measured in
-``test_item_domain_vocabularies``, which now checks the item blocks, the stats
-map and the structural tiers on every run.
+before anybody swept for them, including the ones that cost whole goal kinds and
+a safety rung that has never fired. Those are recorded in
+``test_gates_without_producers`` and measured in
+``test_item_domain_vocabularies``, which checks the item blocks, the stats map
+and the structural tiers on every run.
+
+**That seam now has a check, and it is the one to read first.**
+``test_observation_document_round_trip`` runs the mod's own readers and
+``ObserveModel.build`` through ``tests/lua/support/dump_observation.lua``, then
+decodes the result with the sidecar's own ``Observation.from_dict`` and hands
+the items to the typed views the policies use. One document, both real
+implementations, one process — the twin of ``test_adapter_args_agreement``
+pointed the other way. The two ledgers above compare the sides by *pattern*,
+which is weaker in a specific way: a pattern can be fooled by how a producer is
+written, and one was, for four commits. Prefer a check that runs the producer;
+reach for a pattern only when nothing can.
 
 The lesson generalises past this repository: an agreement that is only kept by
 review is kept until the day it is not, and the suite stays green through the

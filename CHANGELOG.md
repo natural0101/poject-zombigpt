@@ -12,6 +12,38 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Added
 
+- **The observation seam now has the check the command seam has had all along**
+  (`dev`). `tests/lua/support/dump_observation.lua` builds one document through
+  `Observe.playerFields`, `Observe.inventoryRoots` and `ObserveModel.build` —
+  the shipped code — against fakes that stand in for the *engine* and answer
+  exactly the accessor names the mod's own readers ask for.
+  `tests/contract/test_observation_document_round_trip.py` decodes it with
+  `Observation.from_dict` and hands the items to the typed views the policies
+  use. One document, both real implementations, one process.
+
+  This is the twin of `test_adapter_args_agreement.py`, pointed the other way,
+  and its absence is why every one of the eight dead gates was found by hand:
+  the sidecar's fixtures build the document the sidecar expects, the mod's
+  suites build the document the mod emits, and nothing put one side's output
+  into the other side's reader.
+
+  It catches what a key-set comparison cannot. The blocks are raw `JsonDict` on
+  both sides, so a disagreement is not a type error or a crash — it is a
+  decision coming out wrong. The mod reports a sandwich `rotten: true`,
+  `burnt: true`, `poisonous: true`; `FoodView.is_rotten` answers **False**
+  because it asks whether `freshness == "rotten"`. That is the whole defect
+  class, demonstrated end to end instead of argued from two files, with
+  `poisonous` asserted beside it because that key does cross and must keep
+  crossing. The literature block is pinned the same way, from the other side:
+  `pages_total`, `min_level` and `max_level` now survive the trip, which is what
+  the crafting wave's rename looks like from the sidecar's chair.
+
+  Verified in the direction that matters, and through the producer rather than a
+  synthetic: splicing a real `freshness` emission into `Observe.itemFood` makes
+  the test fail with the message telling the next person which documents to
+  update. A regex over the sources can be fooled by how a producer is written —
+  one gate row was, for four commits. A test that runs the producer cannot be.
+
 - **The crafting and building wave is merged into the line** (`dev`). Six
   commits, 19 097 insertions across 80 files, carrying `craft_item` and
   `build_structure` as the twelfth and thirteenth deterministic goal kinds, the
