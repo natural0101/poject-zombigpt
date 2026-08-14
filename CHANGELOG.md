@@ -12,6 +12,35 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Added
 
+- **The ack seam, checked in the one direction nothing could see** (`dev`).
+  Written expecting to find the ack unchecked, the way the observation document
+  was. It is not: `Handle:ack` is pinned hard by `tests/lua/test_action_runtime.lua`,
+  and three plants against the real mod — dropping `schema_version` from the
+  record, mapping `LOST` to a non-terminal status, removing `INTERRUPTED` from
+  `TERMINAL_PHASES` — each failed that suite already. Reported as found rather
+  than dressed up as a discovery.
+
+  What remained is one direction, and it is the realistic one: **the sidecar's
+  reader can tighten, and no Lua test can know that it did.**
+  `ActionResult.from_dict` requires eight fields, refuses an unknown reason code
+  outright and wants both ids UUID-shaped; the mod's suite checks the fields it
+  knows to check. Adding a requirement to `from_dict` that the mod does not
+  satisfy leaves every Lua suite green — verified by planting exactly that — and
+  fails `tests/contract/test_action_ack_round_trip.py`.
+
+  `tests/lua/support/dump_action_acks.lua` drives commands through the real
+  `ActionRuntime` with spy adapters and prints the acks the journal actually
+  received; the contract test reads them with the sidecar's own reader. It also
+  holds `finished_at_ms` against `ActionStatus.is_terminal`, which is a
+  correspondence across a rename — `interrupted` is a mod phase that travels as
+  `cancelled` — so the two tables cannot agree by matching names alone.
+
+  Worth recording: a spy that reports `done` still ends `failed /
+  POSTCONDITION_FAILED` in this fixture, because the runtime asks for an
+  observed postcondition and there is no game to observe one in. The dumper's
+  scenarios are therefore keyed by what the adapter was told to do, never by the
+  outcome expected of it.
+
 - **The protocol vocabularies the regex could not see** (`dev`).
   `tests/unit/test_lua_mod_contract.py` holds `Protocol.lua` against the Python
   enums by matching `KEY = "value"` pairs in the file's text. Four tables are not
