@@ -12,6 +12,31 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Added
 
+- **Twenty-nine plan tasks told the operator to run commands that do not exist**
+  (`dev`). `tests/contract/test_documented_commands_parse.py` has put every
+  `pz-agent …` line in every shipped document through the real parser since two
+  pages were caught naming `--redact` and `memory --forget`. It reads `*.md`.
+  `MASTER_PLAN.yaml` is YAML, and its `verify_command` fields are command lines
+  a person types — so nothing had ever looked at them.
+
+  Through that gap: all twenty-two of `E14-M02` verify with `pz-agent
+  capabilities --verify`, and there is no `capabilities` command; `E14-M01-T002`
+  says `pz-agent backup`, which is `backup-save`; four `E15` tasks say
+  `pz-agent logs --trace`, and there is no `--trace` flag. Together with the
+  `livetest` spelling fixed in the previous commit, that is twenty-nine tasks —
+  all of them in the two epics nothing here can close, so the first person to
+  try one would have been at a Windows machine with the game running, working
+  through a checklist that does not run.
+
+  The capability scan is `doctor` ("check the installation and the capability
+  surface"), the resolved ledger is what `status` reports, and the trace is read
+  back by `replay`. The plan now says so.
+
+  The checker gained a section for the plan: sixty invocations, each parsed, and
+  a guard that fails if `E14-M02` or `E14-M03` stops being covered. Verified
+  against the plan as it stood before this commit — twenty-nine rejections, the
+  exact four shapes — and against the plan after it, zero.
+
 - **The plan of record told the operator to run scenarios that do not exist**
   (`dev`). `E14-M03` — the milestone a person at a Windows machine works through,
   on one of the two epics that gate `v1.0.0` — was generated from a hand-written

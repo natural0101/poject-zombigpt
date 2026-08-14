@@ -7871,7 +7871,7 @@ epics:
       depends_on:
       - E14-M01-T001
       pass_criterion: the backup exists and its digest is recorded
-      verify_command: .venv/bin/pz-agent backup
+      verify_command: .venv/bin/pz-agent backup-save
       regression_test: ''
       evidence: evidence/live/setup.json
       status: NOT_STARTED
@@ -7943,7 +7943,7 @@ epics:
       depends_on:
       - E14-M01-T005
       pass_criterion: the report lists each capability with its observed state
-      verify_command: .venv/bin/pz-agent capabilities
+      verify_command: .venv/bin/pz-agent doctor --json
       regression_test: ''
       evidence: evidence/live/capabilities.json
       status: NOT_STARTED
@@ -7961,7 +7961,7 @@ epics:
       depends_on:
       - E14-M01-T006
       pass_criterion: every verified capability has a confirm() record
-      verify_command: .venv/bin/pz-agent capabilities
+      verify_command: .venv/bin/pz-agent status --json
       regression_test: ''
       evidence: evidence/live/capabilities.json
       status: NOT_STARTED
@@ -8005,7 +8005,7 @@ epics:
       owner: local
       depends_on: []
       pass_criterion: the symbol exists on the real build and its signature matches the probe
-      verify_command: .venv/bin/pz-agent capabilities --verify
+      verify_command: .venv/bin/pz-agent doctor --json
       regression_test: ''
       evidence: evidence/live/api/S01_INSTALL.json
       status: NOT_STARTED
@@ -8023,7 +8023,7 @@ epics:
       depends_on:
       - E14-M02-T001
       pass_criterion: the symbol exists on the real build and its signature matches the probe
-      verify_command: .venv/bin/pz-agent capabilities --verify
+      verify_command: .venv/bin/pz-agent doctor --json
       regression_test: ''
       evidence: evidence/live/api/S02_HEARTBEAT.json
       status: NOT_STARTED
@@ -8041,7 +8041,7 @@ epics:
       depends_on:
       - E14-M02-T002
       pass_criterion: the symbol exists on the real build and its signature matches the probe
-      verify_command: .venv/bin/pz-agent capabilities --verify
+      verify_command: .venv/bin/pz-agent doctor --json
       regression_test: ''
       evidence: evidence/live/api/S03_ARM_DISARM.json
       status: NOT_STARTED
@@ -8059,7 +8059,7 @@ epics:
       depends_on:
       - E14-M02-T003
       pass_criterion: the symbol exists on the real build and its signature matches the probe
-      verify_command: .venv/bin/pz-agent capabilities --verify
+      verify_command: .venv/bin/pz-agent doctor --json
       regression_test: ''
       evidence: evidence/live/api/S04_MOVE.json
       status: NOT_STARTED
@@ -8077,7 +8077,7 @@ epics:
       depends_on:
       - E14-M02-T004
       pass_criterion: the symbol exists on the real build and its signature matches the probe
-      verify_command: .venv/bin/pz-agent capabilities --verify
+      verify_command: .venv/bin/pz-agent doctor --json
       regression_test: ''
       evidence: evidence/live/api/S05_BLOCKED_PATH.json
       status: NOT_STARTED
@@ -8095,7 +8095,7 @@ epics:
       depends_on:
       - E14-M02-T005
       pass_criterion: the symbol exists on the real build and its signature matches the probe
-      verify_command: .venv/bin/pz-agent capabilities --verify
+      verify_command: .venv/bin/pz-agent doctor --json
       regression_test: ''
       evidence: evidence/live/api/S06_MANUAL_TAKEOVER.json
       status: NOT_STARTED
@@ -8113,7 +8113,7 @@ epics:
       depends_on:
       - E14-M02-T006
       pass_criterion: the symbol exists on the real build and its signature matches the probe
-      verify_command: .venv/bin/pz-agent capabilities --verify
+      verify_command: .venv/bin/pz-agent doctor --json
       regression_test: ''
       evidence: evidence/live/api/S07_NESTED_INVENTORY.json
       status: NOT_STARTED
@@ -8131,7 +8131,7 @@ epics:
       depends_on:
       - E14-M02-T007
       pass_criterion: the symbol exists on the real build and its signature matches the probe
-      verify_command: .venv/bin/pz-agent capabilities --verify
+      verify_command: .venv/bin/pz-agent doctor --json
       regression_test: ''
       evidence: evidence/live/api/S08_UNSAFE_FOOD.json
       status: NOT_STARTED
@@ -8149,7 +8149,7 @@ epics:
       depends_on:
       - E14-M02-T008
       pass_criterion: the symbol exists on the real build and its signature matches the probe
-      verify_command: .venv/bin/pz-agent capabilities --verify
+      verify_command: .venv/bin/pz-agent doctor --json
       regression_test: ''
       evidence: evidence/live/api/S09_DRINK.json
       status: NOT_STARTED
@@ -8167,7 +8167,7 @@ epics:
       depends_on:
       - E14-M02-T009
       pass_criterion: the symbol exists on the real build and its signature matches the probe
-      verify_command: .venv/bin/pz-agent capabilities --verify
+      verify_command: .venv/bin/pz-agent doctor --json
       regression_test: ''
       evidence: evidence/live/api/S10_READ.json
       status: NOT_STARTED
@@ -8185,7 +8185,7 @@ epics:
       depends_on:
       - E14-M02-T010
       pass_criterion: the symbol exists on the real build and its signature matches the probe
-      verify_command: .venv/bin/pz-agent capabilities --verify
+      verify_command: .venv/bin/pz-agent doctor --json
       regression_test: ''
       evidence: evidence/live/api/S11_CONTAINER.json
       status: NOT_STARTED
@@ -8203,7 +8203,7 @@ epics:
       depends_on:
       - E14-M02-T011
       pass_criterion: the symbol exists on the real build and its signature matches the probe
-      verify_command: .venv/bin/pz-agent capabilities --verify
+      verify_command: .venv/bin/pz-agent doctor --json
       regression_test: ''
       evidence: evidence/live/api/S12_EQUIPMENT.json
       status: NOT_STARTED
@@ -8221,7 +8221,7 @@ epics:
       depends_on:
       - E14-M02-T012
       pass_criterion: the symbol exists on the real build and its signature matches the probe
-      verify_command: .venv/bin/pz-agent capabilities --verify
+      verify_command: .venv/bin/pz-agent doctor --json
       regression_test: ''
       evidence: evidence/live/api/S13_MEDICAL.json
       status: NOT_STARTED
@@ -8239,7 +8239,7 @@ epics:
       depends_on:
       - E14-M02-T013
       pass_criterion: the symbol exists on the real build and its signature matches the probe
-      verify_command: .venv/bin/pz-agent capabilities --verify
+      verify_command: .venv/bin/pz-agent doctor --json
       regression_test: ''
       evidence: evidence/live/api/S14_SLEEP_REST.json
       status: NOT_STARTED
@@ -8257,7 +8257,7 @@ epics:
       depends_on:
       - E14-M02-T014
       pass_criterion: the symbol exists on the real build and its signature matches the probe
-      verify_command: .venv/bin/pz-agent capabilities --verify
+      verify_command: .venv/bin/pz-agent doctor --json
       regression_test: ''
       evidence: evidence/live/api/S15_ZOMBIE_INTERRUPT.json
       status: NOT_STARTED
@@ -8275,7 +8275,7 @@ epics:
       depends_on:
       - E14-M02-T015
       pass_criterion: the symbol exists on the real build and its signature matches the probe
-      verify_command: .venv/bin/pz-agent capabilities --verify
+      verify_command: .venv/bin/pz-agent doctor --json
       regression_test: ''
       evidence: evidence/live/api/S16_STALE_SIDECAR.json
       status: NOT_STARTED
@@ -8293,7 +8293,7 @@ epics:
       depends_on:
       - E14-M02-T016
       pass_criterion: the symbol exists on the real build and its signature matches the probe
-      verify_command: .venv/bin/pz-agent capabilities --verify
+      verify_command: .venv/bin/pz-agent doctor --json
       regression_test: ''
       evidence: evidence/live/api/S17_RESTART_RECOVERY.json
       status: NOT_STARTED
@@ -8311,7 +8311,7 @@ epics:
       depends_on:
       - E14-M02-T017
       pass_criterion: the symbol exists on the real build and its signature matches the probe
-      verify_command: .venv/bin/pz-agent capabilities --verify
+      verify_command: .venv/bin/pz-agent doctor --json
       regression_test: ''
       evidence: evidence/live/api/S18_PANIC.json
       status: NOT_STARTED
@@ -8329,7 +8329,7 @@ epics:
       depends_on:
       - E14-M02-T018
       pass_criterion: the symbol exists on the real build and its signature matches the probe
-      verify_command: .venv/bin/pz-agent capabilities --verify
+      verify_command: .venv/bin/pz-agent doctor --json
       regression_test: ''
       evidence: evidence/live/api/S19_AUTONOMOUS_30_MIN.json
       status: NOT_STARTED
@@ -8347,7 +8347,7 @@ epics:
       depends_on:
       - E14-M02-T019
       pass_criterion: the symbol exists on the real build and its signature matches the probe
-      verify_command: .venv/bin/pz-agent capabilities --verify
+      verify_command: .venv/bin/pz-agent doctor --json
       regression_test: ''
       evidence: evidence/live/api/S20_AUTONOMOUS_2_HOURS.json
       status: NOT_STARTED
@@ -8365,7 +8365,7 @@ epics:
       depends_on:
       - E14-M02-T020
       pass_criterion: the symbol exists on the real build and its signature matches the probe
-      verify_command: .venv/bin/pz-agent capabilities --verify
+      verify_command: .venv/bin/pz-agent doctor --json
       regression_test: ''
       evidence: evidence/live/api/S21_CRAFT.json
       status: NOT_STARTED
@@ -8384,7 +8384,7 @@ epics:
       depends_on:
       - E14-M02-T021
       pass_criterion: the symbol exists on the real build and its signature matches the probe
-      verify_command: .venv/bin/pz-agent capabilities --verify
+      verify_command: .venv/bin/pz-agent doctor --json
       regression_test: ''
       evidence: evidence/live/api/S22_BUILD.json
       status: NOT_STARTED
@@ -9065,7 +9065,7 @@ epics:
       depends_on:
       - E15-M01-T001
       pass_criterion: the trace is complete and replayable
-      verify_command: .venv/bin/pz-agent logs --trace
+      verify_command: .venv/bin/pz-agent replay logs/pz-agent.jsonl
       regression_test: ''
       evidence: evidence/live/endurance-30m.json
       status: NOT_STARTED
@@ -9119,7 +9119,7 @@ epics:
       depends_on:
       - E15-M01-T004
       pass_criterion: the trace is complete and replayable
-      verify_command: .venv/bin/pz-agent logs --trace
+      verify_command: .venv/bin/pz-agent replay logs/pz-agent.jsonl
       regression_test: ''
       evidence: evidence/live/endurance-2h.json
       status: NOT_STARTED
@@ -9137,7 +9137,7 @@ epics:
       depends_on:
       - E15-M01-T005
       pass_criterion: rotation is observed and no diff is orphaned
-      verify_command: .venv/bin/pz-agent logs --trace
+      verify_command: .venv/bin/pz-agent logs --json
       regression_test: ''
       evidence: evidence/live/endurance-2h.json
       status: NOT_STARTED
@@ -9155,7 +9155,7 @@ epics:
       depends_on:
       - E15-M01-T006
       pass_criterion: the outcome is accounted for in the trace
-      verify_command: .venv/bin/pz-agent logs --trace
+      verify_command: .venv/bin/pz-agent replay logs/pz-agent.jsonl
       regression_test: ''
       evidence: evidence/live/endurance-2h.json
       status: NOT_STARTED

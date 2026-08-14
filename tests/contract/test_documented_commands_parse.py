@@ -241,6 +241,68 @@ def test_the_server_parser_accepts_what_the_document_names(
 
 
 # ---------------------------------------------------------------------------
+# the plan of record, which is a document an operator works from
+# ---------------------------------------------------------------------------
+
+#: ``MASTER_PLAN.yaml``'s ``verify_command`` fields are command lines a person
+#: types, and until this section existed nothing put them through a parser: the
+#: scan above reads ``*.md`` and the plan is YAML. Twenty-nine tasks went out
+#: through that gap — all twenty-two of ``E14-M02`` telling the operator to run
+#: ``pz-agent capabilities``, which is not a command, plus ``pz-agent backup``
+#: (it is ``backup-save``), ``pz-agent logs --trace`` (no such flag) and every
+#: ``E14-M03`` row naming ``pz-agent livetest``, a subcommand spelled
+#: ``live-test``. They sat in the one epic nothing in this environment can
+#: close, so the first person to try them would have been at a Windows machine
+#: with the game running, working through a checklist that does not run.
+_PLAN: Final = REPO_ROOT / "docs" / "control" / "MASTER_PLAN.yaml"
+
+#: The same program, reached through either interpreter prefix the plan uses.
+_PLAN_INVOCATION: Final = re.compile(r"^(?:\.venv[\\/](?:bin|Scripts)[\\/])?pz-agent(?!-)\s+(.+)$")
+
+
+def _plan_invocations() -> list[tuple[str, str, list[str]]]:
+    import yaml  # noqa: PLC0415
+
+    document = yaml.safe_load(_PLAN.read_text(encoding="utf-8"))
+    built: list[tuple[str, str, list[str]]] = []
+    for epic in document["epics"]:
+        for milestone in epic["milestones"]:
+            for task in milestone["tasks"]:
+                match = _PLAN_INVOCATION.match((task.get("verify_command") or "").strip())
+                if match is None:
+                    continue
+                built.append((task["id"], match.group(1), _clean(match.group(1))))
+    return built
+
+
+_PLAN_CASES: Final = _plan_invocations()
+
+
+def test_the_plan_is_being_read_at_all() -> None:
+    """Sixty tasks verify through the CLI; a pattern that stopped matching would
+    make every case below vacuous, which is how the defect survived once already."""
+    assert len(_PLAN_CASES) > 40, f"only {len(_PLAN_CASES)} plan invocations found"
+    milestones = {identifier.rsplit("-", 1)[0] for identifier, _, _ in _PLAN_CASES}
+    for owed in ("E14-M02", "E14-M03"):
+        assert owed in milestones, f"{owed} is no longer being checked"
+
+
+@pytest.mark.parametrize(
+    ("where", "raw", "argv"),
+    _PLAN_CASES,
+    ids=[f"{where} {raw[:36]}" for where, raw, _ in _PLAN_CASES],
+)
+def test_the_parser_accepts_what_the_plan_tells_an_operator_to_run(
+    where: str, raw: str, argv: list[str]
+) -> None:
+    parser = build_parser()
+    try:
+        parser.parse_args(argv)
+    except SystemExit:
+        pytest.fail(f"{where} verifies with `pz-agent {raw}`, and the parser rejects it")
+
+
+# ---------------------------------------------------------------------------
 # docs/VOICE.md, beyond its command lines
 # ---------------------------------------------------------------------------
 #
