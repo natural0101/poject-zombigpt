@@ -36,9 +36,10 @@ about nothing.
 
 | Field | Value |
 | --- | --- |
-| archive | `pz-agent-windows-rc` (artifact 9206571008), `pz-agent-windows-v1.0.0-rc1.zip`, 77 entries |
-| archive sha256 | `b02bc6846e3a5c942208836ba9e8dbb99fc5d6b8aaf81aaa9e09b0a6efec35fc` |
-| source commit | `19f29819e5b6669fa4904480984f37b1c706c1b5` |
-| workflow run | https://github.com/natural0101/poject-zombigpt/actions/runs/31765997897 |
-| certified by | `check_release.py --rc` printing `CERTIFIED v1.0.0-rc1: 8 check(s) passed` — archive complete, all 11 wrappers at the root, **both executables in `bin/`**, 76 file digests matching, 8469 of 8510 tests passed with no failures, 31 MCP end-to-end testcases green, and the archive claiming no live-test evidence. The packaged pair also completed an MCP `initialize` over the RPC link with `PATH` reduced to the system directories. The suite has grown by one at each of the last two RCs, and both are positive controls added to the contract ledgers after a row in one of them turned out to be wrong |
+| archive | `pz-agent-windows-rc` (artifact 9208986035), `pz-agent-windows-v1.0.0-rc1.zip`, 77 entries |
+| archive sha256 | `fcf8ad28dd6ac45832fc799a70c1b541e4d18e2329b7aa0340df221d6de1d0a8` |
+| source commit | `5f073e918aef7e7dec2db903d518fa987cc058b0` |
+| workflow run | https://github.com/natural0101/poject-zombigpt/actions/runs/31772782919 |
+| certified by | `check_release.py --rc` printing `CERTIFIED v1.0.0-rc1: 8 check(s) passed` — archive complete, all 11 wrappers at the root, **both executables in `bin/`**, 76 file digests matching, 8469 of 8513 tests passed with no failures, 31 MCP end-to-end testcases green, and the archive claiming no live-test evidence. The packaged pair also completed an MCP `initialize` over the RPC link with `PATH` reduced to the system directories |
+| a number worth reading twice | the passed count did **not** move from the previous RC (8469) while collected went 8510 → 8513 and skips 41 → 44. The three new tests are `test_observation_document_round_trip`, and they skip on this runner because no Lua interpreter is on its PATH. They run on Linux CI and locally. So the observation-seam round trip is **not** evidence this artefact carries; it is evidence about the tree, taken elsewhere |
 | current? | `docs/control/STATUS.json` → `release_candidate.status`; any code commit after the source commit makes it STALE until the workflow rebuilds it |
