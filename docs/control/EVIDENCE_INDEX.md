@@ -36,9 +36,9 @@ about nothing.
 
 | Field | Value |
 | --- | --- |
-| archive | `pz-agent-windows-rc` (artifact 9199487934), `pz-agent-windows-v1.0.0-rc1.zip`, 77 entries |
-| archive sha256 | `10932ac6dccdb395576637243579e55c687a8a231dc4d83ace7095161a9e9a00` |
-| source commit | `cbce789eb54ecf3d4dd3aa6861035b2badba5fc4` |
-| workflow run | https://github.com/natural0101/poject-zombigpt/actions/runs/31746116569 |
+| archive | `pz-agent-windows-rc` (artifact 9203275522), `pz-agent-windows-v1.0.0-rc1.zip`, 77 entries |
+| archive sha256 | `6053cbce2f2c8436c46eb45dbfcbb60dccaf91fae17011b7742bbcb382ead9cf` |
+| source commit | `c98c52265164c07c2f41ceea6040202e40895715` |
+| workflow run | https://github.com/natural0101/poject-zombigpt/actions/runs/31756579175 |
 | certified by | `check_release.py --rc` printing `CERTIFIED v1.0.0-rc1: 8 check(s) passed` — archive complete, all 11 wrappers at the root, **both executables in `bin/`**, 76 file digests matching, 8467 of 8508 tests passed with no failures, 31 MCP end-to-end testcases green, and the archive claiming no live-test evidence. The packaged pair also completed an MCP `initialize` over the RPC link with `PATH` reduced to the system directories. This is the first RC carrying the crafting and building wave — the suite grew from 8127 tests to 8508 and the archive from 75 entries to 77 |
 | current? | `docs/control/STATUS.json` → `release_candidate.status`; any code commit after the source commit makes it STALE until the workflow rebuilds it |
