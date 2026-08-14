@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import re
 import uuid
-from typing import Any
+from pathlib import Path
+from typing import Any, Final
 
 import pytest
 
@@ -67,8 +69,16 @@ CRATE = f"container:{DEFAULT_SESSION}:world:1200:3400:0:0:0"
 DOOR = f"object:{DEFAULT_SESSION}:1200:3401:0:2"
 ZOMBIE = f"zombie:{DEFAULT_SESSION}:31:0"
 
-#: The set named by docs/MCP_TOOLS.md, written out rather than derived, so a
-#: tool appearing or vanishing has to be a deliberate edit in two places.
+#: The published surface, written out rather than derived, so a tool appearing
+#: or vanishing has to be a deliberate edit in two places.
+#:
+#: "Two places" used to mean ``catalog.py`` and this literal — never the
+#: document. Renaming ``pz_action_inspect_recipe`` out of ``docs/MCP_TOOLS.md``
+#: left 134 tests green while the page an MCP client author reads no longer
+#: named a published tool, and that one in particular is the reading the
+#: catalogue's own comment says a client is expected to call first.
+#: :func:`test_the_document_names_every_published_tool` closes that: this literal
+#: is still the deliberate edit, and the file is now held to it too.
 DOCUMENTED_TOOLS = {
     "pz_session_status",
     "pz_session_arm",
@@ -167,6 +177,35 @@ ALL_CAPABILITIES = (
 def test_the_published_set_is_exactly_the_documented_one() -> None:
     assert set(TOOLS_BY_NAME) == DOCUMENTED_TOOLS
     assert {spec.uri for spec in RESOURCES} == DOCUMENTED_RESOURCES
+
+
+#: The page an MCP client author works from. Nothing derived it and nothing
+#: checked it; the two literals above were a copy of what it was believed to say.
+MCP_TOOLS_DOC: Final = Path(__file__).resolve().parents[2] / "docs" / "MCP_TOOLS.md"
+
+
+def test_the_document_names_every_published_tool_and_resource() -> None:
+    """The file itself, not a transcription of it.
+
+    Both directions. A tool published and undocumented is a client that cannot
+    find it; a tool documented and unpublished is a client that calls something
+    the server will refuse. ``pz_agent_core`` is excluded by name because it is
+    the package, not a tool, and it is the only ``pz_``-prefixed token in the
+    page that is not one.
+    """
+    text = MCP_TOOLS_DOC.read_text(encoding="utf-8")
+
+    named_tools = set(re.findall(r"\bpz_[a-z0-9_]+\b", text)) - {"pz_agent_core"}
+    named_resources = set(re.findall(r"\bpz://[a-z0-9/_-]+", text))
+
+    assert set(TOOLS_BY_NAME) - named_tools == set(), (
+        "published but never named in docs/MCP_TOOLS.md: "
+        f"{sorted(set(TOOLS_BY_NAME) - named_tools)}"
+    )
+    assert named_tools - set(TOOLS_BY_NAME) == set(), (
+        f"named in docs/MCP_TOOLS.md but not published: {sorted(named_tools - set(TOOLS_BY_NAME))}"
+    )
+    assert named_resources == {spec.uri for spec in RESOURCES}
 
 
 def test_stop_and_disarm_never_require_an_armed_session() -> None:

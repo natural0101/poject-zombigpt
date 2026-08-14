@@ -12,6 +12,29 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Added
 
+- **"Documented" meant a transcription of the document, not the document**
+  (`dev`). `tests/unit/test_mcp_catalog.py` carries `DOCUMENTED_TOOLS` and
+  `DOCUMENTED_RESOURCES` — literals whose comment reads *"the set named by
+  docs/MCP_TOOLS.md, written out rather than derived, so a tool appearing or
+  vanishing has to be a deliberate edit in two places"*. Sound intent, wrong two
+  places: they were `catalog.py` and the test file. The page itself was never
+  read by anything.
+
+  Renaming `pz_action_inspect_recipe` out of `docs/MCP_TOOLS.md` left **134 tests
+  green** while the page an MCP client author works from no longer named a
+  published tool — and that one is the reading the catalogue's own comment says
+  a client is expected to call first.
+
+  The 49 tools and 7 resources do agree with the page today; nothing was wrong,
+  and nothing was holding it. `test_the_document_names_every_published_tool_and_resource`
+  now reads the file and compares both directions: published-and-undocumented is
+  a client that cannot find a tool, documented-and-unpublished is a client that
+  calls something the server refuses. The hand-written literals stay as the
+  deliberate-edit tripwire they were meant to be.
+
+  Verified by planting each direction against the real page — a dropped tool, an
+  invented resource URI — and removing them again.
+
 - **Two counts of the wrappers, and nothing comparing the collections**
   (`dev`). `build_rc.BAT_NAMES` decides which `.bat` files the archive carries.
   `tests/unit/test_packaging_rc.py` asserted `len(BAT_NAMES) == 11`;
