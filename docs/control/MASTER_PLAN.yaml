@@ -7838,8 +7838,8 @@ epics:
   title: Project Zomboid live validation
   subsystem: live
   integration_scenario: On a Windows machine with Steam and Project Zomboid Build 42.20, against a dedicated
-    test save with a verified backup, all twenty scenarios run to a terminal state, every evidence digest
-    verifies, the panic stop works from the keyboard, and no save is corrupted.
+    test save with a verified backup, every scenario in the catalogue runs to a terminal state, every
+    evidence digest verifies, the panic stop works from the keyboard, and no save is corrupted.
   required_ci: null
   milestones:
   - id: E14-M01
@@ -7999,7 +7999,7 @@ epics:
     tasks:
     - id: E14-M02-T001
       subsystem: live
-      action: Verify the real Build 42.20 API for handshake and heartbeat
+      action: Verify the real Build 42.20 API for Mod installs, loads and is visible from both sides
       weight: 10
       band: live
       owner: local
@@ -8007,7 +8007,7 @@ epics:
       pass_criterion: the symbol exists on the real build and its signature matches the probe
       verify_command: .venv/bin/pz-agent capabilities --verify
       regression_test: ''
-      evidence: evidence/live/api/S01.json
+      evidence: evidence/live/api/S01_INSTALL.json
       status: NOT_STARTED
       implementation_commit: null
       verification_commit: null
@@ -8016,7 +8016,7 @@ epics:
       reason: ''
     - id: E14-M02-T002
       subsystem: live
-      action: Verify the real Build 42.20 API for arm refuses without a backup
+      action: Verify the real Build 42.20 API for Session handshake and two-way heartbeat
       weight: 10
       band: live
       owner: local
@@ -8025,7 +8025,7 @@ epics:
       pass_criterion: the symbol exists on the real build and its signature matches the probe
       verify_command: .venv/bin/pz-agent capabilities --verify
       regression_test: ''
-      evidence: evidence/live/api/S02.json
+      evidence: evidence/live/api/S02_HEARTBEAT.json
       status: NOT_STARTED
       implementation_commit: null
       verification_commit: null
@@ -8034,7 +8034,7 @@ epics:
       reason: ''
     - id: E14-M02-T003
       subsystem: live
-      action: Verify the real Build 42.20 API for arm succeeds with a confirmed backup
+      action: Verify the real Build 42.20 API for Arming grants authority and disarming takes it back
       weight: 10
       band: live
       owner: local
@@ -8043,7 +8043,7 @@ epics:
       pass_criterion: the symbol exists on the real build and its signature matches the probe
       verify_command: .venv/bin/pz-agent capabilities --verify
       regression_test: ''
-      evidence: evidence/live/api/S03.json
+      evidence: evidence/live/api/S03_ARM_DISARM.json
       status: NOT_STARTED
       implementation_commit: null
       verification_commit: null
@@ -8052,7 +8052,7 @@ epics:
       reason: ''
     - id: E14-M02-T004
       subsystem: live
-      action: Verify the real Build 42.20 API for walk to a nearby square
+      action: Verify the real Build 42.20 API for Move to a square and observe arrival
       weight: 10
       band: live
       owner: local
@@ -8061,7 +8061,7 @@ epics:
       pass_criterion: the symbol exists on the real build and its signature matches the probe
       verify_command: .venv/bin/pz-agent capabilities --verify
       regression_test: ''
-      evidence: evidence/live/api/S04.json
+      evidence: evidence/live/api/S04_MOVE.json
       status: NOT_STARTED
       implementation_commit: null
       verification_commit: null
@@ -8070,7 +8070,7 @@ epics:
       reason: ''
     - id: E14-M02-T005
       subsystem: live
-      action: Verify the real Build 42.20 API for open a container
+      action: Verify the real Build 42.20 API for An unreachable square fails with a named reason
       weight: 10
       band: live
       owner: local
@@ -8079,7 +8079,7 @@ epics:
       pass_criterion: the symbol exists on the real build and its signature matches the probe
       verify_command: .venv/bin/pz-agent capabilities --verify
       regression_test: ''
-      evidence: evidence/live/api/S05.json
+      evidence: evidence/live/api/S05_BLOCKED_PATH.json
       status: NOT_STARTED
       implementation_commit: null
       verification_commit: null
@@ -8088,7 +8088,7 @@ epics:
       reason: ''
     - id: E14-M02-T006
       subsystem: live
-      action: Verify the real Build 42.20 API for transfer an item
+      action: Verify the real Build 42.20 API for Moving by hand cancels the agent's action
       weight: 10
       band: live
       owner: local
@@ -8097,7 +8097,7 @@ epics:
       pass_criterion: the symbol exists on the real build and its signature matches the probe
       verify_command: .venv/bin/pz-agent capabilities --verify
       regression_test: ''
-      evidence: evidence/live/api/S06.json
+      evidence: evidence/live/api/S06_MANUAL_TAKEOVER.json
       status: NOT_STARTED
       implementation_commit: null
       verification_commit: null
@@ -8106,7 +8106,7 @@ epics:
       reason: ''
     - id: E14-M02-T007
       subsystem: live
-      action: Verify the real Build 42.20 API for nested inventory observation
+      action: Verify the real Build 42.20 API for Transfer an item out of a bag inside a bag
       weight: 10
       band: live
       owner: local
@@ -8115,7 +8115,7 @@ epics:
       pass_criterion: the symbol exists on the real build and its signature matches the probe
       verify_command: .venv/bin/pz-agent capabilities --verify
       regression_test: ''
-      evidence: evidence/live/api/S07.json
+      evidence: evidence/live/api/S07_NESTED_INVENTORY.json
       status: NOT_STARTED
       implementation_commit: null
       verification_commit: null
@@ -8124,7 +8124,7 @@ epics:
       reason: ''
     - id: E14-M02-T008
       subsystem: live
-      action: Verify the real Build 42.20 API for eat a known-safe food
+      action: Verify the real Build 42.20 API for Rotten food is refused and safe food is chosen
       weight: 10
       band: live
       owner: local
@@ -8133,7 +8133,7 @@ epics:
       pass_criterion: the symbol exists on the real build and its signature matches the probe
       verify_command: .venv/bin/pz-agent capabilities --verify
       regression_test: ''
-      evidence: evidence/live/api/S08.json
+      evidence: evidence/live/api/S08_UNSAFE_FOOD.json
       status: NOT_STARTED
       implementation_commit: null
       verification_commit: null
@@ -8142,7 +8142,7 @@ epics:
       reason: ''
     - id: E14-M02-T009
       subsystem: live
-      action: Verify the real Build 42.20 API for drink from a carried container
+      action: Verify the real Build 42.20 API for Drink from a safe source and observe thirst fall
       weight: 10
       band: live
       owner: local
@@ -8151,7 +8151,7 @@ epics:
       pass_criterion: the symbol exists on the real build and its signature matches the probe
       verify_command: .venv/bin/pz-agent capabilities --verify
       regression_test: ''
-      evidence: evidence/live/api/S09.json
+      evidence: evidence/live/api/S09_DRINK.json
       status: NOT_STARTED
       implementation_commit: null
       verification_commit: null
@@ -8160,7 +8160,7 @@ epics:
       reason: ''
     - id: E14-M02-T010
       subsystem: live
-      action: Verify the real Build 42.20 API for equip a weapon
+      action: Verify the real Build 42.20 API for Read literature with observed progress
       weight: 10
       band: live
       owner: local
@@ -8169,7 +8169,7 @@ epics:
       pass_criterion: the symbol exists on the real build and its signature matches the probe
       verify_command: .venv/bin/pz-agent capabilities --verify
       regression_test: ''
-      evidence: evidence/live/api/S10.json
+      evidence: evidence/live/api/S10_READ.json
       status: NOT_STARTED
       implementation_commit: null
       verification_commit: null
@@ -8178,7 +8178,7 @@ epics:
       reason: ''
     - id: E14-M02-T011
       subsystem: live
-      action: Verify the real Build 42.20 API for read a skill book
+      action: Verify the real Build 42.20 API for Open a world container and read its contents
       weight: 10
       band: live
       owner: local
@@ -8187,7 +8187,7 @@ epics:
       pass_criterion: the symbol exists on the real build and its signature matches the probe
       verify_command: .venv/bin/pz-agent capabilities --verify
       regression_test: ''
-      evidence: evidence/live/api/S11.json
+      evidence: evidence/live/api/S11_CONTAINER.json
       status: NOT_STARTED
       implementation_commit: null
       verification_commit: null
@@ -8196,7 +8196,7 @@ epics:
       reason: ''
     - id: E14-M02-T012
       subsystem: live
-      action: Verify the real Build 42.20 API for apply a bandage
+      action: Verify the real Build 42.20 API for Equip an item into the correct slot
       weight: 10
       band: live
       owner: local
@@ -8205,7 +8205,7 @@ epics:
       pass_criterion: the symbol exists on the real build and its signature matches the probe
       verify_command: .venv/bin/pz-agent capabilities --verify
       regression_test: ''
-      evidence: evidence/live/api/S12.json
+      evidence: evidence/live/api/S12_EQUIPMENT.json
       status: NOT_STARTED
       implementation_commit: null
       verification_commit: null
@@ -8214,7 +8214,7 @@ epics:
       reason: ''
     - id: E14-M02-T013
       subsystem: live
-      action: Verify the real Build 42.20 API for sleep in a bed
+      action: Verify the real Build 42.20 API for Treat a wound and observe the wound state change
       weight: 10
       band: live
       owner: local
@@ -8223,7 +8223,7 @@ epics:
       pass_criterion: the symbol exists on the real build and its signature matches the probe
       verify_command: .venv/bin/pz-agent capabilities --verify
       regression_test: ''
-      evidence: evidence/live/api/S13.json
+      evidence: evidence/live/api/S13_MEDICAL.json
       status: NOT_STARTED
       implementation_commit: null
       verification_commit: null
@@ -8232,7 +8232,7 @@ epics:
       reason: ''
     - id: E14-M02-T014
       subsystem: live
-      action: Verify the real Build 42.20 API for refuse an unverified capability
+      action: Verify the real Build 42.20 API for Rest reduces fatigue and is interruptible
       weight: 10
       band: live
       owner: local
@@ -8241,7 +8241,7 @@ epics:
       pass_criterion: the symbol exists on the real build and its signature matches the probe
       verify_command: .venv/bin/pz-agent capabilities --verify
       regression_test: ''
-      evidence: evidence/live/api/S14.json
+      evidence: evidence/live/api/S14_SLEEP_REST.json
       status: NOT_STARTED
       implementation_commit: null
       verification_commit: null
@@ -8250,7 +8250,7 @@ epics:
       reason: ''
     - id: E14-M02-T015
       subsystem: live
-      action: Verify the real Build 42.20 API for panic stop mid-action
+      action: Verify the real Build 42.20 API for A zombie interrupts a running action
       weight: 10
       band: live
       owner: local
@@ -8259,7 +8259,7 @@ epics:
       pass_criterion: the symbol exists on the real build and its signature matches the probe
       verify_command: .venv/bin/pz-agent capabilities --verify
       regression_test: ''
-      evidence: evidence/live/api/S15.json
+      evidence: evidence/live/api/S15_ZOMBIE_INTERRUPT.json
       status: NOT_STARTED
       implementation_commit: null
       verification_commit: null
@@ -8268,7 +8268,7 @@ epics:
       reason: ''
     - id: E14-M02-T016
       subsystem: live
-      action: Verify the real Build 42.20 API for manual takeover mid-action
+      action: Verify the real Build 42.20 API for The mod stops acting when the sidecar goes silent
       weight: 10
       band: live
       owner: local
@@ -8277,7 +8277,7 @@ epics:
       pass_criterion: the symbol exists on the real build and its signature matches the probe
       verify_command: .venv/bin/pz-agent capabilities --verify
       regression_test: ''
-      evidence: evidence/live/api/S16.json
+      evidence: evidence/live/api/S16_STALE_SIDECAR.json
       status: NOT_STARTED
       implementation_commit: null
       verification_commit: null
@@ -8286,7 +8286,7 @@ epics:
       reason: ''
     - id: E14-M02-T017
       subsystem: live
-      action: Verify the real Build 42.20 API for danger interrupts an interruptible action
+      action: Verify the real Build 42.20 API for Restarting the sidecar recovers rather than replays
       weight: 10
       band: live
       owner: local
@@ -8295,7 +8295,7 @@ epics:
       pass_criterion: the symbol exists on the real build and its signature matches the probe
       verify_command: .venv/bin/pz-agent capabilities --verify
       regression_test: ''
-      evidence: evidence/live/api/S17.json
+      evidence: evidence/live/api/S17_RESTART_RECOVERY.json
       status: NOT_STARTED
       implementation_commit: null
       verification_commit: null
@@ -8304,7 +8304,7 @@ epics:
       reason: ''
     - id: E14-M02-T018
       subsystem: live
-      action: Verify the real Build 42.20 API for idempotent replay
+      action: Verify the real Build 42.20 API for Panic stop clears only what the mod owns
       weight: 10
       band: live
       owner: local
@@ -8313,7 +8313,7 @@ epics:
       pass_criterion: the symbol exists on the real build and its signature matches the probe
       verify_command: .venv/bin/pz-agent capabilities --verify
       regression_test: ''
-      evidence: evidence/live/api/S18.json
+      evidence: evidence/live/api/S18_PANIC.json
       status: NOT_STARTED
       implementation_commit: null
       verification_commit: null
@@ -8322,7 +8322,7 @@ epics:
       reason: ''
     - id: E14-M02-T019
       subsystem: live
-      action: Verify the real Build 42.20 API for session survives a game save
+      action: Verify the real Build 42.20 API for Thirty minutes autonomous inside the bounds
       weight: 10
       band: live
       owner: local
@@ -8331,7 +8331,7 @@ epics:
       pass_criterion: the symbol exists on the real build and its signature matches the probe
       verify_command: .venv/bin/pz-agent capabilities --verify
       regression_test: ''
-      evidence: evidence/live/api/S19.json
+      evidence: evidence/live/api/S19_AUTONOMOUS_30_MIN.json
       status: NOT_STARTED
       implementation_commit: null
       verification_commit: null
@@ -8340,7 +8340,7 @@ epics:
       reason: ''
     - id: E14-M02-T020
       subsystem: live
-      action: Verify the real Build 42.20 API for session ends on character death
+      action: Verify the real Build 42.20 API for Two hours autonomous with no drift
       weight: 10
       band: live
       owner: local
@@ -8349,7 +8349,44 @@ epics:
       pass_criterion: the symbol exists on the real build and its signature matches the probe
       verify_command: .venv/bin/pz-agent capabilities --verify
       regression_test: ''
-      evidence: evidence/live/api/S20.json
+      evidence: evidence/live/api/S20_AUTONOMOUS_2_HOURS.json
+      status: NOT_STARTED
+      implementation_commit: null
+      verification_commit: null
+      commit: null
+      ci_url: null
+      reason: ''
+    - id: E14-M02-T021
+      subsystem: live
+      action: Verify the real Build 42.20 API for Read a recipe, then craft once and observe the product
+      weight: 10
+      band: live
+      owner: local
+      depends_on:
+      - E14-M02-T020
+      pass_criterion: the symbol exists on the real build and its signature matches the probe
+      verify_command: .venv/bin/pz-agent capabilities --verify
+      regression_test: ''
+      evidence: evidence/live/api/S21_CRAFT.json
+      status: NOT_STARTED
+      implementation_commit: null
+      verification_commit: null
+      commit: null
+      ci_url: null
+      reason: ''
+    - id: E14-M02-T022
+      subsystem: live
+      action: Verify the real Build 42.20 API for A wall that would seal the character in is refused;
+        a wall that would not is raised
+      weight: 10
+      band: live
+      owner: local
+      depends_on:
+      - E14-M02-T021
+      pass_criterion: the symbol exists on the real build and its signature matches the probe
+      verify_command: .venv/bin/pz-agent capabilities --verify
+      regression_test: ''
+      evidence: evidence/live/api/S22_BUILD.json
       status: NOT_STARTED
       implementation_commit: null
       verification_commit: null
@@ -8363,19 +8400,19 @@ epics:
       status: NOT_STARTED
       evidence: ''
   - id: E14-M03
-    title: The twenty scenarios
+    title: The live scenarios
     tasks:
     - id: E14-M03-T001
       subsystem: live
-      action: Run live scenario S01 — handshake and heartbeat
+      action: Run live scenario S01_INSTALL — Mod installs, loads and is visible from both sides
       weight: 10
       band: live
       owner: local
       depends_on: []
       pass_criterion: the scenario reaches POSTCONDITION_MET with observed evidence, or records why not
-      verify_command: .venv/bin/pz-agent livetest run S01
+      verify_command: .venv/bin/pz-agent live-test run --scenario S01_INSTALL
       regression_test: ''
-      evidence: evidence/live/S01/result.json
+      evidence: evidence/S01_INSTALL/result.json
       status: NOT_STARTED
       implementation_commit: null
       verification_commit: null
@@ -8384,16 +8421,16 @@ epics:
       reason: ''
     - id: E14-M03-T002
       subsystem: live
-      action: Run live scenario S02 — arm refuses without a backup
+      action: Run live scenario S02_HEARTBEAT — Session handshake and two-way heartbeat
       weight: 10
       band: live
       owner: local
       depends_on:
       - E14-M03-T001
       pass_criterion: the scenario reaches POSTCONDITION_MET with observed evidence, or records why not
-      verify_command: .venv/bin/pz-agent livetest run S02
+      verify_command: .venv/bin/pz-agent live-test run --scenario S02_HEARTBEAT
       regression_test: ''
-      evidence: evidence/live/S02/result.json
+      evidence: evidence/S02_HEARTBEAT/result.json
       status: NOT_STARTED
       implementation_commit: null
       verification_commit: null
@@ -8402,16 +8439,16 @@ epics:
       reason: ''
     - id: E14-M03-T003
       subsystem: live
-      action: Run live scenario S03 — arm succeeds with a confirmed backup
+      action: Run live scenario S03_ARM_DISARM — Arming grants authority and disarming takes it back
       weight: 10
       band: live
       owner: local
       depends_on:
       - E14-M03-T002
       pass_criterion: the scenario reaches POSTCONDITION_MET with observed evidence, or records why not
-      verify_command: .venv/bin/pz-agent livetest run S03
+      verify_command: .venv/bin/pz-agent live-test run --scenario S03_ARM_DISARM
       regression_test: ''
-      evidence: evidence/live/S03/result.json
+      evidence: evidence/S03_ARM_DISARM/result.json
       status: NOT_STARTED
       implementation_commit: null
       verification_commit: null
@@ -8420,16 +8457,16 @@ epics:
       reason: ''
     - id: E14-M03-T004
       subsystem: live
-      action: Run live scenario S04 — walk to a nearby square
+      action: Run live scenario S04_MOVE — Move to a square and observe arrival
       weight: 10
       band: live
       owner: local
       depends_on:
       - E14-M03-T003
       pass_criterion: the scenario reaches POSTCONDITION_MET with observed evidence, or records why not
-      verify_command: .venv/bin/pz-agent livetest run S04
+      verify_command: .venv/bin/pz-agent live-test run --scenario S04_MOVE
       regression_test: ''
-      evidence: evidence/live/S04/result.json
+      evidence: evidence/S04_MOVE/result.json
       status: NOT_STARTED
       implementation_commit: null
       verification_commit: null
@@ -8438,16 +8475,16 @@ epics:
       reason: ''
     - id: E14-M03-T005
       subsystem: live
-      action: Run live scenario S05 — open a container
+      action: Run live scenario S05_BLOCKED_PATH — An unreachable square fails with a named reason
       weight: 10
       band: live
       owner: local
       depends_on:
       - E14-M03-T004
       pass_criterion: the scenario reaches POSTCONDITION_MET with observed evidence, or records why not
-      verify_command: .venv/bin/pz-agent livetest run S05
+      verify_command: .venv/bin/pz-agent live-test run --scenario S05_BLOCKED_PATH
       regression_test: ''
-      evidence: evidence/live/S05/result.json
+      evidence: evidence/S05_BLOCKED_PATH/result.json
       status: NOT_STARTED
       implementation_commit: null
       verification_commit: null
@@ -8456,16 +8493,16 @@ epics:
       reason: ''
     - id: E14-M03-T006
       subsystem: live
-      action: Run live scenario S06 — transfer an item
+      action: Run live scenario S06_MANUAL_TAKEOVER — Moving by hand cancels the agent's action
       weight: 10
       band: live
       owner: local
       depends_on:
       - E14-M03-T005
       pass_criterion: the scenario reaches POSTCONDITION_MET with observed evidence, or records why not
-      verify_command: .venv/bin/pz-agent livetest run S06
+      verify_command: .venv/bin/pz-agent live-test run --scenario S06_MANUAL_TAKEOVER
       regression_test: ''
-      evidence: evidence/live/S06/result.json
+      evidence: evidence/S06_MANUAL_TAKEOVER/result.json
       status: NOT_STARTED
       implementation_commit: null
       verification_commit: null
@@ -8474,16 +8511,16 @@ epics:
       reason: ''
     - id: E14-M03-T007
       subsystem: live
-      action: Run live scenario S07 — nested inventory observation
+      action: Run live scenario S07_NESTED_INVENTORY — Transfer an item out of a bag inside a bag
       weight: 10
       band: live
       owner: local
       depends_on:
       - E14-M03-T006
       pass_criterion: the scenario reaches POSTCONDITION_MET with observed evidence, or records why not
-      verify_command: .venv/bin/pz-agent livetest run S07
+      verify_command: .venv/bin/pz-agent live-test run --scenario S07_NESTED_INVENTORY
       regression_test: ''
-      evidence: evidence/live/S07/result.json
+      evidence: evidence/S07_NESTED_INVENTORY/result.json
       status: NOT_STARTED
       implementation_commit: null
       verification_commit: null
@@ -8492,16 +8529,16 @@ epics:
       reason: ''
     - id: E14-M03-T008
       subsystem: live
-      action: Run live scenario S08 — eat a known-safe food
+      action: Run live scenario S08_UNSAFE_FOOD — Rotten food is refused and safe food is chosen
       weight: 10
       band: live
       owner: local
       depends_on:
       - E14-M03-T007
       pass_criterion: the scenario reaches POSTCONDITION_MET with observed evidence, or records why not
-      verify_command: .venv/bin/pz-agent livetest run S08
+      verify_command: .venv/bin/pz-agent live-test run --scenario S08_UNSAFE_FOOD
       regression_test: ''
-      evidence: evidence/live/S08/result.json
+      evidence: evidence/S08_UNSAFE_FOOD/result.json
       status: NOT_STARTED
       implementation_commit: null
       verification_commit: null
@@ -8510,16 +8547,16 @@ epics:
       reason: ''
     - id: E14-M03-T009
       subsystem: live
-      action: Run live scenario S09 — drink from a carried container
+      action: Run live scenario S09_DRINK — Drink from a safe source and observe thirst fall
       weight: 10
       band: live
       owner: local
       depends_on:
       - E14-M03-T008
       pass_criterion: the scenario reaches POSTCONDITION_MET with observed evidence, or records why not
-      verify_command: .venv/bin/pz-agent livetest run S09
+      verify_command: .venv/bin/pz-agent live-test run --scenario S09_DRINK
       regression_test: ''
-      evidence: evidence/live/S09/result.json
+      evidence: evidence/S09_DRINK/result.json
       status: NOT_STARTED
       implementation_commit: null
       verification_commit: null
@@ -8528,16 +8565,16 @@ epics:
       reason: ''
     - id: E14-M03-T010
       subsystem: live
-      action: Run live scenario S10 — equip a weapon
+      action: Run live scenario S10_READ — Read literature with observed progress
       weight: 10
       band: live
       owner: local
       depends_on:
       - E14-M03-T009
       pass_criterion: the scenario reaches POSTCONDITION_MET with observed evidence, or records why not
-      verify_command: .venv/bin/pz-agent livetest run S10
+      verify_command: .venv/bin/pz-agent live-test run --scenario S10_READ
       regression_test: ''
-      evidence: evidence/live/S10/result.json
+      evidence: evidence/S10_READ/result.json
       status: NOT_STARTED
       implementation_commit: null
       verification_commit: null
@@ -8546,16 +8583,16 @@ epics:
       reason: ''
     - id: E14-M03-T011
       subsystem: live
-      action: Run live scenario S11 — read a skill book
+      action: Run live scenario S11_CONTAINER — Open a world container and read its contents
       weight: 10
       band: live
       owner: local
       depends_on:
       - E14-M03-T010
       pass_criterion: the scenario reaches POSTCONDITION_MET with observed evidence, or records why not
-      verify_command: .venv/bin/pz-agent livetest run S11
+      verify_command: .venv/bin/pz-agent live-test run --scenario S11_CONTAINER
       regression_test: ''
-      evidence: evidence/live/S11/result.json
+      evidence: evidence/S11_CONTAINER/result.json
       status: NOT_STARTED
       implementation_commit: null
       verification_commit: null
@@ -8564,16 +8601,16 @@ epics:
       reason: ''
     - id: E14-M03-T012
       subsystem: live
-      action: Run live scenario S12 — apply a bandage
+      action: Run live scenario S12_EQUIPMENT — Equip an item into the correct slot
       weight: 10
       band: live
       owner: local
       depends_on:
       - E14-M03-T011
       pass_criterion: the scenario reaches POSTCONDITION_MET with observed evidence, or records why not
-      verify_command: .venv/bin/pz-agent livetest run S12
+      verify_command: .venv/bin/pz-agent live-test run --scenario S12_EQUIPMENT
       regression_test: ''
-      evidence: evidence/live/S12/result.json
+      evidence: evidence/S12_EQUIPMENT/result.json
       status: NOT_STARTED
       implementation_commit: null
       verification_commit: null
@@ -8582,16 +8619,16 @@ epics:
       reason: ''
     - id: E14-M03-T013
       subsystem: live
-      action: Run live scenario S13 — sleep in a bed
+      action: Run live scenario S13_MEDICAL — Treat a wound and observe the wound state change
       weight: 10
       band: live
       owner: local
       depends_on:
       - E14-M03-T012
       pass_criterion: the scenario reaches POSTCONDITION_MET with observed evidence, or records why not
-      verify_command: .venv/bin/pz-agent livetest run S13
+      verify_command: .venv/bin/pz-agent live-test run --scenario S13_MEDICAL
       regression_test: ''
-      evidence: evidence/live/S13/result.json
+      evidence: evidence/S13_MEDICAL/result.json
       status: NOT_STARTED
       implementation_commit: null
       verification_commit: null
@@ -8600,16 +8637,16 @@ epics:
       reason: ''
     - id: E14-M03-T014
       subsystem: live
-      action: Run live scenario S14 — refuse an unverified capability
+      action: Run live scenario S14_SLEEP_REST — Rest reduces fatigue and is interruptible
       weight: 10
       band: live
       owner: local
       depends_on:
       - E14-M03-T013
       pass_criterion: the scenario reaches POSTCONDITION_MET with observed evidence, or records why not
-      verify_command: .venv/bin/pz-agent livetest run S14
+      verify_command: .venv/bin/pz-agent live-test run --scenario S14_SLEEP_REST
       regression_test: ''
-      evidence: evidence/live/S14/result.json
+      evidence: evidence/S14_SLEEP_REST/result.json
       status: NOT_STARTED
       implementation_commit: null
       verification_commit: null
@@ -8618,16 +8655,16 @@ epics:
       reason: ''
     - id: E14-M03-T015
       subsystem: live
-      action: Run live scenario S15 — panic stop mid-action
+      action: Run live scenario S15_ZOMBIE_INTERRUPT — A zombie interrupts a running action
       weight: 10
       band: live
       owner: local
       depends_on:
       - E14-M03-T014
       pass_criterion: the scenario reaches POSTCONDITION_MET with observed evidence, or records why not
-      verify_command: .venv/bin/pz-agent livetest run S15
+      verify_command: .venv/bin/pz-agent live-test run --scenario S15_ZOMBIE_INTERRUPT
       regression_test: ''
-      evidence: evidence/live/S15/result.json
+      evidence: evidence/S15_ZOMBIE_INTERRUPT/result.json
       status: NOT_STARTED
       implementation_commit: null
       verification_commit: null
@@ -8636,16 +8673,16 @@ epics:
       reason: ''
     - id: E14-M03-T016
       subsystem: live
-      action: Run live scenario S16 — manual takeover mid-action
+      action: Run live scenario S16_STALE_SIDECAR — The mod stops acting when the sidecar goes silent
       weight: 10
       band: live
       owner: local
       depends_on:
       - E14-M03-T015
       pass_criterion: the scenario reaches POSTCONDITION_MET with observed evidence, or records why not
-      verify_command: .venv/bin/pz-agent livetest run S16
+      verify_command: .venv/bin/pz-agent live-test run --scenario S16_STALE_SIDECAR
       regression_test: ''
-      evidence: evidence/live/S16/result.json
+      evidence: evidence/S16_STALE_SIDECAR/result.json
       status: NOT_STARTED
       implementation_commit: null
       verification_commit: null
@@ -8654,16 +8691,16 @@ epics:
       reason: ''
     - id: E14-M03-T017
       subsystem: live
-      action: Run live scenario S17 — danger interrupts an interruptible action
+      action: Run live scenario S17_RESTART_RECOVERY — Restarting the sidecar recovers rather than replays
       weight: 10
       band: live
       owner: local
       depends_on:
       - E14-M03-T016
       pass_criterion: the scenario reaches POSTCONDITION_MET with observed evidence, or records why not
-      verify_command: .venv/bin/pz-agent livetest run S17
+      verify_command: .venv/bin/pz-agent live-test run --scenario S17_RESTART_RECOVERY
       regression_test: ''
-      evidence: evidence/live/S17/result.json
+      evidence: evidence/S17_RESTART_RECOVERY/result.json
       status: NOT_STARTED
       implementation_commit: null
       verification_commit: null
@@ -8672,16 +8709,16 @@ epics:
       reason: ''
     - id: E14-M03-T018
       subsystem: live
-      action: Run live scenario S18 — idempotent replay
+      action: Run live scenario S18_PANIC — Panic stop clears only what the mod owns
       weight: 10
       band: live
       owner: local
       depends_on:
       - E14-M03-T017
       pass_criterion: the scenario reaches POSTCONDITION_MET with observed evidence, or records why not
-      verify_command: .venv/bin/pz-agent livetest run S18
+      verify_command: .venv/bin/pz-agent live-test run --scenario S18_PANIC
       regression_test: ''
-      evidence: evidence/live/S18/result.json
+      evidence: evidence/S18_PANIC/result.json
       status: NOT_STARTED
       implementation_commit: null
       verification_commit: null
@@ -8690,16 +8727,16 @@ epics:
       reason: ''
     - id: E14-M03-T019
       subsystem: live
-      action: Run live scenario S19 — session survives a game save
+      action: Run live scenario S19_AUTONOMOUS_30_MIN — Thirty minutes autonomous inside the bounds
       weight: 10
       band: live
       owner: local
       depends_on:
       - E14-M03-T018
       pass_criterion: the scenario reaches POSTCONDITION_MET with observed evidence, or records why not
-      verify_command: .venv/bin/pz-agent livetest run S19
+      verify_command: .venv/bin/pz-agent live-test run --scenario S19_AUTONOMOUS_30_MIN
       regression_test: ''
-      evidence: evidence/live/S19/result.json
+      evidence: evidence/S19_AUTONOMOUS_30_MIN/result.json
       status: NOT_STARTED
       implementation_commit: null
       verification_commit: null
@@ -8708,16 +8745,53 @@ epics:
       reason: ''
     - id: E14-M03-T020
       subsystem: live
-      action: Run live scenario S20 — session ends on character death
+      action: Run live scenario S20_AUTONOMOUS_2_HOURS — Two hours autonomous with no drift
       weight: 10
       band: live
       owner: local
       depends_on:
       - E14-M03-T019
       pass_criterion: the scenario reaches POSTCONDITION_MET with observed evidence, or records why not
-      verify_command: .venv/bin/pz-agent livetest run S20
+      verify_command: .venv/bin/pz-agent live-test run --scenario S20_AUTONOMOUS_2_HOURS
       regression_test: ''
-      evidence: evidence/live/S20/result.json
+      evidence: evidence/S20_AUTONOMOUS_2_HOURS/result.json
+      status: NOT_STARTED
+      implementation_commit: null
+      verification_commit: null
+      commit: null
+      ci_url: null
+      reason: ''
+    - id: E14-M03-T021
+      subsystem: live
+      action: Run live scenario S21_CRAFT — Read a recipe, then craft once and observe the product
+      weight: 10
+      band: live
+      owner: local
+      depends_on:
+      - E14-M03-T020
+      pass_criterion: the scenario reaches POSTCONDITION_MET with observed evidence, or records why not
+      verify_command: .venv/bin/pz-agent live-test run --scenario S21_CRAFT
+      regression_test: ''
+      evidence: evidence/S21_CRAFT/result.json
+      status: NOT_STARTED
+      implementation_commit: null
+      verification_commit: null
+      commit: null
+      ci_url: null
+      reason: ''
+    - id: E14-M03-T022
+      subsystem: live
+      action: Run live scenario S22_BUILD — A wall that would seal the character in is refused; a wall
+        that would not is raised
+      weight: 10
+      band: live
+      owner: local
+      depends_on:
+      - E14-M03-T021
+      pass_criterion: the scenario reaches POSTCONDITION_MET with observed evidence, or records why not
+      verify_command: .venv/bin/pz-agent live-test run --scenario S22_BUILD
+      regression_test: ''
+      evidence: evidence/S22_BUILD/result.json
       status: NOT_STARTED
       implementation_commit: null
       verification_commit: null
@@ -8727,7 +8801,7 @@ epics:
     checks:
     - id: E14-M03-C01
       statement: Every scenario reached a terminal state; none is NOT_RUN.
-      command: read evidence/live/manifest.json
+      command: read release/evidence-manifest.json
       status: NOT_STARTED
       evidence: ''
   - id: E14-M04
@@ -8741,9 +8815,9 @@ epics:
       owner: local
       depends_on: []
       pass_criterion: each scenario has its artefacts and digests
-      verify_command: .venv/bin/pz-agent livetest collect
+      verify_command: .venv/bin/pz-agent live-test collect
       regression_test: ''
-      evidence: evidence/live/manifest.json
+      evidence: release/evidence-manifest.json
       status: NOT_STARTED
       implementation_commit: null
       verification_commit: null
@@ -8759,9 +8833,9 @@ epics:
       depends_on:
       - E14-M04-T001
       pass_criterion: the release gate passes over the tree
-      verify_command: .venv/bin/python scripts/check_release.py
+      verify_command: .venv/bin/python scripts/check_release.py --release
       regression_test: ''
-      evidence: evidence/live/manifest.json
+      evidence: release/evidence-manifest.json
       status: NOT_STARTED
       implementation_commit: null
       verification_commit: null
@@ -8777,9 +8851,9 @@ epics:
       depends_on:
       - E14-M04-T002
       pass_criterion: NOT_RUN and BLOCKED are distinguished from FAIL
-      verify_command: .venv/bin/pz-agent livetest report
+      verify_command: .venv/bin/pz-agent live-test status
       regression_test: ''
-      evidence: evidence/live/manifest.json
+      evidence: release/evidence-manifest.json
       status: NOT_STARTED
       implementation_commit: null
       verification_commit: null
@@ -8795,7 +8869,7 @@ epics:
       depends_on:
       - E14-M04-T003
       pass_criterion: each is named with its symbol and build
-      verify_command: .venv/bin/pz-agent livetest report
+      verify_command: .venv/bin/pz-agent live-test status
       regression_test: ''
       evidence: evidence/live/incompatibilities.json
       status: NOT_STARTED
@@ -8813,9 +8887,9 @@ epics:
       depends_on:
       - E14-M04-T004
       pass_criterion: each fix has a test and a re-run scenario
-      verify_command: .venv/bin/pz-agent livetest run
+      verify_command: .venv/bin/pz-agent live-test run
       regression_test: ''
-      evidence: evidence/live/manifest.json
+      evidence: release/evidence-manifest.json
       status: NOT_STARTED
       implementation_commit: null
       verification_commit: null
@@ -8831,9 +8905,9 @@ epics:
       depends_on:
       - E14-M04-T005
       pass_criterion: the affected scenarios pass after the fix
-      verify_command: .venv/bin/pz-agent livetest run
+      verify_command: .venv/bin/pz-agent live-test run
       regression_test: ''
-      evidence: evidence/live/manifest.json
+      evidence: release/evidence-manifest.json
       status: NOT_STARTED
       implementation_commit: null
       verification_commit: null
@@ -8851,7 +8925,7 @@ epics:
       pass_criterion: the hotkey stops the agent within one tick
       verify_command: follow docs/LIVE_TEST_PLAYBOOK.md
       regression_test: ''
-      evidence: evidence/live/S15/result.json
+      evidence: evidence/S18_PANIC/result.json
       status: NOT_STARTED
       implementation_commit: null
       verification_commit: null
@@ -8869,7 +8943,7 @@ epics:
       pass_criterion: the save loads and the backup still matches
       verify_command: follow docs/LIVE_TEST_PLAYBOOK.md
       regression_test: ''
-      evidence: evidence/live/manifest.json
+      evidence: release/evidence-manifest.json
       status: NOT_STARTED
       implementation_commit: null
       verification_commit: null
@@ -9135,9 +9209,9 @@ epics:
       depends_on:
       - E15-M01-T009
       pass_criterion: the affected scenarios pass
-      verify_command: .venv/bin/pz-agent livetest run
+      verify_command: .venv/bin/pz-agent live-test run
       regression_test: ''
-      evidence: evidence/live/manifest.json
+      evidence: release/evidence-manifest.json
       status: NOT_STARTED
       implementation_commit: null
       verification_commit: null

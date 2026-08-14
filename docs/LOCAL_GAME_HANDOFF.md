@@ -12,9 +12,9 @@ exactly how to run it.
 | Repository | `natural0101/poject-zombigpt` |
 | Branch | `main` |
 | Base | — `feature/playable-agent-1.0` (base `dev`) is merged in, and `main` has moved past it |
-| Merged into `main`? | **Yes.** An earlier revision of this row said no, and that merging would wait for live evidence. The merge has since happened — `fef7edd` brought the Windows, MCP and voice runtime work into `main` — and evidence still does not exist: all twenty scenarios remain `NOT_RUN`. What still waits for evidence is the tag and the release. See §4. |
+| Merged into `main`? | **Yes.** An earlier revision of this row said no, and that merging would wait for live evidence. The merge has since happened — `fef7edd` brought the Windows, MCP and voice runtime work into `main` — and evidence still does not exist: all twenty-two scenarios remain `NOT_RUN`. What still waits for evidence is the tag and the release. See §4. |
 | Tag | **None.** `v1.0.0` is deliberately not created. See §4. |
-| Release candidate | `dist/pz-agent-windows-v1.0.0-rc1.zip` — built here without the two Windows executables; see §5 |
+| Release candidate | `pz-agent-windows-v1.0.0-rc1.zip`, built by the `windows package` workflow and uploaded as the `pz-agent-windows-rc` artifact. That build is the artefact of record: it is the only one that contains the two Windows executables, because they are compiled on the Windows runner. A local `build_rc.py` here produces an archive without them, which is useful for checking the layout and is not a release candidate. `docs/control/EVIDENCE_INDEX.md` carries the commit, run and digest of the current one; see §5 |
 
 ```
 git fetch --all --prune
@@ -201,15 +201,15 @@ Everything below ran and passed in the remote environment:
   Lua files in the archive parse. The archive had been built and checksummed
   several times without anyone installing from it, which is a different claim;
 - **the live-test runner's own commands**, as far as they go without a game.
-  `live-test status` on a fresh state directory lists all twenty scenarios as
-  `NOT_RUN`. `live-test prepare` refuses without `--save <mode>/<name>` — there
+  `live-test status` on a fresh state directory lists all twenty-two scenarios
+  as `NOT_RUN`. `live-test prepare` refuses without `--save <mode>/<name>` — there
   is no default, because guessing which world to experiment on is how a main
   save gets used — and exits 1. **An earlier revision of this line said prepare
-  "writes nothing when it refuses". That was wrong.** It creates the twenty
-  scenario directories first, every time, and then refuses; what it withholds is
+  "writes nothing when it refuses". That was wrong.** It creates a directory per
+  scenario first, every time, and then refuses; what it withholds is
   `prepare.json`, the record that says the tree is ready. Scaffolding, not
   evidence — but "writes nothing" invited you to believe a failed prepare left
-  no trace, and it leaves twenty directories. `live-test finalize` refuses and
+  no trace, and it leaves one directory per scenario. `live-test finalize` refuses and
   names every missing artefact, one line each;
 - **the support bundle, with a real secret and a real home path planted in the
   logs.** `logs --bundle --verify` struck out an AWS-shaped key, a private-key
@@ -244,7 +244,7 @@ Everything below ran and passed in the remote environment:
 - **that `run` and `resume` refuse until prepare has completed.** They did not.
   `prepare.json` was written by `prepare` and read by nothing, so the check
   proving you named a test save and hold a backup that reads back produced a
-  record nobody consulted, and twenty deliberately destructive scenarios would
+  record nobody consulted, and the deliberately destructive scenarios would
   start regardless. They now refuse and name the command to fix it. `status` and
   `collect` are deliberately not gated: reading the table and gathering logs
   change nothing, and gating them would leave you unable to see why you are
@@ -339,7 +339,7 @@ This is the honest part, and the reason this handoff exists.
 is a Linux container: no Windows, no Steam, no Wine, no game. So none of the
 following was done, and none of it is claimed:
 
-- **S01–S20 live scenarios.** All twenty are `NOT_RUN`. The runner's initial
+- **S01–S22 live scenarios.** All twenty-two are `NOT_RUN`. The runner's initial
   state is `NOT_RUN` precisely so that a scenario nobody ran cannot report a
   pass.
 - **The 30-minute and 2-hour endurance runs.**
@@ -559,7 +559,7 @@ result that closed it. The trace is bounded and rotates, so a long scenario
 keeps its recent past rather than the whole run — run `live-test collect` at the
 end of each scenario rather than at the end of the day. `collect` takes the
 current file and every rotated generation into that scenario's `logs/`, without
-being asked: the twenty scenarios' `logs` lists were written when nothing
+being asked: the scenarios' `logs` lists were written when nothing
 produced a trace, so none of them names one.
 
 Send the archive together with:

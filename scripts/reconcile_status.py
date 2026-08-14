@@ -34,6 +34,15 @@ from typing import Any, Final
 REPO_ROOT: Final = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:  # pragma: no cover - import plumbing
     sys.path.insert(0, str(REPO_ROOT))
+for _package in (  # pragma: no cover - import plumbing
+    "pz_agent_cli",
+    "pz_agent_core",
+    "pz_agent_mcp",
+    "pz_agent_voice",
+):
+    _source = REPO_ROOT / "packages" / _package / "src"
+    if _source.is_dir() and str(_source) not in sys.path:
+        sys.path.insert(0, str(_source))
 
 from scripts import check_master_plan, master_report  # noqa: E402
 
@@ -47,6 +56,26 @@ CI_STATES: Final = ("GREEN", "RED", "PENDING", "NOT_RUN")
 #: no fourth state, because "recent" is the word that let a stale ZIP be treated
 #: as a certification.
 RC_STATES: Final = ("CURRENT", "STALE", "NOT_BUILT")
+
+
+def live_scenario_count() -> int:
+    """How many live scenarios there are, asked of the catalogue that defines them.
+
+    This was the literal ``20``. Two scenarios — ``S21_CRAFT`` and ``S22_BUILD``
+    — were added afterwards and the literal did not move, so STATUS reported
+    twenty scenarios awaiting a game while the runner owed twenty-two. It is the
+    same defect the CLI already had once, where ``live-test status`` printed
+    "All twenty" directly above a tally reading 22; that fix replaced the word in
+    one file and this file kept the number.
+
+    A number that is *counted* cannot drift, so the count is taken here and an
+    unreadable catalogue is a hard failure rather than a fallback. A fallback
+    would be a guess, and a guessed number in STATUS.json is precisely the class
+    of value this script exists to make impossible.
+    """
+    from pz_agent_cli.livetest.scenarios import SCENARIO_IDS  # noqa: PLC0415
+
+    return len(SCENARIO_IDS)
 
 
 def head() -> str:
@@ -137,7 +166,7 @@ def build(arguments: argparse.Namespace) -> dict[str, Any]:
             "archive_sha256": arguments.rc_sha256,
             "live_game": "NOT_RUN",
         },
-        "live_scenarios": {"passed": 0, "failed": 0, "not_run": 20},
+        "live_scenarios": {"passed": 0, "failed": 0, "not_run": live_scenario_count()},
         "blockers_document": "docs/control/BLOCKERS.md",
     }
 

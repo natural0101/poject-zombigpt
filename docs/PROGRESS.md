@@ -229,30 +229,37 @@ The tooling, all of it gates rather than reports:
   admitted — without which a gate that rejected everything would satisfy them
   all.
 
-### The figures, as of `521f1e4`
+### The figures, as of `5fcab5d`
 
 Run `.venv/bin/python scripts/master_report.py` for the current ones; these are
 not maintained by hand and will drift.
 
 ```
-OVERALL WEIGHTED PROGRESS: 40.1%  (1244/3104 weight)
-TOTAL TASKS 480 · PASS 218 · IN_PROGRESS 33 · FAIL 0 · BLOCKED 0 · NOT_STARTED 229
-CHECKS: 0/54 PASS
+OVERALL WEIGHTED PROGRESS: 73.3%  (2305/3144 weight)
+TOTAL TASKS 484 · PASS 400 · IN_PROGRESS 0 · FAIL 0 · BLOCKED 0 · NOT_STARTED 84
+CHECKS: 48/54 PASS
 
-CODE IMPLEMENTATION    56.2%   (682/1213)
-WINDOWS COMPATIBILITY  89.3%   (259/290)
-MCP OPERABILITY        58.3%   (154/264)
-VOICE OPERABILITY       0.0%   (0/324)
-RC PACKAGING           17.3%   (35/202)
-LIVE GAME VALIDATION    0.0%   (0/599)
+CODE IMPLEMENTATION   100.0%   (1213/1213)
+WINDOWS COMPATIBILITY 100.0%   (290/290)
+MCP OPERABILITY       100.0%   (264/264)
+VOICE OPERABILITY     100.0%   (324/324)
+RC PACKAGING          100.0%   (202/202)
+LIVE GAME VALIDATION    0.0%   (0/639)
 FINAL RELEASE           0.0%   (0/200)
 ```
 
-Three of those seven are at zero. **Live game validation is 599 of 3104 weight —
-a fifth of the project — and nothing in this environment can move it**, because
-nothing here can start Project Zomboid. Every task in those epics is owned
-`local`, and the gate refuses to mark one `PASS` from here at all. "Done" is not
-a word that applies to this build.
+Five of those seven are at 100% and two are at zero, which is the whole shape of
+this build. **Live game validation is 639 of 3144 weight — a fifth of the
+project — and nothing in this environment can move it**, because nothing here
+can start Project Zomboid. Every task in those epics is owned `local`, and the
+gate refuses to mark one `PASS` from here at all. "Done" is not a word that
+applies to this build.
+
+The live total grew from 599 to 639 when `E14` was regenerated from the
+runner's scenario catalogue: the plan had been carrying twenty hand-written
+scenarios, two fewer than exist, and eighteen of them named a different
+scenario from the id they select. The percentage went *down* as a result, which
+is what a corrected denominator does.
 
 ## Status
 

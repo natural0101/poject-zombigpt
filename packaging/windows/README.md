@@ -111,7 +111,7 @@ python scripts/check_release.py --release --junit pytest.xml
 
 `--rc` wants the archive to be complete, its digests to match, and a test report
 showing a green suite. `--release` wants all of that **and**
-`release/evidence-manifest.json` — twenty scenarios at PASS, each artefact
-hashed. That file is written only by `pz-agent live-test finalize` after the
+`release/evidence-manifest.json` — every scenario in the catalogue at PASS, each
+artefact hashed. That file is written only by `pz-agent live-test finalize` after the
 scenarios have been run inside the game, so `--release` fails here today and
 will keep failing until somebody plays the game with this attached.

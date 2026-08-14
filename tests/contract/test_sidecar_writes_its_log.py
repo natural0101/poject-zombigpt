@@ -1,11 +1,11 @@
-"""The sidecar writes the log nineteen scenarios tell an operator to collect.
+"""The sidecar writes the log all but one scenario tells an operator to collect.
 
 ``DiagnosticLog`` was written, tested, rotated, redacted, level-filtered — and
 constructed nowhere outside the test suite. So ``logs/pz-agent.log`` and
 ``logs/pz-agent.jsonl`` did not exist, could not exist, and:
 
-- nineteen of the twenty live scenarios name ``pz-agent.log`` among the logs to
-  collect, and three name ``pz-agent.jsonl``;
+- twenty-one of the twenty-two live scenarios name ``pz-agent.log`` among the
+  logs to collect, and three name ``pz-agent.jsonl``;
 - ``docs/LOCAL_DEBUG_MAP.md`` sends an operator to it by name;
 - ``pz-agent logs`` reads it;
 - ``pz-agent logs --bundle`` packs the directory it lives in, and
@@ -69,7 +69,7 @@ def test_a_session_leaves_both_log_files_behind(tmp_path: Path) -> None:
 
     for name in (HUMAN, STRUCTURED):
         path = _logs_dir(world) / name
-        assert path.is_file(), f"{name} was not written; nineteen scenarios ask for it"
+        assert path.is_file(), f"{name} was not written; the scenarios ask for it"
         assert path.read_text(encoding="utf-8").strip(), f"{name} is empty"
 
 

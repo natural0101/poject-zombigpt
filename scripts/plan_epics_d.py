@@ -10,8 +10,23 @@ thing works in the game, stayed unanswered.
 
 from __future__ import annotations
 
-from scripts.plan_epics_a import CI, RC, _tasks
-from scripts.plan_model import Check, Epic, Milestone
+import sys
+from pathlib import Path
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+for _package in (  # pragma: no cover - import plumbing
+    "pz_agent_cli",
+    "pz_agent_core",
+    "pz_agent_mcp",
+    "pz_agent_voice",
+):
+    _source = _REPO_ROOT / "packages" / _package / "src"
+    if _source.is_dir() and str(_source) not in sys.path:
+        sys.path.insert(0, str(_source))
+
+from pz_agent_cli.livetest.scenarios import SCENARIOS  # noqa: E402
+from scripts.plan_epics_a import CI, RC, _tasks  # noqa: E402
+from scripts.plan_model import Check, Epic, Milestone  # noqa: E402
 
 T = "tests/unit"
 C = "tests/contract"
@@ -848,28 +863,19 @@ E13 = Epic(
 # E14 — Project Zomboid live validation (60, band "live", owner local)
 # ---------------------------------------------------------------------------
 
-_SCENARIOS = [
-    ("S01", "handshake and heartbeat"),
-    ("S02", "arm refuses without a backup"),
-    ("S03", "arm succeeds with a confirmed backup"),
-    ("S04", "walk to a nearby square"),
-    ("S05", "open a container"),
-    ("S06", "transfer an item"),
-    ("S07", "nested inventory observation"),
-    ("S08", "eat a known-safe food"),
-    ("S09", "drink from a carried container"),
-    ("S10", "equip a weapon"),
-    ("S11", "read a skill book"),
-    ("S12", "apply a bandage"),
-    ("S13", "sleep in a bed"),
-    ("S14", "refuse an unverified capability"),
-    ("S15", "panic stop mid-action"),
-    ("S16", "manual takeover mid-action"),
-    ("S17", "danger interrupts an interruptible action"),
-    ("S18", "idempotent replay"),
-    ("S19", "session survives a game save"),
-    ("S20", "session ends on character death"),
-]
+#: The live scenarios, taken from the catalogue the runner dispatches on.
+#:
+#: This was a hand-written list of twenty pairs, and it had drifted into a
+#: different set of scenarios from the ones that exist. The plan's ``S05`` was
+#: "open a container"; the runner's ``S05_BLOCKED_PATH`` is a walk into a wall.
+#: Eighteen of the twenty named a scenario other than the one their id selects,
+#: ``S21_CRAFT`` and ``S22_BUILD`` had no task at all, and the verify command
+#: pointed at a subcommand — ``livetest`` — that the CLI does not have. So the
+#: plan of record was instructing an operator, on the one epic nothing here can
+#: close, to run commands that do not exist against scenarios that are not
+#: those. Read from the catalogue, the three cannot disagree again: the id, the
+#: title and the evidence path all come from the object the runner runs.
+_SCENARIOS = [(scenario.id, scenario.title) for scenario in SCENARIOS]
 
 _E14_SETUP = [
     (
@@ -955,9 +961,9 @@ _E14_RUN = [
         f"Run live scenario {code} — {name}",
         10,
         "the scenario reaches POSTCONDITION_MET with observed evidence, or records why not",
-        f".venv/bin/pz-agent livetest run {code}",
+        f".venv/bin/pz-agent live-test run --scenario {code}",
         "",
-        f"evidence/live/{code}/result.json",
+        f"evidence/{code}/result.json",
     )
     for code, name in _SCENARIOS
 ]
@@ -967,31 +973,31 @@ _E14_EVIDENCE = [
         "Collect the evidence tree for every scenario",
         10,
         "each scenario has its artefacts and digests",
-        ".venv/bin/pz-agent livetest collect",
+        ".venv/bin/pz-agent live-test collect",
         "",
-        "evidence/live/manifest.json",
+        "release/evidence-manifest.json",
     ),
     (
         "Verify every evidence digest after collection",
         10,
         "the release gate passes over the tree",
-        ".venv/bin/python scripts/check_release.py",
+        ".venv/bin/python scripts/check_release.py --release",
         "",
-        "evidence/live/manifest.json",
+        "release/evidence-manifest.json",
     ),
     (
         "Record every scenario that did not run, and why",
         10,
         "NOT_RUN and BLOCKED are distinguished from FAIL",
-        ".venv/bin/pz-agent livetest report",
+        ".venv/bin/pz-agent live-test status",
         "",
-        "evidence/live/manifest.json",
+        "release/evidence-manifest.json",
     ),
     (
         "Record the game incompatibilities the run found",
         10,
         "each is named with its symbol and build",
-        ".venv/bin/pz-agent livetest report",
+        ".venv/bin/pz-agent live-test status",
         "",
         "evidence/live/incompatibilities.json",
     ),
@@ -999,17 +1005,17 @@ _E14_EVIDENCE = [
         "Fix each confirmed game incompatibility",
         10,
         "each fix has a test and a re-run scenario",
-        ".venv/bin/pz-agent livetest run",
+        ".venv/bin/pz-agent live-test run",
         "",
-        "evidence/live/manifest.json",
+        "release/evidence-manifest.json",
     ),
     (
         "Re-run every scenario a fix touched",
         10,
         "the affected scenarios pass after the fix",
-        ".venv/bin/pz-agent livetest run",
+        ".venv/bin/pz-agent live-test run",
         "",
-        "evidence/live/manifest.json",
+        "release/evidence-manifest.json",
     ),
     (
         "Confirm the panic stop works from the keyboard in game",
@@ -1017,7 +1023,7 @@ _E14_EVIDENCE = [
         "the hotkey stops the agent within one tick",
         "follow docs/LIVE_TEST_PLAYBOOK.md",
         "",
-        "evidence/live/S15/result.json",
+        "evidence/S18_PANIC/result.json",
     ),
     (
         "Confirm no save file was corrupted by any run",
@@ -1025,7 +1031,7 @@ _E14_EVIDENCE = [
         "the save loads and the backup still matches",
         "follow docs/LIVE_TEST_PLAYBOOK.md",
         "",
-        "evidence/live/manifest.json",
+        "release/evidence-manifest.json",
     ),
     (
         "Confirm the MCP server works against the live sidecar",
@@ -1067,7 +1073,8 @@ E14 = Epic(
     subsystem="live",
     integration_scenario=(
         "On a Windows machine with Steam and Project Zomboid Build 42.20, against "
-        "a dedicated test save with a verified backup, all twenty scenarios run to "
+        "a dedicated test save with a verified backup, every scenario in the catalogue "
+        "runs to "
         "a terminal state, every evidence digest verifies, the panic stop works "
         "from the keyboard, and no save is corrupted."
     ),
@@ -1105,13 +1112,13 @@ E14 = Epic(
         ),
         Milestone(
             id="E14-M03",
-            title="The twenty scenarios",
+            title="The live scenarios",
             tasks=_tasks("E14", "M03", "live", "live", "local", rows=_E14_RUN),
             checks=(
                 Check(
                     id="E14-M03-C01",
                     statement="Every scenario reached a terminal state; none is NOT_RUN.",
-                    command="read evidence/live/manifest.json",
+                    command="read release/evidence-manifest.json",
                 ),
             ),
         ),
@@ -1211,9 +1218,9 @@ _E15_ENDURANCE = [
         "Re-run the affected scenarios after those fixes",
         10,
         "the affected scenarios pass",
-        ".venv/bin/pz-agent livetest run",
+        ".venv/bin/pz-agent live-test run",
         "",
-        "evidence/live/manifest.json",
+        "release/evidence-manifest.json",
     ),
 ]
 

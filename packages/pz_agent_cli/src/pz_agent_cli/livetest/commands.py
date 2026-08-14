@@ -387,7 +387,7 @@ def _unprepared(layout: EvidenceLayout) -> str | None:
     on: a save whose name marks it as a test world, and a backup that *reads
     back* rather than merely existing. It wrote ``prepare.json`` when both held
     — and nothing read it. ``run`` proceeded regardless, so the one check
-    standing between twenty deliberately destructive scenarios and somebody's
+    standing between a batch of deliberately destructive scenarios and somebody's
     main save was a check whose answer nobody consulted.
 
     Read here rather than trusted from memory of an earlier invocation: the
@@ -680,7 +680,8 @@ def _finalize(
     """Build the manifest, or refuse and name everything that is wrong.
 
     The refusal lists every problem at once. Reporting only the first would make
-    an operator run this twenty times to learn twenty facts, and each of those
+    an operator run this once per problem to learn one fact at a time, and each of
+    those
     runs is a chance to decide the gate is the obstacle.
     """
     destination = output or default_manifest_path()

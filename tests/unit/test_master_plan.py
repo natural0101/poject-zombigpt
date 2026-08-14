@@ -33,6 +33,8 @@ from __future__ import annotations
 
 import copy
 import json
+import os
+import re
 import shutil
 import subprocess
 import sys
@@ -60,6 +62,9 @@ from scripts.plan_model import (  # noqa: E402  # noqa: E402
     epic_closed,
     weight_band,
 )
+
+from pz_agent_cli.livetest.commands import SUBCOMMANDS  # noqa: E402
+from pz_agent_cli.livetest.scenarios import SCENARIO_IDS  # noqa: E402
 
 PLAN_PATH: Final = REPO_ROOT / "docs" / "control" / "MASTER_PLAN.yaml"
 
@@ -549,6 +554,28 @@ class TestAVerdictSurvivesItsOwnRecording:
         assert written["linux_ci"]["describes_current_head"] is False
 
 
+def _catalogue_on_path() -> dict[str, str]:
+    """The environment a scratch repo needs to reach the real scenario catalogue.
+
+    The generator counts the live scenarios rather than carrying the number, so
+    it has to import ``pz_agent_cli.livetest.scenarios``. A scratch repo holds
+    only the four scripts and a plan — copying two package trees into every one
+    of them would cost megabytes per test to prove nothing these tests are
+    about, and a hand-written stub catalogue would make the count fictional in
+    exactly the file whose defect was a fictional count. So the subprocess is
+    pointed at this checkout's packages: the git semantics under test are the
+    scratch repo's, the catalogue is the real one.
+    """
+    environment = dict(os.environ)
+    sources = [
+        str(REPO_ROOT / "packages" / name / "src")
+        for name in ("pz_agent_cli", "pz_agent_core", "pz_agent_mcp", "pz_agent_voice")
+    ]
+    existing = environment.get("PYTHONPATH")
+    environment["PYTHONPATH"] = os.pathsep.join([*sources, *([existing] if existing else [])])
+    return environment
+
+
 def _reconcile_in_with_shas(repo: Path, status: str, sha: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
@@ -566,6 +593,7 @@ def _reconcile_in_with_shas(repo: Path, status: str, sha: str) -> subprocess.Com
             "NOT_BUILT",
         ],
         cwd=repo,
+        env=_catalogue_on_path(),
         capture_output=True,
         text=True,
         check=False,
@@ -628,6 +656,7 @@ def _reconcile_in(repo: Path, *extra: str) -> subprocess.CompletedProcess[str]:
             *extra,
         ],
         cwd=repo,
+        env=_catalogue_on_path(),
         capture_output=True,
         text=True,
         check=False,
@@ -914,3 +943,146 @@ class TestThePlantedViolationsAreDetectedInTheRealPlan:
         task["owner"] = "local"
         found = _refusals(mutable)
         assert any(task["id"] in problem and "local task" in problem for problem in found), found
+
+
+class TestTheLiveScenarioTallyIsCounted:
+    """The number of live scenarios is asked of the catalogue, never typed.
+
+    ``reconcile_status.py`` carried ``"not_run": 20`` as a literal. ``S21_CRAFT``
+    and ``S22_BUILD`` were added afterwards, the literal did not move, and
+    STATUS.json then told every reader that twenty scenarios were waiting on a
+    game while the runner owed twenty-two.
+
+    This is the second time the same number outlived the same list: ``pz-agent
+    live-test status`` once printed "All twenty need a running game" directly
+    above a tally reading 22. That fix replaced the word in the CLI and left the
+    number here, which is the ordinary way a spelled-out constant survives — it
+    is fixed where somebody happened to look.
+
+    So both halves are checked: the generator counts (proved by running it), and
+    the file it generated agrees with the catalogue as committed (proved by
+    reading the artefact, which is what a stale regeneration would betray).
+    """
+
+    @staticmethod
+    def _catalogue_size() -> int:
+        return len(SCENARIO_IDS)
+
+    def test_the_generator_counts_the_catalogue_rather_than_a_literal(self, tmp_path: Path) -> None:
+        repo = _scratch_repo(tmp_path)
+
+        result = _reconcile_in(repo)
+
+        assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
+        written = json.loads(
+            (repo / "docs" / "control" / "STATUS.json").read_text(encoding="utf-8")
+        )
+        assert written["live_scenarios"]["not_run"] == self._catalogue_size()
+
+    def test_the_committed_status_agrees_with_the_catalogue(self) -> None:
+        """The artefact, not the generator — a regeneration can be owed."""
+        status = json.loads(
+            (REPO_ROOT / "docs" / "control" / "STATUS.json").read_text(encoding="utf-8")
+        )
+        tally = status["live_scenarios"]
+        assert tally["passed"] + tally["failed"] + tally["not_run"] == self._catalogue_size(), (
+            "STATUS.json accounts for a different number of live scenarios than the "
+            "catalogue defines; re-run scripts/reconcile_status.py"
+        )
+
+    def test_the_generator_holds_no_scenario_count_of_its_own(self) -> None:
+        """A second literal would restore the defect while both tests above pass.
+
+        Deliberately narrow: it reads the one dictionary literal STATUS is built
+        from, not the whole file, because the interesting failure is somebody
+        re-typing a number *there* — beside the counted one — and not a stray
+        integer anywhere in the script.
+        """
+        source = (REPO_ROOT / "scripts" / "reconcile_status.py").read_text(encoding="utf-8")
+        line = next(
+            text for text in source.splitlines() if '"live_scenarios"' in text and ":" in text
+        )
+        assert "live_scenario_count()" in line, line
+        assert not re.search(r"\bnot_run\"?\s*:\s*\d", line), line
+
+
+class TestThePlanNamesTheScenariosThatExist:
+    """The live tasks are generated from the catalogue the runner dispatches on.
+
+    E14-M03 was a hand-written list of twenty ``(code, name)`` pairs, and the
+    catalogue had moved underneath it. The plan's ``S05`` was "open a container";
+    the runner's ``S05_BLOCKED_PATH`` is a walk into a wall. Eighteen of the
+    twenty pairs named a scenario other than the one their id selects,
+    ``S21_CRAFT`` and ``S22_BUILD`` had no task at all, and every one of the
+    twenty told the operator to run ``pz-agent livetest run S05`` — a subcommand
+    the CLI does not have, against an evidence path nothing writes.
+
+    That mattered more than an ordinary stale list: E14 is one of the two epics
+    that gate v1.0.0, it can only be done by a person at a Windows machine, and
+    the plan is the checklist they would have worked from.
+
+    So this asserts the correspondence in both directions. One direction alone
+    is the weaker half of the pair: every catalogue scenario having a task does
+    not stop the plan carrying tasks for scenarios that no longer exist.
+    """
+
+    RUN_MILESTONE: Final = "E14-M03"
+
+    @staticmethod
+    def _catalogue_ids() -> tuple[str, ...]:
+        return tuple(SCENARIO_IDS)
+
+    @classmethod
+    def _run_tasks(cls, plan: dict[str, Any]) -> list[dict[str, Any]]:
+        for epic in plan["epics"]:
+            for milestone in epic["milestones"]:
+                if milestone["id"] == cls.RUN_MILESTONE:
+                    return list(milestone["tasks"])
+        raise AssertionError(f"{cls.RUN_MILESTONE} is not in the plan")
+
+    def test_every_scenario_in_the_catalogue_has_a_task(self, real_plan: dict[str, Any]) -> None:
+        commands = " ".join(task["verify_command"] for task in self._run_tasks(real_plan))
+        missing = [
+            identifier
+            for identifier in self._catalogue_ids()
+            if f"--scenario {identifier}" not in commands
+        ]
+        assert not missing, f"the plan has no run task for {missing}"
+
+    def test_the_plan_names_no_scenario_the_catalogue_lacks(
+        self, real_plan: dict[str, Any]
+    ) -> None:
+        known = set(self._catalogue_ids())
+        named = [
+            match.group(1)
+            for task in self._run_tasks(real_plan)
+            if (match := re.search(r"--scenario (\S+)", task["verify_command"]))
+        ]
+        assert named, "no run task names a scenario at all"
+        assert not set(named) - known, (
+            f"the plan runs scenarios that do not exist: {set(named) - known}"
+        )
+
+    def test_each_task_points_at_the_path_the_runner_writes(
+        self, real_plan: dict[str, Any]
+    ) -> None:
+        """``evidence/<ID>/result.json`` — what ``EvidenceLayout`` actually uses.
+
+        The old paths were ``evidence/live/<code>/result.json``, a directory the
+        runner has never written to, so a task marked PASS against one would have
+        been claiming a file that could not be there.
+        """
+        for task in self._run_tasks(real_plan):
+            match = re.search(r"--scenario (\S+)", task["verify_command"])
+            assert match, task["verify_command"]
+            assert task["evidence"] == f"evidence/{match.group(1)}/result.json", task
+
+    def test_the_verify_commands_name_a_subcommand_that_exists(
+        self, real_plan: dict[str, Any]
+    ) -> None:
+        """Asked of the parser, not of a list of words written next to it."""
+        for task in self._run_tasks(real_plan):
+            command = task["verify_command"].split()
+            assert "live-test" in command, task["verify_command"]
+            following = command[command.index("live-test") + 1]
+            assert following in SUBCOMMANDS, f"{following!r} is not a live-test subcommand"

@@ -11,8 +11,9 @@ PASS and a SHA-256 for each artefact that scenario owes.
 
 That file does not exist in this repository, so ``--release`` fails today. It is
 supposed to. Nothing here can be satisfied by building, by testing, or by
-reading the code carefully; the only way to make it pass is to run the twenty
-scenarios inside Project Zomboid and let the runner write what it observed. A
+reading the code carefully; the only way to make it pass is to run every
+scenario in the catalogue inside Project Zomboid and let the runner write what it
+observed. A
 gate that could be satisfied without the game would certify the one thing this
 project cannot check for itself.
 
@@ -521,7 +522,7 @@ def _scenario_ids() -> tuple[tuple[str, ...], Finding | None]:
 
 
 def check_evidence(manifest_path: Path, evidence_root: Path) -> list[Finding]:
-    """The live evidence for v1.0.0: twenty PASSes, each with hashed artefacts."""
+    """The live evidence for v1.0.0: every scenario at PASS, each with hashed artefacts."""
     scenario_ids, problem = _scenario_ids()
     if problem is not None:
         return [problem]
@@ -532,7 +533,8 @@ def check_evidence(manifest_path: Path, evidence_root: Path) -> list[Finding]:
                 ok=False,
                 detail=f"{manifest_path} does not exist",
                 remediation=(
-                    "run the twenty scenarios against a real Build 42.20 session and then "
+                    "run every scenario in the catalogue against a real Build 42.20 session and "
+                    "then "
                     "'pz-agent live-test finalize'. Nothing else produces this file: it is "
                     "the record of what was observed in the game, and no amount of building "
                     "or testing substitutes for it"

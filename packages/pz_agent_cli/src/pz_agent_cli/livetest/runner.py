@@ -116,8 +116,8 @@ class UnavailableDriver:
     """The driver used when there is nothing to observe.
 
     Returns a blocked run rather than raising, so a batch that cannot reach a
-    game still records twenty honest BLOCKED attempts instead of dying on the
-    first one.
+    game still records an honest BLOCKED attempt for every scenario in the batch
+    instead of dying on the first one.
     """
 
     reason: str

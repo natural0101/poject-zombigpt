@@ -12,6 +12,62 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Added
 
+- **The plan of record told the operator to run scenarios that do not exist**
+  (`dev`). `E14-M03` — the milestone a person at a Windows machine works through,
+  on one of the two epics that gate `v1.0.0` — was generated from a hand-written
+  list of twenty `(code, name)` pairs in `scripts/plan_epics_d.py`, and the
+  runner's catalogue had moved out from under it. The plan's `S05` was "open a
+  container"; `S05_BLOCKED_PATH` is a walk into a wall. Eighteen of the twenty
+  named a scenario other than the one their id selects, `S21_CRAFT` and
+  `S22_BUILD` had no task at all, and every row's verify command read
+  `pz-agent livetest run S05` — a subcommand the CLI does not have — against
+  `evidence/live/S05/result.json`, a directory `EvidenceLayout` has never
+  written to.
+
+  The list now comes from `pz_agent_cli.livetest.scenarios.SCENARIOS`, so id,
+  title and evidence path all come from the object the runner runs. The commands
+  are `pz-agent live-test run --scenario <ID>` and the paths
+  `evidence/<ID>/result.json`. The other `livetest` invocations in E14 are
+  corrected too, including three calls to a `report` subcommand that does not
+  exist, and the manifest rows now name `release/evidence-manifest.json` rather
+  than `evidence/live/manifest.json`. The plan grows from 480 to 484 tasks and
+  from 3104 to 3144 weight — the two scenarios that had no task, in both the API
+  and the run milestones.
+
+  Four tests in `tests/unit/test_master_plan.py` pin the correspondence in both
+  directions: every catalogue scenario has a task, no task names a scenario the
+  catalogue lacks, each evidence path is the one the runner writes, and each
+  verify command's subcommand is asked of `livetest.commands.SUBCOMMANDS` rather
+  than compared against a list written beside it.
+
+- **A hardcoded twenty outlived the twenty scenarios, again** (`dev`).
+  `scripts/reconcile_status.py` carried `"not_run": 20` as a literal, so
+  `STATUS.json` told every reader that twenty live scenarios were waiting on a
+  game while the runner owed twenty-two. This is the same defect the CLI had at
+  `live-test status`, fixed there by replacing the word — and a spelled-out
+  constant is fixed where somebody happens to look, so this file kept its copy.
+
+  The generator now counts `SCENARIO_IDS`, and an unreadable catalogue is a hard
+  failure rather than a fallback: a fallback would be a guess, and a guessed
+  number in `STATUS.json` is the class of value that script exists to prevent.
+  Three tests hold it — the generator counts (proved by running it in a scratch
+  repo), the committed artefact agrees with the catalogue, and the dictionary
+  STATUS is built from carries no scenario count of its own.
+
+  The same wrong number is corrected in `docs/LOCAL_GAME_HANDOFF.md` (four
+  places, including *"S01–S20 live scenarios"*), `scripts/check_release.py`,
+  `packaging/windows/README.md`, `app.py`, `livetest/commands.py`,
+  `livetest/runner.py` and `tests/contract/test_sidecar_writes_its_log.py`,
+  where "nineteen of the twenty scenarios name `pz-agent.log`" is now the
+  twenty-one of twenty-two that do.
+
+- **The handoff described a release candidate built without its executables**
+  (`dev`). `LOCAL_GAME_HANDOFF.md` §1 named `dist/pz-agent-windows-v1.0.0-rc1.zip`
+  — the local `build_rc.py` output, useful for checking the layout and missing
+  both Windows executables, because they are compiled on the Windows runner. The
+  row now names the `windows package` artefact as the one of record and points
+  at `EVIDENCE_INDEX.md` for its commit, run and digest.
+
 - **The retraction's last live carrier was the page a user reads when a move
   fails** (`dev`). `TROUBLESHOOTING.md` had an entry titled *"TARGET_NOT_LOADED"
   on every move — known, unfixed*, which told the reader the mod emitted no

@@ -894,7 +894,7 @@ def _sidecar_log(ctx: CliContext, workspace: Workspace) -> DiagnosticLog | None:
 
     ``DiagnosticLog`` was written, tested, rotated and redacted — and
     constructed nowhere outside the test suite. Nothing wrote ``pz-agent.log``
-    or ``pz-agent.jsonl``, while nineteen of the twenty live scenarios name the
+    or ``pz-agent.jsonl``, while twenty-one of the twenty-two live scenarios name the
     first among the logs to collect, ``docs/LOCAL_DEBUG_MAP.md`` sends an
     operator to it, ``pz-agent logs`` reads it and the support bundle packs the
     directory it lives in. Every one of those was reading a file that could not
