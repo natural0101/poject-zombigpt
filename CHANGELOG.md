@@ -12,6 +12,32 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Added
 
+- **Two counts of the wrappers, and nothing comparing the collections**
+  (`dev`). `build_rc.BAT_NAMES` decides which `.bat` files the archive carries.
+  `tests/unit/test_packaging_rc.py` asserted `len(BAT_NAMES) == 11`;
+  `tests/contract/test_bat_wrappers_invoke_the_real_cli.py` asserted
+  `len(glob("*.bat")) == 11` over the directory. Two literals, no set
+  comparison — so a wrapper added to the directory and not to `BAT_NAMES` is
+  never copied into the archive, and the only thing that reddens is a count.
+
+  The natural repair for a red count is to bump it. Doing exactly that was
+  tried, on the real tree: an undeclared `latency.bat` in the directory, the
+  directory count raised to twelve, `BAT_NAMES` untouched. **188 packaging tests
+  went green while the archive shipped eleven wrappers and the twelfth existed
+  only in the repository** — a file a document could tell a user to
+  double-click, that is in no release.
+
+  Both literals are gone. The wrapper contract now compares the two sets in both
+  directions and derives the count from them, and the message names the file. An
+  undeclared wrapper fails with its own name; a declared wrapper with no file
+  fails the same way. Verified by planting each direction separately and by
+  removing them again.
+
+  Reported alongside what was *not* found: the reverse omission — a `.bat`
+  present and undeclared — was already caught at collection time by the same
+  contract's directory count, so this is a hole in how the two checks were
+  written rather than a hole in coverage nobody had thought about.
+
 - **The mod's identity is spelled in six places and was checked in none**
   (`dev`). `modinstall.py` carries `MOD_ID: Final = "pz_agent_bridge"` under a
   comment reading *"Directory name under `Zomboid/mods`. Matches `id=` in

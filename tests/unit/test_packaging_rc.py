@@ -104,9 +104,18 @@ def _invocations(bat: Path, expansions: dict[str, list[str]]) -> list[list[str]]
 
 
 def test_every_declared_wrapper_is_present() -> None:
+    """One direction of the pair; the other lives in the wrapper contract.
+
+    The count here used to be pinned as ``== 11``, beside a second literal ``11``
+    in ``tests/contract/test_bat_wrappers_invoke_the_real_cli.py`` that counted
+    the *directory*. Two numbers, no comparison: a wrapper added to the directory
+    and not to ``BAT_NAMES`` reddened only the other file, and bumping that one
+    number left the archive shipping eleven while the repository held twelve.
+    That file now compares the sets, so the count is derived and this assertion
+    is only about the direction it can see.
+    """
     missing = [name for name in build_rc.BAT_NAMES if not (_bat_dir() / name).is_file()]
     assert missing == []
-    assert len(build_rc.BAT_NAMES) == 11
 
 
 @pytest.mark.parametrize("name", build_rc.BAT_NAMES)

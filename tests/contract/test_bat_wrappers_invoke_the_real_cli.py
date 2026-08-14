@@ -24,7 +24,9 @@ Each invocation is parsed by the real parser rather than run, because running
 
 from __future__ import annotations
 
+import importlib
 import re
+import sys
 from pathlib import Path
 from typing import Final
 
@@ -34,6 +36,11 @@ from pz_agent_cli.app import COMMANDS, build_parser
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[2]
 BAT_DIR: Final = REPO_ROOT / "packaging" / "windows" / "bat"
+
+# ``build_rc`` is not importable as a package; ``test_packaging_rc.py``
+# reaches it the same way, and it is the module that decides what ships.
+sys.path.insert(0, str(REPO_ROOT / "packaging" / "windows"))
+BAT_NAMES: Final[tuple[str, ...]] = importlib.import_module("build_rc").BAT_NAMES
 
 #: ``"%PZ_AGENT%" live-test %EVIDENCE% run %*`` — everything after the executable.
 _INVOCATION: Final = re.compile(r'^\s*"%PZ_AGENT%"\s+(.+?)\s*$', re.MULTILINE)
@@ -50,8 +57,36 @@ _EXPANSIONS: Final[dict[str, list[str]]] = {
 
 
 def _wrappers() -> list[Path]:
+    """Every wrapper on disk, checked against the list that ships them.
+
+    This counted, and counted only: ``len(found) == 11`` here and
+    ``len(BAT_NAMES) == 11`` in ``tests/unit/test_packaging_rc.py``, with nothing
+    comparing the two collections. A wrapper added to the directory and not to
+    ``BAT_NAMES`` is never copied into the archive, and the failure that follows
+    is the count in *this* file — so the natural repair is to bump the number
+    that went red and stop.
+
+    Doing exactly that was tried: with an undeclared ``latency.bat`` in the
+    directory and this number raised to twelve, the whole packaging suite went
+    green — 188 tests — while the archive shipped eleven wrappers and the twelfth
+    existed only in the repository. A user told to double-click it would not have
+    found it.
+
+    So the sets are compared, in both directions, and the count follows from
+    them. Adding a wrapper now fails until it is declared, and the failure says
+    which one.
+    """
     found = sorted(BAT_DIR.glob("*.bat"))
-    assert len(found) == 11, f"expected eleven wrappers, found {len(found)}"
+    on_disk = {path.name for path in found}
+    declared = set(BAT_NAMES)
+
+    assert on_disk - declared == set(), (
+        f"these wrappers exist but are not in build_rc.BAT_NAMES, so the archive "
+        f"will not carry them: {sorted(on_disk - declared)}"
+    )
+    assert declared - on_disk == set(), (
+        f"BAT_NAMES declares wrappers that are not in {BAT_DIR}: {sorted(declared - on_disk)}"
+    )
     return found
 
 
