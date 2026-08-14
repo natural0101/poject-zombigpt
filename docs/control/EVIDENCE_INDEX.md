@@ -36,10 +36,10 @@ about nothing.
 
 | Field | Value |
 | --- | --- |
-| archive | `pz-agent-windows-rc` (artifact 9233098075), `pz-agent-windows-v1.0.0-rc1.zip`, 77 entries |
-| archive sha256 | `8be564f64fe778769ddb2a94c1774bf74dc8cf268bd88fcf553f08331f7e247a` |
-| source commit | `378b195b7b116e8ed2f4c29ec19053b465b4a73f` |
-| workflow run | https://github.com/natural0101/poject-zombigpt/actions/runs/31836767697 |
-| certified by | `check_release.py --rc` printing `CERTIFIED v1.0.0-rc1: 8 check(s) passed` — archive complete, all 11 wrappers at the root, **both executables in `bin/`**, 76 file digests matching, 8545 of 8613 tests passed with no failures, 31 MCP end-to-end testcases green, and the archive claiming no live-test evidence. The packaged pair also completed an MCP `initialize` over the RPC link with `PATH` reduced to the system directories |
+| archive | `pz-agent-windows-rc` (artifact 9234765241), `pz-agent-windows-v1.0.0-rc1.zip`, 77 entries |
+| archive sha256 | `8eca8b708ec96770ee1d0aa6e77c430c541281d3a8617fe78e7b0512d40a2463` |
+| source commit | `2163f79e9d83a389fad53a216b1b6ad5856fb0f1` |
+| workflow run | https://github.com/natural0101/poject-zombigpt/actions/runs/31841423667 |
+| certified by | `check_release.py --rc` printing `CERTIFIED v1.0.0-rc1: 8 check(s) passed` — archive complete, all 11 wrappers at the root, **both executables in `bin/`**, 76 file digests matching, 8546 of 8614 tests passed with no failures, 31 MCP end-to-end testcases green, and the archive claiming no live-test evidence. The packaged pair also completed an MCP `initialize` over the RPC link with `PATH` reduced to the system directories |
 | what this RC does *not* certify | skips have moved 49 → 63 → 68 and held at 68 here — the five mod-identity checks added at `e2b8978` need no interpreter and run everywhere, and every one of the nineteen added is a seam check that runs the mod's Lua and finds no interpreter on this runner: fourteen for the protocol tables at `1a5feb4`, five for the action-ack round trip at `8a803c2`. They join `test_adapter_args_agreement`, `test_capability_declaration_agreement` and the observation round trip, so **no seam check has ever been part of RC certification** — the count moves whenever a seam gains coverage, never because something stopped working. All five run on Linux CI and locally; each verifies a contract between the mod and the sidecar that has nothing to do with the host OS, and putting Lua on the release runner would add a dependency to the release path for coverage already taken elsewhere. Stated here so the growing skip count is read as what it is |
 | current? | `docs/control/STATUS.json` → `release_candidate.status`; any code commit after the source commit makes it STALE until the workflow rebuilds it |
