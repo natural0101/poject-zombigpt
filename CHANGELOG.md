@@ -12,6 +12,26 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Added
 
+- **The round trip now covers the tier where the retraction happened** (`dev`).
+  The first version walked the inventory only. The `nearby` tier is where a row
+  claimed for four commits that the mod emitted no `kind = "square"` entry — the
+  claim that cost `LIMITATIONS.md`, `PROGRESS.md` and two sections of the final
+  report before it was caught. The dumper now installs a real square window,
+  `Observe.nearbyFields` walks it, and the document carries 49 square entries
+  with `loaded`, `blocked` and `occupied` semantics.
+
+  Three assertions follow from that, each pinning something that was previously
+  only argued: the mod really does publish squares, and every entry carries the
+  position movement matches on; `closed_window` and `stairs` really are absent
+  from the square entry, which is the narrow gap that survived the retraction;
+  and `policy.building.read_window` — the consumer a retracted row called dead —
+  builds a window from the mod's own document rather than returning `None`.
+
+  Sensitivity verified through the producer, as before: making `mergeNearby`
+  return early makes the first of the three fail with the message naming which
+  documents to un-retract. The check that would have caught the mistake now
+  exists, and it exists as a test rather than as a paragraph.
+
 - **The observation seam now has the check the command seam has had all along**
   (`dev`). `tests/lua/support/dump_observation.lua` builds one document through
   `Observe.playerFields`, `Observe.inventoryRoots` and `ObserveModel.build` —

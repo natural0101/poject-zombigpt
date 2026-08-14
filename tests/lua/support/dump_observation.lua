@@ -122,6 +122,44 @@ local function taintedBottle()
   return item
 end
 
+--- A grid square that answers the square reader's calls. `passable` and `free`
+--- are written out rather than defaulted because each is tri-state on the mod's
+--- side, and a document where every square answers the same way would not tell
+--- a reading apart from a substitution.
+local function gridSquare(fields)
+  local square = Support.square(fields.objects or {})
+  square.isSolid = function()
+    return fields.solid == true
+  end
+  square.isSolidTrans = function()
+    return fields.solid_trans == true
+  end
+  square.isFree = function()
+    return fields.free ~= false
+  end
+  square.getFloor = function()
+    return fields.floor ~= false and {} or nil
+  end
+  return square
+end
+
+--- The window `Observe.describeSquares` walks, keyed the way `getGridSquare`
+--- is asked for it. One square is deliberately solid: a document in which
+--- nothing blocks proves nothing about a reader that must refuse a blocked
+--- destination.
+local function squareWindow()
+  local squares = {}
+  for x = 100 - Observe.RADIUS, 100 + Observe.RADIUS do
+    for y = 200 - Observe.RADIUS, 200 + Observe.RADIUS do
+      squares[string.format("%d,%d,%d", x, y, 0)] = gridSquare({
+        solid = (x == 102 and y == 200),
+        free = not (x == 101 and y == 200),
+      })
+    end
+  end
+  return squares
+end
+
 local player = Support.player({
   x = 100.5,
   y = 200.5,
@@ -130,8 +168,11 @@ local player = Support.player({
   inventory = Support.container({ rottenMeal(), skillBook(), taintedBottle() }, 30),
 })
 
+local removeCell = Support.installCell(squareWindow(), {})
+
 local playerFields = Observe.playerFields(player)
 local inventoryRoots = Observe.inventoryRoots(player)
+local nearbyFields = Observe.nearbyFields(player, playerFields.position)
 
 local document = Model.build({
   session_id = SESSION,
@@ -142,6 +183,7 @@ local document = Model.build({
   game = { build = "42.20", save_key = "Muldraugh, KY/survivor", paused = false, speed = 1 },
   player = playerFields,
   inventory = inventoryRoots,
+  nearby = nearbyFields,
   safety = {
     armed = false,
     mode = "OBSERVE",
@@ -151,5 +193,7 @@ local document = Model.build({
   },
   action = { ownership = "none", busy = false },
 })
+
+removeCell()
 
 print((Json.encode(document)))

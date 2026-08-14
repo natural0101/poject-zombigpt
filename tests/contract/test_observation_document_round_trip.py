@@ -42,6 +42,14 @@ from typing import Any, Final
 
 import pytest
 
+from pz_agent_core.actions.adapters.movement import (
+    SEMANTIC_BLOCKED,
+    SEMANTIC_CLOSED_WINDOW,
+    SEMANTIC_LOADED,
+    SEMANTIC_STAIRS,
+    SQUARE_OBJECT_KIND,
+)
+from pz_agent_core.policy.building import read_window
 from pz_agent_core.policy.food import FoodView
 from pz_agent_core.policy.literature import LiteratureView
 from pz_agent_core.protocol.messages import ItemView, Observation
@@ -158,3 +166,93 @@ def test_a_books_pages_survive_the_seam(document: dict[str, Any]) -> None:
         "absent must stay unknown rather than zero; a real count here means the "
         "mod gained a recipe reader and the tri-state can be revisited"
     )
+
+
+def test_the_mod_really_does_publish_squares(document: dict[str, Any]) -> None:
+    """The assertion that would have caught a retracted claim, and did not exist.
+
+    A row in ``test_gates_without_producers.py`` said for four commits that the
+    mod emitted no ``kind = "square"`` entry, so movement refused every real
+    observation and ``build_structure`` refused every placement. The producer had
+    been there the whole time; the row's pattern searched for a literal and the
+    mod writes the token through a constant. Nothing ran the producer, so nothing
+    contradicted it.
+
+    This runs it. ``ObserveModel.buildSquare`` mints the entries and
+    ``mergeNearby`` folds them into ``nearby.objects``, and both are exercised
+    above by the dumper walking a real square window.
+    """
+    observation = Observation.from_dict(document)
+    nearby = observation.nearby
+    assert nearby is not None, "the mod produced no nearby block"
+
+    squares = [o for o in nearby.objects if o.kind == SQUARE_OBJECT_KIND]
+    assert squares, (
+        "no square entry in nearby.objects. If this is a deliberate change, the "
+        "retraction in test_gates_without_producers.py has to be un-retracted "
+        "and LIMITATIONS.md rewritten — movement and the enclosure check both "
+        "scan for exactly this"
+    )
+    assert all(o.position is not None for o in squares), (
+        "movement matches a square by position; an entry without one is invisible "
+        "to the reader that needs it"
+    )
+
+
+def test_the_two_square_semantics_the_sidecar_reads_off_the_square(
+    document: dict[str, Any],
+) -> None:
+    """What survived the retraction, pinned as behaviour rather than as prose.
+
+    Three of the five tokens ``movement._check_square`` reads do cross the seam.
+    ``closed_window`` and ``stairs`` do not, and the mod says why: both are facts
+    about an object standing on a square rather than about the square, so it
+    emits them on the object entry instead. The consequences are asymmetric —
+    a floor-changing move always refuses, which is the cautious direction, while
+    a closed-window square is refused as ``blocked`` under the wrong name.
+
+    Asserted on the document the mod actually built, so it fails the day either
+    token starts crossing.
+    """
+    observation = Observation.from_dict(document)
+    nearby = observation.nearby
+    assert nearby is not None
+
+    seen: set[str] = set()
+    for entry in nearby.objects:
+        if entry.kind == SQUARE_OBJECT_KIND:
+            seen.update(entry.semantics)
+
+    assert SEMANTIC_LOADED in seen
+    assert SEMANTIC_BLOCKED in seen, (
+        "the window includes one solid square on purpose; without a blocked "
+        "reading this test cannot tell a refusal from an unread square"
+    )
+    assert SEMANTIC_CLOSED_WINDOW not in seen, (
+        "closed_window now crosses the seam — retire its row in "
+        "test_gates_without_producers.py and correct docs/LIMITATIONS.md"
+    )
+    assert SEMANTIC_STAIRS not in seen, (
+        "stairs now reaches the square entry, so a floor-changing move can "
+        "finally be permitted — update LIMITATIONS.md and §9 of the report"
+    )
+
+
+def test_the_enclosure_check_reads_the_squares_the_mod_sends(
+    document: dict[str, Any],
+) -> None:
+    """``build_structure``'s window, built from the mod's own document.
+
+    This is the consumer a retracted claim said was dead: ``read_window`` was
+    supposed to collect nothing and refuse every placement ``WOULD_TRAP_PLAYER``.
+    It collects the squares the dumper's window produced. Running the producer
+    settles it; reading the sources twice did not.
+    """
+    observation = Observation.from_dict(document)
+    window = read_window(observation, 0)
+    assert window is not None, (
+        "read_window returned None on a document the mod built, which is the "
+        "state the retracted row described. If this is real, build_structure "
+        "refuses every placement and LIMITATIONS.md needs the entry back"
+    )
+    assert len(window) > 1
