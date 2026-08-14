@@ -12,6 +12,26 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Added
 
+- **The retraction's last live carrier was the page a user reads when a move
+  fails** (`dev`). `TROUBLESHOOTING.md` had an entry titled *"TARGET_NOT_LOADED"
+  on every move — known, unfixed*, which told the reader the mod emitted no
+  square tier at all and that "the character cannot be walked anywhere by the
+  agent until one of them changes". Wrong since the crafting wave, and the worst
+  place to be wrong: this is the page consulted at the moment something breaks.
+
+  Rewritten. A single `TARGET_NOT_LOADED` now means what it says — the square
+  was not described in this observation, so move closer. *Every* move refusing
+  is redirected to the likely upstream cause: `Observe.describeSquares` calls
+  `isSolid`, `isSolidTrans`, `isFree` and `getFloor`, none of which is confirmed
+  against Build 42.20, and a build exposing none of them leaves every square
+  without a passability reading — with what to check and what to report. The
+  genuinely unfixed part, the storey-changing move, is stated as the narrow
+  thing it is.
+
+  A sweep of every document under `docs/` now finds no live carrier of the
+  retracted claim. `CHANGELOG` keeps its own history, which was true when
+  written and is marked as retracted where it was not.
+
 - **The handoff still carried the retracted claims, and it is the one document a
   live session is planned from** (`dev`). `LOCAL_GAME_HANDOFF.md` §4 opened with
   "eight parts of the sidecar are wired to a mod that cannot drive them. Two of

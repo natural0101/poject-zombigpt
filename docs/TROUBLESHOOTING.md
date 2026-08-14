@@ -229,43 +229,42 @@ stale references.
 Re-observe and rebuild. This is not retryable, and retrying is why the code
 refuses to.
 
-## "TARGET_NOT_LOADED" on every move — known, unfixed
+## "TARGET_NOT_LOADED" on a move
 
-If `movement.move_to` refuses with `no loaded square was reported at (x, y, z)`
-for **every** destination, including the square next to the character, this is a
-known gap and not a fault of your install, your position, or the loaded cell.
-
-`movement.move_to`, `movement.move_near`, `world.inspect` and the local map all
-look for the destination square in `nearby.objects`, matching entries whose
-`kind` is `square` and reading `loaded` / `blocked` / `closed_window` / `drop`
-from their semantics. **The mod has no code path that emits such an entry.**
-`Observe.nearbyObjects` sets each entry's `kind` from the container type, from
-`getObjectName`, or to the literal `corpse`; `Refs.KIND.SQUARE` exists only to
-mint and parse *reference strings*. `nearby` carries `objects` and `zombies` and
-no square tier at all.
-
-So the sidecar's half of this interface is built and the mod's half is not. The
-character cannot be walked anywhere by the agent until one of them changes.
-Reproduced against a document assembled exactly as `Observe.nearbyObjects`
-assembles it:
+**This entry used to say every move refused, always, and that the mod emitted no
+square tier at all. That was wrong and is retracted.** The claim came from a
+contract check that searched the mod's sources for a literal spelling the mod
+does not use; the producer had been there since the crafting and building wave.
+`ObserveModel.buildSquare` mints entries with `kind = ObserveModel.SQUARE_KIND`
+(`SQUARE_KIND = "square"`), and `mergeNearby` folds them into `nearby.objects` —
+exactly where `movement.move_to`, `move_near`, `world.inspect` and the local map
+look. You can see the document the mod builds without a game:
 
 ```
-- the character walks in the world the mod actually describes
-  FAIL a one-square walk east is accepted
-         reason: TARGET_NOT_LOADED
-         detail: no loaded square was reported at (1201, 3400, 0)
-  FAIL walking up to a container the mod reported is accepted
-         reason: TARGET_NOT_LOADED
-
-  object kinds in the document: ['corpse', 'counter', 'door']
-  entries with kind 'square':   0
+pytest tests/contract/test_observation_document_round_trip.py -v
 ```
 
-There is no workaround, and none should be improvised: the refusal is the
-adapter's precondition doing its job, and relaxing it would let the agent walk
-into squares nothing has assessed. `world.inspect` is affected the same way — it
-reports `squares_described: 0` — and the local map never learns that any square
-is blocked, so it records obstacles only where a door, window or tree was seen.
+So a single `TARGET_NOT_LOADED` is now what it says: the destination square was
+not described in this observation. Move closer, re-observe, and try again — the
+window the mod walks is bounded by `Observe.RADIUS`, so a far target is simply
+outside it.
+
+**If every move refuses**, including the square next to the character, the
+likely cause is upstream of the square tier: `Observe.describeSquares` calls
+`IsoGridSquare.isSolid`, `isSolidTrans`, `isFree` and `getFloor`, and none of
+those four is confirmed against Build 42.20 — they are not yet rows in
+`docs/GAME_API_VERIFICATION.md`. A build that exposes none of them leaves every
+square without a passability reading. Check `world.inspect`: if it reports
+squares described but none passable, that is the shape, and it is a finding
+worth reporting with the build number.
+
+**What is still genuinely unfixed is narrower.** A move that changes storey
+always refuses `PATH_NOT_FOUND`: the check wants the `stairs` semantic on the
+*square* entry, and the mod puts it on the staircase *object* standing there,
+deliberately, so as not to write one fact in two places. That gate is
+restrictive when the token is missing, so the failure runs toward caution. Walk
+on one floor. Do not relax the precondition — it exists to stop the character
+being walked onto ground nothing assessed.
 
 ## "LEASE_EXPIRED"
 
