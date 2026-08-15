@@ -433,6 +433,71 @@ def test_a_member_the_index_never_recorded_is_refused(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_an_archive_claiming_another_release_is_refused(tmp_path: Path) -> None:
+    """The headline was the one claim derived from neither the artefact nor a check.
+
+    ``CERTIFIED v1.0.0-rc1`` is built from ``build_rc.RELEASE_VERSION``, the
+    *checkout's* constant, in a file whose rule is *"A claim is checked against
+    the artefact, never accepted from it."* The archive records its own
+    ``release_version`` and nothing read it.
+
+    Scope, stated rather than dressed up: ``DECISIONS.md`` D-012 records that the
+    gate runs in the workflow that built, so in the real release path both
+    constants are the same object moments apart and this cannot fire. It is a
+    tightening — an otherwise-valid archive examined outside that workflow is now
+    refused instead of relabelled — not a reachable false success.
+
+    Built by rewriting the manifest of a real, complete archive: the hand-made
+    one used while investigating was refused for incompleteness first, which
+    would have made this assertion pass for the wrong reason.
+    """
+    archive = _archive(tmp_path)
+    relabelled = tmp_path / "relabelled.zip"
+    with zipfile.ZipFile(archive) as source, zipfile.ZipFile(relabelled, "w") as target:
+        for item in source.infolist():
+            payload = source.read(item.filename)
+            if item.filename == build_rc.MANIFEST_NAME:
+                document = json.loads(payload.decode("utf-8"))
+                document["release_version"] = "0.4.2"
+                payload = json.dumps(document).encode("utf-8")
+            target.writestr(item, payload)
+
+    findings = _run(tmp_path, archive=relabelled)
+
+    detail = _failures(findings)["archive.release"]
+    assert "0.4.2" in detail
+    assert build_rc.RELEASE_VERSION in detail
+    # The other archive checks still passed, so the refusal is about the label
+    # and not about a broken archive.
+    assert "archive.complete" not in _failures(findings)
+
+
+def test_an_archive_recording_no_release_is_refused(tmp_path: Path) -> None:
+    archive = _archive(tmp_path)
+    stripped = tmp_path / "stripped.zip"
+    with zipfile.ZipFile(archive) as source, zipfile.ZipFile(stripped, "w") as target:
+        for item in source.infolist():
+            payload = source.read(item.filename)
+            if item.filename == build_rc.MANIFEST_NAME:
+                document = json.loads(payload.decode("utf-8"))
+                del document["release_version"]
+                payload = json.dumps(document).encode("utf-8")
+            target.writestr(item, payload)
+
+    findings = _run(tmp_path, archive=stripped)
+
+    assert "records no release_version" in _failures(findings)["archive.release"]
+
+
+def test_the_archive_this_checkout_builds_is_accepted(tmp_path: Path) -> None:
+    """The other direction: refusing every archive would pass the two above."""
+    findings = _run(tmp_path, archive=_archive(tmp_path))
+
+    assert "archive.release" not in _failures(findings)
+    passing = {f.check: f.detail for f in findings if f.ok}
+    assert build_rc.RELEASE_VERSION in passing["archive.release"]
+
+
 def test_evidence_from_another_mod_version_is_refused(tmp_path: Path) -> None:
     """The mod is the code that ran inside the game and did the observing.
 

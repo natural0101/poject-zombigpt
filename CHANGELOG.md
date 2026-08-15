@@ -12,6 +12,52 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **The gate's headline was the one claim derived from neither the artefact nor
+  a check of it** (`dev`). `check_release.py` states its rule at the top: *"A
+  claim is checked against the artefact, never accepted from it."* Its own
+  successful output — `CERTIFIED v1.0.0-rc1` — is built from
+  `build_rc.RELEASE_VERSION`, the **checkout's** constant. The archive records
+  its own `release_version` and nothing read it, so the gate labelled whatever
+  ZIP it was handed with the name the checkout would have given its own build.
+
+  `archive.release` now refuses an archive that declares another release or
+  declares none, and the passing case says which release the archive itself
+  claims.
+
+  **Scope, stated plainly rather than dressed up as more than it is.**
+  `docs/control/DECISIONS.md` D-012 records that the gate runs in the workflow
+  that built, so in the real release path the archive's constant and the
+  checkout's are the same object moments apart and this check can never fire
+  there. It is a tightening, not a reachable false success — unlike the commit,
+  build and component-version gaps closed in the preceding entries. What it buys
+  is that the headline now agrees with the artefact, and that an archive examined
+  outside that workflow is refused rather than relabelled.
+
+  Found by applying the previous entry's method to the other half of the
+  release: every key `build_rc.py` writes into the archive manifest, against
+  every key the `--rc` path reads. Seven were unread. The first pass scanned the
+  whole gate and reported `mod_version` and `product_version` as covered —
+  a false positive, since those strings are named by the *evidence* checks added
+  a commit earlier, not by the archive path. Re-scoped to the archive functions,
+  they are unread there too; they are left alone deliberately, because
+  `build_rc` writes them from the same interpreter that assembles the ZIP and
+  D-012 puts the gate in that same job. `file_count`, `name` and `summary` are
+  likewise not worth a check: the first two are re-derived by the digest pass
+  that opens every member, and the third is prose.
+
+  Three tests, both directions. The relabelled archive is built by rewriting the
+  manifest inside a **real, complete** one — the hand-made archive used while
+  investigating was refused for incompleteness first, which would have made the
+  assertion pass for the wrong reason, and the test asserts `archive.complete`
+  still passes so the refusal is about the label. Proved by planting: removing
+  the check fails all three.
+
+  Consequence worth expecting: the next RC prints `CERTIFIED v1.0.0-rc1: 9
+  check(s) passed` where it printed 8. Measured against a complete archive
+  rather than assumed. `docs/control/EVIDENCE_INDEX.md` still says 8 and is
+  correct for the RC built at `2d3cfea`, which predates this change; it will be
+  updated from the observed line when the next archive is built.
+
 - **Two of the five versions the evidence records were read by nobody** (`dev`).
   This changelog opens with the rule: *"Five versions move independently —
   product, protocol, schema, mod and the supported build range."* The evidence

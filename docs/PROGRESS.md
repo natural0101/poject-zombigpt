@@ -94,6 +94,17 @@ The handover point between work sessions: read it first, update it last.
 > shape; the same enumeration is now a test, and it also records which of the
 > remaining keys honestly need nothing.
 
+> **The gate's headline was asserted from the checkout, not read off the
+> artefact.** `CERTIFIED v1.0.0-rc1` came from `build_rc.RELEASE_VERSION`; the
+> archive's own `release_version` was recorded and never read, in a file whose
+> rule is *"A claim is checked against the artefact, never accepted from it."*
+> `archive.release` closes it. Smaller than the preceding entries and said so:
+> D-012 puts the gate in the workflow that built, so it cannot fire on the real
+> path — it is a tightening, not a reachable false success. Found by enumerating
+> the archive manifest's keys against the `--rc` path, the same method as the
+> evidence manifest; the enumeration's first pass gave a false positive by
+> scanning the whole file instead of the archive functions.
+
 **Legend** — `done` implementation + tests + docs complete and `scripts/check.sh`
 green · `wip` in progress · `todo` not started · `live` blocked on a step that
 physically requires a running game.

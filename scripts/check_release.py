@@ -231,10 +231,60 @@ def _check_archive_contents(archive: Path, bundle: zipfile.ZipFile) -> list[Find
         )
     )
     findings.append(_completeness(manifest))
+    findings.append(_archive_release(manifest))
     findings.append(_evidence_not_claimed(manifest))
     findings.extend(_required_entries(names))
     findings.append(_recorded_digests(bundle, manifest, names))
     return findings
+
+
+def _archive_release(manifest: dict[str, Any]) -> Finding:
+    """The archive must be the release this gate says it certified.
+
+    The headline of a successful run is ``CERTIFIED v1.0.0-rc1``, and that string
+    is built from ``build_rc.RELEASE_VERSION`` — the *checkout's* constant. It was
+    the one claim in the output derived from neither the artefact nor a check of
+    it, in a file whose stated rule is: *"A claim is checked against the artefact,
+    never accepted from it."* The archive records its own ``release_version`` and
+    nothing read it.
+
+    Scope, stated plainly rather than dressed up: ``docs/control/DECISIONS.md``
+    D-012 records that the gate runs in the workflow that built, so in the real
+    release path the archive's constant and the checkout's are the same object
+    moments apart, and this can never fire there. It is a tightening, not a
+    reachable false success — the value is that the headline now says something
+    the artefact agrees with, and that an archive examined outside that workflow
+    is refused rather than relabelled.
+    """
+    declared = str(manifest.get("release_version", "")).strip()
+    if not declared:
+        return Finding(
+            check="archive.release",
+            ok=False,
+            detail=f"{build_rc.MANIFEST_NAME} records no release_version",
+            remediation=(
+                "rebuild with packaging/windows/build_rc.py; an archive that does not "
+                "say which release it is cannot be certified as one"
+            ),
+        )
+    if declared != build_rc.RELEASE_VERSION:
+        return Finding(
+            check="archive.release",
+            ok=False,
+            detail=(
+                f"the archive says it is release {declared} and this checkout builds "
+                f"{build_rc.RELEASE_VERSION}"
+            ),
+            remediation=(
+                "certify the archive this checkout built. Relabelling another one would "
+                "put this gate's verdict on an artefact it never examined the build of"
+            ),
+        )
+    return Finding(
+        check="archive.release",
+        ok=True,
+        detail=f"the archive declares release {declared}, which is what this checkout builds",
+    )
 
 
 def _archive_digest(archive: Path) -> str:
