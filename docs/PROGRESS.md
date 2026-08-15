@@ -74,6 +74,16 @@ The handover point between work sessions: read it first, update it last.
 > commits. The manifest now carries each scenario's commit and `evidence.commit`
 > refuses a disagreement, naming what to re-run.
 
+> **The release bar never checked which game the evidence came from.** The
+> runner's `UNOBSERVED_BUILD` states the rule — *"evidence that cannot name the
+> game it ran against closes nothing"* — and nothing enforced it: `game_build`
+> appeared in `check_release.py` once, in a printed detail, and no code compared
+> it to `SUPPORTED_BUILDS` (`['42.20']`). Measured: 21 of 22 scenarios declare no
+> postcondition about the build and record `(not observed)`; the 22nd asks only
+> that it be `observed`, so `"41.78"` and `"banana"` both pass. `evidence.game_build`
+> now refuses an unnamed, unobserved or unsupported build, and imports the
+> marker from the runner rather than re-spelling it.
+
 **Legend** — `done` implementation + tests + docs complete and `scripts/check.sh`
 green · `wip` in progress · `todo` not started · `live` blocked on a step that
 physically requires a running game.

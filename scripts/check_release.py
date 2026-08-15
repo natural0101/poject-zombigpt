@@ -577,9 +577,84 @@ def check_evidence(manifest_path: Path, evidence_root: Path) -> list[Finding]:
     ]
     findings.append(_manifest_version(manifest))
     findings.append(_scenario_commits(manifest))
+    findings.append(_game_builds(manifest))
     findings.extend(_scenario_verdicts(manifest, scenario_ids))
     findings.extend(_artefact_digests(manifest, scenario_ids, evidence_root))
     return findings
+
+
+def _game_builds(manifest: dict[str, Any]) -> Finding:
+    """The evidence must name the game it ran against, and it must be a supported one.
+
+    The runner already states the rule, on the constant it records when nobody
+    read a build off a running session: *"Not a guess at the supported build:
+    evidence that cannot name the game it ran against closes nothing."* Nothing
+    enforced it. ``game_build`` appeared in this file exactly once, interpolated
+    into a detail line, and no code anywhere compared the evidence's build to
+    ``SUPPORTED_BUILDS``.
+
+    Both halves are reachable. Twenty-one of the twenty-two scenarios declare no
+    postcondition about the build at all, so they reach PASS with ``game_build``
+    unset and the result records ``(not observed)``. The twenty-second,
+    ``S01_INSTALL``, asks only that the field be ``observed`` — measured, it
+    passes on ``"41.78"`` and on ``"banana"``. So a full manifest could carry
+    ``game_builds: ["(not observed)"]`` and this gate would print it and certify
+    ``v1.0.0``.
+
+    ``UNOBSERVED_BUILD`` is imported rather than re-spelled here: a second copy
+    of that string is precisely the drift this project keeps finding, and a
+    checker that agrees with its own spelling of a constant checks nothing.
+    """
+    try:
+        from pz_agent_cli.livetest.runner import UNOBSERVED_BUILD  # noqa: PLC0415
+        from pz_agent_core.version import SUPPORTED_BUILDS  # noqa: PLC0415
+    except ImportError as exc:  # pragma: no cover - the catalogue import fails first
+        return Finding(
+            check="evidence.game_build",
+            ok=False,
+            detail=f"the supported builds could not be imported ({exc})",
+            remediation="run this from a checkout of the repository",
+        )
+
+    builds = [str(entry).strip() for entry in manifest.get("game_builds", []) if str(entry).strip()]
+    if not builds:
+        return Finding(
+            check="evidence.game_build",
+            ok=False,
+            detail="the manifest names no game build",
+            remediation=(
+                "re-run the scenarios recording the build the session reported, and "
+                "finalize again; evidence that cannot name the game it ran against "
+                "closes nothing"
+            ),
+        )
+
+    unsupported = sorted(build for build in builds if build not in SUPPORTED_BUILDS)
+    if unsupported:
+        unobserved = [build for build in unsupported if build == UNOBSERVED_BUILD]
+        return Finding(
+            check="evidence.game_build",
+            ok=False,
+            detail=(
+                f"the evidence names build(s) {', '.join(unsupported)}, and this release "
+                f"supports {', '.join(SUPPORTED_BUILDS)}"
+            ),
+            remediation=(
+                "re-run the scenarios against a supported build, recording what the "
+                "session reported"
+                + (
+                    ". At least one result records that no build was read at all, which "
+                    "is the runner saying nobody looked"
+                    if unobserved
+                    else ""
+                )
+            ),
+        )
+    return Finding(
+        check="evidence.game_build",
+        ok=True,
+        detail=f"the evidence was produced against build(s) {', '.join(sorted(builds))}",
+    )
 
 
 def _scenario_commits(manifest: dict[str, Any]) -> Finding:

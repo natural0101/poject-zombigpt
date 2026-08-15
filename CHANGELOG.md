@@ -12,6 +12,43 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **The release bar never checked which game the evidence came from** (`dev`).
+  The runner states the rule on the constant it records when nobody read a build
+  off a running session — *"Not a guess at the supported build: evidence that
+  cannot name the game it ran against closes nothing."* Nothing enforced it.
+  `game_build` appeared in `check_release.py` exactly once, interpolated into a
+  detail line, and no code anywhere compared the evidence's build against
+  `SUPPORTED_BUILDS`.
+
+  Both halves are reachable, and measured rather than argued:
+
+  - Twenty-one of the twenty-two scenarios declare no postcondition about the
+    build at all, so they reach `PASS` with `game_build` unset and the result
+    records `(not observed)`.
+  - The twenty-second, `S01_INSTALL`, asks only that `game.build` be `observed`
+    — driving the real postcondition, it passes on `"42.20"`, on `"41.78"` and
+    on `"banana"`. "A build was recorded" was never the same claim as "a
+    supported build was recorded".
+
+  So a full manifest could carry `game_builds: ["(not observed)"]` and this gate
+  would print it and certify `v1.0.0`, for a project whose `SUPPORTED_BUILDS` is
+  exactly `['42.20']`.
+
+  The new `evidence.game_build` check refuses a manifest that names no build,
+  one that names `(not observed)`, and one that names a build outside the
+  supported set — saying which it found and which is supported. It imports
+  `UNOBSERVED_BUILD` from the runner rather than re-spelling it: a second copy of
+  that string is precisely the drift this project keeps finding, and a checker
+  that agrees only with its own spelling of a constant checks nothing. A test
+  parses the gate's AST and refuses a second *value* while leaving the docstring
+  prose that quotes it — which caught the first, too-blunt version of that
+  assertion.
+
+  Five tests, both directions: unobserved, unsupported and empty are each refused
+  by name, `42.20` is accepted, and the marker is pinned to the runner's.
+  Proved by planting: removing the check fails four, re-spelling the constant
+  fails the fifth.
+
 - **The release bar could certify `v1.0.0` on evidence from other code** (`dev`).
   `check_release.py --release` is the last gate before a tag. It checks that the
   evidence's *product version* matches the release, and its own remediation

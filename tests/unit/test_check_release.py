@@ -14,6 +14,7 @@ it.
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import importlib
 import io
@@ -26,6 +27,7 @@ from typing import Any, Final
 
 import pytest
 
+from pz_agent_cli.livetest.runner import UNOBSERVED_BUILD
 from pz_agent_cli.livetest.scenarios import SCENARIO_IDS
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[2]
@@ -86,6 +88,15 @@ def _failures(findings: list[Any]) -> dict[str, str]:
     return {finding.check: finding.detail for finding in findings if not finding.ok}
 
 
+def _failures_full(findings: list[Any]) -> dict[str, str]:
+    """Detail and remediation together, for the assertions about what to do next."""
+    return {
+        finding.check: f"{finding.detail} {finding.remediation}"
+        for finding in findings
+        if not finding.ok
+    }
+
+
 # ---------------------------------------------------------------------------
 # building the things the gate reads
 # ---------------------------------------------------------------------------
@@ -144,7 +155,12 @@ _OTHER_COMMIT: Final = "fedcba9876543210fedcba9876543210fedcba98"
 
 
 def _evidence(
-    root: Path, *, failing: str = "", tamper: str = "", commit_elsewhere: str = ""
+    root: Path,
+    *,
+    failing: str = "",
+    tamper: str = "",
+    commit_elsewhere: str = "",
+    game_builds: list[str] | None = None,
 ) -> tuple[Path, Path]:
     """A passing evidence tree and the manifest that accounts for it.
 
@@ -204,7 +220,7 @@ def _evidence(
                 "format": check_release.LIVETEST_MANIFEST_FORMAT,
                 "complete": True,
                 "commit": _MANIFEST_COMMIT,
-                "game_builds": ["42.20"],
+                "game_builds": ["42.20"] if game_builds is None else game_builds,
                 "product_version": build_rc.RELEASE_VERSION,
                 "scenario_count": len(SCENARIO_IDS),
                 "scenarios": scenarios,
@@ -411,6 +427,98 @@ def test_a_member_the_index_never_recorded_is_refused(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # the evidence, when there is some
 # ---------------------------------------------------------------------------
+
+
+def test_evidence_that_never_named_a_game_build_is_refused(tmp_path: Path) -> None:
+    """The runner's own rule, which nothing enforced.
+
+    ``UNOBSERVED_BUILD`` carries it on the constant: *"Not a guess at the
+    supported build: evidence that cannot name the game it ran against closes
+    nothing."* Twenty-one of the twenty-two scenarios declare no postcondition
+    about the build, so they reach PASS with it unset and the result records
+    ``(not observed)`` — which used to reach ``CERTIFIED v1.0.0`` unremarked.
+    """
+
+    manifest, evidence = _evidence(tmp_path / "tree", game_builds=[UNOBSERVED_BUILD])
+
+    findings = _run(tmp_path, release=True, manifest=manifest, evidence_dir=evidence)
+
+    detail = _failures(findings)["evidence.game_build"]
+    assert UNOBSERVED_BUILD in detail
+    assert "nobody looked" in _failures_full(findings)["evidence.game_build"]
+
+
+def test_evidence_from_an_unsupported_build_is_refused(tmp_path: Path) -> None:
+    """A build string that was read, and is the wrong game.
+
+    ``S01_INSTALL`` is the only scenario that looks at the build at all and its
+    check is ``observed`` — measured, it passes on ``"41.78"`` and on
+    ``"banana"``. So "a build was recorded" was never the same claim as "a
+    supported build was recorded".
+    """
+    manifest, evidence = _evidence(tmp_path / "tree", game_builds=["41.78"])
+
+    findings = _run(tmp_path, release=True, manifest=manifest, evidence_dir=evidence)
+
+    detail = _failures(findings)["evidence.game_build"]
+    assert "41.78" in detail
+    assert "42.20" in detail
+
+
+def test_a_manifest_naming_no_build_at_all_is_refused(tmp_path: Path) -> None:
+    manifest, evidence = _evidence(tmp_path / "tree", game_builds=[])
+
+    findings = _run(tmp_path, release=True, manifest=manifest, evidence_dir=evidence)
+
+    assert "names no game build" in _failures(findings)["evidence.game_build"]
+
+
+def test_evidence_from_the_supported_build_is_accepted(tmp_path: Path) -> None:
+    """The other direction: refusing every manifest would pass the three above."""
+    manifest, evidence = _evidence(tmp_path / "tree")
+
+    findings = _run(tmp_path, release=True, manifest=manifest, evidence_dir=evidence)
+
+    assert "evidence.game_build" not in _failures(findings)
+    passing = {f.check: f.detail for f in findings if f.ok}
+    assert "42.20" in passing["evidence.game_build"]
+
+
+def test_the_gate_reads_the_unobserved_marker_from_the_runner(tmp_path: Path) -> None:
+    """A second spelling of that constant would make the refusal miss it.
+
+    The gate imports ``UNOBSERVED_BUILD``; this pins that it is still the string
+    the runner actually records, so the two cannot drift into a checker that
+    agrees only with itself.
+    """
+
+    source = (REPO_ROOT / "scripts" / "check_release.py").read_text(encoding="utf-8")
+    assert "from pz_agent_cli.livetest.runner import UNOBSERVED_BUILD" in source
+
+    # Docstrings quote the marker on purpose — that is the explanation. What must
+    # not exist is a second *value*, so the tree is walked and docstrings are
+    # skipped rather than the text being grepped.
+    tree = ast.parse(source)
+    docstrings = {
+        node.body[0].value
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+        and node.body
+        and isinstance(node.body[0], ast.Expr)
+        and isinstance(node.body[0].value, ast.Constant)
+    }
+    literals = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant)
+        and node.value == UNOBSERVED_BUILD
+        and node not in docstrings
+    ]
+
+    assert literals == [], (
+        f"{UNOBSERVED_BUILD!r} is spelled as a value at line(s) "
+        f"{[n.lineno for n in literals]}; import it instead"
+    )
 
 
 def test_a_scenario_that_passed_against_other_code_is_refused(tmp_path: Path) -> None:
