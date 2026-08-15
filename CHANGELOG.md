@@ -12,6 +12,47 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **The verifier could confirm a `PASS` that the plan gate exists to refuse**
+  (`dev`). `scripts/verify_carryover.py` re-derives which tasks deserve a `PASS`
+  by running their tests — 400 of the plan's claims went through it — and it was
+  the last script in `scripts/` that no test ran. Running it turned up two
+  defects.
+
+  `check_master_plan.py` refuses a `local` task marked `PASS` in as many words:
+  nothing in this environment can produce its evidence. `evaluate()` did not know
+  that rule, so a live task whose named regression test happens to pass on Linux
+  and whose evidence path happens to exist came back `PASS` — one script writing
+  precisely what the other exists to refuse. Demonstrated on the real pair before
+  the fix: `evaluate` answered `PASS`, `check_master_plan.problems` answered
+  *"E14-M01-T001 is a local task marked PASS; nothing in this environment can
+  produce its evidence"* about the same task. It now returns no status at all for
+  a `local` task, and `--apply` writes nothing — not the status, not the reason,
+  not the commit, because recording a reason against a task this environment may
+  not judge is still having had an opinion about it. The report prints those
+  separately from the rejected ones: "cannot be judged here" and "was judged and
+  failed" are different facts.
+
+  Not reachable in today's plan — measured over all 84 `local` tasks, none has
+  both an existing test file and an existing evidence path, and a test now holds
+  that measurement. Closed anyway: "not reachable today" is a fact about the
+  plan, which is edited every iteration, not about this code.
+
+  Second defect, found by looking rather than by waiting for another red build:
+  it invoked `.venv/bin/pytest`, the POSIX venv layout, which does not exist on
+  Windows where the entry point is `.venv/Scripts/pytest.exe` — the same class as
+  the decoding failure two commits ago. It runs `sys.executable -m pytest` now,
+  correct on either platform and needing no venv at all.
+
+  Checked and found sound, so it is on the record rather than implied: the
+  refusal of a green run over zero executed tests genuinely works. pytest exits 0
+  when every test in a target skips, and `tests/unit/test_carryover_verification.py`
+  (10 tests) asserts that against a target built to skip everything, with a
+  control that a target which really runs is still accepted. The load-bearing one
+  is neither: it asks both scripts about the same task and requires that anything
+  the verifier would confirm, the gate would accept — the invariant that was
+  violated, and the one that catches this without anybody thinking of `owner`.
+  Proved by planting the pre-fix script: four of the ten fail.
+
 - **The decoding control test asserted the wrong failure, and the right one is
   worse** (`dev`). The production fix of the previous entry worked — the Windows
   runner went from `10 failed` to `1 failed, 8585 passed` at `6794dd4` — and the

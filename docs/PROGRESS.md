@@ -275,7 +275,14 @@ The tooling, all of it gates rather than reports:
   `verification_commit`. Both halves are held by
   `tests/unit/test_pass_audit.py`, which plants each question.
 - `scripts/verify_carryover.py` re-runs a task's regression test before its
-  `PASS` is believed. Nothing inherits a pass from the old model.
+  `PASS` is believed. Nothing inherits a pass from the old model. It refuses a
+  green run over zero executed tests — pytest exits 0 when every test in a target
+  skips — and it decides nothing at all about an `owner: local` task, which is
+  the rule the gate above enforces and which this script did not know: a live
+  task whose test happened to pass here came back `PASS`, exactly what
+  `check_master_plan.py` refuses. Held by
+  `tests/unit/test_carryover_verification.py`, whose central assertion is that
+  anything this script would confirm, that gate would accept.
 - `tests/unit/test_master_plan.py` proves each of those refusals by planting the
   violation it exists to catch, and includes a control asserting a clean plan is
   admitted — without which a gate that rejected everything would satisfy them

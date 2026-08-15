@@ -69,7 +69,14 @@ def _run(test: str) -> tuple[bool, str]:
         report = Path(scratch) / "report.xml"
         result = subprocess.run(
             [
-                str(REPO_ROOT / ".venv" / "bin" / "pytest"),
+                # ``sys.executable -m pytest`` rather than ``.venv/bin/pytest``:
+                # that path is the POSIX venv layout and does not exist on
+                # Windows, where the entry point is ``.venv/Scripts/pytest.exe``.
+                # The interpreter already running this script is the right one by
+                # construction, on either platform.
+                sys.executable,
+                "-m",
+                "pytest",
                 test,
                 "-x",
                 f"--junitxml={report}",
@@ -138,8 +145,26 @@ def _commit_exists(sha: str) -> bool:
     )
 
 
-def evaluate(task: dict[str, Any], commit: str) -> tuple[str, str]:
-    """(status, reason) for one candidate task."""
+def evaluate(task: dict[str, Any], commit: str) -> tuple[str | None, str]:
+    """(status, reason) for one candidate task, or ``(None, why)`` to decide nothing.
+
+    ``None`` is not a soft ``FAIL``. It means this environment has no standing to
+    say anything about the task, so whatever the plan records is left exactly as
+    it is.
+    """
+    if task.get("owner") == "local":
+        # ``check_master_plan.py`` refuses a ``local`` task marked PASS in as
+        # many words — nothing here can produce its evidence. This function did
+        # not know that rule, and a live task whose named test happens to pass
+        # on Linux and whose evidence path happens to exist was returned as
+        # PASS: one script writing precisely what the other exists to refuse.
+        # Not reachable in today's plan (no local task has both an existing test
+        # file and an existing evidence path) and closed anyway, because "not
+        # reachable today" is a fact about the plan, not about this code.
+        return None, (
+            "owner is 'local': nothing in this environment can produce this task's "
+            "evidence, so nothing here may decide its status either"
+        )
     test = (task.get("regression_test") or "").strip()
     if not test:
         return "IN_PROGRESS", (
@@ -173,7 +198,7 @@ def main() -> int:
     candidates: dict[str, str] = json.loads(args.candidates.read_text(encoding="utf-8"))
     document = yaml.safe_load(PLAN_PATH.read_text(encoding="utf-8"))
 
-    outcome: dict[str, tuple[str, str]] = {}
+    outcome: dict[str, tuple[str | None, str]] = {}
     for epic in document["epics"]:
         for milestone in epic["milestones"]:
             for task in milestone["tasks"]:
@@ -182,17 +207,28 @@ def main() -> int:
                     continue
                 status, reason = evaluate(task, commit)
                 outcome[task["id"]] = (status, reason)
-                if args.apply:
+                # A ``None`` status writes nothing at all — not the status, not
+                # the reason, not the commit. Recording a reason against a task
+                # this environment may not judge would still be this environment
+                # having had an opinion about it.
+                if args.apply and status is not None:
                     task["status"] = status
                     task["reason"] = reason
                     task["commit"] = commit if status == "PASS" else task.get("commit")
 
     confirmed = [i for i, (s, _) in outcome.items() if s == "PASS"]
-    rejected = {i: r for i, (s, r) in outcome.items() if s != "PASS"}
+    left_alone = {i: r for i, (s, r) in outcome.items() if s is None}
+    rejected = {i: r for i, (s, r) in outcome.items() if s is not None and s != "PASS"}
     print(f"candidates: {len(outcome)}")
     print(f"confirmed PASS: {len(confirmed)}")
     print(f"not confirmed: {len(rejected)}")
     for identifier, reason in sorted(rejected.items()):
+        print(f"  - {identifier}: {reason}")
+    # Printed separately and never folded into the count above: "this cannot be
+    # judged here" and "this was judged and failed" are different facts, and a
+    # summary that merges them reads as a verdict nobody reached.
+    print(f"left alone: {len(left_alone)}")
+    for identifier, reason in sorted(left_alone.items()):
         print(f"  - {identifier}: {reason}")
 
     if args.apply:
