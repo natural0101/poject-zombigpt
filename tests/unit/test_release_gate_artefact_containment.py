@@ -40,6 +40,7 @@ as the installer's, so the two read alike.
 from __future__ import annotations
 
 import importlib
+import os
 import sys
 from pathlib import Path
 from typing import Final
@@ -180,11 +181,29 @@ def test_the_defect_reproduces_through_the_naive_join(tmp_path: Path) -> None:
     Asserts what the old expression did, rather than only that the new one does
     not: the absolute case in particular is not a traversal at all, and a future
     reader who fixes only ``..`` would leave it open.
+
+    **The assertion is containment, not an exact path, and that is the point of
+    this note.** The first version asserted ``root / "/etc/passwd" ==
+    Path("/etc/passwd")``, which is true on POSIX and false on Windows: pathlib
+    keeps the *drive* and replaces only the root, so the join yields
+    ``C:/etc/passwd``. The defect reproduces on both — the join leaves the
+    evidence tree either way — but the shape of the escape differs, and pinning
+    the shape took the Windows release build red. Written, with some
+    embarrassment, in a test file about paths from documents reaching the
+    filesystem: the fourth instance of this class, and the second I authored.
     """
     root = tmp_path / "evidence"
 
-    assert root / "../outside.txt" != root.joinpath("outside.txt")
-    assert (root / "/etc/passwd") == Path("/etc/passwd"), (
-        "pathlib no longer replaces the root on an absolute operand; the second "
+    # The two halves are visible differently, which is itself worth pinning.
+    # A traversal is *lexically* still under the root — ``is_relative_to`` says
+    # True for ``…/evidence/../outside.txt`` — and leaves it only once ``..`` is
+    # folded, so it is asserted through ``normpath``. An absolute operand is
+    # visible immediately, because pathlib discards the root outright.
+    traversed = Path(os.path.normpath(root / "../outside.txt"))
+    assert not traversed.is_relative_to(root), (
+        "the traversal half of this defect no longer reproduces"
+    )
+    assert not (root / "/etc/passwd").is_relative_to(root), (
+        "pathlib no longer discards the root on an absolute operand; the second "
         "half of this defect no longer reproduces"
     )
