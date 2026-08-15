@@ -12,6 +12,39 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **The decoding control test asserted the wrong failure, and the right one is
+  worse** (`dev`). The production fix of the previous entry worked — the Windows
+  runner went from `10 failed` to `1 failed, 8585 passed` at `6794dd4` — and the
+  one remaining red was the control test written to keep that file honest. It
+  asserted that an unpinned `text=True` exits non-zero, which is true on POSIX
+  and false on Windows:
+
+  * POSIX decodes in `_communicate`, on the calling thread, so the
+    `UnicodeDecodeError` propagates and the process dies.
+  * Windows decodes in `_readerthread`. The exception is raised *there*, printed
+    by the threading excepthook, and never reaches the caller —
+    `subprocess.run` returns `returncode` 0 with **empty output**. The release
+    log's traceback names that exact frame.
+
+  So the original defect was not only "a gate that could not execute". Outside
+  pytest — which is how `scripts/check.sh` runs it — `audit_pass._path_at` would
+  have returned `""` for every file, `_defines("", node)` answers False, and the
+  audit would have reported tasks as unproven whose tests are plainly there.
+  Measured, not reasoned: patching `_git` to drop `git show`'s stdout exactly as
+  the reader thread leaves it makes the audit report **82 invalid claims out of
+  400**, every one fabricated, with no error anywhere — a gate whose whole
+  purpose is not to make false accusations, making 82 of them silently. That
+  shape now has its own regression test.
+
+  The control now asserts what both platforms share: the decode raises *and* the
+  content does not arrive. Verified in both directions — the pinned form
+  delivers all 214520 characters of `CHANGELOG.md` under the same ASCII locale,
+  which is precisely what the control refuses to see from the unpinned one.
+
+  Also checked and found clean, so it is on the record rather than left open:
+  the three `subprocess` call sites in the shipped `packages/` are all
+  byte-mode. The defect was confined to `scripts/`.
+
 - **A control-plane gate could not run on Windows at all, and took the release
   build red** (`dev`). `subprocess.run(..., text=True)` decodes the pipe with
   `locale.getencoding()` — UTF-8 in this container, **cp1252 on the Windows

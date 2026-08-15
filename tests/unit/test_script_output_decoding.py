@@ -98,22 +98,58 @@ def test_the_repository_really_has_bytes_that_ascii_cannot_decode() -> None:
         raw.decode("ascii")
 
 
-def test_the_ambient_encoding_is_what_broke_the_windows_build() -> None:
-    """The defect, planted as it stood: ``text=True`` with nothing pinning it.
+def test_the_ambient_encoding_does_not_deliver_the_content() -> None:
+    """The control: ``text=True`` with nothing pinning it must still fail.
 
-    This is the control. If a future Python made ``text=True`` mean UTF-8
-    everywhere, this would stop raising and every assertion below would be
-    proving nothing — so the failure is asserted rather than assumed.
+    Without this, a future Python that made ``text=True`` mean UTF-8 everywhere
+    would leave every assertion in this file proving nothing.
+
+    **What "fail" means is not the same on both platforms**, and getting that
+    wrong is what made this test itself the one red test on the Windows runner
+    after the fix landed (``6794dd4``: ``1 failed, 8585 passed``). It asserted a
+    non-zero exit, which is true on POSIX and false on Windows:
+
+    * On POSIX ``_communicate`` decodes on the calling thread, so the
+      ``UnicodeDecodeError`` propagates and the process dies.
+    * On Windows it decodes in ``_readerthread``. The exception is raised
+      *there*, printed by the threading excepthook, and never reaches the
+      caller — ``subprocess.run`` returns a ``CompletedProcess`` with
+      ``returncode`` 0 and **empty output**. The traceback in the release log
+      shows exactly that frame.
+
+    The Windows shape is the more dangerous of the two and is the real reason
+    this matters beyond a red build: ``audit_pass._path_at`` would have returned
+    ``""`` rather than a file's content, ``_defines("", node)`` answers False on
+    an empty string, and the audit would have accused tests that were plainly
+    there. Measured rather than reasoned — patching ``_git`` to return an empty
+    ``stdout`` for ``git show``, exactly as the reader thread leaves it, makes
+    the audit report **82 invalid claims out of 400**, every one of them
+    fabricated, with no error anywhere. Under pytest it surfaced at all only
+    because pytest turns an unraisable thread exception into one;
+    ``scripts/check.sh`` runs the script directly, where the run would simply
+    have exited 1 with a list of 82 tasks to go and investigate.
+
+    So what is asserted here is the thing both platforms share: the decode
+    raises, and the content does not arrive.
     """
+    expected = len((REPO_ROOT / _NON_ASCII_FILE).read_text(encoding="utf-8"))
     ambient = _in_ascii_locale(
         "-c",
-        "import subprocess;"
-        f"subprocess.run(['git','show','HEAD:{_NON_ASCII_FILE}'],"
-        "capture_output=True,text=True,check=False)",
+        "import subprocess,sys;"
+        f"r=subprocess.run(['git','show','HEAD:{_NON_ASCII_FILE}'],"
+        "capture_output=True,text=True,check=False);"
+        "sys.stderr.write('DELIVERED %d\\n' % len(r.stdout))",
     )
 
-    assert ambient.returncode != 0, "the ambient decode no longer fails; this file is moot"
-    assert "UnicodeDecodeError" in ambient.stderr
+    assert "UnicodeDecodeError" in ambient.stderr, (
+        "the ambient decode no longer fails; this file is moot"
+    )
+    delivered = [
+        int(line.split()[1]) for line in ambient.stderr.splitlines() if line.startswith("DELIVERED")
+    ]
+    assert delivered != [expected], (
+        f"the ambient decode delivered all {expected} characters despite raising"
+    )
 
 
 def test_the_pinned_decoder_survives_the_same_locale() -> None:
@@ -155,6 +191,42 @@ def test_each_control_plane_gate_runs_under_an_ascii_locale(argv: tuple[str, ...
 
     assert "UnicodeDecodeError" not in result.stderr, result.stderr[-2000:]
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_an_audit_reading_empty_git_output_accuses_the_innocent() -> None:
+    """The Windows shape, held as a fact rather than as a paragraph.
+
+    ``git show`` returning nothing is what a reader-thread decode failure leaves
+    behind, and it is indistinguishable — to every line of ``audit_pass`` — from
+    a file that is genuinely empty. This pins the consequence so the number in
+    the docstring above is checked rather than remembered, and so that anyone
+    tempted to give ``_path_at`` a "just return what we got" fallback sees what
+    that costs.
+    """
+    import yaml  # noqa: PLC0415
+    from scripts import audit_pass  # noqa: PLC0415
+
+    document = yaml.safe_load(
+        (REPO_ROOT / "docs" / "control" / "MASTER_PLAN.yaml").read_text(encoding="utf-8")
+    )
+    real = audit_pass._git
+
+    def content_lost(*arguments: str) -> subprocess.CompletedProcess[str]:
+        result = real(*arguments)
+        if arguments and arguments[0] == "show":
+            result.stdout = ""
+        return result
+
+    audit_pass._git = content_lost
+    try:
+        invalid = [verdict for verdict in audit_pass.audit(document) if not verdict.valid]
+    finally:
+        audit_pass._git = real
+
+    assert invalid, "losing every file's content produced no accusation at all"
+    assert len(invalid) > 50, f"only {len(invalid)} accusation(s); the simulation is not biting"
+    # And with the content arriving, none of them stands.
+    assert [v for v in audit_pass.audit(document) if not v.valid] == []
 
 
 # ---------------------------------------------------------------------------

@@ -254,7 +254,14 @@ The tooling, all of it gates rather than reports:
   all, and took the release build red one commit after it was wired in. The
   decoding is pinned to UTF-8 with `errors="replace"`;
   `tests/unit/test_script_output_decoding.py` runs the gates under `LC_ALL=C`,
-  where the same failure reproduces on Linux.
+  where the same failure reproduces on Linux. The two platforms fail
+  *differently*, which is the part worth carrying: POSIX decodes on the calling
+  thread and dies, Windows decodes in a reader thread and returns `returncode`
+  0 with **empty output**. So on Windows the audit would not have crashed — it
+  would have read every file as empty and reported 82 of 400 claims as unproven,
+  measured by simulating exactly that. The shipped `packages/` were checked at
+  the same time and are clean: all three of their subprocess calls are
+  byte-mode.
 - `scripts/audit_pass.py` asks the *historical* questions, which are the ones
   the gate above cannot: did the regression test a task names exist at the commit
   the task records as its verification, did the named test node exist in it, is
