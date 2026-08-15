@@ -12,6 +12,50 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **The release bar could certify `v1.0.0` on evidence from other code** (`dev`).
+  `check_release.py --release` is the last gate before a tag. It checks that the
+  evidence's *product version* matches the release, and its own remediation
+  states the principle: *"evidence from a different build is evidence about that
+  build."* But `PRODUCT_VERSION` is a single literal that does not move for
+  hundreds of commits, so the version cannot tell one build from another inside
+  a release series. The commit can — and nothing compared it. The manifest's own
+  `commit` was interpolated into a detail line and compared to nothing, and the
+  per-scenario commits were **not in the manifest at all**: `result.json` has
+  carried `commit` from the start, and `_scenario_summary` — the function whose
+  output becomes the release manifest — dropped it.
+
+  This is reachable by the plan's own design, not by misuse. The ledger derives
+  *PASS if any attempt passed*, deliberately, so a re-run cannot erase a real
+  result — which means a scenario keeps reporting `PASS` after the code moves.
+  And the campaign that produces this evidence is expected to move it: `E14-M04`
+  is, in as many words, *"record the game incompatibilities the run finds, fix
+  each, re-run every scenario a fix touches"*. The natural end of a week of live
+  testing is twenty-two passes spread across several commits, and before this
+  nothing would have said so ahead of `CERTIFIED v1.0.0`.
+
+  The manifest now carries each scenario's commit, read through `verify_result`
+  so the value comes from bytes checked against the recorded digest — the same
+  way `game_builds` was already gathered. `evidence/schema/manifest.schema.json`
+  requires it, and rejected the field until it was declared, which is the schema
+  working. The new `evidence.commit` check refuses when any scenario's commit
+  differs from the one the manifest was generated at, or when any is unrecorded,
+  and names the scenarios to re-run. Agreement rather than equality with `HEAD`:
+  an operator who runs the catalogue without changing code gets one value
+  throughout, so the rule is an instruction and not a wall.
+
+  Three tests, both directions — a scenario that passed against other code is
+  refused by name and by commit, a manifest with the field stripped refuses
+  rather than passing silently, and evidence all taken at one commit is
+  accepted. Proved by planting each half: removing the check fails three,
+  removing the manifest field fails the round-trip contract suite outright.
+
+  Checked in the same pass and found sound, so they are recorded rather than
+  re-examined next time: a scenario declaring zero postconditions cannot pass
+  vacuously (`decide` raises, with a comment saying why), and the evidence
+  tamper chain is honestly scoped in its own module — *"a tripwire rather than a
+  seal: there is no key, and this project ships no secrets"* — which is the
+  correct claim for local evidence rather than an overclaim.
+
 - **A safety postcondition could pass on a character nobody read** (`dev`).
   `livetest/scenarios.py` states the rule the live verdict rests on — *"A
   postcondition can only pass on a value that was observed. There is no check

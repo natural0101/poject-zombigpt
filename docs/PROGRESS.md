@@ -63,6 +63,17 @@ The handover point between work sessions: read it first, update it last.
 > not truthiness, because `0` and `False` are readings.
 > `tests/unit/test_postcondition_needs_a_reading.py` holds both directions.
 
+> **The release bar could certify `v1.0.0` on evidence from other code.**
+> `--release` enforced *"evidence from a different build is evidence about that
+> build"* on the product version — a literal that does not move for hundreds of
+> commits — and compared no commit at all: the manifest's own was printed and
+> never checked, and the per-scenario ones were missing from the manifest, though
+> `result.json` has always carried them. Reachable by design: the ledger derives
+> *PASS if any attempt passed*, and `E14-M04` expects fixes and re-runs mid
+> campaign, so a week of live testing naturally ends with passes spread across
+> commits. The manifest now carries each scenario's commit and `evidence.commit`
+> refuses a disagreement, naming what to re-run.
+
 **Legend** — `done` implementation + tests + docs complete and `scripts/check.sh`
 green · `wip` in progress · `todo` not started · `live` blocked on a step that
 physically requires a running game.

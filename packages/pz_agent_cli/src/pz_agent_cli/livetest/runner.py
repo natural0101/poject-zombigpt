@@ -888,7 +888,7 @@ def finalize(
         "generated_at_ms": generated_at_ms,
         "generated_at": _iso(generated_at_ms),
         "scenario_count": len(audits),
-        "scenarios": [_scenario_summary(audit, store) for audit in audits],
+        "scenarios": [_scenario_summary(audit, store, layout) for audit in audits],
         "artefacts": [entry.to_dict() for entry in entries],
         "totals": {
             "artefact_count": len(entries),
@@ -899,7 +899,28 @@ def finalize(
     return output, document
 
 
-def _scenario_summary(audit: ScenarioAudit, store: StateStore) -> JsonDict:
+def _scenario_summary(audit: ScenarioAudit, store: StateStore, layout: EvidenceLayout) -> JsonDict:
+    """One scenario's line in the manifest, including the commit it passed at.
+
+    ``result.json`` has carried ``commit`` since the beginning — *"a result whose
+    commit does not match the code under test is not evidence of anything"* — and
+    this summary used to drop it. That mattered because the summary is what
+    becomes the release manifest: ``check_release.py --release`` could not ask
+    which commit a scenario passed at, because the answer was not in the document
+    it reads.
+
+    It is not a hypothetical gap. The ledger's rule is *PASS if any attempt
+    passed*, so a scenario that passed at one commit keeps reporting PASS after
+    the code moves, and the campaign that produces this evidence is explicitly
+    expected to move it — ``E14-M04`` is "fix each incompatibility, re-run every
+    scenario a fix touches". Without the commit here, twenty-two PASSes spread
+    across a week of fixes are indistinguishable from twenty-two taken against
+    one build.
+
+    Read through ``verify_result`` rather than off the ledger, so the value comes
+    from bytes that were checked against the recorded digest — the same way
+    ``game_builds`` is already gathered a few lines up.
+    """
     state = store.read(audit.scenario_id)
     attempt = state.passing_attempt
     return {
@@ -908,6 +929,7 @@ def _scenario_summary(audit: ScenarioAudit, store: StateStore) -> JsonDict:
         "attempt_count": state.attempt_count,
         "last_run_ms": state.last_run_ms,
         "result_sha256": "" if attempt is None else attempt.result_sha256,
+        "commit": str(verify_result(layout, state).get("commit", "")),
     }
 
 

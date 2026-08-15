@@ -21,44 +21,83 @@
     "totals"
   ],
   "properties": {
-    "format": { "const": "pz-agent/livetest-manifest/1" },
+    "format": {
+      "const": "pz-agent/livetest-manifest/1"
+    },
     "complete": {
       "const": true,
       "description": "Constant by design. A manifest that could describe itself as partial is one a release gate would accept."
     },
-    "commit": { "type": "string", "minLength": 1 },
+    "commit": {
+      "type": "string",
+      "minLength": 1
+    },
     "game_builds": {
       "type": "array",
       "minItems": 1,
       "maxItems": 8,
-      "items": { "type": "string", "minLength": 1 },
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
       "description": "Every distinct build string the results carry. More than one means the evidence spans builds, which a reviewer needs to see rather than have averaged away."
     },
-    "product_version": { "type": "string", "minLength": 1 },
-    "mod_version": { "type": "string", "minLength": 1 },
-    "schema_version": { "type": "string", "minLength": 1 },
-    "generated_at_ms": { "type": "integer", "minimum": 0 },
-    "generated_at": { "type": "string", "minLength": 1 },
-    "scenario_count": { "type": "integer", "minimum": 1 },
+    "product_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "mod_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "schema_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "generated_at_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "generated_at": {
+      "type": "string",
+      "minLength": 1
+    },
+    "scenario_count": {
+      "type": "integer",
+      "minimum": 1
+    },
     "scenarios": {
       "type": "array",
       "minItems": 1,
       "maxItems": 64,
-      "items": { "$ref": "#/$defs/scenario" }
+      "items": {
+        "$ref": "#/$defs/scenario"
+      }
     },
     "artefacts": {
       "type": "array",
       "minItems": 1,
       "maxItems": 4096,
-      "items": { "$ref": "#/$defs/artefact" }
+      "items": {
+        "$ref": "#/$defs/artefact"
+      }
     },
     "totals": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["artefact_count", "bytes"],
+      "required": [
+        "artefact_count",
+        "bytes"
+      ],
       "properties": {
-        "artefact_count": { "type": "integer", "minimum": 1 },
-        "bytes": { "type": "integer", "minimum": 0 }
+        "artefact_count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0
+        }
       }
     }
   },
@@ -71,10 +110,14 @@
         "state",
         "attempt_count",
         "last_run_ms",
-        "result_sha256"
+        "result_sha256",
+        "commit"
       ],
       "properties": {
-        "scenario_id": { "type": "string", "pattern": "^S[0-9]{2}_[A-Z0-9_]+$" },
+        "scenario_id": {
+          "type": "string",
+          "pattern": "^S[0-9]{2}_[A-Z0-9_]+$"
+        },
         "state": {
           "const": "PASS",
           "description": "Only PASS reaches a manifest. Everything else is a refusal, named in the error rather than recorded here."
@@ -84,8 +127,22 @@
           "minimum": 1,
           "description": "More than one is normal and is kept: a scenario fixed after a failure carries both attempts."
         },
-        "last_run_ms": { "type": ["integer", "null"], "minimum": 0 },
-        "result_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        "last_run_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "result_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "commit": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The commit this scenario passed at, copied from its verified result.json. Required because the ledger derives PASS from any passing attempt, so a scenario keeps reporting PASS after the code moves; without this the manifest cannot say whether the passes describe one build or a week of them, and check_release.py --release compares them."
+        }
       }
     },
     "artefact": {
@@ -102,30 +159,72 @@
         "problem"
       ],
       "properties": {
-        "scenario_id": { "type": "string", "minLength": 1 },
-        "kind": {
-          "enum": ["state", "result", "attempt", "log", "journal", "snapshot", "screenshot"]
+        "scenario_id": {
+          "type": "string",
+          "minLength": 1
         },
-        "path": { "type": "string", "minLength": 1 },
-        "required": { "type": "boolean" },
-        "present": { "type": "boolean" },
-        "sha256": { "type": "string", "pattern": "^([0-9a-f]{64})?$" },
-        "size_bytes": { "type": "integer", "minimum": 0 },
-        "problem": { "type": "string" }
+        "kind": {
+          "enum": [
+            "state",
+            "result",
+            "attempt",
+            "log",
+            "journal",
+            "snapshot",
+            "screenshot"
+          ]
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "present": {
+          "type": "boolean"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^([0-9a-f]{64})?$"
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "problem": {
+          "type": "string"
+        }
       },
       "allOf": [
         {
           "description": "A required artefact that reached the manifest is present, hashed and non-empty.",
           "if": {
-            "properties": { "required": { "const": true } },
-            "required": ["required"]
+            "properties": {
+              "required": {
+                "const": true
+              }
+            },
+            "required": [
+              "required"
+            ]
           },
           "then": {
             "properties": {
-              "present": { "const": true },
-              "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-              "size_bytes": { "type": "integer", "minimum": 1 },
-              "problem": { "const": "" }
+              "present": {
+                "const": true
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "size_bytes": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "problem": {
+                "const": ""
+              }
             }
           }
         }

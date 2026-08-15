@@ -576,9 +576,85 @@ def check_evidence(manifest_path: Path, evidence_root: Path) -> list[Finding]:
         )
     ]
     findings.append(_manifest_version(manifest))
+    findings.append(_scenario_commits(manifest))
     findings.extend(_scenario_verdicts(manifest, scenario_ids))
     findings.extend(_artefact_digests(manifest, scenario_ids, evidence_root))
     return findings
+
+
+def _scenario_commits(manifest: dict[str, Any]) -> Finding:
+    """Every scenario's evidence must be about the code being released.
+
+    ``_manifest_version`` one function down already states the principle in its
+    remediation — *"evidence from a different build is evidence about that
+    build"* — and enforces it on the **version string**. That string is a single
+    literal that does not move for hundreds of commits, so it cannot tell one
+    build from another inside a release series. The commit can, and until this
+    check existed nothing compared it: the manifest's ``commit`` was printed in a
+    detail line and the per-scenario commits were not in the document at all.
+
+    That gap has teeth because of how the ledger derives a verdict: *PASS if any
+    attempt passed*. A scenario that passed at one commit keeps reporting PASS
+    after the code moves — deliberately, so a re-run cannot erase a real result —
+    and the campaign producing this evidence is expected to move it. ``E14-M04``
+    is, in as many words, "record the incompatibilities the run finds, fix each,
+    re-run every scenario a fix touches". So the natural end of a week of live
+    testing is a manifest whose scenarios passed at several commits, and nothing
+    would have said so before ``CERTIFIED v1.0.0``.
+
+    The rule is agreement, not equality with HEAD: ``finalize`` stamps the
+    manifest with the commit it was generated at, and an operator who ran every
+    scenario without changing code gets one value throughout. A disagreement
+    names the scenarios to re-run, which is an instruction rather than a wall.
+    """
+    manifest_commit = str(manifest.get("commit", "")).strip()
+    entries = [item for item in manifest.get("scenarios", []) if isinstance(item, dict)]
+
+    unrecorded = sorted(
+        str(entry.get("scenario_id", "?")) for entry in entries if not str(entry.get("commit", ""))
+    )
+    if not manifest_commit or unrecorded:
+        missing = ", ".join(unrecorded) if unrecorded else "the manifest itself"
+        return Finding(
+            check="evidence.commit",
+            ok=False,
+            detail=f"no commit is recorded for {missing}",
+            remediation=(
+                "rebuild the manifest with 'pz-agent live-test finalize'. A manifest "
+                "written before the commit was recorded cannot say what code its "
+                "evidence is about, and that is the question this check exists to ask"
+            ),
+        )
+
+    elsewhere = sorted(
+        {
+            f"{entry.get('scenario_id', '?')} at {str(entry.get('commit'))[:8]}"
+            for entry in entries
+            if str(entry.get("commit")) != manifest_commit
+        }
+    )
+    if elsewhere:
+        return Finding(
+            check="evidence.commit",
+            ok=False,
+            detail=(
+                f"the manifest was generated at {manifest_commit[:8]} and "
+                f"{len(elsewhere)} scenario(s) passed at other commits: " + "; ".join(elsewhere)
+            ),
+            remediation=(
+                "re-run those scenarios against the code being released: "
+                "'pz-agent live-test run --scenario <id>' for each, then finalize again. "
+                "A pass recorded against different code is evidence about that code"
+            ),
+        )
+    return Finding(
+        check="evidence.commit",
+        ok=True,
+        detail=(
+            f"all {len(entries)} scenario(s) passed at {manifest_commit[:8]}, "
+            f"the commit the manifest was generated at"
+        ),
+    )
 
 
 def _manifest_version(manifest: dict[str, Any]) -> Finding:

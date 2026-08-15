@@ -136,7 +136,16 @@ def _junit(tmp_path: Path, body: str = _GREEN_JUNIT) -> Path:
     return path
 
 
-def _evidence(root: Path, *, failing: str = "", tamper: str = "") -> tuple[Path, Path]:
+#: The commit a well-formed manifest and every scenario in it agree on.
+_MANIFEST_COMMIT: Final = "0123456789abcdef0123456789abcdef01234567"
+
+#: A different one, for the scenario that passed against other code.
+_OTHER_COMMIT: Final = "fedcba9876543210fedcba9876543210fedcba98"
+
+
+def _evidence(
+    root: Path, *, failing: str = "", tamper: str = "", commit_elsewhere: str = ""
+) -> tuple[Path, Path]:
     """A passing evidence tree and the manifest that accounts for it.
 
     Returns ``(manifest path, evidence root)``. ``failing`` marks one scenario
@@ -177,6 +186,11 @@ def _evidence(root: Path, *, failing: str = "", tamper: str = "") -> tuple[Path,
                 "attempt_count": 1,
                 "last_run_ms": 1_700_000_000_000,
                 "result_sha256": artefacts[-1]["sha256"],
+                # The commit the scenario passed at. Well-formed evidence agrees
+                # with the manifest's own commit; ``commit_elsewhere`` names a
+                # scenario that passed against different code, which is the case
+                # ``evidence.commit`` exists to refuse.
+                "commit": _OTHER_COMMIT if scenario_id == commit_elsewhere else _MANIFEST_COMMIT,
             }
         )
     if tamper:
@@ -189,7 +203,7 @@ def _evidence(root: Path, *, failing: str = "", tamper: str = "") -> tuple[Path,
             {
                 "format": check_release.LIVETEST_MANIFEST_FORMAT,
                 "complete": True,
-                "commit": "0123456789abcdef",
+                "commit": _MANIFEST_COMMIT,
                 "game_builds": ["42.20"],
                 "product_version": build_rc.RELEASE_VERSION,
                 "scenario_count": len(SCENARIO_IDS),
@@ -397,6 +411,58 @@ def test_a_member_the_index_never_recorded_is_refused(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # the evidence, when there is some
 # ---------------------------------------------------------------------------
+
+
+def test_a_scenario_that_passed_against_other_code_is_refused(tmp_path: Path) -> None:
+    """The gap this check closes, and it is at the last gate before a tag.
+
+    ``_manifest_version`` states the principle — *"evidence from a different
+    build is evidence about that build"* — and enforces it on the version
+    string, a single literal that does not move for hundreds of commits. The
+    commit distinguishes them, and nothing compared it: the manifest's own was
+    printed in a detail line and the per-scenario ones were not in the document
+    at all.
+
+    It is reachable by the plan's own design. The ledger derives *PASS if any
+    attempt passed*, so a scenario keeps its verdict when the code moves, and
+    ``E14-M04`` is "fix each incompatibility, re-run every scenario a fix
+    touches" — a week of live testing naturally ends with passes spread across
+    commits.
+    """
+    manifest, evidence = _evidence(tmp_path / "tree", commit_elsewhere=SCENARIO_IDS[4])
+
+    findings = _run(tmp_path, release=True, manifest=manifest, evidence_dir=evidence)
+
+    detail = _failures(findings)["evidence.commit"]
+    assert SCENARIO_IDS[4] in detail
+    assert _OTHER_COMMIT[:8] in detail
+    assert _MANIFEST_COMMIT[:8] in detail
+
+
+def test_a_manifest_that_records_no_commit_cannot_answer_the_question(tmp_path: Path) -> None:
+    """A manifest written before the field existed must refuse, not pass silently."""
+    manifest, evidence = _evidence(tmp_path / "tree")
+    document = json.loads(manifest.read_text(encoding="utf-8"))
+    for entry in document["scenarios"]:
+        entry.pop("commit")
+    manifest.write_text(json.dumps(document, indent=2), encoding="utf-8")
+
+    findings = _run(tmp_path, release=True, manifest=manifest, evidence_dir=evidence)
+
+    detail = _failures(findings)["evidence.commit"]
+    assert "no commit is recorded" in detail
+    assert SCENARIO_IDS[0] in detail
+
+
+def test_evidence_all_taken_against_one_commit_is_accepted(tmp_path: Path) -> None:
+    """The other direction: a check that refused every manifest would pass the two above."""
+    manifest, evidence = _evidence(tmp_path / "tree")
+
+    findings = _run(tmp_path, release=True, manifest=manifest, evidence_dir=evidence)
+
+    assert "evidence.commit" not in _failures(findings)
+    passing = {f.check: f.detail for f in findings if f.ok}
+    assert _MANIFEST_COMMIT[:8] in passing["evidence.commit"]
 
 
 def test_well_formed_evidence_leaves_only_the_version_to_answer_for(tmp_path: Path) -> None:
