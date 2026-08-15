@@ -12,10 +12,20 @@ construction.
 | `docs/control/evidence/step-01-10/windows-workflow-runs.txt` | the ten most recent Windows runs, all red |
 | `docs/control/evidence/step-01-10/windows-failures.txt` | the 24 failing tests, named |
 | `docs/control/evidence/step-01-10/linux-baseline.txt` | 3677 passed, 2 skipped at `873037c0` |
-| `docs/control/PLAN.md` | the 100 steps |
+| `docs/control/PLAN.md` | the 100 steps, superseded by `MASTER_PLAN.yaml` |
 | `docs/control/STATUS.json` | the recorded state |
-| `scripts/check_progress.py` | the gate |
-| `scripts/progress_report.py` | the counter |
+| `scripts/check_progress.py` | the gate of the 100-step plan; refuses any other |
+| `scripts/progress_report.py` | its counter; refuses any other |
+
+The counter and gate of the plan of record are `scripts/master_report.py` and
+`scripts/check_master_plan.py`. The retired pair above is listed because these
+steps were measured with it, not because it still reports anything: run against
+the current `STATUS.json` both refuse by name. That refusal is the fix for a
+counter that printed `PROGRESS: 0%`, `RC ARTIFACT: None` and `LIVE SCENARIOS:
+0/20` for a tree the same file recorded at 73.31% with a fully identified
+archive and 22 scenarios, and whose `--write` stored those zeroes.
+`tests/unit/test_control_plane_reporters.py` runs all four and holds the printed
+figures against the recorded ones.
 
 ## Steps 11–19 — evidence bytes are portable
 

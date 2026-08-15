@@ -10,6 +10,48 @@ drift out of sync with `pz_agent_core.version`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The progress counter reported zeroes for a tree at 73.31%** (`dev`).
+  `scripts/progress_report.py` and `scripts/check_progress.py` count and gate
+  `docs/control/PLAN.md`, the 100-step plan. The plan of record moved to
+  `docs/control/MASTER_PLAN.yaml` and `docs/control/STATUS.json` was regenerated
+  in the new shape, with no `steps` key at all — and the counter reads every
+  field through a `.get` with a default, so it went on printing a complete,
+  confident report made entirely of those defaults:
+
+  ```
+  PROGRESS: 0%          STEP: 1/100        STATUS: NOT_STARTED
+  RC ARTIFACT: None     LIVE SCENARIOS: 0/20
+  EVIDENCE: 0 path(s) recorded in docs/control/EVIDENCE_INDEX.md
+  ```
+
+  against a file recording 73.31%, 400 of 484 tasks PASS, a release candidate
+  identified by commit, run and sha256, and a catalogue of 22 scenarios. The
+  `--write` form — the one `docs/control/COMMAND_LOG.md` told an operator to run
+  to "recount and store" — then stored `overall_percent: 0` and six more zeroed
+  keys into the file whose own `$comment` says every field is derived and a
+  hand-written value is the defect it exists to prevent.
+
+  Both scripts now ask `STATUS.json` which plan it describes and refuse when the
+  answer is not theirs, naming that plan and its successor
+  (`master_report.py` / `check_master_plan.py`); `progress_report.py` exits 1,
+  `check_progress.py` exits 2 — the code its docstring had always documented for
+  an unreadable file and which `raise SystemExit("...")` could never produce.
+  The literal `20` in the live-scenario denominator is counted from the tally
+  instead, the same drift already removed from `reconcile_status.py`.
+
+  `tests/unit/test_control_plane_reporters.py` (9 tests) runs all four scripts as
+  subprocesses: the retired pair refuses and names its successor, refuses before
+  `--write` can touch the file, and still counts and gates a 100-step
+  `STATUS.json` — the accepting direction, without which an unconditional refusal
+  would pass. The fourth question is the one whose absence let this stand:
+  `master_report.py` is run and its printed figures held against what
+  `STATUS.json` records, both directions, percent for percent. Proved by planting
+  each defect back in the real tree: the pre-fix counter fails four of the nine,
+  the pre-fix gate two, and a `weighted_progress_percent` moved to 88.0 fails the
+  agreement test.
+
 ### Added
 
 - **§9 of the report called itself complete and was not** (`dev`). The section

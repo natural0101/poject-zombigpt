@@ -184,7 +184,29 @@ The hundred-step model that used to be described here has been **retired**. It
 counted steps and called one step one percentage point, which meant a paragraph
 of documentation and a Project Zomboid scenario running on a real machine were
 the same size — so `STEP 51/100` read as "half done" while several subsystems
-had not been started. `docs/control/PLAN.md` and `STATUS.json` are historical.
+had not been started. `docs/control/PLAN.md` is historical.
+
+Retiring the model left its two scripts behind, and that had a cost that went
+unnoticed until it was looked for. `STATUS.json` was regenerated in the new
+shape — no `steps` key at all — while `scripts/progress_report.py` reads every
+field through a `.get` with a default, so it printed a complete and entirely
+false report: `PROGRESS: 0%`, `STEP: 1/100`, `STATUS: NOT_STARTED`, `RC
+ARTIFACT: None`, `LIVE SCENARIOS: 0/20`, `EVIDENCE: 0 path(s)` — against a file
+recording 73.31%, 400 of 484 tasks `PASS`, an archive identified by commit, run
+and sha256, and a catalogue of 22 scenarios. `--write`, which
+`docs/control/COMMAND_LOG.md` told an operator to run to "recount and store",
+stored `overall_percent: 0` and six more zeroed keys beside the correct figure,
+into the file whose own `$comment` forbids exactly that. `check_progress.py`
+did refuse, but as `'steps' must be a list`, which reads as a corrupt file
+rather than as the retired gate.
+
+Both now ask `STATUS.json` which plan it describes and refuse when the answer
+is not theirs, naming that plan and its successor. `STATUS.json` is therefore
+**not** historical — it is the current control-plane record, written by
+`scripts/reconcile_status.py`, and the pair above no longer pretends to read it.
+`tests/unit/test_control_plane_reporters.py` runs all four scripts as
+subprocesses and holds `master_report.py`'s printed figures against the recorded
+ones, in both directions; nothing had run any of them before.
 
 What replaced it:
 
@@ -221,7 +243,11 @@ The tooling, all of it gates rather than reports:
   on a red Windows workflow; a `PASS` check with no evidence; an epic recorded
   closed that `epic_closed` disagrees with; an unknown status; and drift from
   the generator.
-- `scripts/master_report.py` prints the mandated block.
+- `scripts/master_report.py` prints the mandated block, and `--json` prints the
+  same figures structured. `tests/unit/test_control_plane_reporters.py` holds
+  both against what `STATUS.json` records, by running the command rather than
+  reading its source — the check whose absence let the retired counter print
+  `0%` for a tree at 73.31%.
 - `scripts/verify_carryover.py` re-runs a task's regression test before its
   `PASS` is believed. Nothing inherits a pass from the old model.
 - `tests/unit/test_master_plan.py` proves each of those refusals by planting the

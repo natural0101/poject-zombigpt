@@ -1,5 +1,12 @@
 # The 100-step plan
 
+> **Superseded.** The plan of record is `docs/control/MASTER_PLAN.yaml` — 484
+> weighted tasks rather than 100 equal steps — counted by
+> `scripts/master_report.py` and gated by `scripts/check_master_plan.py`.
+> `docs/control/STATUS.json` names it in `plan_of_record`, and the two scripts
+> below refuse when that name is not this plan. This document is kept because
+> the steps 1–10 evidence in `docs/control/evidence/` was measured against it.
+
 One step is one percentage point. `overall_percent` is **counted by
 `scripts/progress_report.py`**, never written by hand, and equals the number of
 steps whose status is `PASS`.

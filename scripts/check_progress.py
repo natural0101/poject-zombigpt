@@ -20,7 +20,14 @@ Nine refusals, each for a way a percentage becomes a lie:
 * step 100 passed with no GitHub Release;
 * an evidence path that does not exist on disk.
 
-Exit codes: 0 admissible, 1 refused, 2 the status file itself is unusable.
+**This gates ``docs/control/PLAN.md`` and nothing else.** The plan of record
+moved to ``docs/control/MASTER_PLAN.yaml`` and ``STATUS.json`` was regenerated
+without a ``steps`` key, so every refusal above became unreachable here. It said
+so — ``'steps' must be a list`` — but that reads as a corrupt file rather than
+as the retired gate, and it is the second reading that is true. It now names the
+plan the file actually describes and the gate that judges it.
+
+Exit codes: 0 admissible, 1 refused, 2 the status file is not one this can read.
 """
 
 from __future__ import annotations
@@ -28,10 +35,30 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, NoReturn
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[1]
 STATUS_PATH: Final = REPO_ROOT / "docs" / "control" / "STATUS.json"
+
+#: The plan this gate judges, as ``STATUS.json`` spells it in ``plan_of_record``.
+JUDGES: Final = "docs/control/PLAN.md"
+
+#: Which gate belongs to which plan, so a refusal sends the reader somewhere.
+GATES: Final = {
+    "docs/control/MASTER_PLAN.yaml": "scripts/check_master_plan.py",
+}
+
+
+def _unusable(message: str) -> NoReturn:
+    """Exit 2, the code this file's docstring has always promised for this case.
+
+    ``raise SystemExit("...")`` exits 1, so before this the documented 2 was
+    unreachable and a caller distinguishing "refused" from "cannot read" got the
+    same code for both.
+    """
+    print(message, file=sys.stderr)
+    raise SystemExit(2)
+
 
 #: Steps only an agent holding Project Zomboid can pass.
 LIVE_STEPS: Final = frozenset({96, 97, 98})
@@ -53,31 +80,43 @@ VALID_STATUSES: Final = frozenset({"NOT_STARTED", "IN_PROGRESS", "BLOCKED", "FAI
 TOTAL_STEPS: Final = 100
 
 
+def _require_the_plan_this_judges(document: dict[str, Any]) -> None:
+    """Refuse a status file that is about a different plan, by name."""
+    recorded = str(document.get("plan_of_record") or "")
+    if recorded == JUDGES:
+        return
+    gate = GATES.get(recorded)
+    where = f"Judge that one with {gate}." if gate else "There is nothing here to judge."
+    _unusable(
+        f"{STATUS_PATH}: plan of record is "
+        f"{recorded or 'unnamed'}, and this judges {JUDGES}. {where}"
+    )
+
+
 def _load() -> dict[str, Any]:
     try:
         document: Any = json.loads(STATUS_PATH.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        raise SystemExit(
-            f"{STATUS_PATH}: does not exist; create it before claiming progress"
-        ) from None
+        _unusable(f"{STATUS_PATH}: does not exist; create it before claiming progress")
     except json.JSONDecodeError as exc:
-        raise SystemExit(f"{STATUS_PATH}: is not JSON ({exc})") from exc
+        _unusable(f"{STATUS_PATH}: is not JSON ({exc})")
     if not isinstance(document, dict):
-        raise SystemExit(f"{STATUS_PATH}: must be a JSON object")
+        _unusable(f"{STATUS_PATH}: must be a JSON object")
+    _require_the_plan_this_judges(document)
     return document
 
 
 def _steps(document: dict[str, Any]) -> list[dict[str, Any]]:
     raw = document.get("steps")
     if not isinstance(raw, list):
-        raise SystemExit(f"{STATUS_PATH}: 'steps' must be a list")
+        _unusable(f"{STATUS_PATH}: 'steps' must be a list")
     steps: list[dict[str, Any]] = []
     for entry in raw:
         if not isinstance(entry, dict):
-            raise SystemExit(f"{STATUS_PATH}: every step must be an object")
+            _unusable(f"{STATUS_PATH}: every step must be an object")
         steps.append(entry)
     if len(steps) != TOTAL_STEPS:
-        raise SystemExit(f"{STATUS_PATH}: {len(steps)} steps recorded, expected {TOTAL_STEPS}")
+        _unusable(f"{STATUS_PATH}: {len(steps)} steps recorded, expected {TOTAL_STEPS}")
     return steps
 
 
