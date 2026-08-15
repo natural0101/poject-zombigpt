@@ -12,6 +12,42 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **The RC identity document enforced a third of its own rule** (`dev`).
+  `docs/control/EVIDENCE_INDEX.md` opens its release-candidate table with the
+  standard it holds itself to: *"The digest is the identity: an RC is this
+  archive, from this commit, by this run, and a claim about 'the RC' that names
+  none of the three is a claim about nothing."* Three things — and only the
+  sha256 was ever compared against `STATUS.json`.
+
+  So the index could carry the correct digest beside the **wrong source commit**
+  and the **wrong workflow run**, and the entire suite stayed green.
+  Demonstrated against the real files before the fix: swapping the commit to a
+  previous RC's, then the run id to a previous run's, left `pytest tests/unit
+  tests/contract` fully passing both times. STALE IDENTITY, in the one document
+  whose subject is identity — and a hand-written table beside a generated
+  record, which is precisely the pair that drifts. Five consecutive rebuilds
+  updated it by hand.
+
+  `test_the_evidence_index_names_the_same_commit_and_run_as_the_record` now holds
+  both remaining fields against `release_candidate.source_commit` and
+  `workflow_run`, requires each to be stated exactly once (the property the
+  digest row already had), and additionally requires the source commit to resolve
+  in this clone and be an ancestor of `HEAD` — a 40-hex string that is not in
+  this history names an archive built from another branch, which matching
+  `STATUS.json` would not make true. Proved by planting all three: a real but
+  wrong commit, a real but wrong run, and a well-formed sha that resolves to
+  nothing.
+
+  Stated rather than implied: the artefact id in the `archive` row is still
+  unchecked, because `STATUS.json` records no artefact id and inventing a second
+  source for it would be a check agreeing with itself.
+
+  Checked in the same pass and found sound, so it is on the record: the
+  `--release` bar — the gate between here and a `v1.0.0` tag — is covered by 23
+  tests in `tests/unit/test_check_release.py`, a dozen of which drive it with
+  real live-test manifests, including a missing manifest, a missing evidence
+  directory, wrong scenario verdicts and mismatched artefact digests.
+
 - **The verifier could confirm a `PASS` that the plan gate exists to refuse**
   (`dev`). `scripts/verify_carryover.py` re-derives which tasks deserve a `PASS`
   by running their tests — 400 of the plan's claims went through it — and it was

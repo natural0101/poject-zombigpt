@@ -21,6 +21,7 @@ from __future__ import annotations
 import functools
 import json
 import re
+import subprocess
 from pathlib import Path
 from typing import Any, Final
 
@@ -360,6 +361,83 @@ def test_the_evidence_index_carries_the_digest_status_derives() -> None:
         f"{EVIDENCE_INDEX.name} names archive {rows[0]} but STATUS.json derives "
         f"{derived}. The index has drifted from the record it is supposed to summarise; "
         f"one of the two is describing an RC that is not the current one."
+    )
+
+
+def test_the_evidence_index_names_the_same_commit_and_run_as_the_record() -> None:
+    """The index states the rule and the check above only enforced a third of it.
+
+    ``EVIDENCE_INDEX.md`` opens its release-candidate table with the standard it
+    holds itself to:
+
+        The digest is the identity: an RC is *this* archive, from *this* commit,
+        by *this* run, and a claim about "the RC" that names none of the three is
+        a claim about nothing.
+
+    Three things — and only the digest was compared against ``STATUS.json``. So
+    the index could carry the right sha256 beside the *wrong* source commit and
+    the *wrong* workflow run and the whole suite stayed green; demonstrated by
+    planting both, one at a time, against the real files. That is the STALE
+    IDENTITY family in the one document whose subject is identity, and it is a
+    hand-written table beside a generated record, which is exactly the pair that
+    drifts. Five consecutive rebuilds updated it by hand.
+
+    The source commit is also required to resolve here and to be an ancestor of
+    HEAD: a 40-hex string that is not in this history names an RC built from
+    another branch, which no amount of matching STATUS.json would make true.
+
+    What is *not* checked, said plainly rather than implied: the artefact id in
+    the ``archive`` row. ``STATUS.json`` records no artefact id, so there is
+    nothing here to hold it against, and inventing a second source for it would
+    be a check agreeing with itself.
+    """
+    status = json.loads(STATUS.read_text(encoding="utf-8"))
+    recorded = status.get("release_candidate", {})
+    index_text = EVIDENCE_INDEX.read_text(encoding="utf-8")
+
+    commits = re.findall(r"source commit[^\n]*?([0-9a-fA-F]{40})", index_text)
+    runs = re.findall(r"workflow run[^\n]*?/actions/runs/(\d+)", index_text)
+
+    assert len(commits) == 1, (
+        f"{EVIDENCE_INDEX.name}: expected exactly one 'source commit' row carrying a "
+        f"40-hex sha, found {len(commits)} — the RC's identity must be stated once"
+    )
+    assert len(runs) == 1, (
+        f"{EVIDENCE_INDEX.name}: expected exactly one 'workflow run' row carrying a "
+        f"run id, found {len(runs)} — the RC's identity must be stated once"
+    )
+
+    assert commits[0].lower() == str(recorded.get("source_commit", "")).lower(), (
+        f"{EVIDENCE_INDEX.name} says the RC was built from {commits[0][:8]} and "
+        f"STATUS.json records {str(recorded.get('source_commit'))[:8]}; one of them "
+        f"describes an archive that was never built"
+    )
+    assert runs[0] == str(recorded.get("workflow_run", "")), (
+        f"{EVIDENCE_INDEX.name} credits run {runs[0]} and STATUS.json records "
+        f"{recorded.get('workflow_run')}; the archive cannot have come from both"
+    )
+
+    resolved = subprocess.run(
+        ["git", "cat-file", "-e", f"{commits[0]}^{{commit}}"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        check=False,
+        timeout=60,
+    )
+    assert resolved.returncode == 0, (
+        f"{EVIDENCE_INDEX.name} names source commit {commits[0][:8]}, which does not "
+        f"resolve in this clone"
+    )
+    ancestor = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", commits[0], "HEAD"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        check=False,
+        timeout=60,
+    )
+    assert ancestor.returncode == 0, (
+        f"{EVIDENCE_INDEX.name} names source commit {commits[0][:8]}, which is not an "
+        f"ancestor of HEAD; the RC it describes was built from another history"
     )
 
 

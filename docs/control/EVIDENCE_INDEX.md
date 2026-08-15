@@ -48,6 +48,13 @@ The digest is the identity: an RC is *this* archive, from *this* commit, by
 *this* run, and a claim about "the RC" that names none of the three is a claim
 about nothing.
 
+All three rows are held against `STATUS.json` by
+`tests/unit/test_windows_workflow_contract.py` — this table is written by hand
+beside a generated record, and for a long while only the digest was compared, so
+the right sha256 could sit beside the wrong commit and the wrong run with the
+suite green. The artefact id is the one field with nothing to check it against:
+`STATUS.json` does not record one.
+
 | Field | Value |
 | --- | --- |
 | archive | `pz-agent-windows-rc` (artifact 9243161800), `pz-agent-windows-v1.0.0-rc1.zip`, 77 entries |
