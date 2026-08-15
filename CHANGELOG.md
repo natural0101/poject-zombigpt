@@ -12,6 +12,37 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **Seven scenarios owe a screenshot, and nothing told the operator to take
+  one** (`dev`). The sibling of the log defect below, and worse in the way that
+  counts. What the playbook said, in full, was `— screenshots required`
+  appended to the **Evidence** line of seven sections. Not the directory, not
+  when to take it, not that `finalize` refuses without it.
+  `LOCAL_AGENT_PROMPT.md`, `LOCAL_GAME_HANDOFF.md` and `LOCAL_DEBUG_MAP.md`
+  mentioned screenshots **zero times** between them.
+
+  Measured: `S11_CONTAINER` driven to PASS through the real runner, every
+  declared log written, and the real `finalize` still refuses — *"no screenshot
+  was collected for a scenario that requires one"*.
+
+  A log survives on disk until the next game launch, so a late `collect`
+  recovers some. A screenshot is a moment in a running game, and **no command
+  produces one**: `live-test collect` gathers logs and journals and never
+  touches that directory — asserted against the source, so if it ever learns to,
+  the playbook's claim gets revisited rather than quietly becoming false. The
+  moment is over when the scenario ends.
+
+  The generator now prints, under each requiring scenario, the directory —
+  composed from `SCREENSHOTS_DIR_NAME`, the same constant
+  `EvidenceLayout.screenshots_dir` uses, so a rename moves the instruction with
+  the code — the moment to take it, and the refusal it avoids. It also says
+  plainly that the runner checks only that a file exists: whether the shot shows
+  what the postconditions describe is the operator's judgement, which is the
+  entire reason the scenario asks for one. The prompt gains §4b.
+
+  `tests/contract/test_screenshots_are_asked_for_in_time.py` holds both
+  directions — an instruction wherever the catalogue requires a screenshot and
+  nowhere else — on top of the measured refusal and its control.
+
 - **The prompt handed to the local agent told it to collect logs at the end of
   the run, and the logs do not survive that long** (`dev`).
   `docs/LOCAL_AGENT_PROMPT.md` is not a reference — it is the text pasted into a

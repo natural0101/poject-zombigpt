@@ -162,6 +162,17 @@ sessions were spent. The runner refuses that PASS here instead.
 
 **Evidence:** `evidence/S01_INSTALL/`  — screenshots required
 
+**Take the screenshot while the scenario is running**, and save it into
+`evidence/S01_INSTALL/screenshots/`. Nothing can produce it later: `collect-evidence.bat` gathers
+logs and journals and never touches that directory, and the moment it has to
+show is over when the scenario ends. `finalize` refuses this scenario with
+"no screenshot was collected for a scenario that requires one" — after every
+session has been spent.
+
+The runner checks only that a file is there; whether it shows the state the
+postconditions describe is on you, and that is the whole reason this scenario
+asks for one — it is the part a person has to look at.
+
 ### When it fails
 
 Look first at **pz-mod/42/media/lua/client/PZAgent/ (load order), pz_agent_cli.modinstall**.
@@ -1072,6 +1083,17 @@ sessions were spent. The runner refuses that PASS here instead.
 
 **Evidence:** `evidence/S11_CONTAINER/`  — screenshots required
 
+**Take the screenshot while the scenario is running**, and save it into
+`evidence/S11_CONTAINER/screenshots/`. Nothing can produce it later: `collect-evidence.bat` gathers
+logs and journals and never touches that directory, and the moment it has to
+show is over when the scenario ends. `finalize` refuses this scenario with
+"no screenshot was collected for a scenario that requires one" — after every
+session has been spent.
+
+The runner checks only that a file is there; whether it shows the state the
+postconditions describe is on you, and that is the whole reason this scenario
+asks for one — it is the part a person has to look at.
+
 ### When it fails
 
 Look first at **actions/adapters/container.py, protocol/refs.py, PZAgent/Refs.lua**.
@@ -1250,6 +1272,17 @@ sessions were spent. The runner refuses that PASS here instead.
 **Time budget:** 420 s
 
 **Evidence:** `evidence/S13_MEDICAL/`  — screenshots required
+
+**Take the screenshot while the scenario is running**, and save it into
+`evidence/S13_MEDICAL/screenshots/`. Nothing can produce it later: `collect-evidence.bat` gathers
+logs and journals and never touches that directory, and the moment it has to
+show is over when the scenario ends. `finalize` refuses this scenario with
+"no screenshot was collected for a scenario that requires one" — after every
+session has been spent.
+
+The runner checks only that a file is there; whether it shows the state the
+postconditions describe is on you, and that is the whole reason this scenario
+asks for one — it is the part a person has to look at.
 
 ### When it fails
 
@@ -1778,6 +1811,17 @@ list, so a number nobody measured becomes a percentile nobody measured.
 
 **Evidence:** `evidence/S19_AUTONOMOUS_30_MIN/`  — screenshots required
 
+**Take the screenshot while the scenario is running**, and save it into
+`evidence/S19_AUTONOMOUS_30_MIN/screenshots/`. Nothing can produce it later: `collect-evidence.bat` gathers
+logs and journals and never touches that directory, and the moment it has to
+show is over when the scenario ends. `finalize` refuses this scenario with
+"no screenshot was collected for a scenario that requires one" — after every
+session has been spent.
+
+The runner checks only that a file is there; whether it shows the state the
+postconditions describe is on you, and that is the whole reason this scenario
+asks for one — it is the part a person has to look at.
+
 ### When it fails
 
 Look first at **policy/autonomy.py, pz_agent_cli.runtime (tick budget)**.
@@ -1876,6 +1920,17 @@ list, so a number nobody measured becomes a percentile nobody measured.
 **Time budget:** 8400 s  ·  **latency measured** (p50/p95 recorded in `result.json`)
 
 **Evidence:** `evidence/S20_AUTONOMOUS_2_HOURS/`  — screenshots required
+
+**Take the screenshot while the scenario is running**, and save it into
+`evidence/S20_AUTONOMOUS_2_HOURS/screenshots/`. Nothing can produce it later: `collect-evidence.bat` gathers
+logs and journals and never touches that directory, and the moment it has to
+show is over when the scenario ends. `finalize` refuses this scenario with
+"no screenshot was collected for a scenario that requires one" — after every
+session has been spent.
+
+The runner checks only that a file is there; whether it shows the state the
+postconditions describe is on you, and that is the whole reason this scenario
+asks for one — it is the part a person has to look at.
 
 ### When it fails
 
@@ -1987,6 +2042,17 @@ sessions were spent. The runner refuses that PASS here instead.
 **Time budget:** 600 s
 
 **Evidence:** `evidence/S21_CRAFT/`  — screenshots required
+
+**Take the screenshot while the scenario is running**, and save it into
+`evidence/S21_CRAFT/screenshots/`. Nothing can produce it later: `collect-evidence.bat` gathers
+logs and journals and never touches that directory, and the moment it has to
+show is over when the scenario ends. `finalize` refuses this scenario with
+"no screenshot was collected for a scenario that requires one" — after every
+session has been spent.
+
+The runner checks only that a file is there; whether it shows the state the
+postconditions describe is on you, and that is the whole reason this scenario
+asks for one — it is the part a person has to look at.
 
 ### When it fails
 
@@ -2106,6 +2172,17 @@ sessions were spent. The runner refuses that PASS here instead.
 **Time budget:** 900 s
 
 **Evidence:** `evidence/S22_BUILD/`  — screenshots required
+
+**Take the screenshot while the scenario is running**, and save it into
+`evidence/S22_BUILD/screenshots/`. Nothing can produce it later: `collect-evidence.bat` gathers
+logs and journals and never touches that directory, and the moment it has to
+show is over when the scenario ends. `finalize` refuses this scenario with
+"no screenshot was collected for a scenario that requires one" — after every
+session has been spent.
+
+The runner checks only that a file is there; whether it shows the state the
+postconditions describe is on you, and that is the whole reason this scenario
+asks for one — it is the part a person has to look at.
 
 ### When it fails
 

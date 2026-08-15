@@ -866,6 +866,21 @@ had only ever been tested against hand-built manifests; they now also run over
 one `finalize` really wrote. All three already agreed — a tightening, recorded
 as such.
 
+The logs have a sibling, and it is worse. Seven scenarios declare
+`screenshots_required`, and the whole of what the operator was told was
+`— screenshots required` appended to the **Evidence** line: no directory, no
+moment, no mention that `finalize` refuses without one. The three handoff
+documents mentioned screenshots zero times between them. Measured —
+`S11_CONTAINER` driven to PASS with every declared log written, and `finalize`
+still refuses. A log survives until the next game launch; a screenshot is a
+moment, and **no command produces one** (`collect` gathers logs and journals and
+never touches that directory, which is now asserted against the source rather
+than recalled). The generator prints the directory, the moment and the refusal
+under each requiring scenario, and says plainly that the runner only checks a
+file is there — whether it shows the right thing is the operator's judgement,
+which is why the scenario asks for one. The prompt gains §4b. Held by
+`tests/contract/test_screenshots_are_asked_for_in_time.py`, both directions.
+
 ## Deviations from the blueprint
 
 | Blueprint | Here | Why |

@@ -35,6 +35,7 @@ for package in ("pz_agent_cli", "pz_agent_core", "pz_agent_mcp", "pz_agent_voice
     if source.is_dir():
         sys.path.insert(0, str(source))
 
+from pz_agent_cli.livetest.evidence import SCREENSHOTS_DIR_NAME  # noqa: E402
 from pz_agent_cli.livetest.scenarios import SCENARIOS, LiveScenario  # noqa: E402
 
 #: The line that opens the generated region, and the one that closes it. Found
@@ -137,6 +138,36 @@ def _latency_instruction() -> list[str]:
     ]
 
 
+def _screenshot_instruction(scenario: LiveScenario) -> list[str]:
+    """Where the screenshot goes, and when it has to be taken.
+
+    "screenshots required" appended to the evidence line was the whole of what
+    seven scenarios said about it, and the three handoff documents said nothing
+    at all. ``finalize`` refuses a scenario that requires one and has none —
+    measured, not assumed — and unlike the logs there is no command that can
+    produce it afterwards: ``collect`` gathers logs and journals and never
+    touches this directory. The moment is gone when the scenario ends, so the
+    instruction has to reach the operator *before* they play it.
+
+    The directory is composed from the layout's own constants rather than typed,
+    so a rename moves the instruction with it.
+    """
+    directory = f"evidence/{scenario.id}/{SCREENSHOTS_DIR_NAME}/"
+    return [
+        "**Take the screenshot while the scenario is running**, and save it into\n",
+        f"`{directory}`. Nothing can produce it later: `collect-evidence.bat` gathers\n",
+        "logs and journals and never touches that directory, and the moment it has to\n",
+        "show is over when the scenario ends. `finalize` refuses this scenario with\n",
+        '"no screenshot was collected for a scenario that requires one" — after every\n',
+        "session has been spent.\n",
+        "\n",
+        "The runner checks only that a file is there; whether it shows the state the\n",
+        "postconditions describe is on you, and that is the whole reason this scenario\n",
+        "asks for one — it is the part a person has to look at.\n",
+        "\n",
+    ]
+
+
 def _render(scenario: LiveScenario) -> str:
     out: list[str] = [
         f"## {scenario.id}\n",
@@ -193,6 +224,8 @@ def _render(scenario: LiveScenario) -> str:
     if scenario.screenshots_required:
         evidence += "  — screenshots required"
     out += [f"{evidence}\n", "\n"]
+    if scenario.screenshots_required:
+        out += _screenshot_instruction(scenario)
 
     out += [
         "### When it fails\n",
