@@ -12,6 +12,42 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **The release gate accepted one statement from the document it exists to
+  doubt** (`dev`). `check_release.py` opens with the rule the whole file is
+  built on: *"A claim is checked against the artefact, never accepted from it."*
+  It re-hashes every artefact the evidence manifest records — that rule,
+  correctly applied to the contents. The **path** was taken at face value:
+  `evidence_root / path`, with no containment check.
+
+  Measured, both of these returned *verified* with no problem reported:
+
+  | recorded path | what the join produced |
+  | --- | --- |
+  | `../outside.txt` | walks up and out of the evidence tree |
+  | `/anywhere/outside.txt` | pathlib **replaces** the root on an absolute operand, so the evidence root vanishes from the expression |
+
+  The second needs no traversal at all. `..\outside.txt` is the Windows half,
+  invisible here for the same reason yesterday's installer hole was.
+
+  What that buys a wrong manifest is a **green** `evidence.artefacts` —
+  *"N required artefact(s), each with a SHA-256; N re-hashed from &lt;root&gt;"* —
+  over files that are not the evidence, in the bar that certifies v1.0.0. Not a
+  remote attack: the manifest is written by `live-test finalize` and named on
+  the command line. But a gate whose stated purpose is to disbelieve a document
+  must not take that document's word for where to look.
+
+  An escaping path is now **reported**, not skipped. A skip would record it as
+  "not re-hashed", which reads as an absent evidence tree rather than as a
+  manifest pointing outside the one it describes — an understatement exactly
+  where understating is dangerous. `tests/unit/test_release_gate_artefact_containment.py`
+  holds both, plus the control that a wrong digest *inside* the tree still fails
+  for the digest rather than the containment.
+
+  Third instance of one class in three days — a Windows path parsed in a test, a
+  traversal guard splitting on one separator, and now this. All three are a path
+  from a recorded document reaching the filesystem without containment, so the
+  fix here is deliberately the installer's idiom rather than a new one.
+
 - **The installer's traversal guard refused one separator convention and shipped
   to the other** (`dev`). `modinstall._check_relative` states its purpose —
   *"refusing anything that could escape the mod directory"* — and split the path

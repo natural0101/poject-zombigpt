@@ -38,7 +38,7 @@ import sys
 import zipfile
 from collections.abc import Sequence
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any, Final
 from xml.etree import ElementTree
 
@@ -965,13 +965,53 @@ def _artefact_digests(
     return [Finding(check="evidence.artefacts", ok=True, detail=detail)]
 
 
+def _inside_the_tree(evidence_root: Path, path: str) -> Path | None:
+    """The artefact's location under *evidence_root*, or None if the path leaves it.
+
+    The manifest is a document, and this module's own first rule is that a claim
+    is checked against the artefact rather than accepted from it. The recorded
+    path was the one thing accepted outright: ``evidence_root / path`` with no
+    containment check at all. Measured, both of these verified clean —
+
+    * ``"../outside.txt"`` — ``evidence_root / path`` walks up and out;
+    * ``"/anywhere/outside.txt"`` — pathlib *replaces* the root when the right
+      operand is absolute, so the evidence root vanishes from the expression.
+
+    — and the gate then reported *"N required artefact(s) … re-hashed from
+    <root>"*, green, over files that were not the evidence. That is a false
+    success in the bar that certifies v1.0.0, produced by trusting exactly the
+    kind of statement this file exists not to trust.
+
+    Both separator conventions, for the reason ``modinstall._check_relative``
+    records: splitting on ``/`` alone lets ``..\\..\\x`` through as a single
+    segment, and on Windows ``joinpath`` then resolves it outward.
+    """
+    if not path:
+        return None
+    normalised = path.replace("\\", "/")
+    if normalised.startswith("/") or PureWindowsPath(path).is_absolute():
+        return None
+    parts = tuple(part for part in normalised.split("/") if part not in ("", "."))
+    if any(part == ".." for part in parts):
+        return None
+    return evidence_root.joinpath(*parts)
+
+
 def _verify_on_disk(
     evidence_root: Path, path: str, digest: str, label: str, problems: list[str]
 ) -> int:
     """Re-hash one artefact when the tree is here. Returns 1 when it was checked."""
     if not evidence_root.is_dir():
         return 0
-    candidate = evidence_root / path
+    candidate = _inside_the_tree(evidence_root, path)
+    if candidate is None:
+        # Reported rather than skipped. A skip would record this as "not
+        # re-hashed", which reads as an absent tree instead of as a manifest
+        # pointing outside the one it describes.
+        problems.append(
+            f"{label}: the manifest records {path!r}, which is not inside {evidence_root}"
+        )
+        return 0
     if not candidate.is_file():
         problems.append(f"{label}: recorded as present, but not in {evidence_root}")
         return 0

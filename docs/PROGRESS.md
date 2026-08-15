@@ -933,6 +933,23 @@ separators; the fix is that idiom where it was missing. Held by
 `tests/unit/test_install_path_traversal.py`, built on `PureWindowsPath` per
 D-004 so it fails on any platform.
 
+Asking the question once more found the third, and the worst placed. The release
+gate's own first rule is *"a claim is checked against the artefact, never
+accepted from it"* — and it re-hashes every artefact the manifest records, which
+is that rule applied to the contents. The **path** it took at face value:
+`evidence_root / path`. Measured, `../outside.txt` came back verified, and an
+absolute path came back verified without needing a traversal at all, because
+pathlib replaces the root when the right operand is absolute. A wrong manifest
+could therefore turn `evidence.artefacts` green over files that are not the
+evidence, in the bar that certifies v1.0.0. Escapes are now reported rather than
+skipped: a skip would read as an absent tree, which is a different fact. Held by
+`tests/unit/test_release_gate_artefact_containment.py`.
+
+Three instances of one class in three days — a Windows path parsed in a test, a
+traversal guard splitting on one separator, and a release gate trusting a
+recorded path. Each was found by asking whether the previous one's shape existed
+somewhere else, so the question is worth keeping.
+
 ## Deviations from the blueprint
 
 | Blueprint | Here | Why |
