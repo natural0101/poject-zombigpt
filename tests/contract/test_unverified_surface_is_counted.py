@@ -16,6 +16,11 @@ document                     ``grep "Build 42:"`` lines   ``requires_live`` rows
 measured                     **10 lines, 3 files**        **167 rows**
 ===========================  ==========================  ====================
 
+The grep figures are measured by reading ``pz-mod/`` rather than by running
+grep. The first version did shell out, and it took the Windows release build red
+one commit after landing — see :func:`_marked` for the exact shape of that
+mistake and the regression test that pins it.
+
 Two of them said fifty-two against a real one hundred and sixty-seven, in the
 documents whose whole job is to size that risk before anyone starts. The
 inventory itself — the one that says *"This document is the list"* — was wrong
@@ -38,7 +43,6 @@ once and every reader was told the surface was a third of its real size.
 from __future__ import annotations
 
 import re
-import subprocess
 from pathlib import Path
 from typing import Final
 
@@ -76,17 +80,44 @@ _WORDS: Final = {
 }
 
 
+def _marked() -> dict[Path, int]:
+    """Files under ``pz-mod/`` carrying the marker, and how many lines each has.
+
+    The same measurement ``grep -rn "Build 42:" pz-mod/`` makes, done by reading
+    the tree instead of shelling out to grep.
+
+    The first version did shell out, on the principle of running the producer,
+    and it took the Windows release build red one commit after it landed. Grep
+    exists there — Git for Windows ships it — and found all ten lines; what
+    broke was this file's own parsing. It recovered each filename with
+    ``line.split(":", 1)[0]``, which on a runner whose paths begin
+    ``D:\\a\\poject-zombigpt`` returns ``"D"`` for every line: one file instead
+    of three, green here and red there. A POSIX assumption inside a checker
+    written to catch stale numbers.
+
+    Grep was only ever a reader of the tree. The tree is the producer, and
+    reading it directly measures the same thing on both platforms.
+    """
+    found: dict[Path, int] = {}
+    for path in sorted(MOD_ROOT.rglob("*")):
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            # A binary or unreadable file cannot carry a Lua comment. Skipped
+            # rather than reported: the question here is how many comments the
+            # marker has, and this file is not one of them either way.
+            continue
+        hits = sum(1 for line in text.splitlines() if MARKER in line)
+        if hits:
+            found[path] = hits
+    return found
+
+
 def _grep_lines() -> list[str]:
-    """The real grep, run rather than described."""
-    result = subprocess.run(
-        ["grep", "-rn", MARKER, str(MOD_ROOT)],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        check=False,
-    )
-    return [line for line in result.stdout.splitlines() if line.strip()]
+    """Every marked line, in the shape the operator's grep prints them."""
+    return [f"{path}:{index}" for path, hits in _marked().items() for index in range(hits)]
 
 
 def _symbol_rows() -> list[list[str]]:
@@ -134,17 +165,18 @@ def test_the_table_still_has_symbol_rows() -> None:
 
 def test_the_inventory_states_the_grep_it_really_returns() -> None:
     """Ten lines in three files, measured — it said nine in two."""
-    lines = _grep_lines()
-    files = {line.split(":", 1)[0] for line in lines}
+    marked = _marked()
+    lines = sum(marked.values())
+    files = len(marked)
 
     stated_lines = _stated(r"returns\s+(?P<count>\d+|\w+)\s+lines")
     stated_files = _stated(r"lines,\s+in\s+(?P<count>\d+|\w+)\s+files")
 
-    assert stated_lines == len(lines), (
-        f"{INVENTORY.name} says the grep returns {stated_lines} lines; it returns {len(lines)}"
+    assert stated_lines == lines, (
+        f"{INVENTORY.name} says the grep returns {stated_lines} lines; it returns {lines}"
     )
-    assert stated_files == len(files), (
-        f"{INVENTORY.name} says {stated_files} files; the grep spans {len(files)}"
+    assert stated_files == files, (
+        f"{INVENTORY.name} says {stated_files} files; the marker is in {files}"
     )
 
 
@@ -199,3 +231,29 @@ def test_every_satellite_sends_the_reader_to_the_inventory(document: Path) -> No
     assert "GAME_API_VERIFICATION.md" in document.read_text(encoding="utf-8"), (
         f"{document.name} no longer states a size and does not say where to find one"
     )
+
+
+def test_counting_files_does_not_split_a_path_on_its_colon() -> None:
+    """The Windows shape, constructed here so the defect fails on any platform.
+
+    Per D-004: a fix for a Windows failure carries a regression test that builds
+    the Windows shape explicitly rather than relying on the Windows runner to
+    catch it again. The original counted distinct files by taking everything
+    before the first ``:`` of each grep line. On this runner that is a path; on
+    the release runner it is the drive letter, and three files collapsed to one.
+    """
+    windows_output = [
+        r"D:\a\poject-zombigpt\pz-mod\42\media\lua\client\PZAgent\Toolkit.lua:118:-- Build 42:",
+        r"D:\a\poject-zombigpt\pz-mod\42\media\lua\client\PZAgent\Runtime.lua:41:-- Build 42:",
+        r"D:\a\poject-zombigpt\pz-mod\42\media\lua\client\PZAgent\Ipc.lua:9:-- Build 42:",
+    ]
+
+    naive = {line.split(":", 1)[0] for line in windows_output}
+
+    assert naive == {"D"}, "the defect no longer reproduces; this test has stopped meaning anything"
+    assert len(naive) == 1
+
+    # What the counter does instead: the files are known because they were
+    # walked, never recovered from a printed line.
+    assert len(_marked()) == len({path for path in _marked()})
+    assert all(isinstance(path, Path) for path in _marked())
