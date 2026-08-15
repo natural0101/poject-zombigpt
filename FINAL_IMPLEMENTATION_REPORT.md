@@ -795,7 +795,7 @@ Build 42.20 — that is §2's list, and it is what the live session is for.
 
 ### The twenty-two live scenarios
 
-7. `S01_INSTALL` through `S22`, via `run-live-tests.bat` — twenty-two since the
+7. `S01_INSTALL` through `S22`, via `run-live-tests.bat` (`E14-M03`) — twenty-two since the
    crafting and building wave added S21 and S22 to give both new capabilities a
    live route.
    Per-scenario detail — world preparation, required starting state, the exact
@@ -822,7 +822,7 @@ Build 42.20 — that is §2's list, and it is what the live session is for.
 
 ### Things only a live run can settle
 
-9. **Every engine symbol in `docs/GAME_API_VERIFICATION.md`** — 120 rows
+9. **Every engine symbol in `docs/GAME_API_VERIFICATION.md`** (`E14-M02`) — 120 rows
    marked `requires_live`, rebuilt at this close from a 195-symbol sweep of
    the sources (§2). Note that `grep -rn "Build 42:" pz-mod/` returns 6 lines,
    about a twentieth of the surface, so it is *not* a complete list of the
@@ -843,13 +843,49 @@ Build 42.20 — that is §2's list, and it is what the live session is for.
     Nothing else produces it — not a build, not a green test suite, not the
     certified RC.
 
+### What the plan carries that this list had omitted
+
+Steps 1–13 were written from what this branch had been working on. The plan of
+record carries **84 tasks owned `local`**, across six milestones, and comparing
+the two turned up five subjects with no step here at all. They are added rather
+than folded into the ones above, so the omission stays visible: this section is
+the one the reader is told is complete, and for several revisions it was not.
+
+14. **Record the machine, its Windows version, and the capability scan.**
+    `pz-agent doctor --json` against the real build, and then `pz-agent status
+    --json` to confirm no capability reads `verified` without a live
+    acknowledgement behind it. A capability that promotes itself on an install
+    is the failure this ledger exists to prevent. (`E14-M01`)
+15. **Record the game incompatibilities the run finds, fix each, and re-run
+    every scenario a fix touched.** Expect some: §2's inventory has 120 symbols
+    marked `requires_live`. A fix that is not followed by a re-run leaves the
+    evidence describing the code before it. (`E14-M04`)
+16. **Confirm no save file was corrupted — twice.** Once after the scenarios,
+    once after the endurance runs. The scenarios are deliberately destructive
+    and the endurance runs are long; neither is a substitute for the other's
+    check. (`E14-M04`, `E15-M01`)
+17. **The endurance runs beyond S19 and S20 themselves.** Those two scenarios
+    are in step 7 and produce their verdicts there. What is not there: memory
+    and handle counts stable across the thirty minutes, the journals rotating
+    without losing an observation, and the character's outcome — survived or
+    died — explainable from the trace rather than merely recorded. (`E15-M01`)
+18. **Voice against the game, and the support bundle.** Step 12 says the voice
+    *route* has never had a game on the far side; this is the narrower thing to
+    confirm at the chair: that a spoken stop halts the character. Then record
+    the whole run as a support bundle and verify it is clean — that is the
+    artefact anyone diagnosing the run afterwards will be reading. (`E14-M04`)
+
+The panic stop is deliberately not a step of its own: `S18_PANIC` is one of the
+twenty-two and confirms it from the keyboard, so a separate entry would be the
+same work counted twice.
+
 ### Then, and only then
 
-14. `scripts/check_release.py --release` must stop refusing — the RC gate
+19. `scripts/check_release.py --release` must stop refusing — the RC gate
     already passes on CI's build, and the `--release` gate's remaining refusal
     is the evidence manifest above.
-15. Merge to `main`, tag, and cut the release. **Do not tag `v1.0.0` before
-    step 14 passes** (`docs/control/BLOCKERS.md` RB-002 states the same rule),
+20. Merge to `main`, tag, and cut the release (`E15-M02`). **Do not tag `v1.0.0` before
+    step 19 passes** (`docs/control/BLOCKERS.md` RB-002 states the same rule),
     and note that every version constant currently says `0.1.0`.
 
 ---

@@ -1086,3 +1086,60 @@ class TestThePlanNamesTheScenariosThatExist:
             assert "live-test" in command, task["verify_command"]
             following = command[command.index("live-test") + 1]
             assert following in SUBCOMMANDS, f"{following!r} is not a live-test subcommand"
+
+
+class TestTheReportListsEveryMilestoneOnlyAGameCanClose:
+    """Section 9 is the deliverable the reader is told is complete.
+
+    It says so in two places — §1 ("§9 is the complete list of what closing them
+    requires") and §10 — and for several revisions it was not. The plan carries
+    eighty-four tasks owned ``local``, and comparing them against the section
+    turned up five subjects with no step at all: the machine and capability
+    record, recording and fixing game incompatibilities, confirming no save was
+    corrupted, the endurance runs' surroundings, and voice plus the support
+    bundle.
+
+    Pinning eighty-four prose steps to eighty-four task actions would be a
+    checker nobody could keep honest. The milestone is the right granularity: a
+    new one carrying local work is a new *subject*, which is exactly the kind of
+    omission that happened, and the section names each it covers.
+
+    **What it therefore does not catch, stated so nobody reads more into it.**
+    Deleting one step of a milestone that has several leaves the id present and
+    this check green — tried, on step 18, and it passed as designed. It fires
+    when a milestone loses its *last* step, which was tried too, on 14. So this
+    holds the subjects, not their steps; a step vanishing from a well-covered
+    milestone is still something only a reader will notice.
+    """
+
+    @staticmethod
+    def _local_milestones(plan: dict[str, Any]) -> set[str]:
+        return {
+            milestone["id"]
+            for epic in plan["epics"]
+            for milestone in epic["milestones"]
+            if any(task.get("owner") == "local" for task in milestone["tasks"])
+        }
+
+    @staticmethod
+    def _section_nine() -> str:
+        text = (REPO_ROOT / "FINAL_IMPLEMENTATION_REPORT.md").read_text(encoding="utf-8")
+        start = text.index("## 9.")
+        return text[start : text.index("## 10.", start)]
+
+    def test_the_plan_still_has_local_work_to_describe(self, real_plan: dict[str, Any]) -> None:
+        """A plan with none would make the check below vacuously true."""
+        assert self._local_milestones(real_plan), "no milestone carries local tasks any more"
+
+    def test_section_nine_names_every_milestone_that_needs_the_game(
+        self, real_plan: dict[str, Any]
+    ) -> None:
+        section = self._section_nine()
+        missing = sorted(
+            milestone for milestone in self._local_milestones(real_plan) if milestone not in section
+        )
+
+        assert not missing, (
+            f"§9 of FINAL_IMPLEMENTATION_REPORT.md names no step for {missing}; "
+            "it is the list the report calls complete"
+        )

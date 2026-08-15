@@ -12,6 +12,40 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Added
 
+- **§9 of the report called itself complete and was not** (`dev`). The section
+  the standing instruction singles out — the exact list of steps that physically
+  require the user to launch the game — had fifteen steps written from what this
+  branch had been working on. The plan of record carries **84 tasks owned
+  `local`** across six milestones, and comparing the two turned up five subjects
+  with no step at all:
+
+  - record the machine, its Windows version, and the capability scan, including
+    that no capability reads `verified` without a live acknowledgement (`E14-M01`);
+  - record the game incompatibilities the run finds, fix each, re-run every
+    scenario a fix touched (`E14-M04`);
+  - confirm no save file was corrupted — after the scenarios *and* after the
+    endurance runs, which are different checks (`E14-M04`, `E15-M01`);
+  - the endurance runs beyond `S19`/`S20` themselves: memory and handle counts
+    stable, journals rotating without losing an observation, the character's
+    outcome explainable from the trace (`E15-M01`);
+  - a spoken stop halting the character, and the whole run recorded as a support
+    bundle verified clean (`E14-M04`).
+
+  Added as steps 14–18 rather than folded into the existing ones, so the omission
+  stays visible; the release steps renumber to 19–20 and the one cross-reference
+  moves with them. The panic stop is deliberately *not* a new step — `S18_PANIC`
+  is one of the twenty-two and confirms it from the keyboard.
+
+  `TestTheReportListsEveryMilestoneOnlyAGameCanClose` holds it: every milestone
+  carrying `local` tasks must be named in §9. Steps 7, 9 and 20 gained their
+  milestone ids so the mapping is visible to a reader rather than implied.
+
+  Its limit is written into the docstring rather than left to be discovered.
+  Deleting one step of a well-covered milestone leaves the id present and the
+  check green — tried, on step 18, and it passed as designed. It fires when a
+  milestone loses its *last* step, tried on 14. It holds the subjects, not the
+  steps.
+
 - **Nothing said where the release archive comes from** (`dev`). Every document
   describes what to do *with* `pz-agent-windows-*.zip` — `INSTALL.md` opens with
   a table telling the reader which installer their situation calls for — and
