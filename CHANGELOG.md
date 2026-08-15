@@ -12,6 +12,49 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **The installer's traversal guard refused one separator convention and shipped
+  to the other** (`dev`). `modinstall._check_relative` states its purpose —
+  *"refusing anything that could escape the mod directory"* — and split the path
+  on `/` alone:
+
+  | path | verdict |
+  | --- | --- |
+  | `../../evil.txt` | refused: `..` becomes a part |
+  | `..\..\evil.txt` | **admitted**: nothing splits it |
+
+  Measured, not reasoned about. The backslash string stays one segment, that
+  segment is not `..`, the depth is 1, so every check passes; on Windows
+  `destination.joinpath` then reads the backslashes as separators and lands
+  outside the mod directory.
+
+  Stated precisely rather than dramatised: this is not a remote attack. The
+  paths come from the install ledger `pz-agent` itself writes, and it writes
+  POSIX. But that ledger lives in the user's Zomboid directory, is read back on
+  the next `install-mod`, and every path in it goes through this guard — after
+  which the entries the audit calls stale are `unlink`ed. A corrupt or
+  hand-edited ledger could therefore delete a file this project never installed,
+  which is the outcome the surrounding audit exists to prevent: it raises
+  `ForeignFileError` on the first file pz-agent did not write. AGENTS.md ranks
+  user safety first, and this is on the platform the product ships to.
+
+  The fix is `platform/backup.py`'s existing idiom — normalise `\` to `/` before
+  splitting — applied where it was missing rather than invented. One call site
+  in `_audit_destination` split a manifest path itself instead of going through
+  the guard; it now goes through it.
+
+  `tests/unit/test_install_path_traversal.py` builds the Windows shape with
+  `PureWindowsPath`, per D-004, so the defect fails on any platform instead of
+  waiting for a Windows run. It separates escapes from dot segments — those are
+  refused for tidiness, not because they escape, and merging the two would have
+  made the consequence test assert something untrue of half its cases — and
+  carries the control that legitimate install paths still work.
+
+- **The check that found it was itself the previous commit's Windows failure.**
+  See below: `test_unverified_surface_is_counted` shelled out to grep and
+  recovered filenames with `split(":", 1)[0]`, which returns the drive letter on
+  a `D:\a\...` runner. Both defects are the same class, one in a test and one in
+  the installer, found within a day of each other.
+
 - **The stale scenario range was in six more places, and my own guards were the
   reason nobody saw them** (`dev`). Two earlier iterations wrote checks for
   `S01..S20` — one scoped to `packaging/windows/bat/*.bat`, one to three named

@@ -177,10 +177,30 @@ def _text(payload: Mapping[str, Any], key: str) -> str:
 
 
 def _check_relative(relative: str) -> tuple[str, ...]:
-    """Split a manifest path, refusing anything that could escape the mod directory."""
+    """Split a manifest path, refusing anything that could escape the mod directory.
+
+    **Both separator conventions, because this runs on Windows.** The first
+    version split on ``/`` alone, so ``../../evil`` was refused and
+    ``..\\..\\evil`` was not: the traversal parts never became parts at all, the
+    whole string stayed one segment that is not ``..``, and every check below
+    passed it. ``destination.joinpath("..\\..\\evil")`` on Windows then resolves
+    the backslashes as separators and lands outside the mod directory —
+    measured, not reasoned about.
+
+    That is reachable through a manifest, not only through the shipped one.
+    ``install-mod`` reads the ledger it wrote into the user's Zomboid directory
+    on a previous run, and every path recorded there is passed through here;
+    the ones it calls stale are then ``unlink``ed. A corrupt or hand-edited
+    ledger could therefore delete a file this project never installed, which is
+    the exact outcome the surrounding audit — ``ForeignFileError`` on the first
+    file pz-agent did not write — exists to make impossible.
+
+    ``platform/backup.py`` already normalises both separators this way; this is
+    that idiom, applied where it was missing rather than invented here.
+    """
     if not relative or relative.startswith("/") or relative.startswith("\\"):
         raise InstallError(f"install path must be relative, got {relative!r}")
-    parts = tuple(relative.split("/"))
+    parts = tuple(relative.replace("\\", "/").split("/"))
     if any(part in ("", ".", "..") for part in parts):
         raise InstallError(f"install path must not traverse: {relative!r}")
     if len(parts) > MAX_DEPTH:
@@ -316,7 +336,11 @@ def _audit_destination(
     known = {} if manifest is None else manifest.by_path()
     replaced: list[str] = []
     for relative, _, _ in planned:
-        target = destination / Path(*relative.split("/"))
+        # Through the guard rather than around it. This was the one place that
+        # split a manifest path itself, so a path the guard would refuse still
+        # reached the filesystem here — for a read, but the audit's answer
+        # decides what the write pass then does.
+        target = destination.joinpath(*_check_relative(relative))
         if not target.exists():
             continue
         recorded = known.get(relative)

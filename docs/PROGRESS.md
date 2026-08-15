@@ -915,6 +915,24 @@ came out clean: every module its triage table names exists, all seven reason
 codes it sends the agent to look for are emitted somewhere, and all eleven
 exchange filenames it lists appear in the code that writes them.
 
+Then that guard took the Windows release build red — it shelled out to grep and
+recovered filenames with `split(":", 1)[0]`, which on a `D:\a\...` runner
+returns the drive letter, so three files counted as one. Green here, red there.
+The measurement now reads `pz-mod/` directly; grep was only ever a reader of the
+tree, and the tree is the producer.
+
+Asking whether that class existed elsewhere found the more serious one.
+`modinstall._check_relative` — whose stated job is *"refusing anything that
+could escape the mod directory"* — split on `/` alone, so `../../evil.txt` was
+refused and `..\..\evil.txt` was **admitted**: the traversal never became a
+part, and `joinpath` on Windows resolves it outside the destination. Not remote
+— the paths come from the ledger `pz-agent` writes — but that ledger sits in the
+user's Zomboid directory, is read on the next `install-mod`, and the entries the
+audit calls stale are `unlink`ed. `platform/backup.py` already normalised both
+separators; the fix is that idiom where it was missing. Held by
+`tests/unit/test_install_path_traversal.py`, built on `PureWindowsPath` per
+D-004 so it fails on any platform.
+
 ## Deviations from the blueprint
 
 | Blueprint | Here | Why |
