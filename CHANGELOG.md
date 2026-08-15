@@ -12,6 +12,37 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Added
 
+- **Nothing said where the release archive comes from** (`dev`). Every document
+  describes what to do *with* `pz-agent-windows-*.zip` — `INSTALL.md` opens with
+  a table telling the reader which installer their situation calls for — and
+  none said how to obtain it. It is a workflow artifact, not a release asset.
+
+  Worse, GitHub wraps it, and the wrapping is the trap I have fallen into
+  roughly ten times while maintaining this repository: the download is
+  `pz-agent-windows-rc.zip`, the release candidate is the
+  `pz-agent-windows-v1.0.0-rc1.zip` *inside* it, and **the SHA-256 the Actions
+  page shows beside the artifact is the wrapper's, not the archive's.** Those
+  two numbers are never equal. A user comparing the page's digest against the
+  one in `EVIDENCE_INDEX.md` would conclude they had the wrong file.
+
+  `docs/LOCAL_GAME_HANDOFF.md` §5 now opens with getting the ZIP and checking
+  it: extract, then `certutil -hashfile … SHA256` against the
+  `.zip.sha256` sidecar that travelled with it, and against the `archive sha256`
+  row in the evidence index. Three independent statements of one number — the
+  builder wrote the sidecar, the gate printed it into the workflow log, the
+  index records it against its commit and run — with the instruction to stop if
+  any two disagree.
+
+  No new test: the procedure rests on behaviour already pinned.
+  `test_packaging_rc.py` fixes the sidecar's contents as
+  `{report.sha256}  {name}`, and `test_rc_archive.py` fixes `report.sha256` as
+  the digest of the archive's own bytes.
+
+  The first draft linked the evidence index relatively and
+  `test_archive_documents_resolve.py` refused it — `docs/control/` is not
+  shipped, so that link would dangle for someone reading the document inside the
+  ZIP. It is named rather than linked, and the reason is written beside it.
+
 - **A gap `docs/PROGRESS.md` still listed as open had been closed** (`dev`).
   Its "Requires a live game session" section said of the restore guard:
   *"Nothing yet supplies it from an actual process check; whoever wires the CLI

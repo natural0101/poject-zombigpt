@@ -367,6 +367,46 @@ the artefact, not any claim about it having been run in a game.
 
 ## 5. Installing
 
+### Getting the ZIP, and checking it is the one
+
+Nothing above says where the archive comes from, so: it is a workflow artifact,
+not a release asset. Open the `windows package` run named in
+`docs/control/EVIDENCE_INDEX.md` — that file is part of the repository rather
+than the archive, so it is named here rather than linked — and download
+`pz-agent-windows-rc`.
+
+**GitHub wraps it, and the wrapping matters.** What downloads is
+`pz-agent-windows-rc.zip`, and inside it are two files:
+
+```
+pz-agent-windows-v1.0.0-rc1.zip
+pz-agent-windows-v1.0.0-rc1.zip.sha256
+```
+
+The inner ZIP is the release candidate. The outer one is packaging GitHub adds
+and takes no part in anything — which is why the SHA-256 the Actions page shows
+beside the artifact is **not** the archive's digest. It is the wrapper's. Those
+two numbers have never been equal and never will be, and confusing them is the
+easiest mistake to make here.
+
+Extract, then check the inner ZIP against the sidecar that travelled with it:
+
+```
+certutil -hashfile pz-agent-windows-v1.0.0-rc1.zip SHA256
+type pz-agent-windows-v1.0.0-rc1.zip.sha256
+```
+
+The first prints a digest; the second prints the same digest followed by the
+file name. They must match, and both must match the `archive sha256` row in
+`EVIDENCE_INDEX.md`. Three independent statements of one number: the builder
+wrote the sidecar, the release gate printed it into the workflow log, and the
+evidence index records it against the commit and run it came from. If any two
+disagree, stop — you are not holding the archive this project certified.
+
+Then extract the inner ZIP and run `install.bat` from where it unpacked.
+
+### Running the installer
+
 From the RC ZIP (no Python, no git needed — **but only from an RC built on
 Windows**; the Windows CI builds `bin\pz-agent.exe` and `bin\pz-agent-mcp.exe`
 with PyInstaller, and the ZIP in this container's `dist/` was built without
