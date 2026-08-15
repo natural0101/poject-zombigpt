@@ -6511,7 +6511,7 @@ epics:
       evidence: docs/control/evidence/step-30-40/windows-suite.txt
       status: PASS
       implementation_commit: 7d4a110d2019e2fbadc2ebb064985cc26c5f822a
-      verification_commit: be28770b8b1d04b29b47a00e818b8a2d682acc6f
+      verification_commit: f4fa0b2c043b890eb8d0596496b2fb90702c4d1e
       commit: 7d4a110d2019e2fbadc2ebb064985cc26c5f822a
       ci_url: https://github.com/natural0101/poject-zombigpt/actions/runs/31225901032
       reason: ''
@@ -6529,7 +6529,7 @@ epics:
       evidence: packaging/windows/pz-agent-mcp.spec
       status: PASS
       implementation_commit: 7d4a110d2019e2fbadc2ebb064985cc26c5f822a
-      verification_commit: be28770b8b1d04b29b47a00e818b8a2d682acc6f
+      verification_commit: f4fa0b2c043b890eb8d0596496b2fb90702c4d1e
       commit: 7d4a110d2019e2fbadc2ebb064985cc26c5f822a
       ci_url: https://github.com/natural0101/poject-zombigpt/actions/runs/31225901032
       reason: ''
@@ -6547,7 +6547,7 @@ epics:
       evidence: packaging/windows/pz-agent.spec
       status: PASS
       implementation_commit: 7d4a110d2019e2fbadc2ebb064985cc26c5f822a
-      verification_commit: be28770b8b1d04b29b47a00e818b8a2d682acc6f
+      verification_commit: f4fa0b2c043b890eb8d0596496b2fb90702c4d1e
       commit: 7d4a110d2019e2fbadc2ebb064985cc26c5f822a
       ci_url: https://github.com/natural0101/poject-zombigpt/actions/runs/31225901032
       reason: ''
@@ -6701,7 +6701,7 @@ epics:
       evidence: .github/workflows/windows.yml
       status: PASS
       implementation_commit: df79d65340c481028e0781632bda158232418794
-      verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
+      verification_commit: f4fa0b2c043b890eb8d0596496b2fb90702c4d1e
       commit: df79d65340c481028e0781632bda158232418794
       ci_url: https://github.com/natural0101/poject-zombigpt/actions/runs/31214158408
       reason: ''
@@ -6782,7 +6782,7 @@ epics:
       evidence: .github/workflows/windows.yml
       status: PASS
       implementation_commit: df79d65340c481028e0781632bda158232418794
-      verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
+      verification_commit: f4fa0b2c043b890eb8d0596496b2fb90702c4d1e
       commit: df79d65340c481028e0781632bda158232418794
       ci_url: https://github.com/natural0101/poject-zombigpt/actions/runs/31214158408
       reason: ''
@@ -6800,7 +6800,7 @@ epics:
       evidence: docs/control/MASTER_PLAN.yaml
       status: PASS
       implementation_commit: df79d65340c481028e0781632bda158232418794
-      verification_commit: 276b9d90797e6cfd9c79d107f007acee7d3770d9
+      verification_commit: f4fa0b2c043b890eb8d0596496b2fb90702c4d1e
       commit: df79d65340c481028e0781632bda158232418794
       ci_url: https://github.com/natural0101/poject-zombigpt/actions/runs/31214158408
       reason: ''
@@ -6818,7 +6818,7 @@ epics:
       evidence: docs/control/EVIDENCE_INDEX.md
       status: PASS
       implementation_commit: cd1d21085671780a9c68441507c1887450c12737
-      verification_commit: cd1d21085671780a9c68441507c1887450c12737
+      verification_commit: f4fa0b2c043b890eb8d0596496b2fb90702c4d1e
       commit: cd1d21085671780a9c68441507c1887450c12737
       ci_url: null
       reason: ''

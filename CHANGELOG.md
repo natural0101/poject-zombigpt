@@ -12,6 +12,50 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **Seven `PASS` claims named a proof that did not exist yet, and the gate that
+  would have said so had never been run** (`dev`). `scripts/audit_pass.py` asks
+  the questions `check_master_plan.py` cannot: that gate reads the tree as it
+  stands today, so a task can name a commit that predated the proof it claims
+  and every check passes. The audit asks the tree as it *stood* — and nothing
+  invoked it. It is in no workflow, no `check.sh` step and no test. Running it
+  took 2.1 seconds and returned eight invalid claims out of 400.
+
+  Seven were real. The E11 packaging tasks name
+  `tests/unit/test_windows_workflow_contract.py` as their regression test, and
+  that file was first added at `f4fa0b2` — a *descendant* of every commit those
+  tasks recorded as their verification, so at the commit each named as its proof
+  the file was simply absent. The behaviour was there and the test passes today;
+  what was false was the claim about where it had been proved.
+  `verification_commit` now points at `f4fa0b2`, whose eight tests match the
+  seven `pass_criterion` lines one for one (`console=True` →
+  `test_the_spec_builds_a_console_executable`, `a red gate stops the upload
+  step` → `test_a_red_gate_stands_between_the_suite_and_the_upload`, and so on).
+  No `PASS` was withdrawn, because a real proof backs each; no question was
+  relaxed.
+
+  The eighth was a false accusation by the audit itself. `E06-M04-T001`'s proof
+  sits exactly at the commit the plan names for it, and the audit looked at
+  `commit` — the implementation — because it never read `verification_commit` at
+  all. The two fields exist because those are different events, and
+  `check_master_plan.py` says as much: a proof written after the code it proves
+  is ordinary work. An audit that accuses a sound claim gets argued with once and
+  then switched off, so this counted as a defect and was fixed with the rest;
+  `audit_pass.proving_commit()` reads the verification commit and falls back to
+  `commit` only when a task records nothing else. The docstring also claimed a
+  fourth question — "does the regression test pass today?" — that no line of the
+  file asked; it now says where that question is actually answered.
+
+  `scripts/audit_pass.py --quiet` is a step of `scripts/check.sh`, and
+  `tests/unit/test_pass_audit.py` (12 tests) runs the audit against the real plan
+  and plants each of its questions: a proof dated before it existed, a named test
+  node missing from a file that was there, an evidence path not on disk, a `PASS`
+  standing on a reopened dependency, a task with no commit at all. Two more pin
+  the false-accusation half — the task whose proof legitimately post-dates its
+  implementation must stay clean, and a task naming only one commit must still be
+  asked the question. Proved by planting each defect back in the real tree:
+  restoring the seven commits fails two tests, restoring the pre-fix audit fails
+  five, and dropping the `check.sh` step fails one.
+
 - **The progress counter reported zeroes for a tree at 73.31%** (`dev`).
   `scripts/progress_report.py` and `scripts/check_progress.py` count and gate
   `docs/control/PLAN.md`, the 100-step plan. The plan of record moved to

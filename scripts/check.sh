@@ -35,6 +35,11 @@ step "mypy" "$PY" -m mypy
 step "forbidden patterns" "$PY" scripts/check_forbidden.py
 step "version sync" "$PY" scripts/check_versions.py
 step "schema validity" "$PY" scripts/check_schemas.py
+# Asks the historical questions no test run can: did the proof a task names
+# exist at the commit the task says proved it. Two seconds over 400 claims, and
+# it needs the full history — a shallow clone makes it exit 2 rather than pass,
+# which is the honest answer when no historical question is answerable.
+step "pass audit" "$PY" scripts/audit_pass.py --quiet
 step "playbook in sync" "$PY" scripts/generate_playbook.py --check
 step "knowledge docs in sync" "$PY" scripts/generate_knowledge_docs.py --check
 

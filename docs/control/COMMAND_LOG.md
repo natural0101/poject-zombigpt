@@ -34,7 +34,12 @@ and its gate:
 .venv/bin/python scripts/master_report.py              # print
 .venv/bin/python scripts/master_report.py --json       # the same figures, structured
 .venv/bin/python scripts/check_master_plan.py          # refuse an unearned claim
+.venv/bin/python scripts/audit_pass.py                 # refuse a claim history does not support
 ```
+
+`audit_pass.py` needs the full history and exits 2 on a shallow clone; both
+workflows check out with `fetch-depth: 0`. It is also a `check.sh` step, so it
+runs without being remembered.
 
 Nothing recounts and stores. `master_report.py` derives the percentage on every
 read, so there is no stored number to drift; `scripts/reconcile_status.py` is

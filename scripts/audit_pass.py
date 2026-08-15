@@ -10,29 +10,48 @@ every existing check looks at the tree as it stands rather than as it stood.
 
 So this asks the historical questions instead.
 
-**Did the regression test exist at the recorded commit?** If a task says "proved
-by ``tests/x.py::test_y``" and names commit ``C``, and ``tests/x.py`` did not
-exist in ``C``, then whatever ``C`` did, it was not verified by that test. The
+**Did the regression test exist where the plan says it was proved?** If a task
+says "proved by ``tests/x.py::test_y``" and ``tests/x.py`` did not exist at that
+commit, then whatever that commit did, it was not verified by that test. The
 claim rests on a file written later. This is the automatable half of "evidence
 must not predate implementation" — it cannot tell whether the *code* was there,
 but a missing proof is decisive on its own.
 
-**Did the specific test node exist at the recorded commit?** For a task pinned
-to ``file::Class::test_name``, the file existing is not enough; the named test
-has to be in it. A file that existed and did not yet contain the test is the
-same defect one level finer, and it is the level at which E07's tasks were
-written.
+*Where* the plan says it was proved is ``verification_commit``, not ``commit``.
+The two are different fields on purpose: ``commit``/``implementation_commit`` is
+where the behaviour landed, ``verification_commit`` is where the proof did, and
+``check_master_plan.py`` is explicit that a proof written before or after its
+implementation is ordinary work rather than a defect. This file asked both
+questions of ``commit`` alone, and so accused ``E06-M04-T001`` — whose proof sits
+exactly at the commit the plan names for it — of resting on a file written later.
+An audit that makes a false accusation is worse than no audit: it gets argued
+with once and switched off. ``commit`` is used only when no verification commit
+is recorded, which is the honest reading of a task that names just the one.
 
-**Does the evidence path exist at the recorded commit?** Evidence created after
-the commit it certifies is evidence about something else.
+**Did the specific test node exist there?** For a task pinned to
+``file::Class::test_name``, the file existing is not enough; the named test has
+to be in it. A file that existed and did not yet contain the test is the same
+defect one level finer, and it is the level at which E07's tasks were written.
 
-**Does the regression test pass today?** Delegated to ``verify_carryover.py``,
-which runs it under ``--junitxml`` and refuses a run where nothing was observed
-— pytest exits 0 when every test skips, and a green exit over zero executed
-tests is the emptiest possible proof.
+**Does the evidence path exist?** Asked of the working tree, because evidence is
+a path that has to be there now for anyone to read it. ``check_master_plan.py``
+asks the same question and this repeats it, so a verdict here is complete on its
+own rather than true only in combination with another script's output.
 
-Exit 0 when every ``PASS`` survives all four, 1 otherwise. The report names each
-survivor's failing question, because "some tasks are invalid" is not actionable.
+**Is every dependency also PASS?** A claim standing on an open one is not a
+claim.
+
+Exit 0 when every ``PASS`` survives all four, 1 when one does not, 2 when the
+clone is shallow and no historical question can be answered at all. The report
+names each failure's question, because "some tasks are invalid" is not
+actionable.
+
+Whether the named test *passes* is not asked here and deliberately so: that is
+what running the suite does, on every commit, in ``scripts/check.sh`` and in CI.
+``verify_carryover.py`` is the tool for asking it task by task, under
+``--junitxml`` so that a green run over zero executed tests is refused. This
+script asks only the questions a test run cannot answer — the ones about
+history.
 """
 
 from __future__ import annotations
@@ -64,6 +83,17 @@ class Verdict:
     @property
     def valid(self) -> bool:
         return not self.problems
+
+
+def proving_commit(task: dict[str, Any]) -> str:
+    """The commit the plan says the proof landed at.
+
+    ``verification_commit`` when the task records one, and ``commit`` when it
+    does not. Never a silent fallback the other way: a task that names where it
+    was verified is answered on that, and reading ``commit`` instead is what
+    produced a false accusation against a sound claim.
+    """
+    return str(task.get("verification_commit") or task.get("commit") or "")
 
 
 def _git(*args: str) -> subprocess.CompletedProcess[str]:
@@ -142,17 +172,23 @@ def _audit_one(task: dict[str, Any], verdict: Verdict, passed: set[str]) -> None
 
     regression_test = str(task.get("regression_test") or "")
     if regression_test:
+        proved_at = proving_commit(task)
+        if not _commit_exists(proved_at):
+            verdict.problems.append(
+                f"the verification commit {proved_at[:8]} does not resolve in this clone"
+            )
+            return
         path, node = _split_node(regression_test)
-        content = _path_at(commit, path)
+        content = _path_at(proved_at, path)
         if content is None:
             verdict.problems.append(
-                f"the regression test {path} did not exist at {commit[:8]}, so that "
-                f"commit was never proved by it"
+                f"the regression test {path} did not exist at {proved_at[:8]}, the commit "
+                f"this task names as its verification, so nothing was proved by it there"
             )
         elif node and not _defines(content, node):
             verdict.problems.append(
-                f"{path} existed at {commit[:8]} but did not contain {node}, so the "
-                f"named proof was written after the commit it certifies"
+                f"{path} existed at {proved_at[:8]} but did not contain {node}, so the "
+                f"named proof was written after the commit that claims it"
             )
 
     evidence = str(task.get("evidence") or "").split("#", 1)[0]

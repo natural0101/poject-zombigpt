@@ -18,7 +18,11 @@ construction.
 | `scripts/progress_report.py` | its counter; refuses any other |
 
 The counter and gate of the plan of record are `scripts/master_report.py` and
-`scripts/check_master_plan.py`. The retired pair above is listed because these
+`scripts/check_master_plan.py`, with `scripts/audit_pass.py` beside the gate for
+the questions it cannot ask — whether a task's proof existed at the commit the
+task names as its verification. That one is a `check.sh` step and is held by
+`tests/unit/test_pass_audit.py`; before it was wired in, seven `PASS` claims
+named a regression test added in a later commit than the one they recorded. The retired pair above is listed because these
 steps were measured with it, not because it still reports anything: run against
 the current `STATUS.json` both refuse by name. That refusal is the fix for a
 counter that printed `PROGRESS: 0%`, `RC ARTIFACT: None` and `LIVE SCENARIOS:

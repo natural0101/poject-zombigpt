@@ -248,6 +248,18 @@ The tooling, all of it gates rather than reports:
   both against what `STATUS.json` records, by running the command rather than
   reading its source — the check whose absence let the retired counter print
   `0%` for a tree at 73.31%.
+- `scripts/audit_pass.py` asks the *historical* questions, which are the ones
+  the gate above cannot: did the regression test a task names exist at the commit
+  the task records as its verification, did the named test node exist in it, is
+  the evidence on disk, is every dependency `PASS`. Two seconds over 400 claims,
+  a step of `check.sh`, and it refuses outright on a shallow clone rather than
+  answering a historical question with no history. It had never been run by
+  anything, and the first run returned eight invalid claims — seven real
+  (E11's packaging tasks named a proof added in a later commit than the one they
+  recorded; `verification_commit` was corrected, no `PASS` withdrawn) and one a
+  false accusation by the audit, which read `commit` where the plan records
+  `verification_commit`. Both halves are held by
+  `tests/unit/test_pass_audit.py`, which plants each question.
 - `scripts/verify_carryover.py` re-runs a task's regression test before its
   `PASS` is believed. Nothing inherits a pass from the old model.
 - `tests/unit/test_master_plan.py` proves each of those refusals by planting the
