@@ -217,6 +217,20 @@
               "p95_ms": { "type": "null" }
             }
           }
+        },
+        {
+          "description": "The other direction: a measurement has samples behind it. A tightening rather than a reachable defect — latency_summary sets measured only from a non-empty sample list — so this refuses a document assembled by any other route, where 'measured' with no samples would be a percentile over nothing.",
+          "if": {
+            "properties": { "measured": { "const": true } },
+            "required": ["measured"]
+          },
+          "then": {
+            "properties": {
+              "samples": { "minimum": 1 },
+              "p50_ms": { "type": "integer" },
+              "p95_ms": { "type": "integer" }
+            }
+          }
         }
       ]
     }

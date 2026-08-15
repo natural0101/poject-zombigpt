@@ -90,8 +90,10 @@ def _observations_skeleton(scenario: LiveScenario) -> list[str]:
     if snapshot:
         document["before"] = _nest(snapshot)
         document["after"] = _nest(snapshot)
+    if scenario.measures_latency:
+        document["latencies_ms"] = []
     rendered = json.dumps(document, indent=2, ensure_ascii=False)
-    return [
+    lines = [
         "### The observations file\n",
         "\n",
         "Fill every `null` with what you read back, then pass it to `--observations`.\n",
@@ -102,11 +104,36 @@ def _observations_skeleton(scenario: LiveScenario) -> list[str]:
         "pass without it and the release gate would refuse the whole archive after all "
         f"{len(SCENARIOS)}\n",
         "sessions were spent. The runner refuses that PASS here instead.\n",
+    ]
+    if scenario.measures_latency:
+        lines += _latency_instruction()
+    lines += [
         "\n",
         "```json\n",
         *[f"{line}\n" for line in rendered.splitlines()],
         "```\n",
         "\n",
+    ]
+    return lines
+
+
+def _latency_instruction() -> list[str]:
+    """Where the samples come from, for the scenarios that declare a measurement.
+
+    Named because the alternative is an operator inventing plausible numbers,
+    which is worse than the empty list this replaces. ``pz-agent latency --json``
+    publishes one entry per command in ``traces``, each with the two stamps the
+    sample is the difference of, so every number written here is one the journals
+    already recorded.
+    """
+    return [
+        "\n",
+        "This scenario declares that it **measures latency**, so `latencies_ms` is\n",
+        "required as well and an empty list is not a measurement. Run `pz-agent latency\n",
+        "--json` after the scenario and read the `traces` array: for each command this\n",
+        "scenario issued, the sample is `terminal_at_ms - issued_at_ms`. Write those\n",
+        "numbers, and no others — the p50/p95 in `result.json` are computed from this\n",
+        "list, so a number nobody measured becomes a percentile nobody measured.\n",
     ]
 
 

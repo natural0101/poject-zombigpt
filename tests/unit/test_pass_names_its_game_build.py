@@ -78,6 +78,11 @@ def _satisfying(scenario: LiveScenario, *, game_build: str) -> ObservedRun:
         after=after,
         observations=observations,
         game_build=game_build,
+        # Supplied wherever the scenario declares a measurement, so this file
+        # stays about the build alone. Three scenarios repeat an operation and
+        # a PASS there requires samples too; leaving them out would make every
+        # assertion here pass for the neighbouring reason.
+        latencies_ms=(140, 150, 160) if scenario.measures_latency else (),
     )
 
 
@@ -169,7 +174,7 @@ def test_the_failure_names_the_build_rather_than_the_game() -> None:
         started_at_ms=0,
         finished_at_ms=1,
         commit="0" * 40,
-        failure_code=_code(status, run, outcomes),
+        failure_code=_code(status, run, outcomes, scenario),
     )
 
     assert document["failure_code"] == BUILD_NOT_OBSERVED
@@ -188,7 +193,7 @@ def test_a_real_postcondition_failure_still_says_so() -> None:
 
     assert status is LiveState.FAIL
     assert not all(outcome.passed for outcome in outcomes)
-    assert _code(status, run, outcomes) == POSTCONDITION_FAILED
+    assert _code(status, run, outcomes, scenario) == POSTCONDITION_FAILED
 
 
 def test_a_blocked_attempt_is_not_blamed_on_the_build() -> None:
@@ -202,7 +207,7 @@ def test_a_blocked_attempt_is_not_blamed_on_the_build() -> None:
     status, outcomes = decide(scenario, run)
 
     assert status is LiveState.BLOCKED
-    assert _code(status, run, outcomes) != BUILD_NOT_OBSERVED
+    assert _code(status, run, outcomes, scenario) != BUILD_NOT_OBSERVED
 
 
 def test_the_schema_refuses_the_document_too() -> None:
@@ -256,8 +261,8 @@ def test_the_schema_spells_the_marker_the_runner_writes() -> None:
     assert [clause["not"]["const"] for clause in clauses] == [UNOBSERVED_BUILD]
 
 
-def _code(status: LiveState, run: ObservedRun, outcomes: Any) -> str:
+def _code(status: LiveState, run: ObservedRun, outcomes: Any, scenario: LiveScenario) -> str:
     """The runner's own derivation, reached through its module."""
     from pz_agent_cli.livetest import runner  # noqa: PLC0415
 
-    return runner._failure_code(status, run, outcomes)
+    return runner._failure_code(status, run, outcomes, scenario)

@@ -391,6 +391,13 @@ the running game reports. No postcondition reads it, so a scenario would otherwi
 pass without it and the release gate would refuse the whole archive after all 22
 sessions were spent. The runner refuses that PASS here instead.
 
+This scenario declares that it **measures latency**, so `latencies_ms` is
+required as well and an empty list is not a measurement. Run `pz-agent latency
+--json` after the scenario and read the `traces` array: for each command this
+scenario issued, the sample is `terminal_at_ms - issued_at_ms`. Write those
+numbers, and no others — the p50/p95 in `result.json` are computed from this
+list, so a number nobody measured becomes a percentile nobody measured.
+
 ```json
 {
   "scenario_id": "S04_MOVE",
@@ -412,7 +419,8 @@ sessions were spent. The runner refuses that PASS here instead.
     "player": {
       "position": null
     }
-  }
+  },
+  "latencies_ms": []
 }
 ```
 
@@ -1730,6 +1738,13 @@ the running game reports. No postcondition reads it, so a scenario would otherwi
 pass without it and the release gate would refuse the whole archive after all 22
 sessions were spent. The runner refuses that PASS here instead.
 
+This scenario declares that it **measures latency**, so `latencies_ms` is
+required as well and an empty list is not a measurement. Run `pz-agent latency
+--json` after the scenario and read the `traces` array: for each command this
+scenario issued, the sample is `terminal_at_ms - issued_at_ms`. Write those
+numbers, and no others — the p50/p95 in `result.json` are computed from this
+list, so a number nobody measured becomes a percentile nobody measured.
+
 ```json
 {
   "scenario_id": "S19_AUTONOMOUS_30_MIN",
@@ -1746,7 +1761,8 @@ sessions were spent. The runner refuses that PASS here instead.
     "player": {
       "alive_after": null
     }
-  }
+  },
+  "latencies_ms": []
 }
 ```
 
@@ -1823,6 +1839,13 @@ the running game reports. No postcondition reads it, so a scenario would otherwi
 pass without it and the release gate would refuse the whole archive after all 22
 sessions were spent. The runner refuses that PASS here instead.
 
+This scenario declares that it **measures latency**, so `latencies_ms` is
+required as well and an empty list is not a measurement. Run `pz-agent latency
+--json` after the scenario and read the `traces` array: for each command this
+scenario issued, the sample is `terminal_at_ms - issued_at_ms`. Write those
+numbers, and no others — the p50/p95 in `result.json` are computed from this
+list, so a number nobody measured becomes a percentile nobody measured.
+
 ```json
 {
   "scenario_id": "S20_AUTONOMOUS_2_HOURS",
@@ -1837,7 +1860,8 @@ sessions were spent. The runner refuses that PASS here instead.
     "player": {
       "alive_after": null
     }
-  }
+  },
+  "latencies_ms": []
 }
 ```
 

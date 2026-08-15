@@ -12,6 +12,47 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **Three scenarios declared that they measure latency, and none of them did**
+  (`dev`). `measures_latency` is set by `S04_MOVE`, `S19_AUTONOMOUS_30_MIN` and
+  `S20_AUTONOMOUS_2_HOURS`, and it was read by exactly two things, both of which
+  only *described* it: `generate_playbook.py`, which prints **latency measured**
+  (p50/p95 recorded in `result.json`) under each of those sections, and
+  `latency_summary`, which writes `"measured": false, "samples": 0` when no
+  samples were supplied.
+
+  So the shipped document promised a measurement, the evidence recorded that
+  none was made, and the verdict said `PASS`. That combination is what separates
+  this from the `game_build` entry below: there the release gate caught it, late
+  and expensively. **Here nothing would have caught it at all** — `finalize`
+  does not read the latency block and neither does `check_release.py`. The
+  promise would have shipped as evidence of a measurement nobody made.
+
+  The playbook made it certain rather than merely possible: the observations
+  skeleton had no `latencies_ms` field, so an operator following the document
+  supplied none by construction.
+
+  `decide` now refuses a PASS for a scenario that declares a measurement and
+  carries no samples, under a new code `LATENCY_NOT_MEASURED`; the two evidence
+  rules live in one `unmet_evidence` function so the verdict and the code it is
+  reported under cannot come apart. The skeleton carries `latencies_ms` for
+  exactly those three scenarios, and — the half that matters as much as the
+  refusal — the prose names a real source: `pz-agent latency --json` publishes
+  one entry per command in `traces`, each with `issued_at_ms` and
+  `terminal_at_ms`, and the sample is their difference. A required field with no
+  honest source would push an operator toward plausible invented numbers, which
+  is worse than the empty list it replaces.
+
+  The result schema gains the other direction of its latency rule — `measured:
+  true` requires at least one sample and non-null percentiles. Stated as what it
+  is: a tightening, not a reachable defect, since `latency_summary` sets
+  `measured` only from a non-empty list. It refuses a document assembled by any
+  other route.
+
+  Held by `tests/unit/test_latency_scenarios_measure_latency.py`, including the
+  control that the nineteen scenarios which declare nothing are *not* held to
+  it — a rule strict in the wrong places gets switched off wholesale the first
+  time it blocks something legitimate.
+
 - **A scenario could PASS without naming the game it passed against** (`dev`).
   `game_build` is the one field a live result carries that no postcondition
   covers. Twenty-one of the twenty-two scenarios say nothing about the build,

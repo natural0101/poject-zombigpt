@@ -805,6 +805,24 @@ result schema refuses the document under its PASS branch, and the playbook names
 the field. Held by `tests/unit/test_pass_names_its_game_build.py` over all 22
 scenarios, with the control that says the fixture really does satisfy them.
 
+The same question asked of the *other* per-scenario declaration found the worse
+one. `measures_latency` is set by `S04_MOVE`, `S19_AUTONOMOUS_30_MIN` and
+`S20_AUTONOMOUS_2_HOURS`, and it was read by two things that only described it:
+the playbook, which prints "**latency measured** (p50/p95 recorded in
+`result.json`)", and `latency_summary`, which writes `"measured": false,
+"samples": 0` when no samples were supplied. The document promised a
+measurement, the evidence recorded that none was made, and the verdict said
+PASS — and unlike the build, **no gate anywhere would ever have asked**:
+neither `finalize` nor `check_release.py` reads the latency block. The skeleton
+had no `latencies_ms` field, so an operator following the playbook supplied none
+by construction. `decide` now refuses that PASS under `LATENCY_NOT_MEASURED`,
+the skeleton carries the field for exactly those three scenarios, and the prose
+names a real source — `pz-agent latency --json`, the `traces` array,
+`terminal_at_ms - issued_at_ms` — because a required field with no honest source
+invites invented numbers. Held by
+`tests/unit/test_latency_scenarios_measure_latency.py`, with the control that
+the other nineteen scenarios are not held to a rule they never declared.
+
 ## Deviations from the blueprint
 
 | Blueprint | Here | Why |

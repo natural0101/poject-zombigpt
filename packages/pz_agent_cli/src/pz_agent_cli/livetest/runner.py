@@ -68,6 +68,10 @@ NOT_OBSERVED: Final = "NOT_OBSERVED"
 #: cannot say which game it held them against. See :func:`decide`.
 BUILD_NOT_OBSERVED: Final = "BUILD_NOT_OBSERVED"
 
+#: Failure code for a scenario that declares ``measures_latency`` and supplied
+#: no samples, so its result would record ``"measured": false`` beside a PASS.
+LATENCY_NOT_MEASURED: Final = "LATENCY_NOT_MEASURED"
+
 #: Recorded in place of a build string nobody read off a running game. Not a
 #: guess at the supported build: evidence that cannot name the game it ran
 #: against closes nothing.
@@ -508,6 +512,16 @@ def decide(
     would refuse the archive — correctly, and only after all twenty-two live
     sessions had been spent. The truth is knowable here, at the first scenario,
     where the remedy costs one edit to a file rather than a day at the game.
+
+    **A scenario that declares it measures latency has to have measured it.**
+    Same shape, one level worse: ``measures_latency`` was read by exactly two
+    things, both of which only *described* it. The playbook prints "latency
+    measured (p50/p95 recorded in ``result.json``)" for the three scenarios that
+    declare it, and :func:`latency_summary` writes ``"measured": false`` when no
+    samples were supplied — so the document promised a measurement, the evidence
+    recorded that none was made, the verdict said PASS, and nothing downstream
+    ever asked. Not a deferred refusal like the build: no gate anywhere would
+    have caught it.
     """
     outcomes = tuple(evaluate(condition, run) for condition in scenario.postconditions)
     if run.blocked_reason:
@@ -519,9 +533,25 @@ def decide(
         raise LiveTestError(f"{scenario.id}: declares no postconditions, so it cannot pass")
     if not all(outcome.passed for outcome in outcomes):
         return LiveState.FAIL, outcomes
-    if not run.game_build.strip():
+    if unmet_evidence(scenario, run):
         return LiveState.FAIL, outcomes
     return LiveState.PASS, outcomes
+
+
+def unmet_evidence(scenario: LiveScenario, run: ObservedRun) -> str:
+    """The failure code for evidence a PASS requires and this run does not carry.
+
+    Empty when the run carries all of it. Kept as one function rather than two
+    checks in :func:`decide` and two more in :func:`_failure_code`, so the
+    verdict and the code it is reported under cannot come apart — a FAIL
+    labelled ``POSTCONDITION_FAILED`` over a scenario whose postconditions all
+    held would send the operator to inspect a game that behaved correctly.
+    """
+    if not run.game_build.strip():
+        return BUILD_NOT_OBSERVED
+    if scenario.measures_latency and not run.latencies_ms:
+        return LATENCY_NOT_MEASURED
+    return ""
 
 
 def read_commit(repo_root: Path) -> str:
@@ -623,7 +653,7 @@ def run_scenario(
         run = ObservedRun(blocked_reason=str(exc), failure_code=NOT_OBSERVED)
     status, outcomes = decide(scenario, run)
     finished_at_ms = clock()
-    failure_code = _failure_code(status, run, outcomes)
+    failure_code = _failure_code(status, run, outcomes, scenario)
 
     attempt_number = store.read(scenario.id).attempt_count + 1
     document = build_result(
@@ -663,7 +693,10 @@ def run_scenario(
 
 
 def _failure_code(
-    status: LiveState, run: ObservedRun, outcomes: Sequence[PostconditionOutcome]
+    status: LiveState,
+    run: ObservedRun,
+    outcomes: Sequence[PostconditionOutcome],
+    scenario: LiveScenario,
 ) -> str:
     if status is LiveState.PASS:
         return ""
@@ -675,7 +708,7 @@ def _failure_code(
     # produces on its own, and calling it POSTCONDITION_FAILED would send the
     # operator to look at a game that behaved correctly.
     if all(outcome.passed for outcome in outcomes):
-        return BUILD_NOT_OBSERVED
+        return unmet_evidence(scenario, run) or POSTCONDITION_FAILED
     return POSTCONDITION_FAILED
 
 
@@ -1008,6 +1041,7 @@ def attempt_lines(state: ScenarioState) -> list[str]:
 
 __all__ = [
     "BUILD_NOT_OBSERVED",
+    "LATENCY_NOT_MEASURED",
     "MANIFEST_FORMAT",
     "NOT_OBSERVED",
     "POSTCONDITION_FAILED",
