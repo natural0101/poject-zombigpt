@@ -12,6 +12,51 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **Two of the five versions the evidence records were read by nobody** (`dev`).
+  This changelog opens with the rule: *"Five versions move independently —
+  product, protocol, schema, mod and the supported build range."* The evidence
+  manifest records three of them, and `check_release.py --release` compared
+  exactly one. `_manifest_version` handles `product_version` and the previous
+  entry wired up the build range; `mod_version` and `schema_version` were
+  written into the evidence and never looked at.
+
+  They are not decoration. `MOD_VERSION` describes the Lua that runs **inside
+  the game** and produces every observation these scenarios are judged on, so
+  evidence from another mod version is evidence about other in-game code — the
+  same argument the commit and the build already make, applied to the component
+  that actually did the observing. `SCHEMA_VERSION` describes the shape of the
+  observation documents, which postconditions read by dotted path; a schema that
+  moved can move a field out from under a check that still finds something
+  there. `evidence.components` now compares both against this checkout.
+
+  Found by **enumerating** rather than by luck. Two consecutive fixes had the
+  same shape — a fact the runner records that the gate prints but never checks —
+  so this time every key `finalize` writes was listed against every key the gate
+  reads. Eight were unread; the enumeration also says honestly which of them need
+  nothing: `scenario_count` is strictly weaker than the per-scenario verdict
+  check that already iterates the real catalogue, `generated_at`/`generated_at_ms`
+  have nothing to check against offline, and `totals`/`artefact_count`/`bytes`
+  are sums over `artefacts`, every one of which the gate already re-hashes.
+
+  `test_every_version_the_manifest_records_is_checked_by_something` keeps the
+  enumeration, so the same gap cannot reopen one field at a time. Two things
+  worth recording about writing it:
+
+  - its first version looked for `manifest.get("x")` literals and reported
+    `mod_version` and `schema_version` as unread by the new check too — they are
+    read through a loop over a dict whose *keys* are those strings. That is the
+    retraction lesson in miniature: a checker blind to the producer's spelling
+    reports a false absence. The checker was widened; the code was not bent into
+    the shape the checker expected.
+  - the first attempt to prove the guard fires did not fire, and the guard was
+    right — the plant had landed in `result.json`, which carries the same
+    `"schema_version"` line, because the replacement took the first match.
+    Re-planted into the manifest literal, it fails as designed.
+
+  Five tests, both directions: another mod version, another schema version and a
+  missing one are each refused by name, this checkout's are accepted, and the
+  enumeration holds. Proved by planting: removing the check fails four.
+
 - **The release bar never checked which game the evidence came from** (`dev`).
   The runner states the rule on the constant it records when nobody read a build
   off a running session — *"Not a guess at the supported build: evidence that

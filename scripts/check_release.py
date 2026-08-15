@@ -576,11 +576,74 @@ def check_evidence(manifest_path: Path, evidence_root: Path) -> list[Finding]:
         )
     ]
     findings.append(_manifest_version(manifest))
+    findings.append(_manifest_components(manifest))
     findings.append(_scenario_commits(manifest))
     findings.append(_game_builds(manifest))
     findings.extend(_scenario_verdicts(manifest, scenario_ids))
     findings.extend(_artefact_digests(manifest, scenario_ids, evidence_root))
     return findings
+
+
+def _manifest_components(manifest: dict[str, Any]) -> Finding:
+    """The mod and schema versions the evidence was produced by.
+
+    This repository's own changelog opens with the rule: *"Five versions move
+    independently — product, protocol, schema, mod and the supported build
+    range."* The manifest records three of them, and until this check existed the
+    gate compared exactly one. ``_manifest_version`` handles ``product_version``;
+    ``game_builds`` covers the supported build range. ``mod_version`` and
+    ``schema_version`` were written into the evidence and read by nobody.
+
+    They are not decoration. ``MOD_VERSION`` describes the Lua that runs *inside
+    the game* and produces every observation these scenarios are judged on, so
+    evidence from another mod version is evidence about other in-game code —
+    the same argument the commit and the build already make, applied to the
+    component that actually did the observing. ``SCHEMA_VERSION`` describes the
+    shape of the observation documents, which postconditions read by dotted
+    path; a schema that moved can move a field out from under a check that still
+    finds something there.
+
+    Compared against this checkout rather than against a release target: neither
+    is the number being tagged, so the question is whether the evidence describes
+    the code being released, which is what the checkout declares.
+    """
+    from pz_agent_core.version import MOD_VERSION, SCHEMA_VERSION  # noqa: PLC0415
+
+    expected = {"mod_version": MOD_VERSION, "schema_version": SCHEMA_VERSION}
+    missing = sorted(key for key in expected if not str(manifest.get(key, "")).strip())
+    if missing:
+        return Finding(
+            check="evidence.components",
+            ok=False,
+            detail=f"the manifest records no {', '.join(missing)}",
+            remediation=(
+                "rebuild the manifest with 'pz-agent live-test finalize'; evidence that "
+                "does not say which mod and schema produced it cannot be matched to the "
+                "code being released"
+            ),
+        )
+
+    disagreeing = sorted(
+        f"{key} {str(manifest.get(key)).strip()} against {value}"
+        for key, value in expected.items()
+        if str(manifest.get(key)).strip() != value
+    )
+    if disagreeing:
+        return Finding(
+            check="evidence.components",
+            ok=False,
+            detail="the evidence was produced by " + "; ".join(disagreeing) + " in this checkout",
+            remediation=(
+                "re-run the scenarios against the mod and schema being released. The mod "
+                "is the code that ran inside the game and did the observing, so evidence "
+                "from another one is evidence about that one"
+            ),
+        )
+    return Finding(
+        check="evidence.components",
+        ok=True,
+        detail=f"the evidence was produced by mod {MOD_VERSION}, schema {SCHEMA_VERSION}",
+    )
 
 
 def _game_builds(manifest: dict[str, Any]) -> Finding:

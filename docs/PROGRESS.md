@@ -84,6 +84,16 @@ The handover point between work sessions: read it first, update it last.
 > now refuses an unnamed, unobserved or unsupported build, and imports the
 > marker from the runner rather than re-spelling it.
 
+> **Two of the five versions the evidence records were read by nobody.** The
+> changelog's own rule is that five versions move independently; the manifest
+> records three and `--release` compared one. `mod_version` describes the Lua
+> that ran inside the game and did the observing, `schema_version` the shape of
+> the documents postconditions read by dotted path — `evidence.components` now
+> compares both against the checkout. Found by enumerating every manifest key
+> against every key the gate reads, after two consecutive fixes of the same
+> shape; the same enumeration is now a test, and it also records which of the
+> remaining keys honestly need nothing.
+
 **Legend** — `done` implementation + tests + docs complete and `scripts/check.sh`
 green · `wip` in progress · `todo` not started · `live` blocked on a step that
 physically requires a running game.

@@ -19,6 +19,7 @@ import hashlib
 import importlib
 import io
 import json
+import re
 import sys
 import zipfile
 from contextlib import redirect_stdout
@@ -29,6 +30,7 @@ import pytest
 
 from pz_agent_cli.livetest.runner import UNOBSERVED_BUILD
 from pz_agent_cli.livetest.scenarios import SCENARIO_IDS
+from pz_agent_core.version import MOD_VERSION, SCHEMA_VERSION
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[2]
 
@@ -222,6 +224,8 @@ def _evidence(
                 "commit": _MANIFEST_COMMIT,
                 "game_builds": ["42.20"] if game_builds is None else game_builds,
                 "product_version": build_rc.RELEASE_VERSION,
+                "mod_version": MOD_VERSION,
+                "schema_version": SCHEMA_VERSION,
                 "scenario_count": len(SCENARIO_IDS),
                 "scenarios": scenarios,
                 "artefacts": artefacts,
@@ -427,6 +431,110 @@ def test_a_member_the_index_never_recorded_is_refused(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # the evidence, when there is some
 # ---------------------------------------------------------------------------
+
+
+def test_evidence_from_another_mod_version_is_refused(tmp_path: Path) -> None:
+    """The mod is the code that ran inside the game and did the observing.
+
+    This repository's changelog opens with *"Five versions move independently —
+    product, protocol, schema, mod and the supported build range."* The manifest
+    records three of them and the gate compared exactly one. ``mod_version`` and
+    ``schema_version`` were written into the evidence and read by nobody; found
+    by enumerating every key ``finalize`` writes against every key the gate
+    reads, rather than one field at a time.
+    """
+    manifest, evidence = _evidence(tmp_path / "tree")
+    document = json.loads(manifest.read_text(encoding="utf-8"))
+    document["mod_version"] = "0.0.9"
+    manifest.write_text(json.dumps(document, indent=2), encoding="utf-8")
+
+    findings = _run(tmp_path, release=True, manifest=manifest, evidence_dir=evidence)
+
+    detail = _failures(findings)["evidence.components"]
+    assert "0.0.9" in detail
+    assert MOD_VERSION in detail
+
+
+def test_evidence_from_another_schema_version_is_refused(tmp_path: Path) -> None:
+    """A schema that moved can move a field out from under a check still finding one."""
+    manifest, evidence = _evidence(tmp_path / "tree")
+    document = json.loads(manifest.read_text(encoding="utf-8"))
+    document["schema_version"] = "0.9"
+    manifest.write_text(json.dumps(document, indent=2), encoding="utf-8")
+
+    findings = _run(tmp_path, release=True, manifest=manifest, evidence_dir=evidence)
+
+    assert "schema_version 0.9" in _failures(findings)["evidence.components"]
+
+
+def test_a_manifest_missing_a_component_version_is_refused(tmp_path: Path) -> None:
+    manifest, evidence = _evidence(tmp_path / "tree")
+    document = json.loads(manifest.read_text(encoding="utf-8"))
+    del document["mod_version"]
+    manifest.write_text(json.dumps(document, indent=2), encoding="utf-8")
+
+    findings = _run(tmp_path, release=True, manifest=manifest, evidence_dir=evidence)
+
+    assert "records no mod_version" in _failures(findings)["evidence.components"]
+
+
+def test_evidence_from_this_checkouts_components_is_accepted(tmp_path: Path) -> None:
+    """The other direction: refusing every manifest would pass the three above."""
+    manifest, evidence = _evidence(tmp_path / "tree")
+
+    findings = _run(tmp_path, release=True, manifest=manifest, evidence_dir=evidence)
+
+    assert "evidence.components" not in _failures(findings)
+    passing = {f.check: f.detail for f in findings if f.ok}
+    assert MOD_VERSION in passing["evidence.components"]
+    assert SCHEMA_VERSION in passing["evidence.components"]
+
+
+def test_every_version_the_manifest_records_is_checked_by_something() -> None:
+    """The enumeration itself, so the next field added is not silently ignored.
+
+    ``finalize`` writes the versions; each must be read by some check. This is
+    what turned up ``mod_version`` and ``schema_version``, and it is kept so the
+    same gap cannot reopen one field at a time.
+    """
+    runner_source = (
+        REPO_ROOT / "packages" / "pz_agent_cli" / "src" / "pz_agent_cli" / "livetest" / "runner.py"
+    ).read_text(encoding="utf-8")
+    block = runner_source.split("document: JsonDict = {", 1)[1].split("\n    }", 1)[0]
+    recorded = {
+        name
+        for name in re.findall(r'^\s*"([a-z_]+)":', block, re.MULTILINE)
+        if name.endswith("_version") or name == "game_builds"
+    }
+    assert recorded == {"product_version", "mod_version", "schema_version", "game_builds"}, (
+        f"the manifest now records {sorted(recorded)}; give the new one a check"
+    )
+
+    # Every string constant in the gate's code, not only the literal arguments of
+    # ``.get``. The first version of this guard looked for ``manifest.get("x")``
+    # and reported ``mod_version`` and ``schema_version`` as unread — they are
+    # read through a loop over a dict whose *keys* are those strings, so the
+    # pattern could not see the idiom the code actually uses. That is the
+    # retraction lesson in miniature: a checker blind to the producer's spelling
+    # reports a false absence, and the fix is to widen the checker rather than to
+    # bend the code into the shape the checker expected.
+    gate_source = (REPO_ROOT / "scripts" / "check_release.py").read_text(encoding="utf-8")
+    tree = ast.parse(gate_source)
+    docstrings = {
+        node.body[0].value
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+        and node.body
+        and isinstance(node.body[0], ast.Expr)
+        and isinstance(node.body[0].value, ast.Constant)
+    }
+    mentioned = {
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and node not in docstrings
+    }
+
+    assert recorded <= mentioned, f"the gate never names {sorted(recorded - mentioned)}"
 
 
 def test_evidence_that_never_named_a_game_build_is_refused(tmp_path: Path) -> None:
