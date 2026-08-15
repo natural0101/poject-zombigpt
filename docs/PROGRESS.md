@@ -750,7 +750,7 @@ Four defects, each caught by executing the code rather than reviewing it:
 | Windows release candidate and CI | **done** — RC built; the two `.exe` files need a Windows PyInstaller run |
 | `consume.drink_source`, and the capability gate under it | **done** |
 | Handoff documentation | **done** |
-| S01–S20 live scenarios | **live** |
+| the catalogue's live scenarios | **live** |
 | `v1.0.0` tag and release | **live** |
 
 ### Handoff documents
@@ -826,9 +826,9 @@ the other nineteen scenarios are not held to a rule they never declared.
 Then the same question asked one level out, of the file the operator actually
 double-clicks. `packaging/windows/bat/` is the entire interface of the release —
 nobody on the Windows machine types `pz-agent` — and its `rem` blocks are the
-manual. `run-live-tests.bat` opened with "Run the twenty live scenarios, S01 to
-S20" and `finalize-release.bat` with "only when all twenty scenarios are PASS",
-against a catalogue of twenty-two; the two an operator would have dropped are
+manual. `run-live-tests.bat` opened by naming twenty live scenarios and a range
+ending two short, and `finalize-release.bat` with "only when all twenty scenarios
+are PASS", against a catalogue of twenty-two; the two an operator would have dropped are
 S21 and S22, the craft and the placement, the only irreversible ones. The same
 wrapper advertised `run-live-tests.bat --observations obs.json`, which exits 1
 with "--observations describes one scenario, but 22 were selected" — so it
@@ -855,7 +855,7 @@ to play them again. `LOCAL_GAME_HANDOFF.md` carried the correct rule six hundred
 lines in, justified by trace rotation rather than by the refusal: two documents
 in one bundle disagreeing about the order of operations, with the instruction
 sheet wrong. The prompt now carries §4a. It also said "двадцать сценариев
-S01-S20" twice while its sibling said twenty-two correctly, and showed
+a range ending two short" twice while its sibling was correct, and showed
 `run-live-tests.bat` bare. Held by
 `tests/contract/test_handoff_instructions_match_the_run.py`, whose load-bearing
 assertion is the measured one — the real runner and the real `finalize` — with
@@ -893,6 +893,27 @@ wrong about its own table. The figure now lives in that one document and the
 other three point at it; `tests/contract/test_unverified_surface_is_counted.py`
 runs the grep and parses the table, so a new symbol row fails the suite until
 the sentence is updated.
+
+Then the same literal turned up in six more places, and the reason nobody had
+seen them was my own two guards: each had been scoped to the file where the
+defect was last caught rather than to the fact. Tree-wide, the survivors were
+`check_release.py`'s module docstring, a description in
+`schemas/gameplay-knowledge.schema.json`, a task string in `plan_epics_d.py`
+(and so a `pass_criterion` in the generated plan), a status row here, and two
+claims in `docs/RELEASE.md`. None was reachable — the release gate imports
+`SCENARIO_IDS` and the schema constrains `proven_by` by length — so the cost was
+a reader of the release gate being told the catalogue ends two early. The narrow
+checks are gone, replaced by `tests/contract/test_scenario_ranges_match_the_catalogue.py`
+over the whole tree. It has to know that **two catalogues exist and collide**:
+`S01-S15` in `RELEASE.md` describes `tests/game-smoke/` and is right, so both
+ends are derived — one from `SCENARIO_IDS`, one by listing that directory — and
+a further test asserts they still differ. The plan was regenerated, not
+hand-edited: one line, statuses preserved, progress unmoved.
+
+`docs/LOCAL_DEBUG_MAP.md`, the last handoff document never checked for content,
+came out clean: every module its triage table names exists, all seven reason
+codes it sends the agent to look for are emitted somewhere, and all eleven
+exchange filenames it lists appear in the code that writes them.
 
 ## Deviations from the blueprint
 

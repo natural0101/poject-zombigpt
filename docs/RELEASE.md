@@ -51,7 +51,7 @@ Nothing here can be asserted from memory. Each produces an artefact.
 - [ ] **Contract test report** — both directions, all enums in parity
 - [ ] **Live-test evidence** — `release/evidence-manifest.json`, holding a PASS
       and a SHA-256 per artefact for every scenario in
-      `pz_agent_cli.livetest.scenarios` (S01…S20), produced by
+      `pz_agent_cli.livetest.scenarios`, produced by
       `pz-agent live-test finalize` and by nothing else
 - [ ] **Endurance report** — the 30-minute and 2-hour runs, which are
       `S19_AUTONOMOUS_30_MIN` and `S20_AUTONOMOUS_2_HOURS` in that catalogue
@@ -62,8 +62,8 @@ Nothing here can be asserted from memory. Each produces an artefact.
 **Two scenario catalogues exist, and their numbers collide.** `tests/game-smoke/`
 holds fifteen YAML scenarios plus an endurance run, driven by `pz-agent smoke`,
 whose assertions are prose that a reviewer judges. `pz_agent_cli.livetest` holds
-twenty, driven by `pz-agent live-test`, whose postconditions are evaluated by
-the runner. The same number means different things in each — `S06_drink.yaml`
+its own set, driven by `pz-agent live-test`, whose postconditions are evaluated
+by the runner. The same number means different things in each — `S06_drink.yaml`
 against `S06_MANUAL_TAKEOVER` — so a scenario id is ambiguous unless the
 catalogue is named with it.
 

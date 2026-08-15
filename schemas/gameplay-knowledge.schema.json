@@ -200,7 +200,7 @@
             }
           },
           "proven_by": {
-            "description": "What proves the rule at its declared status: repo test paths for verified_script; a live scenario id (S01..S20) or evidence-bundle pointer for verified_live; empty only for unverified.",
+            "description": "What proves the rule at its declared status: repo test paths for verified_script; a live scenario id from the catalogue in pz_agent_cli.livetest.scenarios, or an evidence-bundle pointer for verified_live; empty only for unverified.",
             "type": "array",
             "minItems": 0,
             "maxItems": 6,

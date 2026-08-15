@@ -182,18 +182,6 @@ def test_a_stated_scenario_count_matches_the_catalogue(document: Path) -> None:
     )
 
 
-@pytest.mark.parametrize("document", INSTRUCTIONS, ids=lambda p: p.name)
-def test_a_stated_scenario_range_ends_where_the_catalogue_does(document: Path) -> None:
-    """ "S01-S20" is the same stale literal wearing a different shape."""
-    text = document.read_text(encoding="utf-8")
-    last = SCENARIO_IDS[-1][1:3]
-    wrong = [match.group(0) for match in _RANGE.finditer(text) if match.group("last") != last]
-
-    assert wrong == [], (
-        f"{document.name} names range(s) {wrong}; the catalogue ends at {SCENARIO_IDS[-1]}"
-    )
-
-
 def test_the_count_pattern_would_catch_the_defect_it_was_written_for() -> None:
     """A control over the matcher itself, in both languages.
 

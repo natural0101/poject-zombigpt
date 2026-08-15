@@ -7605,7 +7605,7 @@ epics:
       owner: remote
       depends_on:
       - E13-M01-T008
-      pass_criterion: S01-S20 are each described with steps
+      pass_criterion: every catalogue scenario is described with steps
       verify_command: .venv/bin/python scripts/generate_playbook.py --check
       regression_test: ''
       evidence: docs/LIVE_TEST_PLAYBOOK.md

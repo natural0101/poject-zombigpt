@@ -6,13 +6,18 @@ block an operator reads before double-clicking. On the machine that has the game
 those comments are the manual — nobody there is reading ``scenarios.py`` — and
 two of them contradicted the catalogue they describe.
 
-**The count.** ``run-live-tests.bat`` opened with *"Run the twenty live
-scenarios, S01 to S20"* and ``finalize-release.bat`` with *"only when all twenty
+**The count.** ``run-live-tests.bat`` opened by naming twenty live scenarios
+and a range ending two short and ``finalize-release.bat`` with *"only when all twenty
 scenarios are PASS"*. The catalogue holds twenty-two, ``S01_INSTALL`` through
 ``S22_BUILD``, and the playbook's own preamble discusses S21 and S22 at length as
 the two irreversible rungs. An operator reading the wrapper would take the run to
 be complete two scenarios early, and the two they would drop are the craft and
 the placement — the only ones that change the world irreversibly.
+
+The range half of this moved to
+``test_scenario_ranges_match_the_catalogue.py``, which sweeps the whole tree —
+this file's version was scoped to the wrappers, and a later sweep found the same
+literal in six more places it could not see.
 
 This is the third stale literal count this project has found: ``LIVE SCENARIOS:
 0/20`` in the retired progress reporter, "twenty-two" spelled into an error
@@ -95,21 +100,6 @@ def test_no_wrapper_states_a_scenario_count(wrapper: Path) -> None:
     assert claims == [], (
         f"{wrapper.name} states a scenario count ({claims}); the catalogue holds "
         f"{len(SCENARIO_IDS)} and a static wrapper cannot track it. Say 'every scenario'."
-    )
-
-
-@pytest.mark.parametrize("wrapper", WRAPPERS, ids=lambda p: p.name)
-def test_no_wrapper_names_a_scenario_range_endpoint(wrapper: Path) -> None:
-    """ "S01 to S20" is the same stale literal wearing a different shape."""
-    text = wrapper.read_text(encoding="utf-8")
-    # The dash alternatives are spelled by codepoint: a literal en dash in a
-    # pattern is flagged as an ambiguous character, and the range this looks
-    # for may well be written with one.
-    ranges = re.findall(r"\bS\d{2}\b\s*(?:to|through|[-\u2013\u2014])\s*\bS\d{2}\b", text)
-
-    assert ranges == [], (
-        f"{wrapper.name} names a scenario range ({ranges}); the catalogue runs "
-        f"{SCENARIO_IDS[0]}..{SCENARIO_IDS[-1]} and a static wrapper cannot track it"
     )
 
 

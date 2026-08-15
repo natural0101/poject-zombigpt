@@ -739,7 +739,7 @@ _E13 = [
     (
         "Write the live-test playbook for the local agent",
         2,
-        "S01-S20 are each described with steps",
+        "every catalogue scenario is described with steps",
         ".venv/bin/python scripts/generate_playbook.py --check",
         "",
         LIVE,

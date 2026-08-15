@@ -12,6 +12,52 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **The stale scenario range was in six more places, and my own guards were the
+  reason nobody saw them** (`dev`). Two earlier iterations wrote checks for
+  `S01..S20` — one scoped to `packaging/windows/bat/*.bat`, one to three named
+  handoff documents. Both were drawn around the file where the defect had just
+  been caught rather than around the fact, which is the mistake this repository
+  keeps documenting about other people's code.
+
+  A tree-wide sweep found: `scripts/check_release.py`'s own module docstring, a
+  description in `schemas/gameplay-knowledge.schema.json`, a task string in
+  `scripts/plan_epics_d.py` (and therefore a `pass_criterion` in the generated
+  `MASTER_PLAN.yaml`), a status row in `docs/PROGRESS.md`, and two claims in
+  `docs/RELEASE.md` — the release procedure itself.
+
+  Stated plainly: **none of them was reachable.** The release gate calls
+  `_scenario_ids()`, which imports `SCENARIO_IDS`; the schema constrains
+  `proven_by` by length only. They were prose. What they cost is a reader of the
+  file that decides whether v1.0.0 ships being told the catalogue ends two
+  scenarios early.
+
+  The two narrow checks are removed and replaced by
+  `tests/contract/test_scenario_ranges_match_the_catalogue.py`, which sweeps
+  every `.py`, `.md`, `.json`, `.yaml`, `.bat` and `.lua` in the tree.
+
+  **Two catalogues exist and their numbers collide** — `docs/RELEASE.md` says so
+  in as many words — so `S01–S15` there is *correct*: it describes
+  `tests/game-smoke/`, not the live-test catalogue. A checker that flagged it
+  would have been a false accusation, the failure this project has already been
+  taught once. Both ends are derived instead: the live catalogue from
+  `SCENARIO_IDS`, the smoke catalogue by listing its directory. A range is wrong
+  only when it ends at neither, and a further test asserts the two really do end
+  differently, so the rule cannot loosen unnoticed.
+
+  `MASTER_PLAN.yaml` was regenerated rather than hand-edited — one line changed,
+  every status and commit preserved, weighted progress unmoved at 73.3%.
+
+### Verified, unchanged
+
+- **`docs/LOCAL_DEBUG_MAP.md` checks out.** The last handoff document never
+  examined for content: every Lua and Python module its triage table names
+  exists, all seven reason codes it tells the agent to look for
+  (`CAPABILITY_UNAVAILABLE`, `INVALID_ARGUMENT`, `INVALID_REF`, `LEASE_EXPIRED`,
+  `PATH_STUCK`, `PLAYER_BUSY_MANUAL_ACTION`, `SEQ_CONFLICT`) are emitted
+  somewhere in the tree, and all eleven exchange-directory filenames it lists
+  appear in the code that writes them. Nothing to fix; recorded so the next
+  sweep does not repeat it.
+
 - **Four documents carried four different sizes of the unverified engine
   surface, and none of them was the tree's** (`dev`).
   `docs/GAME_API_VERIFICATION.md` is the inventory of every Project Zomboid

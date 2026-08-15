@@ -6,7 +6,7 @@ it declares, the executables and the eleven wrappers are in it, and a test
 report says the suite passed. Nothing about a game.
 
 ``--release`` certifies **v1.0.0**, and asks for the one thing an RC does not
-have: ``release/evidence-manifest.json``, holding for every scenario S01..S20 a
+have: ``release/evidence-manifest.json``, holding for every scenario in the catalogue a
 PASS and a SHA-256 for each artefact that scenario owes.
 
 That file does not exist in this repository, so ``--release`` fails today. It is
