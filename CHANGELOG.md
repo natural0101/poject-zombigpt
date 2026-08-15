@@ -12,6 +12,65 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **The prompt handed to the local agent told it to collect logs at the end of
+  the run, and the logs do not survive that long** (`dev`).
+  `docs/LOCAL_AGENT_PROMPT.md` is not a reference — it is the text pasted into a
+  fresh session on the machine with the game, followed step by step. §5
+  collected evidence *after a FAIL*, and §7 step 4 said `collect-evidence.bat`
+  once everything had passed.
+
+  Measured against the real runner and the real `finalize`: a scenario driven to
+  **PASS** with no logs collected is refused, naming five missing files —
+  `console.txt`, `pz-agent.log`, and the three journals. `_audit_one` marks every
+  name in `scenario.logs` `required=True` with no reference to the verdict, and
+  all twenty-two scenarios declare some. So an operator whose run went well the
+  first time collects nothing and meets that refusal twenty-two times over.
+
+  And it does not repair. `console.txt` is rewritten on every game launch —
+  `collect-evidence.bat`'s own header says so — and the session trace rotates.
+  By the end of a day the early scenarios' logs are gone; the only remedy is to
+  play them again. This is the first of these findings whose cost cannot be paid
+  back from a file the operator still has.
+
+  `docs/LOCAL_GAME_HANDOFF.md` did carry the right rule — *"run `live-test
+  collect` at the end of each scenario rather than at the end of the day"* — six
+  hundred lines in, inside a paragraph about trace rotation, justified by the
+  trace rather than by the refusal. Two documents in one handoff bundle
+  disagreed about the order of operations, and the one written as instructions
+  had it wrong. The prompt now carries §4a, with the reason and the file name.
+
+- **The same prompt was two scenarios short, and its sibling was not** (`dev`).
+  It said *"двадцать сценариев S01-S20"* and headed its final section *"После
+  того как все двадцать сценариев PASS"*, against a catalogue of twenty-two
+  ending at `S22_BUILD` — while `LOCAL_GAME_HANDOFF.md` says twenty-two
+  correctly, twice.
+
+  The rule for prose is not the rule for a `.bat`. A wrapper cannot import
+  anything, so the previous entry removed its counts outright; a document may
+  reasonably state one, and the handoff does it correctly. So
+  `tests/contract/test_handoff_instructions_match_the_run.py` asserts that a
+  count, **where stated**, equals the catalogue's — in English and Russian, since
+  the bundle is written in both — and that a range ends where the catalogue does.
+  `CHANGELOG.md` and `FINAL_IMPLEMENTATION_REPORT.md` are excluded by name: they
+  record what was true when a defect was found, and editing that to today's
+  number would falsify it.
+
+  The prompt's §4 also showed `run-live-tests.bat` bare, repeating the omission
+  fixed in the wrappers last commit; it now leads with the `--scenario` +
+  `--observations` pair, the only form that can produce a PASS.
+
+### Added
+
+- **The three evidence checks added after the manifest round-trip test now cross
+  that seam too** (`dev`). `evidence.commit`, `evidence.game_build` and
+  `evidence.components` were each tested only against hand-built manifests —
+  the one-sided shape `tests/contract/test_evidence_manifest_round_trip.py`
+  exists to prevent. They are now run over a manifest `finalize` really wrote,
+  together with an assertion that the runner writes each key they read, since
+  two of the three reach their verdict through `.get` and would report a passing
+  check over an absent key. Measured: all three already agree. Recorded as a
+  tightening, not a defect found.
+
 - **The wrapper the operator double-clicks described a catalogue two scenarios
   short, and advertised the one flag combination that cannot work** (`dev`).
   `packaging/windows/bat/` is the entire interface of the release: nobody on the

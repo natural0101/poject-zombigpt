@@ -160,3 +160,47 @@ def test_a_tampered_artefact_is_caught_by_the_gate_reading_the_runners_manifest(
     assert [finding for finding in findings if not finding.ok], (
         "the gate accepted an artefact whose bytes no longer match the manifest"
     )
+
+
+def test_the_three_checks_added_after_this_file_read_the_runners_own_manifest(
+    written: tuple[dict[str, Any], Path, Path],
+) -> None:
+    """The gate grew three evidence checks; none had crossed this seam.
+
+    ``evidence.commit``, ``evidence.game_build`` and ``evidence.components``
+    were added to close reachable holes in the release bar, and every test of
+    them builds the manifest by hand — the same one-sided shape whose absence
+    this file exists to fix. A key the gate reads under a name ``finalize``
+    does not write would pass all of those and refuse the operator's real
+    manifest, after the hours in the game.
+
+    A tightening rather than a defect found: measured here, all three already
+    agree. What it buys is that they cannot drift apart quietly.
+    """
+    document, _, _ = written
+
+    findings = [
+        check_release._scenario_commits(document),
+        check_release._game_builds(document),
+        check_release._manifest_components(document),
+    ]
+
+    assert [f"{finding.check}: {finding.detail}" for finding in findings if not finding.ok] == []
+
+
+def test_the_runner_writes_every_manifest_key_those_checks_read(
+    written: tuple[dict[str, Any], Path, Path],
+) -> None:
+    """Named keys, because a check reading an absent one can still return ok.
+
+    ``_game_builds`` refuses an empty list, but ``_manifest_components`` and
+    ``_scenario_commits`` reach their verdicts through ``.get``, so a renamed
+    key would show up as a passing check over nothing rather than as a failure.
+    """
+    document, _, _ = written
+
+    for key in ("commit", "game_builds", "mod_version", "schema_version"):
+        assert document.get(key), f"finalize wrote no usable {key!r}, which the gate reads"
+    assert all(entry.get("commit") for entry in document["scenarios"]), (
+        "a scenario entry carries no commit, which evidence.commit reads per scenario"
+    )

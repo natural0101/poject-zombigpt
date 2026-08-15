@@ -842,6 +842,30 @@ and this was the third stale scenario count found here. What holds it now is
 id a wrapper names must exist, no wrapper may state a count or a range endpoint,
 and an `--observations` example's own tokens go through the real `resolve`.
 
+The same question asked of `docs/LOCAL_AGENT_PROMPT.md` — the text pasted into a
+session on the machine with the game — found the most expensive one yet. §5
+collected evidence after a FAIL and §7 collected everything once the run was
+done, but `finalize` requires each scenario's declared logs **whether it passed
+or not**: measured, a scenario driven to PASS with nothing collected is refused
+over five missing files, and every one of the twenty-two declares some. Unlike
+the build string and the latency samples, this cannot be repaired afterwards —
+`console.txt` is rewritten on every game launch and the session trace rotates,
+so by the end of a day the early scenarios' logs are gone and the only remedy is
+to play them again. `LOCAL_GAME_HANDOFF.md` carried the correct rule six hundred
+lines in, justified by trace rotation rather than by the refusal: two documents
+in one bundle disagreeing about the order of operations, with the instruction
+sheet wrong. The prompt now carries §4a. It also said "двадцать сценариев
+S01-S20" twice while its sibling said twenty-two correctly, and showed
+`run-live-tests.bat` bare. Held by
+`tests/contract/test_handoff_instructions_match_the_run.py`, whose load-bearing
+assertion is the measured one — the real runner and the real `finalize` — with
+the prose checks resting on it.
+
+Separately, `evidence.commit`, `evidence.game_build` and `evidence.components`
+had only ever been tested against hand-built manifests; they now also run over
+one `finalize` really wrote. All three already agreed — a tightening, recorded
+as such.
+
 ## Deviations from the blueprint
 
 | Blueprint | Here | Why |
