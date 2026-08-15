@@ -12,6 +12,48 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **A safety postcondition could pass on a character nobody read** (`dev`).
+  `livetest/scenarios.py` states the rule the live verdict rests on — *"A
+  postcondition can only pass on a value that was observed. There is no check
+  that succeeds on an absent field"* — and `runner.evaluate` repeats it: *"There
+  is no branch that passes on a missing value."* Ten checks make that claim.
+  Driving the real `evaluate` over all ten against every way a value can be
+  missing, nine held and `UNCHANGED` did not.
+
+  The snapshot path decided presence by key alone (`found_before and
+  found_after`), so a field present in both snapshots carrying `null` — or `""`
+  — compared equal to itself and passed. The observation path had always applied
+  a second rule, `_is_non_empty`; the two paths had drifted apart.
+
+  `UNCHANGED` is used by exactly one postcondition in the catalogue, and it is
+  the worst one it could have been:
+
+  ```
+  S05_BLOCKED_PATH · health_unchanged · player.health
+  "the character took no damage"
+  ```
+
+  A safety statement, in one of the twenty-two scenarios whose `result.json`
+  becomes the evidence manifest `check_release.py --release` reads before
+  `v1.0.0`. With the mod failing to read the character and publishing `null`,
+  the runner would have recorded that the character took no damage from a
+  reading nobody took — and the outcome document would have said `present: true`
+  about it. The same shape is already in this repository's ledger one layer
+  down: *a zombie scan that could not run published an empty list, and the
+  danger floor read that as NONE*.
+
+  Fixed by applying the module's own `_is_non_empty` on both paths instead of
+  one. Deliberately **not** truthiness: `0`, `0.0` and `False` are readings —
+  health at zero is a fact about a character, not a failure to look.
+
+  `tests/unit/test_postcondition_needs_a_reading.py` (53 tests) runs the real
+  `evaluate` across every `Check` × every missing shape, and the same number
+  again over the readings that must still decide — including the falsy ones, and
+  the real `S05_BLOCKED_PATH` postcondition rather than a stand-in. Proved by
+  planting both: the pre-fix runner fails seven, and the tempting truthiness fix
+  fails exactly the three falsy-but-real readings, which is what that half of
+  the file is for.
+
 - **`live-test run --scenario ""` reported success having run nothing** (`dev`).
   The command that produces the evidence for every live task — the 84 the
   project is blocked on — printed

@@ -52,6 +52,17 @@ The handover point between work sessions: read it first, update it last.
 > it is the most expensive false success in the tree;
 > `tests/contract/test_live_test_selection.py` holds both halves.
 
+> **A safety postcondition could pass on a character nobody read.** Ten `Check`
+> members claim that none of them succeeds on an unobserved value; driving the
+> real `evaluate` over all ten found nine holding and `UNCHANGED` not. It decided
+> presence by key alone, so `player.health` published as `null` in both snapshots
+> was equal to itself and `S05_BLOCKED_PATH`'s *"the character took no damage"*
+> passed — the one postcondition in the catalogue that uses `UNCHANGED`, a safety
+> statement, feeding the manifest `--release` reads. The observation path already
+> had the right rule (`_is_non_empty`); the snapshot path now uses it too, and
+> not truthiness, because `0` and `False` are readings.
+> `tests/unit/test_postcondition_needs_a_reading.py` holds both directions.
+
 **Legend** — `done` implementation + tests + docs complete and `scripts/check.sh`
 green · `wip` in progress · `todo` not started · `live` blocked on a step that
 physically requires a running game.

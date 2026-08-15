@@ -308,6 +308,34 @@ def _decide_snapshot(
             passed=False,
             detail=f"{condition.field} was not present in both the before and after snapshots",
         )
+    # The same emptiness rule the observation path applies, and for the same
+    # reason. Key presence alone let ``UNCHANGED`` pass on a pair of unreadable
+    # values: ``player.health`` published as ``null`` in both snapshots is equal
+    # to itself, so ``S05_BLOCKED_PATH``'s "the character took no damage" — a
+    # safety statement, and one of the twenty-two scenarios whose results become
+    # the evidence manifest ``--release`` reads — was satisfiable by a reading
+    # nobody took. This repository has the same shape recorded one layer down:
+    # a zombie scan that could not run published an empty list and the danger
+    # floor read it as NONE.
+    #
+    # ``_is_non_empty`` rather than truthiness, because ``0``, ``0.0`` and
+    # ``False`` are real readings. Health at zero is a fact about a character,
+    # not a failure to look.
+    unreadable = [
+        name for name, value in (("before", before), ("after", after)) if not _is_non_empty(value)
+    ]
+    if unreadable:
+        return _outcome(
+            condition,
+            observed=after,
+            observed_before=before,
+            present=False,
+            passed=False,
+            detail=(
+                f"{condition.field} was present but empty in the "
+                f"{' and '.join(unreadable)} snapshot(s), so nothing was read to compare"
+            ),
+        )
     if condition.check is Check.CHANGED:
         passed = before != after
         detail = "" if passed else "the value is identical in both snapshots"
