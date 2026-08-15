@@ -45,6 +45,7 @@ for _package in (  # pragma: no cover - import plumbing
         sys.path.insert(0, str(_source))
 
 from scripts import check_master_plan, master_report  # noqa: E402
+from scripts._process import ENCODING, ERRORS  # noqa: E402
 
 STATUS_PATH: Final = REPO_ROOT / "docs" / "control" / "STATUS.json"
 PLAN_PATH: Final = REPO_ROOT / "docs" / "control" / "MASTER_PLAN.yaml"
@@ -84,6 +85,8 @@ def head() -> str:
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
+        encoding=ENCODING,
+        errors=ERRORS,
         check=True,
         timeout=60,
     ).stdout.strip()
@@ -139,6 +142,8 @@ def build(arguments: argparse.Namespace) -> dict[str, Any]:
             cwd=REPO_ROOT,
             capture_output=True,
             text=True,
+            encoding=ENCODING,
+            errors=ERRORS,
             check=True,
             timeout=60,
         ).stdout.strip(),
@@ -183,6 +188,8 @@ def _uncommitted_outside_control() -> list[str]:
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
+        encoding=ENCODING,
+        errors=ERRORS,
         check=False,
         timeout=120,
     )

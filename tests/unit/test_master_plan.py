@@ -616,6 +616,9 @@ def _scratch_repo(tmp_path: Path) -> Path:
         "master_report.py",
         "check_master_plan.py",
         "plan_model.py",
+        # The scripts import it for their subprocess decoding; a scratch repo
+        # without it fails at import rather than at the thing under test.
+        "_process.py",
     ):
         shutil.copy(SCRIPTS / name, repo / "scripts" / name)
     (repo / "scripts" / "__init__.py").write_text("", encoding="utf-8")

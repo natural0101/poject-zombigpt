@@ -67,6 +67,8 @@ REPO_ROOT: Final = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:  # pragma: no cover - import plumbing
     sys.path.insert(0, str(REPO_ROOT))
 
+from scripts._process import run_text  # noqa: E402
+
 PLAN_PATH: Final = REPO_ROOT / "docs" / "control" / "MASTER_PLAN.yaml"
 
 
@@ -97,9 +99,14 @@ def proving_commit(task: dict[str, Any]) -> str:
 
 
 def _git(*args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["git", *args], cwd=REPO_ROOT, capture_output=True, text=True, check=False, timeout=120
-    )
+    """Git, decoded as UTF-8 rather than as whatever the host prefers.
+
+    ``_path_at`` reads whole files out of history, and this repository's
+    files are UTF-8 Russian prose. Left to ``text=True`` the Windows runner
+    decoded them as cp1252 and raised inside subprocess's reader thread, so
+    the audit could not run at all there. See :mod:`scripts._process`.
+    """
+    return run_text(["git", *args], cwd=REPO_ROOT, timeout=120)
 
 
 def _commit_exists(sha: str) -> bool:

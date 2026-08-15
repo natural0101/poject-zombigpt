@@ -248,6 +248,13 @@ The tooling, all of it gates rather than reports:
   both against what `STATUS.json` records, by running the command rather than
   reading its source — the check whose absence let the retired counter print
   `0%` for a tree at 73.31%.
+- `scripts/_process.py` is how any of them runs a child. `text=True` decodes the
+  pipe with the host's locale, which is cp1252 on the Windows runner against a
+  tree that is UTF-8 Russian — `audit_pass.py` therefore could not run there at
+  all, and took the release build red one commit after it was wired in. The
+  decoding is pinned to UTF-8 with `errors="replace"`;
+  `tests/unit/test_script_output_decoding.py` runs the gates under `LC_ALL=C`,
+  where the same failure reproduces on Linux.
 - `scripts/audit_pass.py` asks the *historical* questions, which are the ones
   the gate above cannot: did the regression test a task names exist at the commit
   the task records as its verification, did the named test node exist in it, is

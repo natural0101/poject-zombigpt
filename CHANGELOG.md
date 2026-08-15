@@ -12,6 +12,46 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **A control-plane gate could not run on Windows at all, and took the release
+  build red** (`dev`). `subprocess.run(..., text=True)` decodes the pipe with
+  `locale.getencoding()` — UTF-8 in this container, **cp1252 on the Windows
+  runner**. Every file here is UTF-8 and much of it is Russian, so
+  `scripts/audit_pass.py`, whose `_path_at` reads whole files out of git
+  history, raised inside subprocess's *reader thread*:
+
+  ```
+  UnicodeDecodeError: 'charmap' codec can't decode byte 0x81 in position 3672
+  ```
+
+  a hundred times over. `10 failed, 8565 passed, 68 skipped, 1 error` on the
+  `windows package` workflow at `b350572` — not a check reporting a problem, a
+  gate that could not execute. The audit had been wired into `check.sh` one
+  commit earlier and had been exercised only on Linux; this is what the second
+  platform was for.
+
+  The defect is not Windows-specific and finding it needed no Windows:
+  `locale.getencoding()` answers ASCII under `LC_ALL=C`, and the same decode
+  raises here. All nine text-mode subprocess call sites in `scripts/` now go
+  through `scripts/_process.py`, which pins `encoding="utf-8"` and
+  `errors="replace"` — replace rather than strict because every reader searches
+  the text for an ASCII marker, and a gate that dies on one byte of one file is
+  a gate that gets switched off.
+
+  `tests/unit/test_script_output_decoding.py` (11 tests) runs the real scripts
+  as real processes under an ASCII locale, including a control asserting that
+  the *unpinned* form still fails there — without which a future Python making
+  `text=True` mean UTF-8 would leave the whole file proving nothing. Measured
+  and recorded rather than assumed: with the fix reverted only `audit_pass.py`
+  fails behaviourally, because it is the one whose child output carries prose;
+  `check_master_plan.py` and `reconcile_status.py` shell out for SHAs and path
+  lists that are ASCII *today*, so their bug is latent and a non-ASCII filename
+  would wake it. That is why an AST check over every call site is here beside
+  the behavioural ones, itself proved in both directions against a planted call.
+
+  `tests/unit/test_master_plan.py`'s scratch repository now carries
+  `_process.py`: it copies a fixed list of scripts, and without the module they
+  import the subprocesses failed at import rather than at the thing under test.
+
 - **Seven `PASS` claims named a proof that did not exist yet, and the gate that
   would have said so had never been run** (`dev`). `scripts/audit_pass.py` asks
   the questions `check_master_plan.py` cannot: that gate reads the tree as it

@@ -36,6 +36,8 @@ REPO_ROOT: Final = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from scripts._process import ENCODING, ERRORS  # noqa: E402
+
 PLAN_PATH: Final = REPO_ROOT / "docs" / "control" / "MASTER_PLAN.yaml"
 
 #: Candidates: (task id prefix or exact id) -> the commit that did the work.
@@ -74,6 +76,8 @@ def _run(test: str) -> tuple[bool, str]:
             ],
             capture_output=True,
             text=True,
+            encoding=ENCODING,
+            errors=ERRORS,
             cwd=REPO_ROOT,
             timeout=900,
             check=False,
