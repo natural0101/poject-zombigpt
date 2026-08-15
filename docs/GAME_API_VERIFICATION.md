@@ -17,12 +17,18 @@ Some guesses carry a `-- Build 42:` comment, findable with:
 grep -rn "Build 42:" pz-mod/
 ```
 
-`grep -rn "Build 42:" pz-mod/` returns nine lines, in two files. It is a
-*shortcut*, not an inventory: the table below marks 159 symbol rows
+`grep -rn "Build 42:" pz-mod/` returns ten lines, in three files. It is a
+*shortcut*, not an inventory: the table below carries 167 symbol rows, every one
 `requires_live` (several rows carry two or three slash-separated spellings,
 probed in the order written), so the grep covers a small fraction of what is
-unconfirmed. **This document is the list.** Use the grep to jump to a comment;
-use the table to know what has not been checked.
+unconfirmed. **This document is the list, and it is the only place that states
+how large it is** — `LOCAL_DEBUG_MAP.md`, `LIVE_TEST_PLAYBOOK.md` and
+`LOCAL_AGENT_PROMPT.md` used to state their own numbers and every one of them
+had rotted, three of them low enough to make the unverified surface look a third
+of its size. They point here now, and
+`tests/contract/test_unverified_surface_is_counted.py` holds both figures above
+against the real grep and the real table. Use the grep to jump to a comment; use
+the table to know what has not been checked.
 
 An earlier revision of this file made the same claim while carrying about
 fifty rows and missing roughly sixty symbols the mod actually touches —

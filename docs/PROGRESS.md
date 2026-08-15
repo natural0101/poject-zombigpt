@@ -881,6 +881,19 @@ file is there — whether it shows the right thing is the operator's judgement,
 which is why the scenario asks for one. The prompt gains §4b. Held by
 `tests/contract/test_screenshots_are_asked_for_in_time.py`, both directions.
 
+The last document of the handoff bundle to be checked, `LOCAL_DEBUG_MAP.md`,
+turned out to disagree with the other three about a number all four state: how
+much of the engine surface is unverified. `GAME_API_VERIFICATION.md` said "nine
+lines, in two files" and "159 symbol rows"; the debug map and the playbook said
+"52 symbols"; the prompt said "сто двадцать четыре". Measured: the grep returns
+**10 lines in 3 files** and the table carries **167 rows**, every one
+`requires_live`. Two documents presented the unverified surface as under a third
+of its real size, and the inventory — the one that calls itself the list — was
+wrong about its own table. The figure now lives in that one document and the
+other three point at it; `tests/contract/test_unverified_surface_is_counted.py`
+runs the grep and parses the table, so a new symbol row fails the suite until
+the sentence is updated.
+
 ## Deviations from the blueprint
 
 | Blueprint | Here | Why |

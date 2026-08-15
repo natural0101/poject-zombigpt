@@ -12,6 +12,40 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **Four documents carried four different sizes of the unverified engine
+  surface, and none of them was the tree's** (`dev`).
+  `docs/GAME_API_VERIFICATION.md` is the inventory of every Project Zomboid
+  symbol this mod touches without ever having called one. Its size is the single
+  number that tells the agent about to run the first live session how much risk
+  is in front of them.
+
+  | document | `grep "Build 42:"` | `requires_live` rows |
+  | --- | --- | --- |
+  | `GAME_API_VERIFICATION.md` | "nine lines, in two files" | "159 symbol rows" |
+  | `LOCAL_DEBUG_MAP.md` | "six comments" | "52 symbols" |
+  | `LIVE_TEST_PLAYBOOK.md` | "finds six of them" | "52 symbols" |
+  | `LOCAL_AGENT_PROMPT.md` | "шесть строк в двух файлах" | "сто двадцать четыре" |
+  | **measured** | **10 lines, 3 files** | **167 rows** |
+
+  Two of them said fifty-two against a real one hundred and sixty-seven — the
+  unverified surface presented as under a third of its size, in the documents
+  whose entire job is to size it before anyone starts. The inventory itself, the
+  one that says *"This document is the list"*, was wrong about its own table.
+
+  The number now lives in exactly one document and the other three point at it.
+  That is the shape used for the wrapper counts in the previous entry, with one
+  difference worth stating: a wrapper can simply drop its count because nobody
+  needs it there, while this figure **is** the point — so it is stated, and
+  checked. `tests/contract/test_unverified_surface_is_counted.py` runs the grep
+  the documents tell the operator to run and parses the table as a table, so
+  adding a symbol row or a `-- Build 42:` comment fails the suite until the
+  inventory's own sentence is updated. Deliberate: the alternative is what this
+  replaces, four copies drifting at once.
+
+  It also pins the direction nobody was watching — the sentence claims *every*
+  row is `requires_live`, so a row confirmed by a live session must move that
+  wording rather than quietly turn it into an overstatement.
+
 - **Seven scenarios owe a screenshot, and nothing told the operator to take
   one** (`dev`). The sibling of the log defect below, and worse in the way that
   counts. What the playbook said, in full, was `— screenshots required`

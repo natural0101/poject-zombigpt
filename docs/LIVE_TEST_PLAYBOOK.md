@@ -69,9 +69,10 @@ hand all produce the same thing: a release whose evidence proves nothing.
 
 Read `docs/LOCAL_DEBUG_MAP.md` when one fails. Nearly every first-run failure is
 a Build 42.20 API spelled differently from what the adapter declared, and
-`docs/GAME_API_VERIFICATION.md` is the list of every place the code is guessing —
-52 symbols, all `requires_live`. (`grep -rn "Build 42:" pz-mod/` finds six of
-them quickly; it is not the whole list, and this line used to say it was.)
+`docs/GAME_API_VERIFICATION.md` is the list of every place the code is guessing,
+and states how many that is; this line used to carry its own number and it had
+rotted. (`grep -rn "Build 42:" pz-mod/` finds a few of them quickly; it is not
+the whole list, and this line used to say it was.)
 
 ---
 ## S01_INSTALL
