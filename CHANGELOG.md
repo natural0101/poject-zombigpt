@@ -12,6 +12,42 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **A scenario could PASS without naming the game it passed against** (`dev`).
+  `game_build` is the one field a live result carries that no postcondition
+  covers. Twenty-one of the twenty-two scenarios say nothing about the build,
+  and the twenty-second, `S01_INSTALL`, has a `build_string` postcondition that
+  reads `observations.game.build` — a *different* value from the top-level
+  `game_build` the result records and the manifest gathers. So every scenario,
+  S01 included, reached `PASS` with the top-level build unread.
+
+  What that costs is not hypothetical. `build_result` writes `(not observed)`,
+  `finalize` gathers it into the manifest's `game_builds`, and
+  `check_release.py --rc` refuses the archive — *"which is the runner saying
+  nobody looked"*. That refusal is right. Its **timing** was the defect: it
+  arrives after all twenty-two live sessions have been spent, on a machine this
+  project does not have, over a string the operator could have typed at the
+  first scenario from a session they still had open.
+
+  The playbook made it likely rather than merely possible: the skeleton added in
+  the entry below emits `"game_build": ""` and its instruction read *"fill every
+  `null`"*, which names every field except this one.
+
+  Two refusals now, because they fail at different points. `decide` refuses the
+  verdict — a run whose every postcondition held but whose build is blank is
+  `FAIL` with a new code, `BUILD_NOT_OBSERVED`, so an operator is told at the
+  scenario and not sent to inspect a game that behaved correctly. The result
+  schema refuses the document under its PASS branch, so a bundle assembled by
+  any other route is refused too. The generator names the field in the prose.
+
+  `tests/unit/test_pass_names_its_game_build.py` builds, for each of the 22
+  scenarios, a run that satisfies every postcondition — derived from the
+  postconditions themselves, with a control asserting they do hold, so the file
+  cannot go vacuous — and asserts PASS with the build and FAIL without it. The
+  schema half runs the real validator over a real `build_result` document, and
+  the last test holds the schema's literal marker against `UNOBSERVED_BUILD`,
+  since JSON Schema cannot import a constant and an unwatched duplicate is the
+  drift this repository keeps finding.
+
 - **The playbook asked the operator for a file it never described** (`dev`).
   `docs/LIVE_TEST_PLAYBOOK.md` instructs `--observations <file>` for each of the
   22 scenarios. It published every postcondition's key and its prose — "the

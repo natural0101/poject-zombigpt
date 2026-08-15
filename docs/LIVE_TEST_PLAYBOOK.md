@@ -117,6 +117,11 @@ Every one of these must be observed. A missing one is not a pass.
 Fill every `null` with what you read back, then pass it to `--observations`.
 A value left unread fails its postcondition — that is the point.
 
+`game_build` is required too, and it is not a `null`: write the build string
+the running game reports. No postcondition reads it, so a scenario would otherwise
+pass without it and the release gate would refuse the whole archive after all 22
+sessions were spent. The runner refuses that PASS here instead.
+
 ```json
 {
   "scenario_id": "S01_INSTALL",
@@ -208,6 +213,11 @@ Every one of these must be observed. A missing one is not a pass.
 Fill every `null` with what you read back, then pass it to `--observations`.
 A value left unread fails its postcondition — that is the point.
 
+`game_build` is required too, and it is not a `null`: write the build string
+the running game reports. No postcondition reads it, so a scenario would otherwise
+pass without it and the release gate would refuse the whole archive after all 22
+sessions were spent. The runner refuses that PASS here instead.
+
 ```json
 {
   "scenario_id": "S02_HEARTBEAT",
@@ -293,6 +303,11 @@ Every one of these must be observed. A missing one is not a pass.
 Fill every `null` with what you read back, then pass it to `--observations`.
 A value left unread fails its postcondition — that is the point.
 
+`game_build` is required too, and it is not a `null`: write the build string
+the running game reports. No postcondition reads it, so a scenario would otherwise
+pass without it and the release gate would refuse the whole archive after all 22
+sessions were spent. The runner refuses that PASS here instead.
+
 ```json
 {
   "scenario_id": "S03_ARM_DISARM",
@@ -370,6 +385,11 @@ Every one of these must be observed. A missing one is not a pass.
 
 Fill every `null` with what you read back, then pass it to `--observations`.
 A value left unread fails its postcondition — that is the point.
+
+`game_build` is required too, and it is not a `null`: write the build string
+the running game reports. No postcondition reads it, so a scenario would otherwise
+pass without it and the release gate would refuse the whole archive after all 22
+sessions were spent. The runner refuses that PASS here instead.
 
 ```json
 {
@@ -462,6 +482,11 @@ Every one of these must be observed. A missing one is not a pass.
 Fill every `null` with what you read back, then pass it to `--observations`.
 A value left unread fails its postcondition — that is the point.
 
+`game_build` is required too, and it is not a `null`: write the build string
+the running game reports. No postcondition reads it, so a scenario would otherwise
+pass without it and the release gate would refuse the whole archive after all 22
+sessions were spent. The runner refuses that PASS here instead.
+
 ```json
 {
   "scenario_id": "S05_BLOCKED_PATH",
@@ -548,6 +573,11 @@ Every one of these must be observed. A missing one is not a pass.
 Fill every `null` with what you read back, then pass it to `--observations`.
 A value left unread fails its postcondition — that is the point.
 
+`game_build` is required too, and it is not a `null`: write the build string
+the running game reports. No postcondition reads it, so a scenario would otherwise
+pass without it and the release gate would refuse the whole archive after all 22
+sessions were spent. The runner refuses that PASS here instead.
+
 ```json
 {
   "scenario_id": "S06_MANUAL_TAKEOVER",
@@ -629,6 +659,11 @@ Every one of these must be observed. A missing one is not a pass.
 
 Fill every `null` with what you read back, then pass it to `--observations`.
 A value left unread fails its postcondition — that is the point.
+
+`game_build` is required too, and it is not a `null`: write the build string
+the running game reports. No postcondition reads it, so a scenario would otherwise
+pass without it and the release gate would refuse the whole archive after all 22
+sessions were spent. The runner refuses that PASS here instead.
 
 ```json
 {
@@ -721,6 +756,11 @@ Every one of these must be observed. A missing one is not a pass.
 Fill every `null` with what you read back, then pass it to `--observations`.
 A value left unread fails its postcondition — that is the point.
 
+`game_build` is required too, and it is not a `null`: write the build string
+the running game reports. No postcondition reads it, so a scenario would otherwise
+pass without it and the release gate would refuse the whole archive after all 22
+sessions were spent. The runner refuses that PASS here instead.
+
 ```json
 {
   "scenario_id": "S08_UNSAFE_FOOD",
@@ -809,6 +849,11 @@ Every one of these must be observed. A missing one is not a pass.
 Fill every `null` with what you read back, then pass it to `--observations`.
 A value left unread fails its postcondition — that is the point.
 
+`game_build` is required too, and it is not a `null`: write the build string
+the running game reports. No postcondition reads it, so a scenario would otherwise
+pass without it and the release gate would refuse the whole archive after all 22
+sessions were spent. The runner refuses that PASS here instead.
+
 ```json
 {
   "scenario_id": "S09_DRINK",
@@ -893,6 +938,11 @@ Every one of these must be observed. A missing one is not a pass.
 
 Fill every `null` with what you read back, then pass it to `--observations`.
 A value left unread fails its postcondition — that is the point.
+
+`game_build` is required too, and it is not a `null`: write the build string
+the running game reports. No postcondition reads it, so a scenario would otherwise
+pass without it and the release gate would refuse the whole archive after all 22
+sessions were spent. The runner refuses that PASS here instead.
 
 ```json
 {
@@ -983,6 +1033,11 @@ Every one of these must be observed. A missing one is not a pass.
 Fill every `null` with what you read back, then pass it to `--observations`.
 A value left unread fails its postcondition — that is the point.
 
+`game_build` is required too, and it is not a `null`: write the build string
+the running game reports. No postcondition reads it, so a scenario would otherwise
+pass without it and the release gate would refuse the whole archive after all 22
+sessions were spent. The runner refuses that PASS here instead.
+
 ```json
 {
   "scenario_id": "S11_CONTAINER",
@@ -1056,6 +1111,11 @@ Every one of these must be observed. A missing one is not a pass.
 
 Fill every `null` with what you read back, then pass it to `--observations`.
 A value left unread fails its postcondition — that is the point.
+
+`game_build` is required too, and it is not a `null`: write the build string
+the running game reports. No postcondition reads it, so a scenario would otherwise
+pass without it and the release gate would refuse the whole archive after all 22
+sessions were spent. The runner refuses that PASS here instead.
 
 ```json
 {
@@ -1143,6 +1203,11 @@ Every one of these must be observed. A missing one is not a pass.
 Fill every `null` with what you read back, then pass it to `--observations`.
 A value left unread fails its postcondition — that is the point.
 
+`game_build` is required too, and it is not a `null`: write the build string
+the running game reports. No postcondition reads it, so a scenario would otherwise
+pass without it and the release gate would refuse the whole archive after all 22
+sessions were spent. The runner refuses that PASS here instead.
+
 ```json
 {
   "scenario_id": "S13_MEDICAL",
@@ -1228,6 +1293,11 @@ Every one of these must be observed. A missing one is not a pass.
 
 Fill every `null` with what you read back, then pass it to `--observations`.
 A value left unread fails its postcondition — that is the point.
+
+`game_build` is required too, and it is not a `null`: write the build string
+the running game reports. No postcondition reads it, so a scenario would otherwise
+pass without it and the release gate would refuse the whole archive after all 22
+sessions were spent. The runner refuses that PASS here instead.
 
 ```json
 {
@@ -1318,6 +1388,11 @@ Every one of these must be observed. A missing one is not a pass.
 Fill every `null` with what you read back, then pass it to `--observations`.
 A value left unread fails its postcondition — that is the point.
 
+`game_build` is required too, and it is not a `null`: write the build string
+the running game reports. No postcondition reads it, so a scenario would otherwise
+pass without it and the release gate would refuse the whole archive after all 22
+sessions were spent. The runner refuses that PASS here instead.
+
 ```json
 {
   "scenario_id": "S15_ZOMBIE_INTERRUPT",
@@ -1398,6 +1473,11 @@ Every one of these must be observed. A missing one is not a pass.
 Fill every `null` with what you read back, then pass it to `--observations`.
 A value left unread fails its postcondition — that is the point.
 
+`game_build` is required too, and it is not a `null`: write the build string
+the running game reports. No postcondition reads it, so a scenario would otherwise
+pass without it and the release gate would refuse the whole archive after all 22
+sessions were spent. The runner refuses that PASS here instead.
+
 ```json
 {
   "scenario_id": "S16_STALE_SIDECAR",
@@ -1476,6 +1556,11 @@ Every one of these must be observed. A missing one is not a pass.
 Fill every `null` with what you read back, then pass it to `--observations`.
 A value left unread fails its postcondition — that is the point.
 
+`game_build` is required too, and it is not a `null`: write the build string
+the running game reports. No postcondition reads it, so a scenario would otherwise
+pass without it and the release gate would refuse the whole archive after all 22
+sessions were spent. The runner refuses that PASS here instead.
+
 ```json
 {
   "scenario_id": "S17_RESTART_RECOVERY",
@@ -1551,6 +1636,11 @@ Every one of these must be observed. A missing one is not a pass.
 
 Fill every `null` with what you read back, then pass it to `--observations`.
 A value left unread fails its postcondition — that is the point.
+
+`game_build` is required too, and it is not a `null`: write the build string
+the running game reports. No postcondition reads it, so a scenario would otherwise
+pass without it and the release gate would refuse the whole archive after all 22
+sessions were spent. The runner refuses that PASS here instead.
 
 ```json
 {
@@ -1634,6 +1724,11 @@ Every one of these must be observed. A missing one is not a pass.
 
 Fill every `null` with what you read back, then pass it to `--observations`.
 A value left unread fails its postcondition — that is the point.
+
+`game_build` is required too, and it is not a `null`: write the build string
+the running game reports. No postcondition reads it, so a scenario would otherwise
+pass without it and the release gate would refuse the whole archive after all 22
+sessions were spent. The runner refuses that PASS here instead.
 
 ```json
 {
@@ -1722,6 +1817,11 @@ Every one of these must be observed. A missing one is not a pass.
 
 Fill every `null` with what you read back, then pass it to `--observations`.
 A value left unread fails its postcondition — that is the point.
+
+`game_build` is required too, and it is not a `null`: write the build string
+the running game reports. No postcondition reads it, so a scenario would otherwise
+pass without it and the release gate would refuse the whole archive after all 22
+sessions were spent. The runner refuses that PASS here instead.
 
 ```json
 {
@@ -1817,6 +1917,11 @@ Every one of these must be observed. A missing one is not a pass.
 
 Fill every `null` with what you read back, then pass it to `--observations`.
 A value left unread fails its postcondition — that is the point.
+
+`game_build` is required too, and it is not a `null`: write the build string
+the running game reports. No postcondition reads it, so a scenario would otherwise
+pass without it and the release gate would refuse the whole archive after all 22
+sessions were spent. The runner refuses that PASS here instead.
 
 ```json
 {
@@ -1930,6 +2035,11 @@ Every one of these must be observed. A missing one is not a pass.
 
 Fill every `null` with what you read back, then pass it to `--observations`.
 A value left unread fails its postcondition — that is the point.
+
+`game_build` is required too, and it is not a `null`: write the build string
+the running game reports. No postcondition reads it, so a scenario would otherwise
+pass without it and the release gate would refuse the whole archive after all 22
+sessions were spent. The runner refuses that PASS here instead.
 
 ```json
 {

@@ -64,6 +64,10 @@ POSTCONDITION_FAILED: Final = "POSTCONDITION_FAILED"
 #: Failure code for an attempt that never reached a verdict.
 NOT_OBSERVED: Final = "NOT_OBSERVED"
 
+#: Failure code for an attempt whose postconditions all held and which still
+#: cannot say which game it held them against. See :func:`decide`.
+BUILD_NOT_OBSERVED: Final = "BUILD_NOT_OBSERVED"
+
 #: Recorded in place of a build string nobody read off a running game. Not a
 #: guess at the supported build: evidence that cannot name the game it ran
 #: against closes nothing.
@@ -493,6 +497,17 @@ def decide(
     Blocked is checked first and separately: an attempt that never reached the
     game has no observations to evaluate, and calling that a FAIL would blame
     the code for something nobody exercised.
+
+    **A PASS has to name the game it passed against.** ``game_build`` is not a
+    postcondition — twenty-one of the twenty-two scenarios say nothing about it,
+    and the twenty-second reads ``observations.game.build``, which is a
+    different value from the top-level ``game_build`` this record carries. So a
+    scenario whose every postcondition held would reach PASS with the build
+    unread, ``build_result`` would write ``(not observed)``, ``finalize`` would
+    gather that into the manifest's ``game_builds``, and ``check_release.py``
+    would refuse the archive — correctly, and only after all twenty-two live
+    sessions had been spent. The truth is knowable here, at the first scenario,
+    where the remedy costs one edit to a file rather than a day at the game.
     """
     outcomes = tuple(evaluate(condition, run) for condition in scenario.postconditions)
     if run.blocked_reason:
@@ -502,7 +517,11 @@ def decide(
         # with nothing to observe would pass vacuously, which is the one
         # outcome this module exists to make impossible.
         raise LiveTestError(f"{scenario.id}: declares no postconditions, so it cannot pass")
-    return (LiveState.PASS if all(o.passed for o in outcomes) else LiveState.FAIL), outcomes
+    if not all(outcome.passed for outcome in outcomes):
+        return LiveState.FAIL, outcomes
+    if not run.game_build.strip():
+        return LiveState.FAIL, outcomes
+    return LiveState.PASS, outcomes
 
 
 def read_commit(repo_root: Path) -> str:
@@ -604,7 +623,7 @@ def run_scenario(
         run = ObservedRun(blocked_reason=str(exc), failure_code=NOT_OBSERVED)
     status, outcomes = decide(scenario, run)
     finished_at_ms = clock()
-    failure_code = _failure_code(status, run)
+    failure_code = _failure_code(status, run, outcomes)
 
     attempt_number = store.read(scenario.id).attempt_count + 1
     document = build_result(
@@ -643,12 +662,21 @@ def run_scenario(
     )
 
 
-def _failure_code(status: LiveState, run: ObservedRun) -> str:
+def _failure_code(
+    status: LiveState, run: ObservedRun, outcomes: Sequence[PostconditionOutcome]
+) -> str:
     if status is LiveState.PASS:
         return ""
     if status is LiveState.BLOCKED:
         return run.failure_code or NOT_OBSERVED
-    return run.failure_code or POSTCONDITION_FAILED
+    if run.failure_code:
+        return run.failure_code
+    # A FAIL with every postcondition passing is the one shape ``decide``
+    # produces on its own, and calling it POSTCONDITION_FAILED would send the
+    # operator to look at a game that behaved correctly.
+    if all(outcome.passed for outcome in outcomes):
+        return BUILD_NOT_OBSERVED
+    return POSTCONDITION_FAILED
 
 
 def _publish_verdict(layout: EvidenceLayout, state: ScenarioState) -> Path:
@@ -979,6 +1007,7 @@ def attempt_lines(state: ScenarioState) -> list[str]:
 
 
 __all__ = [
+    "BUILD_NOT_OBSERVED",
     "MANIFEST_FORMAT",
     "NOT_OBSERVED",
     "POSTCONDITION_FAILED",

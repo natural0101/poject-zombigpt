@@ -73,6 +73,12 @@ def _observations_skeleton(scenario: LiveScenario) -> list[str]:
     ``null`` is deliberate: every check refuses an unread value, so a skeleton
     handed back unfilled produces an honest failure rather than a pass. It is a
     form to complete, not a default to accept.
+
+    ``game_build`` is named separately in the prose because it is the one
+    required field that is not a ``null`` and not a postcondition: nothing in
+    the catalogue reads the top-level value, so "fill every ``null``" excluded
+    exactly the field ``check_release.py`` refuses an archive over. The runner
+    now refuses a PASS without it, at the scenario rather than at the release.
     """
     import json  # noqa: PLC0415
 
@@ -90,6 +96,12 @@ def _observations_skeleton(scenario: LiveScenario) -> list[str]:
         "\n",
         "Fill every `null` with what you read back, then pass it to `--observations`.\n",
         "A value left unread fails its postcondition — that is the point.\n",
+        "\n",
+        "`game_build` is required too, and it is not a `null`: write the build string\n",
+        "the running game reports. No postcondition reads it, so a scenario would otherwise\n",
+        "pass without it and the release gate would refuse the whole archive after all "
+        f"{len(SCENARIOS)}\n",
+        "sessions were spent. The runner refuses that PASS here instead.\n",
         "\n",
         "```json\n",
         *[f"{line}\n" for line in rendered.splitlines()],

@@ -790,6 +790,21 @@ the JSON back out of the published markdown, feeds it through the real
 whether each path is there; and the reverse, so a skeleton listing everything
 cannot pass by breadth.
 
+Filling that form exposed the next one. `game_build` is the single field a live
+result carries that no postcondition covers: twenty-one scenarios say nothing
+about the build, and `S01_INSTALL`'s `build_string` postcondition reads
+`observations.game.build`, which is a different value from the top-level
+`game_build` the result records and `finalize` gathers. So every scenario could
+reach PASS with the build unread, the manifest would carry `(not observed)`, and
+`check_release.py --rc` would refuse the archive — correctly, and only after all
+twenty-two live sessions had been spent on a machine this project does not have,
+over a string the operator could have typed at the first scenario. The skeleton
+made it likely: it emits `"game_build": ""` and the instruction said "fill every
+`null`". `decide` now refuses that PASS with a `BUILD_NOT_OBSERVED` code, the
+result schema refuses the document under its PASS branch, and the playbook names
+the field. Held by `tests/unit/test_pass_names_its_game_build.py` over all 22
+scenarios, with the control that says the fixture really does satisfy them.
+
 ## Deviations from the blueprint
 
 | Blueprint | Here | Why |
