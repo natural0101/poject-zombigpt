@@ -12,6 +12,37 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **The playbook asked the operator for a file it never described** (`dev`).
+  `docs/LIVE_TEST_PLAYBOOK.md` instructs `--observations <file>` for each of the
+  22 scenarios. It published every postcondition's key and its prose — "the
+  player is standing within a tile of the target" — and dropped the one thing
+  the runner uses: the `field`. The catalogue's 83 postconditions read 66
+  distinct dotted paths, and those paths existed nowhere but `scenarios.py`.
+  `grep "field" docs/LIVE_TEST_PLAYBOOK.md` returned nothing.
+
+  So an operator working only from the document they were handed could not write
+  a file the runner would read. A wrong guess is not a soft failure either: the
+  path is absent, the postcondition is unread, and the scenario fails —
+  correctly, and with nothing to act on. This is the last thing between the RC
+  and the 84 `owner: local` tasks, and it is a documentation defect, not a code
+  one; every check involved behaves exactly as designed.
+
+  `generate_playbook.py` now prints each postcondition's path and check beside
+  the statement — ``` `observations.arrived_at_target` · TRUE ``` — and emits a
+  per-scenario JSON skeleton, nested, with every value `null`, carrying exactly
+  the fields that scenario's postconditions read and no others. `null` is a form
+  to complete rather than a value to accept: every check refuses an unread
+  reading, so handing the skeleton back untouched fails, which is the intent.
+
+  Proved by running the producer rather than by matching over it — the lesson
+  this project has now been taught twice. `tests/contract/test_playbook_observations_skeleton.py`
+  lifts the JSON back out of the published markdown, feeds it through the real
+  `parse_observations`, and asks `read_field` — the reader `evaluate` itself
+  calls — whether each postcondition's path is present, for all 22 scenarios.
+  Both directions: a skeleton listing *everything* would pass a presence check
+  while sending the operator to record fields nothing reads, so every path in
+  the document must also belong to a postcondition.
+
 - **The gate's headline was the one claim derived from neither the artefact nor
   a check of it** (`dev`). `check_release.py` states its rule at the top: *"A
   claim is checked against the artefact, never accepted from it."* Its own

@@ -44,6 +44,60 @@ FIRST_MARKER: Final = f"## {SCENARIOS[0].id}\n"
 LAST_MARKER: Final = "---\n"
 
 
+def _nest(paths: list[str]) -> dict[str, object]:
+    """Turn dotted paths into the nested shape the runner reads them from."""
+    document: dict[str, object] = {}
+    for path in sorted(paths):
+        cursor = document
+        parts = path.split(".")
+        for part in parts[:-1]:
+            nested = cursor.setdefault(part, {})
+            if not isinstance(nested, dict):  # pragma: no cover - a path prefixing another
+                break
+            cursor = nested
+        else:
+            cursor.setdefault(parts[-1], None)
+    return document
+
+
+def _observations_skeleton(scenario: LiveScenario) -> list[str]:
+    """The exact document ``--observations`` expects, with the values left blank.
+
+    The playbook told an operator to pass ``--observations <file>`` for every
+    scenario and never said what the file had to contain. The runner reads each
+    postcondition by an exact dotted path — sixty-six across the catalogue — and
+    those paths existed only in ``scenarios.py``. An operator working from this
+    document could not write a file the runner would read, and a wrong guess
+    fails the postcondition, correctly and unhelpfully.
+
+    ``null`` is deliberate: every check refuses an unread value, so a skeleton
+    handed back unfilled produces an honest failure rather than a pass. It is a
+    form to complete, not a default to accept.
+    """
+    import json  # noqa: PLC0415
+
+    snapshot = [c.field for c in scenario.postconditions if c.check.reads_snapshots]
+    observed = [c.field for c in scenario.postconditions if not c.check.reads_snapshots]
+    document: dict[str, object] = {"scenario_id": scenario.id, "game_build": ""}
+    if observed:
+        document["observations"] = _nest(observed)
+    if snapshot:
+        document["before"] = _nest(snapshot)
+        document["after"] = _nest(snapshot)
+    rendered = json.dumps(document, indent=2, ensure_ascii=False)
+    return [
+        "### The observations file\n",
+        "\n",
+        "Fill every `null` with what you read back, then pass it to `--observations`.\n",
+        "A value left unread fails its postcondition — that is the point.\n",
+        "\n",
+        "```json\n",
+        *[f"{line}\n" for line in rendered.splitlines()],
+        "```\n",
+        "\n",
+    ]
+
+
 def _render(scenario: LiveScenario) -> str:
     out: list[str] = [
         f"## {scenario.id}\n",
@@ -69,14 +123,27 @@ def _render(scenario: LiveScenario) -> str:
         "\n",
     ]
     for condition in scenario.postconditions:
+        # The field path and the check, beside the prose. Without them the
+        # playbook told an operator to pass ``--observations <file>`` and never
+        # said what had to be in it: the runner reads each postcondition by an
+        # exact dotted path, and those paths appeared nowhere outside
+        # ``scenarios.py``. Sixty-six of them across the catalogue, every one to
+        # be transcribed by hand on the machine with the game.
+        where = "before/after" if condition.check.reads_snapshots else "observations"
+        pin = f"`{where}.{condition.field}` · {condition.check.value}"
+        if condition.expected is not None:
+            pin += f" `{condition.expected!r}`"
         if condition.why:
             # Two trailing spaces: a markdown hard break, so the reason sits
             # under its postcondition rather than joining the next bullet.
             out.append(f"- **`{condition.key}`** — {condition.statement}  \n")
+            out.append(f"  {pin}  \n")
             out.append(f"  _{condition.why}_\n")
         else:
-            out.append(f"- **`{condition.key}`** — {condition.statement}\n")
+            out.append(f"- **`{condition.key}`** — {condition.statement}  \n")
+            out.append(f"  {pin}\n")
     out.append("\n")
+    out += _observations_skeleton(scenario)
 
     budget = f"**Time budget:** {scenario.time_budget_s} s"
     if scenario.measures_latency:

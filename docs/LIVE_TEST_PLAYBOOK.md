@@ -102,11 +102,48 @@ doctor resolves the install, the Zomboid directory and the exchange directory, a
 
 Every one of these must be observed. A missing one is not a pass.
 
-- **`mod_files_on_disk`** — mod.info exists in the Zomboid mods directory
+- **`mod_files_on_disk`** — mod.info exists in the Zomboid mods directory  
+  `observations.install.mod_info_present` · is_true
 - **`heartbeat_written`** — heartbeat.game.json exists in the exchange directory  
+  `observations.ipc.game_heartbeat_present` · is_true  
   _Present on disk and enabled in the menu both hold for a mod that crashed during load. Only a written heartbeat proves it is running._
-- **`heartbeat_advances`** — the heartbeat timestamp is newer in the second reading
-- **`build_string`** — the detected game build is recorded
+- **`heartbeat_advances`** — the heartbeat timestamp is newer in the second reading  
+  `before/after.ipc.game_heartbeat_ms` · increased
+- **`build_string`** — the detected game build is recorded  
+  `observations.game.build` · observed
+
+### The observations file
+
+Fill every `null` with what you read back, then pass it to `--observations`.
+A value left unread fails its postcondition — that is the point.
+
+```json
+{
+  "scenario_id": "S01_INSTALL",
+  "game_build": "",
+  "observations": {
+    "game": {
+      "build": null
+    },
+    "install": {
+      "mod_info_present": null
+    },
+    "ipc": {
+      "game_heartbeat_present": null
+    }
+  },
+  "before": {
+    "ipc": {
+      "game_heartbeat_ms": null
+    }
+  },
+  "after": {
+    "ipc": {
+      "game_heartbeat_ms": null
+    }
+  }
+}
+```
 
 **Time budget:** 600 s
 
@@ -157,10 +194,44 @@ status reports the mod present, one session id shared by both sides, mode OBSERV
 Every one of these must be observed. A missing one is not a pass.
 
 - **`session_id_agreed`** — the sidecar and the snapshot name the same session id  
+  `observations.session.ids_agree` · is_true  
   _Two ids means the two sides resolved different exchange directories, and every subsequent command would be written where nothing reads it._
-- **`mode_is_observe`** — the session attaches in OBSERVE
-- **`sidecar_heartbeat_advances`** — heartbeat.sidecar.json is newer in the second reading
-- **`game_heartbeat_advances`** — heartbeat.game.json is newer in the second reading
+- **`mode_is_observe`** — the session attaches in OBSERVE  
+  `observations.session.mode` · equals `'OBSERVE'`
+- **`sidecar_heartbeat_advances`** — heartbeat.sidecar.json is newer in the second reading  
+  `before/after.ipc.sidecar_heartbeat_ms` · increased
+- **`game_heartbeat_advances`** — heartbeat.game.json is newer in the second reading  
+  `before/after.ipc.game_heartbeat_ms` · increased
+
+### The observations file
+
+Fill every `null` with what you read back, then pass it to `--observations`.
+A value left unread fails its postcondition — that is the point.
+
+```json
+{
+  "scenario_id": "S02_HEARTBEAT",
+  "game_build": "",
+  "observations": {
+    "session": {
+      "ids_agree": null,
+      "mode": null
+    }
+  },
+  "before": {
+    "ipc": {
+      "game_heartbeat_ms": null,
+      "sidecar_heartbeat_ms": null
+    }
+  },
+  "after": {
+    "ipc": {
+      "game_heartbeat_ms": null,
+      "sidecar_heartbeat_ms": null
+    }
+  }
+}
+```
 
 **Time budget:** 300 s
 
@@ -210,9 +281,33 @@ safety.mode in the snapshot goes OBSERVE -> ASSISTED -> OBSERVE, and the CLI agr
 Every one of these must be observed. A missing one is not a pass.
 
 - **`armed_in_snapshot`** — the snapshot reports ASSISTED after arm  
+  `observations.arm.snapshot_mode` · equals `'ASSISTED'`  
   _The CLI publishes a request; only the snapshot proves the mod applied it._
-- **`cli_agrees_when_armed`** — the CLI and the snapshot report the same mode
-- **`disarmed_in_snapshot`** — the snapshot reports OBSERVE after disarm
+- **`cli_agrees_when_armed`** — the CLI and the snapshot report the same mode  
+  `observations.arm.cli_agrees` · is_true
+- **`disarmed_in_snapshot`** — the snapshot reports OBSERVE after disarm  
+  `observations.disarm.snapshot_mode` · equals `'OBSERVE'`
+
+### The observations file
+
+Fill every `null` with what you read back, then pass it to `--observations`.
+A value left unread fails its postcondition — that is the point.
+
+```json
+{
+  "scenario_id": "S03_ARM_DISARM",
+  "game_build": "",
+  "observations": {
+    "arm": {
+      "cli_agrees": null,
+      "snapshot_mode": null
+    },
+    "disarm": {
+      "snapshot_mode": null
+    }
+  }
+}
+```
 
 **Time budget:** 300 s
 
@@ -263,10 +358,43 @@ The character arrives; the action result is succeeded with the arrival position 
 
 Every one of these must be observed. A missing one is not a pass.
 
-- **`position_changed`** — the player's tile differs between before and after
+- **`position_changed`** — the player's tile differs between before and after  
+  `before/after.player.position` · changed
 - **`arrived_at_target`** — the final tile equals the requested square  
+  `observations.move.arrived_at_target` · is_true  
   _Position changed is not arrival. A character shoved one tile by a zombie also changed position._
-- **`reason_code`** — the action result carries POSTCONDITION_MET
+- **`reason_code`** — the action result carries POSTCONDITION_MET  
+  `observations.action_result.reason_code` · equals `'POSTCONDITION_MET'`
+
+### The observations file
+
+Fill every `null` with what you read back, then pass it to `--observations`.
+A value left unread fails its postcondition — that is the point.
+
+```json
+{
+  "scenario_id": "S04_MOVE",
+  "game_build": "",
+  "observations": {
+    "action_result": {
+      "reason_code": null
+    },
+    "move": {
+      "arrived_at_target": null
+    }
+  },
+  "before": {
+    "player": {
+      "position": null
+    }
+  },
+  "after": {
+    "player": {
+      "position": null
+    }
+  }
+}
+```
 
 **Time budget:** 300 s  ·  **latency measured** (p50/p95 recorded in `result.json`)
 
@@ -319,11 +447,44 @@ The action fails with PATH_NOT_FOUND or PATH_STUCK and the character is unhurt.
 
 Every one of these must be observed. A missing one is not a pass.
 
-- **`failed_not_succeeded`** — the action status is failed
+- **`failed_not_succeeded`** — the action status is failed  
+  `observations.action_result.status` · equals `'failed'`
 - **`path_reason_code`** — the reason code names the pathing failure  
+  `observations.action_result.reason_code` · observed  
   _A generic INTERNAL_ERROR here would mean the adapter cannot tell a blocked path from a crash, and the operator has nothing to act on._
-- **`ended_within_budget`** — the action ended within its timeout
-- **`health_unchanged`** — the character took no damage
+- **`ended_within_budget`** — the action ended within its timeout  
+  `observations.action_result.duration_ms` · at_most `120000`
+- **`health_unchanged`** — the character took no damage  
+  `before/after.player.health` · unchanged
+
+### The observations file
+
+Fill every `null` with what you read back, then pass it to `--observations`.
+A value left unread fails its postcondition — that is the point.
+
+```json
+{
+  "scenario_id": "S05_BLOCKED_PATH",
+  "game_build": "",
+  "observations": {
+    "action_result": {
+      "duration_ms": null,
+      "reason_code": null,
+      "status": null
+    }
+  },
+  "before": {
+    "player": {
+      "health": null
+    }
+  },
+  "after": {
+    "player": {
+      "health": null
+    }
+  }
+}
+```
 
 **Time budget:** 420 s
 
@@ -374,10 +535,34 @@ The in-flight action ends as USER_TAKEOVER, the session drops to OBSERVE, and no
 
 Every one of these must be observed. A missing one is not a pass.
 
-- **`takeover_reason`** — the action result reason code is USER_TAKEOVER
-- **`disarmed_after_takeover`** — the snapshot reports OBSERVE afterwards
+- **`takeover_reason`** — the action result reason code is USER_TAKEOVER  
+  `observations.action_result.reason_code` · equals `'USER_TAKEOVER'`
+- **`disarmed_after_takeover`** — the snapshot reports OBSERVE afterwards  
+  `observations.safety.mode_after` · equals `'OBSERVE'`
 - **`player_queue_untouched`** — no action the player queued was cancelled  
+  `observations.safety.player_queue_intact` · is_true  
   _Cancelling the player's own queued work is the agent overriding them at the exact moment they took control._
+
+### The observations file
+
+Fill every `null` with what you read back, then pass it to `--observations`.
+A value left unread fails its postcondition — that is the point.
+
+```json
+{
+  "scenario_id": "S06_MANUAL_TAKEOVER",
+  "game_build": "",
+  "observations": {
+    "action_result": {
+      "reason_code": null
+    },
+    "safety": {
+      "mode_after": null,
+      "player_queue_intact": null
+    }
+  }
+}
+```
 
 **Time budget:** 420 s
 
@@ -430,11 +615,46 @@ The item is in the main inventory afterwards and gone from the inner bag.
 
 Every one of these must be observed. A missing one is not a pass.
 
-- **`item_in_main`** — the item is present in the main inventory after the action
+- **`item_in_main`** — the item is present in the main inventory after the action  
+  `observations.transfer.item_in_main_after` · is_true
 - **`item_left_source`** — the item is absent from the inner container after the action  
+  `observations.transfer.item_in_source_after` · is_false  
   _Present in both would mean the reference resolved to a different object of the same type, which is exactly the nesting bug._
-- **`main_count_increased`** — the main inventory item count went up
-- **`reason_code`** — the action result carries POSTCONDITION_MET
+- **`main_count_increased`** — the main inventory item count went up  
+  `before/after.inventory.main_count` · increased
+- **`reason_code`** — the action result carries POSTCONDITION_MET  
+  `observations.action_result.reason_code` · equals `'POSTCONDITION_MET'`
+
+### The observations file
+
+Fill every `null` with what you read back, then pass it to `--observations`.
+A value left unread fails its postcondition — that is the point.
+
+```json
+{
+  "scenario_id": "S07_NESTED_INVENTORY",
+  "game_build": "",
+  "observations": {
+    "action_result": {
+      "reason_code": null
+    },
+    "transfer": {
+      "item_in_main_after": null,
+      "item_in_source_after": null
+    }
+  },
+  "before": {
+    "inventory": {
+      "main_count": null
+    }
+  },
+  "after": {
+    "inventory": {
+      "main_count": null
+    }
+  }
+}
+```
 
 **Time budget:** 420 s
 
@@ -486,11 +706,44 @@ The fresh item is eaten, the rotten one is untouched, and hunger falls.
 
 Every one of these must be observed. A missing one is not a pass.
 
-- **`chosen_is_safe`** — the chosen item is the fresh one
-- **`rotten_untouched`** — the rotten item is still in the inventory afterwards
+- **`chosen_is_safe`** — the chosen item is the fresh one  
+  `observations.selection.chosen_is_safe` · is_true
+- **`rotten_untouched`** — the rotten item is still in the inventory afterwards  
+  `observations.selection.rotten_still_present` · is_true
 - **`hunger_fell`** — hunger is lower after than before  
+  `before/after.player.hunger` · decreased  
   _Eating that does not change hunger is indistinguishable from not eating._
-- **`rationale_recorded`** — the selection rationale is recorded
+- **`rationale_recorded`** — the selection rationale is recorded  
+  `observations.selection.rationale` · observed
+
+### The observations file
+
+Fill every `null` with what you read back, then pass it to `--observations`.
+A value left unread fails its postcondition — that is the point.
+
+```json
+{
+  "scenario_id": "S08_UNSAFE_FOOD",
+  "game_build": "",
+  "observations": {
+    "selection": {
+      "chosen_is_safe": null,
+      "rationale": null,
+      "rotten_still_present": null
+    }
+  },
+  "before": {
+    "player": {
+      "hunger": null
+    }
+  },
+  "after": {
+    "player": {
+      "hunger": null
+    }
+  }
+}
+```
 
 **Time budget:** 420 s
 
@@ -544,9 +797,40 @@ The safe source is used and thirst falls. If a world source was named, drink_wor
 
 Every one of these must be observed. A missing one is not a pass.
 
-- **`thirst_fell`** — thirst is lower after than before
-- **`source_is_safe`** — the chosen source was not tainted
-- **`chosen_ref`** — the chosen source reference is recorded
+- **`thirst_fell`** — thirst is lower after than before  
+  `before/after.player.thirst` · decreased
+- **`source_is_safe`** — the chosen source was not tainted  
+  `observations.selection.source_is_safe` · is_true
+- **`chosen_ref`** — the chosen source reference is recorded  
+  `observations.selection.chosen_ref` · observed
+
+### The observations file
+
+Fill every `null` with what you read back, then pass it to `--observations`.
+A value left unread fails its postcondition — that is the point.
+
+```json
+{
+  "scenario_id": "S09_DRINK",
+  "game_build": "",
+  "observations": {
+    "selection": {
+      "chosen_ref": null,
+      "source_is_safe": null
+    }
+  },
+  "before": {
+    "player": {
+      "thirst": null
+    }
+  },
+  "after": {
+    "player": {
+      "thirst": null
+    }
+  }
+}
+```
 
 **Time budget:** 360 s
 
@@ -597,10 +881,45 @@ Reading starts, pages read advances, and the book matches the stated goal.
 
 Every one of these must be observed. A missing one is not a pass.
 
-- **`reading_started`** — the reading action reported started
+- **`reading_started`** — the reading action reported started  
+  `observations.action_result.evidence.reading_started` · is_true
 - **`progress_advanced`** — pages read is higher after than before  
+  `before/after.literature.pages_read` · increased  
   _Progress is the postcondition; starting is not._
-- **`book_matches_goal`** — the chosen book matches the stated skill goal
+- **`book_matches_goal`** — the chosen book matches the stated skill goal  
+  `observations.selection.matches_goal` · is_true
+
+### The observations file
+
+Fill every `null` with what you read back, then pass it to `--observations`.
+A value left unread fails its postcondition — that is the point.
+
+```json
+{
+  "scenario_id": "S10_READ",
+  "game_build": "",
+  "observations": {
+    "action_result": {
+      "evidence": {
+        "reading_started": null
+      }
+    },
+    "selection": {
+      "matches_goal": null
+    }
+  },
+  "before": {
+    "literature": {
+      "pages_read": null
+    }
+  },
+  "after": {
+    "literature": {
+      "pages_read": null
+    }
+  }
+}
+```
 
 **Time budget:** 600 s
 
@@ -652,9 +971,31 @@ The reported contents match the panel exactly.
 Every one of these must be observed. A missing one is not a pass.
 
 - **`container_ref`** — the resolved container reference is recorded  
+  `observations.container.ref` · observed  
   _A world container reference carries colons in its tail; a naive split yields a valid reference to a different object._
-- **`contents_match`** — the reported contents match the in-game panel
-- **`item_count`** — at least three items were listed
+- **`contents_match`** — the reported contents match the in-game panel  
+  `observations.container.contents_match_panel` · is_true
+- **`item_count`** — at least three items were listed  
+  `observations.container.item_count` · at_least `3`
+
+### The observations file
+
+Fill every `null` with what you read back, then pass it to `--observations`.
+A value left unread fails its postcondition — that is the point.
+
+```json
+{
+  "scenario_id": "S11_CONTAINER",
+  "game_build": "",
+  "observations": {
+    "container": {
+      "contents_match_panel": null,
+      "item_count": null,
+      "ref": null
+    }
+  }
+}
+```
 
 **Time budget:** 360 s
 
@@ -704,9 +1045,42 @@ The weapon is in the primary hand afterwards, and the slot reads back with its r
 
 Every one of these must be observed. A missing one is not a pass.
 
-- **`slot_occupied`** — the primary hand holds the requested item afterwards
-- **`hands_changed`** — the hands view differs between before and after
-- **`reason_code`** — the action result carries POSTCONDITION_MET
+- **`slot_occupied`** — the primary hand holds the requested item afterwards  
+  `observations.equipment.primary_matches_request` · is_true
+- **`hands_changed`** — the hands view differs between before and after  
+  `before/after.player.hands` · changed
+- **`reason_code`** — the action result carries POSTCONDITION_MET  
+  `observations.action_result.reason_code` · equals `'POSTCONDITION_MET'`
+
+### The observations file
+
+Fill every `null` with what you read back, then pass it to `--observations`.
+A value left unread fails its postcondition — that is the point.
+
+```json
+{
+  "scenario_id": "S12_EQUIPMENT",
+  "game_build": "",
+  "observations": {
+    "action_result": {
+      "reason_code": null
+    },
+    "equipment": {
+      "primary_matches_request": null
+    }
+  },
+  "before": {
+    "player": {
+      "hands": null
+    }
+  },
+  "after": {
+    "player": {
+      "hands": null
+    }
+  }
+}
+```
 
 **Time budget:** 300 s
 
@@ -757,9 +1131,40 @@ The wound is bandaged, and the health panel agrees with the reported state.
 
 Every one of these must be observed. A missing one is not a pass.
 
-- **`wound_bandaged`** — the wound reads as bandaged after the action
-- **`untreated_count_fell`** — the number of untreated wounds went down
-- **`panel_agrees`** — the in-game health panel agrees with the reported state
+- **`wound_bandaged`** — the wound reads as bandaged after the action  
+  `observations.medical.wound_bandaged_after` · is_true
+- **`untreated_count_fell`** — the number of untreated wounds went down  
+  `before/after.player.untreated_wounds` · decreased
+- **`panel_agrees`** — the in-game health panel agrees with the reported state  
+  `observations.medical.panel_agrees` · is_true
+
+### The observations file
+
+Fill every `null` with what you read back, then pass it to `--observations`.
+A value left unread fails its postcondition — that is the point.
+
+```json
+{
+  "scenario_id": "S13_MEDICAL",
+  "game_build": "",
+  "observations": {
+    "medical": {
+      "panel_agrees": null,
+      "wound_bandaged_after": null
+    }
+  },
+  "before": {
+    "player": {
+      "untreated_wounds": null
+    }
+  },
+  "after": {
+    "player": {
+      "untreated_wounds": null
+    }
+  }
+}
+```
 
 **Time budget:** 420 s
 
@@ -812,9 +1217,42 @@ Fatigue falls, and the stop request ends the action as CANCELLED_BY_REQUEST.
 
 Every one of these must be observed. A missing one is not a pass.
 
-- **`fatigue_fell`** — fatigue is lower after than before
-- **`stop_honoured`** — the stop request ended the action
-- **`awake_after`** — the character is awake afterwards
+- **`fatigue_fell`** — fatigue is lower after than before  
+  `before/after.player.fatigue` · decreased
+- **`stop_honoured`** — the stop request ended the action  
+  `observations.action_result.reason_code` · equals `'CANCELLED_BY_REQUEST'`
+- **`awake_after`** — the character is awake afterwards  
+  `observations.player.awake_after` · is_true
+
+### The observations file
+
+Fill every `null` with what you read back, then pass it to `--observations`.
+A value left unread fails its postcondition — that is the point.
+
+```json
+{
+  "scenario_id": "S14_SLEEP_REST",
+  "game_build": "",
+  "observations": {
+    "action_result": {
+      "reason_code": null
+    },
+    "player": {
+      "awake_after": null
+    }
+  },
+  "before": {
+    "player": {
+      "fatigue": null
+    }
+  },
+  "after": {
+    "player": {
+      "fatigue": null
+    }
+  }
+}
+```
 
 **Time budget:** 900 s
 
@@ -867,10 +1305,36 @@ The action ends as THREAT_INTERRUPTED and the session drops to OBSERVE.
 
 Every one of these must be observed. A missing one is not a pass.
 
-- **`threat_reason`** — the action ended with THREAT_INTERRUPTED
+- **`threat_reason`** — the action ended with THREAT_INTERRUPTED  
+  `observations.action_result.reason_code` · equals `'THREAT_INTERRUPTED'`
 - **`zombie_observed`** — the nearby zombie appears in the snapshot  
+  `observations.threat.zombies_seen` · at_least `1`  
   _An interrupt with no zombie in the snapshot means the guard fired on something else and the reason code is wrong._
-- **`disarmed`** — the snapshot reports OBSERVE afterwards
+- **`disarmed`** — the snapshot reports OBSERVE afterwards  
+  `observations.safety.mode_after` · equals `'OBSERVE'`
+
+### The observations file
+
+Fill every `null` with what you read back, then pass it to `--observations`.
+A value left unread fails its postcondition — that is the point.
+
+```json
+{
+  "scenario_id": "S15_ZOMBIE_INTERRUPT",
+  "game_build": "",
+  "observations": {
+    "action_result": {
+      "reason_code": null
+    },
+    "safety": {
+      "mode_after": null
+    },
+    "threat": {
+      "zombies_seen": null
+    }
+  }
+}
+```
 
 **Time budget:** 600 s
 
@@ -922,9 +1386,33 @@ The mod disarms itself and reports the sidecar heartbeat as stale.
 
 Every one of these must be observed. A missing one is not a pass.
 
-- **`mod_disarmed_itself`** — the snapshot reports OBSERVE after the timeout
-- **`staleness_detected`** — the mod reports the sidecar heartbeat as stale
-- **`no_action_after`** — no command was executed after the sidecar went silent
+- **`mod_disarmed_itself`** — the snapshot reports OBSERVE after the timeout  
+  `observations.safety.mode_after` · equals `'OBSERVE'`
+- **`staleness_detected`** — the mod reports the sidecar heartbeat as stale  
+  `observations.session.sidecar_stale` · is_true
+- **`no_action_after`** — no command was executed after the sidecar went silent  
+  `observations.session.acks_after_silence` · equals `0`
+
+### The observations file
+
+Fill every `null` with what you read back, then pass it to `--observations`.
+A value left unread fails its postcondition — that is the point.
+
+```json
+{
+  "scenario_id": "S16_STALE_SIDECAR",
+  "game_build": "",
+  "observations": {
+    "safety": {
+      "mode_after": null
+    },
+    "session": {
+      "acks_after_silence": null,
+      "sidecar_stale": null
+    }
+  }
+}
+```
 
 **Time budget:** 600 s
 
@@ -975,10 +1463,32 @@ The sidecar reattaches, no earlier command is re-executed, and the mode is OBSER
 
 Every one of these must be observed. A missing one is not a pass.
 
-- **`reattached`** — the sidecar reports the mod present after restart
+- **`reattached`** — the sidecar reports the mod present after restart  
+  `observations.session.reattached` · is_true
 - **`no_replay`** — no command id from before the restart was acked again  
+  `observations.session.replayed_command_count` · equals `0`  
   _A replay after restart would repeat a real in-game action — eating the last safe food twice, for instance._
-- **`mode_observe`** — the restarted sidecar attaches in OBSERVE
+- **`mode_observe`** — the restarted sidecar attaches in OBSERVE  
+  `observations.session.mode` · equals `'OBSERVE'`
+
+### The observations file
+
+Fill every `null` with what you read back, then pass it to `--observations`.
+A value left unread fails its postcondition — that is the point.
+
+```json
+{
+  "scenario_id": "S17_RESTART_RECOVERY",
+  "game_build": "",
+  "observations": {
+    "session": {
+      "mode": null,
+      "reattached": null,
+      "replayed_command_count": null
+    }
+  }
+}
+```
 
 **Time budget:** 420 s
 
@@ -1030,9 +1540,33 @@ The agent's action ends as PANIC_STOP, the session is OBSERVE, and the player's 
 
 Every one of these must be observed. A missing one is not a pass.
 
-- **`panic_reason`** — the agent's action ended with PANIC_STOP
-- **`player_action_survived`** — the player's queued action is still present afterwards
-- **`disarmed`** — the snapshot reports OBSERVE afterwards
+- **`panic_reason`** — the agent's action ended with PANIC_STOP  
+  `observations.action_result.reason_code` · equals `'PANIC_STOP'`
+- **`player_action_survived`** — the player's queued action is still present afterwards  
+  `observations.safety.player_action_survived` · is_true
+- **`disarmed`** — the snapshot reports OBSERVE afterwards  
+  `observations.safety.mode_after` · equals `'OBSERVE'`
+
+### The observations file
+
+Fill every `null` with what you read back, then pass it to `--observations`.
+A value left unread fails its postcondition — that is the point.
+
+```json
+{
+  "scenario_id": "S18_PANIC",
+  "game_build": "",
+  "observations": {
+    "action_result": {
+      "reason_code": null
+    },
+    "safety": {
+      "mode_after": null,
+      "player_action_survived": null
+    }
+  }
+}
+```
 
 **Time budget:** 420 s
 
@@ -1085,11 +1619,41 @@ The character survives, stays inside the radius, and every action is followed by
 
 Every one of these must be observed. A missing one is not a pass.
 
-- **`ran_full_duration`** — the run lasted at least thirty minutes
-- **`stayed_in_radius`** — the character never left the configured radius
-- **`single_action_at_a_time`** — never more than one agent action was in flight
-- **`survived`** — the character is alive at the end
-- **`no_unbounded_growth`** — the journals stayed within their rotation caps
+- **`ran_full_duration`** — the run lasted at least thirty minutes  
+  `observations.endurance.duration_s` · at_least `1800`
+- **`stayed_in_radius`** — the character never left the configured radius  
+  `observations.autonomy.stayed_in_radius` · is_true
+- **`single_action_at_a_time`** — never more than one agent action was in flight  
+  `observations.autonomy.max_concurrent_actions` · at_most `1`
+- **`survived`** — the character is alive at the end  
+  `observations.player.alive_after` · is_true
+- **`no_unbounded_growth`** — the journals stayed within their rotation caps  
+  `observations.endurance.logs_within_caps` · is_true
+
+### The observations file
+
+Fill every `null` with what you read back, then pass it to `--observations`.
+A value left unread fails its postcondition — that is the point.
+
+```json
+{
+  "scenario_id": "S19_AUTONOMOUS_30_MIN",
+  "game_build": "",
+  "observations": {
+    "autonomy": {
+      "max_concurrent_actions": null,
+      "stayed_in_radius": null
+    },
+    "endurance": {
+      "duration_s": null,
+      "logs_within_caps": null
+    },
+    "player": {
+      "alive_after": null
+    }
+  }
+}
+```
 
 **Time budget:** 2400 s  ·  **latency measured** (p50/p95 recorded in `result.json`)
 
@@ -1143,11 +1707,39 @@ The character survives, resident memory is flat, journals rotated within their c
 
 Every one of these must be observed. A missing one is not a pass.
 
-- **`ran_full_duration`** — the run lasted at least two hours
-- **`survived`** — the character is alive at the end
-- **`memory_flat`** — resident memory grew by no more than 64 MiB
-- **`logs_within_caps`** — the journals stayed within their rotation caps
-- **`latency_stable`** — p95 action latency stayed under ten seconds
+- **`ran_full_duration`** — the run lasted at least two hours  
+  `observations.endurance.duration_s` · at_least `7200`
+- **`survived`** — the character is alive at the end  
+  `observations.player.alive_after` · is_true
+- **`memory_flat`** — resident memory grew by no more than 64 MiB  
+  `observations.endurance.rss_growth_bytes` · at_most `67108864`
+- **`logs_within_caps`** — the journals stayed within their rotation caps  
+  `observations.endurance.logs_within_caps` · is_true
+- **`latency_stable`** — p95 action latency stayed under ten seconds  
+  `observations.endurance.p95_latency_ms` · at_most `10000`
+
+### The observations file
+
+Fill every `null` with what you read back, then pass it to `--observations`.
+A value left unread fails its postcondition — that is the point.
+
+```json
+{
+  "scenario_id": "S20_AUTONOMOUS_2_HOURS",
+  "game_build": "",
+  "observations": {
+    "endurance": {
+      "duration_s": null,
+      "logs_within_caps": null,
+      "p95_latency_ms": null,
+      "rss_growth_bytes": null
+    },
+    "player": {
+      "alive_after": null
+    }
+  }
+}
+```
 
 **Time budget:** 8400 s  ·  **latency measured** (p50/p95 recorded in `result.json`)
 
@@ -1205,15 +1797,55 @@ The recipe reading matches the game's own panel, and the craft — where it coul
 Every one of these must be observed. A missing one is not a pass.
 
 - **`recipe_readout_present`** — the observation carried a crafting readout for the recipe  
+  `observations.crafting.readout_present` · is_true  
   _Every crafting reader in the mod is a guess at a Build 42 spelling. An observation carrying no readout at all means none of them answered, which is the first thing this run exists to establish._
 - **`ingredients_match_panel`** — the reported ingredients match the in-game crafting panel  
+  `observations.crafting.ingredients_match_panel` · is_true  
   _A reader that answers with the wrong list is worse than one that answers nothing: the policy would call a recipe affordable on requirements nobody actually has._
-- **`capability_state_recorded`** — pz://capabilities' state for 'crafting' is recorded
+- **`capability_state_recorded`** — pz://capabilities' state for 'crafting' is recorded  
+  `observations.crafting.capability_state` · observed
 - **`product_count_rose`** — the inventory holds more of the product after than before  
+  `before/after.inventory.product_count` · increased  
   _The only postcondition a craft has. An ack saying the craft finished is a statement about the queue._
 - **`ingredient_count_fell`** — an ingredient the recipe consumes is observed to have fallen  
+  `before/after.inventory.ingredient_count` · decreased  
   _A product that appeared while nothing was spent did not come out of this recipe, and the mod requires this half too._
-- **`reason_code`** — the action result carries POSTCONDITION_MET
+- **`reason_code`** — the action result carries POSTCONDITION_MET  
+  `observations.action_result.reason_code` · equals `'POSTCONDITION_MET'`
+
+### The observations file
+
+Fill every `null` with what you read back, then pass it to `--observations`.
+A value left unread fails its postcondition — that is the point.
+
+```json
+{
+  "scenario_id": "S21_CRAFT",
+  "game_build": "",
+  "observations": {
+    "action_result": {
+      "reason_code": null
+    },
+    "crafting": {
+      "capability_state": null,
+      "ingredients_match_panel": null,
+      "readout_present": null
+    }
+  },
+  "before": {
+    "inventory": {
+      "ingredient_count": null,
+      "product_count": null
+    }
+  },
+  "after": {
+    "inventory": {
+      "ingredient_count": null,
+      "product_count": null
+    }
+  }
+}
+```
 
 **Time budget:** 600 s
 
@@ -1273,18 +1905,61 @@ The trap square is refused with WOULD_TRAP_PLAYER and nothing is queued for it; 
 Every one of these must be observed. A missing one is not a pass.
 
 - **`trap_refusal_fired`** — the trap square is refused with would_trap_player  
+  `observations.building.trap_square_refusal` · equals `'would_trap_player'`  
   _The heart of this rung. A wall the agent raises cannot be taken down by the agent, so a wall that seals the character in is a mistake with no undo — and the check has to fire from the live map, not only from a fixture._
 - **`nothing_queued_for_the_trap_square`** — the trap square is still empty after the refusal  
+  `observations.building.trap_square_still_empty` · is_true  
   _A refusal that still queued the work would be the worst outcome this scenario can produce: the answer says no and the wall goes up._
 - **`occupied_refusal_fired`** — an occupied square is refused with square_occupied  
+  `observations.building.occupied_square_refusal` · equals `'square_occupied'`  
   _The agent never clears a square to make room for its own placement._
 - **`safe_square_reads_buildable`** — the safe square reports the blueprint as buildable  
+  `observations.building.safe_square_buildable` · is_true  
   _Without this the two refusals prove only that the reading refuses everything, which would be a check that cannot tell a wall from a doorway._
-- **`capability_state_recorded`** — pz://capabilities' state for 'building' is recorded
+- **`capability_state_recorded`** — pz://capabilities' state for 'building' is recorded  
+  `observations.building.capability_state` · observed
 - **`structure_observed_on_the_square`** — the structure is observed standing on the safe square afterwards  
+  `observations.building.structure_observed_after` · is_true  
   _The only postcondition a build has. A queued build is not a wall, and an ack that says the action finished is a statement about the queue._
-- **`square_objects_grew`** — the safe square carries more objects after than before
-- **`reason_code`** — the action result carries POSTCONDITION_MET
+- **`square_objects_grew`** — the safe square carries more objects after than before  
+  `before/after.building.safe_square_objects` · increased
+- **`reason_code`** — the action result carries POSTCONDITION_MET  
+  `observations.action_result.reason_code` · equals `'POSTCONDITION_MET'`
+
+### The observations file
+
+Fill every `null` with what you read back, then pass it to `--observations`.
+A value left unread fails its postcondition — that is the point.
+
+```json
+{
+  "scenario_id": "S22_BUILD",
+  "game_build": "",
+  "observations": {
+    "action_result": {
+      "reason_code": null
+    },
+    "building": {
+      "capability_state": null,
+      "occupied_square_refusal": null,
+      "safe_square_buildable": null,
+      "structure_observed_after": null,
+      "trap_square_refusal": null,
+      "trap_square_still_empty": null
+    }
+  },
+  "before": {
+    "building": {
+      "safe_square_objects": null
+    }
+  },
+  "after": {
+    "building": {
+      "safe_square_objects": null
+    }
+  }
+}
+```
 
 **Time budget:** 900 s
 

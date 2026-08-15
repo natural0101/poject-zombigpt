@@ -764,6 +764,31 @@ remaining work can happen:
 - [`GAME_API_VERIFICATION.md`](GAME_API_VERIFICATION.md) — every engine symbol
   the mod assumes, all of them `requires_live`.
 - [`LOCAL_AGENT_PROMPT.md`](LOCAL_AGENT_PROMPT.md) — the prompt itself.
+- [`LIVE_TEST_PLAYBOOK.md`](LIVE_TEST_PLAYBOOK.md) — generated from `SCENARIOS`
+  by `scripts/generate_playbook.py`, one section per scenario: preconditions,
+  the command, the postconditions, and the observations file to hand back.
+
+That last document told the operator to pass `--observations <file>` twenty-two
+times and never said what the file had to contain. It published each
+postcondition's key and its prose — "the player is standing within a tile of the
+target" — and dropped the `field`, which is the only part the runner uses. The
+catalogue's 83 postconditions read 66 distinct dotted paths, and those paths
+existed nowhere outside `scenarios.py`: `grep "field" docs/LIVE_TEST_PLAYBOOK.md`
+returned nothing. Someone working from the document alone could not write a file
+the runner would read, and a wrong guess is not a soft failure — the path is
+absent, the postcondition is unread, and the scenario fails, correctly and with
+nothing to act on.
+
+The generator now prints each postcondition's path and check beside its
+statement and emits a per-scenario JSON skeleton with every value `null`,
+carrying exactly the fields that scenario reads and no others. `null` is a form
+to fill rather than a value to accept: every check refuses an unread reading, so
+an untouched skeleton fails. Proved by running the producer rather than by
+matching over it — `tests/contract/test_playbook_observations_skeleton.py` lifts
+the JSON back out of the published markdown, feeds it through the real
+`parse_observations`, and asks `read_field`, the reader `evaluate` itself calls,
+whether each path is there; and the reverse, so a skeleton listing everything
+cannot pass by breadth.
 
 ## Deviations from the blueprint
 
