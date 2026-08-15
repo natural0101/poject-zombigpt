@@ -12,6 +12,55 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **`live-test run --scenario ""` reported success having run nothing** (`dev`).
+  The command that produces the evidence for every live task — the 84 the
+  project is blocked on — printed
+
+  ```
+  nothing to run: every scenario is PASS.
+  ```
+
+  and exited **0**, with all twenty-two scenarios `NOT_RUN`. Two false
+  statements in one line: none of them was `PASS`, and the reason nothing ran
+  was that the selection resolved to nothing, not that the work was done. An
+  operator at the game machine has been told their run succeeded. Reproduced end
+  to end against a prepared evidence tree before the fix.
+
+  The trigger is ordinary: `--scenario "$SCENARIO"` with the variable unset,
+  which is how a scripted live session produces it — and the live session is
+  scripted, `docs/LIVE_TEST_PLAYBOOK.md` being generated precisely so the
+  operator can work from a list. `collect --scenario ""` had the same shape.
+
+  Root: `resolve()` drops blank tokens — a repeated flag picks up stray
+  whitespace, which is right — and then returned an empty tuple when *every*
+  token was blank. `_selection` asks `if only:`, true for `[""]`, so an explicit
+  request reached the branch meant for "nothing left to do". `resolve` now
+  refuses a selection that names nothing and lists the ids that exist; the run's
+  empty branch, now reachable only with the flag omitted, says how many
+  scenarios it means.
+
+  Fixed alongside because it is the same family and the same file: the unknown
+  scenario message said *"the twenty-two are:"* beside the list it was printing.
+  The catalogue already grew from twenty to twenty-two once and left written
+  counts behind elsewhere — the literal `20` in `reconcile_status.py`, the `/20`
+  in `progress_report.py`, both removed for this reason. It counts
+  `SCENARIO_IDS` now.
+
+  `tests/contract/test_live_test_selection.py` (15 tests) drives the real CLI
+  through `app.main` against a real evidence tree, because what was wrong was
+  the exit code and the sentence a person reads. Six cases cover both
+  subcommands against three blank forms; four hold the other direction, so that
+  refusing everything would not pass — the flag omitted still selects all 22, a
+  named id still resolves to exactly it, stray whitespace around a real id still
+  works, and an unknown id is still refused by name. Proved by planting: the
+  pre-fix `resolve` fails six, the pre-fix message fails one.
+
+  Checked in the same pass and found sound, so it is recorded rather than
+  re-examined next time: all five documented `--json` invocations parse against
+  the real parser; `live-test status` on a fresh tree does list all 22, as
+  `LOCAL_GAME_HANDOFF.md` §204 claims; and the command checker covers 127
+  invocations across 19 documents including all three local handoff files.
+
 - **The RC identity document enforced a third of its own rule** (`dev`).
   `docs/control/EVIDENCE_INDEX.md` opens its release-candidate table with the
   standard it holds itself to: *"The digest is the identity: an RC is this

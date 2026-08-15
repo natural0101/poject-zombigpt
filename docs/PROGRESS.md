@@ -41,6 +41,17 @@ The handover point between work sessions: read it first, update it last.
 > written here. What follows is the closed T001–T030 graph, kept as history,
 > and the defect record — which is the part still worth reading.
 
+> **The live-test runner reported success having run nothing.**
+> `pz-agent live-test run --scenario ""` — an unexpanded shell variable — printed
+> `nothing to run: every scenario is PASS.` and exited 0 with all twenty-two
+> `NOT_RUN`. `resolve()` dropped blank tokens and then answered an explicit
+> request with an empty selection, which `_selection`'s `if only:` could not tell
+> apart from "nothing left to do". It refuses now, and the unknown-scenario
+> message counts the catalogue instead of saying "twenty-two". This is the
+> command that produces the evidence for all 84 live tasks, so a green exit from
+> it is the most expensive false success in the tree;
+> `tests/contract/test_live_test_selection.py` holds both halves.
+
 **Legend** — `done` implementation + tests + docs complete and `scripts/check.sh`
 green · `wip` in progress · `todo` not started · `live` blocked on a step that
 physically requires a running game.

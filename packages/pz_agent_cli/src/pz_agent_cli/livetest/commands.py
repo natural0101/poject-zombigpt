@@ -424,7 +424,13 @@ def _run(
         return EXIT_FAILURE
     selected = _selection(store, only)
     if not selected:
-        printer.line("nothing to run: every scenario is PASS.")
+        # Reachable only with ``only`` unset: ``resolve`` refuses a selection
+        # that names nothing, so an explicit request can no longer arrive here
+        # and be answered with a sentence about every scenario passing. It used
+        # to — ``--scenario ""`` printed this line and exited 0 with all of them
+        # NOT_RUN — which is why the condition is spelled out rather than left
+        # as "empty means done".
+        printer.line(f"nothing to run: all {len(SCENARIO_IDS)} scenarios are PASS.")
         return EXIT_OK
     if observations is not None and len(selected) != 1:
         printer.error(

@@ -1441,7 +1441,8 @@ def by_id(scenario_id: str) -> LiveScenario:
     scenario = _BY_ID.get(scenario_id)
     if scenario is None:
         raise UnknownScenarioError(
-            f"unknown scenario {scenario_id!r}; the twenty-two are: {', '.join(SCENARIO_IDS)}"
+            f"unknown scenario {scenario_id!r}; the {len(SCENARIO_IDS)} are: "
+            + ", ".join(SCENARIO_IDS)
         )
     return scenario
 
@@ -1449,13 +1450,29 @@ def by_id(scenario_id: str) -> LiveScenario:
 def resolve(tokens: Any) -> tuple[LiveScenario, ...]:
     """Resolve a sequence of ids to scenarios, in run order.
 
-    Passing ``None`` selects all twenty-two. Ids are matched exactly: the operator
-    copies them from ``status`` output, and a fuzzy match that quietly ran a
-    neighbouring scenario would put the wrong evidence in the wrong directory.
+    Passing ``None`` selects the whole catalogue. Ids are matched exactly: the
+    operator copies them from ``status`` output, and a fuzzy match that quietly
+    ran a neighbouring scenario would put the wrong evidence in the wrong
+    directory.
+
+    **A selection that names nothing is refused, not answered with nothing.**
+    Blank tokens are dropped — a repeated flag picks up stray whitespace — but a
+    request made of only blanks is a request, and returning an empty tuple for
+    it made the caller behave as though the operator had asked for nothing at
+    all. ``pz-agent live-test run --scenario ""`` printed *"nothing to run:
+    every scenario is PASS"* and exited 0 with all twenty-two ``NOT_RUN``: two
+    false statements at once, from the command that produces the evidence for
+    every live task. ``--scenario "$SCENARIO"`` with the variable unset is
+    exactly how that happens on a real console.
     """
     if tokens is None:
         return SCENARIOS
     wanted = {str(token).strip() for token in tokens if str(token).strip()}
+    if not wanted:
+        raise UnknownScenarioError(
+            "--scenario was given but names no scenario (the value was empty or blank). "
+            "Name one of: " + ", ".join(SCENARIO_IDS)
+        )
     for token in sorted(wanted):
         by_id(token)
     return tuple(scenario for scenario in SCENARIOS if scenario.id in wanted)
