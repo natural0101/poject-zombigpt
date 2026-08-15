@@ -67,6 +67,7 @@ from ..protocol import (
     belongs_to_session,
 )
 from ..protocol.messages import MIN_LEASE_MS
+from ..protocol.refs import RefKind
 from .plan import (
     MAX_PLAN_STEPS,
     PLAN_COORDINATE_LIMIT,
@@ -75,7 +76,14 @@ from .plan import (
     Plan,
     PlanStep,
     StepFailure,
+    SuccessKind,
 )
+
+#: Success criteria whose verdict is read off the item the step names. These are
+#: the ones an *absent* item satisfies, which is why an unobserved reference
+#: under one of them is refused rather than left to the executor. See
+#: :meth:`PlanCritic._unobserved_ref`.
+_ITEM_READING_CRITERIA: Final = frozenset({SuccessKind.ITEM_CONSUMED})
 
 __all__ = [
     "DEFAULT_HOME_RADIUS",
@@ -111,6 +119,7 @@ class CriticRule(StrEnum):
     PERMISSION_DENIED = "permission_denied"
     OUTSIDE_HOME_RADIUS = "outside_home_radius"
     REPEATED_FAILURE = "repeated_failure"
+    UNOBSERVED_REF = "unobserved_ref"
 
 
 @dataclass(frozen=True, slots=True)
@@ -249,6 +258,10 @@ class PlanCritic:
         if foreign is not None:
             return foreign
 
+        unobserved = self._unobserved_ref(step, observation)
+        if unobserved is not None:
+            return unobserved
+
         risk = self._assess_risk(adapter, step, observation)
         if isinstance(risk, CriticVerdict):
             return risk
@@ -270,6 +283,55 @@ class PlanCritic:
                 step_id=step.step_id,
             )
         return risk
+
+    def _unobserved_ref(self, step: PlanStep, observation: Observation) -> CriticVerdict | None:
+        """Refuse a step whose *own success criterion* reads an item nobody reported.
+
+        AGENTS.md: the model "may emit a typed plan and nothing else … no raw
+        refs it invented". The plan type enforces most of that structurally, and
+        ``_foreign_ref`` catches a reference minted by another session. A
+        well-formed reference from *this* session naming an item that was never
+        observed was approved — measured — and what happened next is the reason
+        this gate is here rather than left to the executor.
+
+        ``SuccessKind.ITEM_CONSUMED`` asks whether the item is *gone*. An item
+        that never existed is absent, so the criterion holds, and
+        ``PlanExecutor._gate`` checks ``success.holds`` **before** it reaches
+        ``_ref_gate`` — the check that would have refused the reference with
+        ``INVALID_REF``. So the step was skipped as "already satisfied", the run
+        completed with every step accounted for, no command was ever sent, and
+        the character never ate. A hallucinated reference produced a finished
+        plan and a silent nothing.
+
+        Narrow on purpose. Only criteria that *read the item* are gated, and only
+        the item is looked up. A step may legitimately name a reference the
+        current observation does not carry — a later step acting on what an
+        earlier one will reveal — and refusing those would break plans that
+        work; the executor re-checks against a fresh observation at the step
+        itself, which is where that case belongs. What cannot be allowed is a
+        criterion whose *satisfaction is the referent's absence* riding on a
+        reference nothing ever reported.
+        """
+        if step.success.kind not in _ITEM_READING_CRITERIA:
+            return None
+        inventory = observation.inventory
+        if inventory is None:
+            # "The mod sent no inventory this tick" is not evidence that the
+            # item is missing, and the executor answers None here for the same
+            # reason. Refusing on an absent tier would refuse every plan made
+            # during a gap in observation.
+            return None
+        for ref in step.args.refs():
+            if ref.kind is RefKind.ITEM and inventory.item(ref.value) is None:
+                return _refuse(
+                    CriticRule.UNOBSERVED_REF,
+                    ReasonCode.INVALID_REF,
+                    f"{step.action.value} is judged by {step.success.kind.value}, which this "
+                    f"item's absence would satisfy — and no observation has reported it. A "
+                    f"reference nobody observed cannot be the thing a step proves it acted on.",
+                    step_id=step.step_id,
+                )
+        return None
 
     def _foreign_ref(self, step: PlanStep) -> CriticVerdict | None:
         for ref in step.args.refs():

@@ -950,6 +950,24 @@ traversal guard splitting on one separator, and a release gate trusting a
 recorded path. Each was found by asking whether the previous one's shape existed
 somewhere else, so the question is worth keeping.
 
+Asking it of the planner — where AGENTS.md says the model may emit "no raw refs
+it invented" — found a false success rather than a path defect. A well-formed
+item reference from this session naming something nobody observed was approved
+by the critic; `ITEM_CONSUMED` is satisfied by the item's *absence*, so
+`success.holds` was True and `PlanExecutor._gate` skipped the step before
+reaching `_ref_gate`, the check that would have refused it. The run ended
+COMPLETED with nothing sent and the character unfed. The critic now refuses at
+review under `UNOBSERVED_REF`, narrowly: only criteria an absence satisfies, and
+a gap in observation is still not evidence the item is gone. Two existing tests
+asserted the old behaviour — one of them named for it — and both were changed,
+which is worth naming rather than burying.
+
+Also checked and sound: the Lua IPC's "a command can never name a file" holds —
+every call site outside `Ipc.lua` passes a literal role, and `pathFor` refuses
+anything not in the `FILES` table, so the lookup table *is* the guard.
+`diagnostics/bundle.py` is clean too, by a character allowlist that excludes the
+backslash, and it never extracts.
+
 ## Deviations from the blueprint
 
 | Blueprint | Here | Why |

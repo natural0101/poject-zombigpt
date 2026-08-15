@@ -315,27 +315,42 @@ class TestRecovery:
         a sentence that blamed ``on_failure: skip`` would be describing recovery
         that did not happen. The line says a step failed; the step reports say
         which one and why.
+
+        The replacement used to be another ``consume.eat`` over beans that the
+        empty world did not carry, and it *skipped* — through the hole the critic
+        now closes, where an item nobody observed satisfies ``item_consumed``.
+        The subject here is the report's wording, so the replacement is now a
+        step that is genuinely runnable in this world instead.
         """
         first = eat_plan(eat_step("s1", on_failure=FailureMode.REPLAN_ONCE))
-        replacement = eat_plan(
-            eat_step(
-                "s1",
-                args=ConsumeArgs(item_ref=item_ref("beans"), fraction=0.5),
-                success=SuccessCriterion(kind=SuccessKind.ITEM_CONSUMED),
-            )
+        replacement = Plan(
+            goal_id=GOAL_ID,
+            summary="walk instead",
+            steps=(
+                PlanStep(
+                    step_id="s1",
+                    action=ActionName.MOVEMENT_MOVE_TO,
+                    args=MoveToArgs(x=1200, y=3400, z=0),
+                    success=SuccessCriterion(kind=SuccessKind.ADAPTER_EVIDENCE),
+                ),
+            ),
         )
         harness = Harness(
             plan=first,
             proposals=(
                 PlanProposal.proposed(first, "eat it all"),
-                PlanProposal.proposed(replacement, "eat half"),
+                PlanProposal.proposed(replacement, "walk instead"),
+            ),
+            adapters=(
+                StubAdapter(name=ActionName.CONSUME_EAT, risk=RiskClass.P2, verify_after=1),
+                StubAdapter(name=ActionName.MOVEMENT_MOVE_TO, risk=RiskClass.P2, verify_after=1),
             ),
         ).world(hungry_observation(inventory=inventory()))
 
         report = harness.run(goal=goal())
 
         assert report.outcome is PlanOutcome.COMPLETED
-        assert [step.state for step in report.steps] == [StepState.FAILED, StepState.SKIPPED]
+        assert [step.state for step in report.steps] == [StepState.FAILED, StepState.SUCCEEDED]
         assert "are done" not in report.detail
         assert "skip" not in report.detail
 
@@ -638,7 +653,28 @@ class TestASkippedStepIsOnlySkippedOnTheAdaptersOwnTerms:
         assert [step.state for step in report.steps] != [StepState.SKIPPED]
         assert report.outcome is not PlanOutcome.COMPLETED
 
-    def test_an_item_nobody_can_find_still_counts_as_consumed(self) -> None:
+    def test_an_item_nobody_can_find_is_refused_rather_than_counted_as_consumed(self) -> None:
+        """This used to assert the opposite, and asserting it was the defect.
+
+        The old name was *"an item nobody can find still counts as consumed"*,
+        and it recorded a real path: ``ITEM_CONSUMED`` asks whether the item is
+        gone, an item that never existed is gone, so ``success.holds`` was True
+        and ``PlanExecutor._gate`` skipped the step **before** reaching
+        ``_ref_gate`` — the check that would have refused the reference. The run
+        ended COMPLETED with every step accounted for, no command sent, and the
+        character unfed. A hallucinated reference produced a finished plan and a
+        silent nothing, which is exactly what AGENTS.md's "no raw refs it
+        invented" exists to prevent.
+
+        The class docstring above already said so: a criterion looser than the
+        adapter's own postcondition "is a report of a state nobody observed".
+        This test was the report.
+
+        The critic now refuses at review, and the skip this class exists to
+        protect is untouched: a plan is reviewed against the observation the
+        planner saw, where a real item is present, and the skip still fires if
+        it is consumed between review and execution.
+        """
         plan = eat_plan(
             eat_step(
                 "s1",
@@ -648,6 +684,5 @@ class TestASkippedStepIsOnlySkippedOnTheAdaptersOwnTerms:
         )
         harness = Harness(plan=plan).world(hungry_observation(inventory=inventory()))
         report = harness.run(goal=goal())
-        assert report.outcome is PlanOutcome.COMPLETED
-        assert [step.state for step in report.steps] == [StepState.SKIPPED]
+        assert report.outcome is PlanOutcome.REJECTED
         assert harness.sink.sent == []

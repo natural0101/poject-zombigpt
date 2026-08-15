@@ -25,6 +25,7 @@ from pz_agent_core.planner.plan import (
     ItemArgs,
     MoveNearArgs,
     MoveToArgs,
+    Plan,
     PlanStep,
     StepFailure,
     SuccessCriterion,
@@ -46,6 +47,7 @@ from pz_agent_core.protocol import (
     SessionMode,
 )
 from tests.fixtures import DEFAULT_SESSION, make_safety
+from tests.fixtures import make_observation as _make_observation
 from tests.fixtures.planner_worlds import (
     ALL_CAPABILITIES,
     NO_PROBES,
@@ -56,6 +58,7 @@ from tests.fixtures.planner_worlds import (
     item_ref,
     planner_observation,
 )
+from tests.fixtures.planner_worlds import item_ref as planner_item_ref
 from tests.fixtures.policy_items import (
     BACKPACK_REF,
     MAIN_REF,
@@ -432,3 +435,59 @@ def test_the_ensure_main_step_of_a_two_step_plan_is_reviewed_too() -> None:
     verdict = critic(capabilities=probes).review(plan, observation)
     assert verdict.rule is CriticRule.CAPABILITY_UNUSABLE
     assert verdict.step_id == "s1"
+
+
+class TestAnUnobservedItemReference:
+    """AGENTS.md: the model may emit a typed plan "and nothing else … no raw
+    refs it invented". The plan type enforces most of that structurally and
+    ``_foreign_ref`` catches another session's reference. A well-formed
+    reference from *this* session naming an item nobody ever reported was
+    approved — measured — and the executor then skipped the step as already
+    satisfied, because ``item_consumed`` is satisfied by absence and the skip
+    check runs before ``_ref_gate``. A hallucinated reference produced a
+    finished plan and a silent nothing.
+    """
+
+    @staticmethod
+    def _eat(ref: str) -> Plan:
+        return Plan(
+            goal_id="00000000-0000-0000-0000-000000000001",
+            summary="eat",
+            steps=(
+                PlanStep(
+                    step_id="s1",
+                    action=ActionName.CONSUME_EAT,
+                    args=ConsumeArgs(item_ref=ref),
+                    success=SuccessCriterion(kind=SuccessKind.ITEM_CONSUMED),
+                ),
+            ),
+        )
+
+    def test_an_item_the_observation_never_carried_is_refused(self) -> None:
+
+        verdict = critic().review(self._eat(planner_item_ref("999999")), planner_observation())
+
+        assert verdict.refused
+        assert verdict.rule is CriticRule.UNOBSERVED_REF
+        assert verdict.reason_code is ReasonCode.INVALID_REF
+
+    def test_an_item_the_observation_carries_is_approved(self) -> None:
+        """The control: without it a gate that refused every plan would pass above."""
+
+        verdict = critic().review(self._eat(planner_item_ref("beans")), planner_observation())
+
+        assert verdict.approved
+
+    def test_a_gap_in_observation_is_not_evidence_that_the_item_is_gone(self) -> None:
+        """No inventory tier means the mod sent none this tick, not that it vanished.
+
+        Refusing here would refuse every plan made during a gap, which is the
+        opposite mistake and the one the executor's own ref gate avoids the same
+        way.
+        """
+
+        verdict = critic().review(
+            self._eat(planner_item_ref("999999")), _make_observation(inventory=None)
+        )
+
+        assert verdict.approved

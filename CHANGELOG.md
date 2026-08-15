@@ -12,6 +12,44 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **A reference the model invented produced a finished plan and a silent
+  nothing** (`dev`). AGENTS.md: the LLM "may emit a typed plan and nothing
+  else … no raw refs it invented". The plan type enforces most of that
+  structurally, and the critic's `_foreign_ref` catches a reference minted by
+  another session. A well-formed reference from *this* session naming an item
+  nobody ever observed was approved.
+
+  Measured end to end:
+
+  1. `Plan.from_payload` accepts it — it is syntactically valid.
+  2. `PlanCritic.review` **approves** it, with the same verdict as a real one.
+  3. `SuccessKind.ITEM_CONSUMED` asks whether the item is *gone*. An item that
+     never existed is gone, so `success.holds` returns **True**.
+  4. `PlanExecutor._gate` checks `success.holds` **before** `_ref_gate` — the
+     check that would have refused it with `INVALID_REF` — so the step is
+     **skipped as already satisfied** and the gate is never reached.
+  5. The run ends `COMPLETED`, every step "accounted for", nothing sent to the
+     game, and the character never ate.
+
+  The critic now refuses at review, under a new `UNOBSERVED_REF` rule. Narrow on
+  purpose: only criteria whose *satisfaction is the referent's absence* are
+  gated, and only the item is looked up. A step may legitimately name a
+  reference the current observation does not carry — a later step acting on
+  what an earlier one reveals — and the executor re-checks against a fresh
+  observation at the step itself, which is where that belongs. A gap in
+  observation is likewise not evidence the item is gone, and is not refused.
+
+  **Two existing tests asserted the defect, and both were changed.**
+  `test_an_item_nobody_can_find_still_counts_as_consumed` said so in its name;
+  its own class docstring already warned that a criterion looser than the
+  adapter's postcondition "is a report of a state nobody observed" — that test
+  was the report. It now asserts the refusal, and records what it used to
+  assert. A recovery test used an empty inventory to make its *replacement* plan
+  skip; its subject is the report's wording, so it now replans into a step that
+  is genuinely runnable in that world. Changing a tested decision is worth
+  naming plainly: the behaviour was deliberate-looking and the measurement is
+  what changed my mind.
+
 - **The release gate accepted one statement from the document it exists to
   doubt** (`dev`). `check_release.py` opens with the rule the whole file is
   built on: *"A claim is checked against the artefact, never accepted from it."*
