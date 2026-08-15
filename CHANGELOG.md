@@ -12,6 +12,37 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **The wrapper the operator double-clicks described a catalogue two scenarios
+  short, and advertised the one flag combination that cannot work** (`dev`).
+  `packaging/windows/bat/` is the entire interface of the release: nobody on the
+  Windows machine types `pz-agent`, they run `run-live-tests.bat`. Its `rem`
+  block is their manual, and two claims in it were false.
+
+  `run-live-tests.bat` opened with *"Run the twenty live scenarios, S01 to
+  S20"* and `finalize-release.bat` with *"only when all twenty scenarios are
+  PASS"*. The catalogue holds twenty-two, `S01_INSTALL` through `S22_BUILD`.
+  The two an operator would have dropped are the craft and the placement — the
+  only irreversible ones, and the two the playbook's own preamble singles out.
+
+  The same file advertised `run-live-tests.bat --observations obs.json`.
+  Measured rather than read: that line exits 1 with *"--observations describes
+  one scenario, but 22 were selected"*. `--observations` describes one scenario
+  and must be paired with `--scenario` — and that pair is the **only** form that
+  can produce a PASS, since a run with nothing to observe records BLOCKED. So
+  the wrapper advertised the combination that never passes and omitted the one
+  that does. The playbook's hand-written "Running them" block had the same gap
+  and now leads with the working form.
+
+  The fix is not "say twenty-two". That is a fresher literal waiting to rot in a
+  file that cannot import anything, and this is the **third** stale scenario
+  count found here — after `LIVE SCENARIOS: 0/20` in the retired progress
+  reporter and "twenty-two" spelled into an error message in `scenarios.py`. The
+  wrappers now state no count at all and point at the generated playbook, and
+  `tests/contract/test_wrapper_comments_match_the_catalogue.py` holds that:
+  every scenario id a wrapper names must exist, no wrapper may state a count or
+  a range endpoint, and an `--observations` example's own tokens go through the
+  real `resolve` and must select exactly one scenario.
+
 - **Three scenarios declared that they measure latency, and none of them did**
   (`dev`). `measures_latency` is set by `S04_MOVE`, `S19_AUTONOMOUS_30_MIN` and
   `S20_AUTONOMOUS_2_HOURS`, and it was read by exactly two things, both of which

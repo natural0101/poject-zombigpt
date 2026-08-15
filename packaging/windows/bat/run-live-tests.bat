@@ -1,10 +1,16 @@
 @echo off
-rem  Run the twenty live scenarios, S01 to S20.
+rem  Run the live scenarios. docs\LIVE_TEST_PLAYBOOK.md has one section each,
+rem  in order, with the observations file every one of them needs.
 rem  Wraps: pz-agent live-test run
 rem  Useful forms:
-rem      run-live-tests.bat                            every scenario not yet PASS
+rem      run-live-tests.bat --scenario S07_NESTED_INVENTORY --observations obs.json
 rem      run-live-tests.bat --scenario S07_NESTED_INVENTORY
-rem      run-live-tests.bat --observations obs.json    hand it what you read back
+rem      run-live-tests.bat                            every scenario not yet PASS
+rem
+rem  --observations describes one scenario, so it must be given with --scenario:
+rem  without it every pending scenario is selected and the run refuses rather
+rem  than guess which one the file is about. Only that pair can produce a PASS -
+rem  a run with nothing to observe is recorded as BLOCKED.
 rem
 rem  Start the game, load the TEST save and run start.bat first. A scenario the
 rem  runner could not observe is recorded as BLOCKED, never as a pass.

@@ -823,6 +823,25 @@ invites invented numbers. Held by
 `tests/unit/test_latency_scenarios_measure_latency.py`, with the control that
 the other nineteen scenarios are not held to a rule they never declared.
 
+Then the same question asked one level out, of the file the operator actually
+double-clicks. `packaging/windows/bat/` is the entire interface of the release —
+nobody on the Windows machine types `pz-agent` — and its `rem` blocks are the
+manual. `run-live-tests.bat` opened with "Run the twenty live scenarios, S01 to
+S20" and `finalize-release.bat` with "only when all twenty scenarios are PASS",
+against a catalogue of twenty-two; the two an operator would have dropped are
+S21 and S22, the craft and the placement, the only irreversible ones. The same
+wrapper advertised `run-live-tests.bat --observations obs.json`, which exits 1
+with "--observations describes one scenario, but 22 were selected" — so it
+published the combination that never passes and omitted the only one that can,
+`--scenario` together with `--observations`. The playbook's hand-written
+"Running them" block had the same gap and now leads with the working form.
+
+The counts are gone rather than corrected: a `.bat` cannot import the catalogue,
+and this was the third stale scenario count found here. What holds it now is
+`tests/contract/test_wrapper_comments_match_the_catalogue.py` — every scenario
+id a wrapper names must exist, no wrapper may state a count or a range endpoint,
+and an `--observations` example's own tokens go through the real `resolve`.
+
 ## Deviations from the blueprint
 
 | Blueprint | Here | Why |

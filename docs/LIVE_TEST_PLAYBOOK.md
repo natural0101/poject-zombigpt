@@ -40,13 +40,21 @@ the save it is restoring.
 ## Running them
 
 ```
+run-live-tests.bat --scenario S07_NESTED_INVENTORY --observations obs.json
+run-live-tests.bat --scenario S07_NESTED_INVENTORY  one of them, with nothing to observe
 run-live-tests.bat                                  every pending scenario, in order
-run-live-tests.bat --scenario S07_NESTED_INVENTORY  one of them
 resume-live-tests.bat                               continue from the first that is not PASS
 pz-agent live-test status                           the table
 collect-evidence.bat                                gather logs into the scenario folders
 finalize-release.bat                                build the manifest, refusing if anything is missing
 ```
+
+**Only the first form can produce a PASS**, and it is the one each scenario's
+own section repeats. A run with no `--observations` has nothing to observe, so
+every scenario in it is recorded BLOCKED — useful for seeing the order, never
+for closing anything. `--observations` describes one scenario, so it must be
+given together with `--scenario`; without it the run selects every pending
+scenario and refuses rather than guess which one the file is about.
 
 ## What PASS means here
 

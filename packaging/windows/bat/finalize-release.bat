@@ -2,8 +2,8 @@
 rem  Build the evidence manifest, or name everything that is missing.
 rem  Wraps: pz-agent live-test finalize
 rem
-rem  It writes release\evidence-manifest.json only when all twenty scenarios
-rem  are PASS and every artefact they owe is present and matches the digest
+rem  It writes release\evidence-manifest.json only when every scenario in the
+rem  catalogue is PASS and every artefact they owe is present and matches the digest
 rem  recorded for it. Anything else is a refusal listing every problem at once;
 rem  nothing partial is written, because a partial manifest is exactly what a
 rem  release gate would accept by mistake.
