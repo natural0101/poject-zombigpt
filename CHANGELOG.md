@@ -12,6 +12,32 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **The section that answers "what still needs the game" named the smaller of
+  the two scenario catalogues and not the one the release stands on** (`dev`).
+  `docs/PROGRESS.md`'s *Requires a live game session* listed the 16 definitions
+  under `tests/game-smoke/`. Nothing in that was false — they exist and
+  `pz-agent smoke` drives them — but `scripts/check_release.py --release` does
+  not read them. It requires a `PASS` and hashed artefacts for every id in
+  `SCENARIO_IDS`, the 22-scenario catalogue behind `pz-agent live-test`, and the
+  section named it nowhere.
+
+  The cost is concrete because the two catalogues number their scenarios
+  independently and the numbers collide: `S14` is `backup / restore` in one and
+  `SLEEP_REST` in the other. A reader of that section got the wrong list *and* a
+  release bar three times smaller than the real one — and `docs/RELEASE.md`
+  makes that section the source for the list of steps in
+  `FINAL_IMPLEMENTATION_REPORT.md` that physically require the game.
+
+  `tests/contract/test_the_live_bar_is_named_where_it_is_owed.py` now requires
+  the section to state the live catalogue's size — taken from `SCENARIO_IDS`,
+  not typed into the test — and to name the gate that reads it. A control
+  requires the smoke catalogue to survive the fix, so one omission cannot be
+  traded for the other; planting confirms it is independent, since dropping the
+  new paragraph fails the two checks about the live catalogue and leaves the
+  control green. A fourth test fails if the two catalogues ever come to hold the
+  same number of scenarios, because the count check could no longer tell which
+  one the section had named.
+
 - **Seven more unguarded refusals, across the adapters, the CLI loop and the
   backup subsystem** (`dev`), from the same multi-agent plant sweep. Each was
   re-planted here before a test was written for it, and each new test was shown

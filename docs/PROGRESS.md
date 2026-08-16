@@ -640,7 +640,22 @@ accessors actually exist needs a live session.
 ## Requires a live game session
 
 No scenario has been run — there is no installed game in this environment. The
-sixteen definitions in `tests/game-smoke/` name what closes each one.
+sixteen definitions in `tests/game-smoke/`, driven by `pz-agent smoke`, name what
+closes each of the claims in the table below.
+
+**And they are not the catalogue the release depends on.** `pz_agent_cli.livetest`
+holds **22** scenarios, driven by `pz-agent live-test`, and *that* is what
+`scripts/check_release.py --release` reads: a `PASS` and hashed artefacts for
+every id in `SCENARIO_IDS`, so v1.0.0 cannot ship until all 22 have run against a
+real Build 42.20 session. The two number their scenarios independently and the
+numbers collide — `S14` is `backup / restore` in one and `SLEEP_REST` in the
+other — so a reader who took the table below for the whole of what the game is
+needed for was reading the wrong list *and* a bar three times smaller than the
+real one. `docs/LIVE_TEST_PLAYBOOK.md` and `docs/LOCAL_GAME_HANDOFF.md` describe
+the 22 in the order an operator runs them; this section named neither until now,
+which matters because `docs/RELEASE.md` requires
+`FINAL_IMPLEMENTATION_REPORT.md` to list exactly the steps that physically need
+the game, and this is the section such a list would be assembled from.
 
 Two non-scenario items also need a real installation:
 
