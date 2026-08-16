@@ -10,6 +10,44 @@ drift out of sync with `pz_agent_core.version`.
 
 ## [Unreleased]
 
+### Added
+
+- **A state-changing engine call can no longer enter the mod unnamed** (`dev`).
+  AGENTS.md ends its capability-honesty rule with "never simulate the effect by
+  writing stats", and nothing enforced it: `scripts/check_forbidden.py` reads
+  shipped Lua only for stub markers and dynamic loading, and
+  `docs/GAME_API_VERIFICATION.md` records what the mod calls without anything
+  comparing it against the code.
+
+  That is the one point where "success only by observation" fails silently.
+  Every engine access goes through `Toolkit.call(owner, name, ...)`, a generic
+  dispatcher with varargs that writes as readily as it reads, and
+  `ActionRuntime.verify` asks only that some `x_before` differ from its
+  `x_after` — both readings taken by the adapter itself. So an adapter that set
+  the player's endurance would return a `succeeded` ack carrying evidence of a
+  change it caused, and mutate the save.
+
+  `tests/contract/test_state_changing_calls_are_declared.py` requires every
+  state-changing name spelled in shipped Lua to carry a row in the inventory.
+  Measured over the tree, five such names exist — `setForceShove`, `setDoShove`,
+  `DoShove`, `pressAttack`, `DoAttack`, the two input-press tables in
+  `Combat.lua` — and all five are documented, so nothing correct is accused. A
+  planted `Toolkit.call(stats, "setEndurance", 1.0)` in `Rest.lua` fails the new
+  test by name and line, while `check_forbidden.py` still reports "No forbidden
+  patterns found" — which is what the hole looked like.
+
+  It deliberately does not judge whether a mutating call fabricates an effect;
+  no scanner can, and that stays a review question. It makes the act impossible
+  to perform quietly.
+
+  Audited alongside and found sound, reported rather than changed: the engine
+  method-name surface is closed — all 74 dispatcher call sites take either a
+  string literal or an entry of a module-level literal table, so no name can
+  come from a command or the model; and the inventory covers every name the code
+  reaches. That last one took three attempts at the comparison, and every
+  apparent gap (39, then 11, then 2) was the parser reading one side too
+  narrowly, not a missing row.
+
 ### Fixed
 
 - **The local gate no longer claims success without saying which tree it

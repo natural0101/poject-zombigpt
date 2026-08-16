@@ -1032,6 +1032,35 @@ test found a defect in it — `git status` collapses untracked directories, so a
 new file under `docs/control/` read as `?? docs/` and landed in the wrong
 branch; `--untracked-files=all` fixes it.
 
+The same enumeration question, asked of the capability-honesty rule, found the
+last sentence of it unguarded: "never simulate the effect by writing stats".
+That is the one point where success-only-by-observation can fail silently.
+Measured rather than argued: every engine access goes through
+`Toolkit.call(owner, name, ...)`, a generic dispatcher with varargs, and
+`ActionRuntime.observedPairs` asks only that some `x_before` differ from its
+`x_after` — both readings the adapter took. An adapter that wrote the player's
+endurance would produce a `succeeded` ack carrying evidence of its own change,
+pass every check here, and mutate the save.
+`tests/contract/test_state_changing_calls_are_declared.py` now requires each
+state-changing name in shipped Lua to carry a row in
+`GAME_API_VERIFICATION.md`. Five exist today — the two input-press tables in
+`Combat.lua` — and all five are documented. A planted
+`Toolkit.call(stats, "setEndurance", 1.0)` fails it by file and line while
+`check_forbidden.py` still says "No forbidden patterns found". The guard does
+not judge whether a mutating call fabricates an effect; no scanner can, and that
+stays a review question.
+
+Two things were checked in the same pass and found sound. The method-name
+surface is closed: all 74 dispatcher call sites take a string literal or an
+entry of a module-level literal table, so no name can arrive from a command or
+the model — the same shape as the `FILES` lookup that keeps a command from
+naming a file. And the inventory covers every engine name the code reaches;
+that took three attempts at the comparison, and each apparent gap (39, then 11,
+then 2 names) was the parser reading one side too narrowly rather than a missing
+row. The one real defect found this pass was in the guard itself: compiled with
+`re.IGNORECASE`, its pattern also relaxed the required capital and accused
+`settings` and `address`. Its own control test caught that.
+
 ## Deviations from the blueprint
 
 | Blueprint | Here | Why |

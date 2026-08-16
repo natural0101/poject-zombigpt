@@ -59,6 +59,18 @@ catches `KeyboardInterrupt` and `SystemExit`.
 used it. Unverified → `available_unverified`. Unavailable → `unsupported` with a
 reason, plus a safe fallback. Never simulate the effect by writing stats.
 
+That last sentence had no check, and it is the one place "success only by
+observation" can fail silently: every engine access goes through
+`Toolkit.call(owner, name, ...)`, which writes as readily as it reads, and
+`ActionRuntime.verify` asks only that some `x_before` differ from its `x_after`
+— both readings taken by the adapter itself. An adapter that set the player's
+endurance would hand back a `succeeded` ack carrying evidence of a change it
+caused. `tests/contract/test_state_changing_calls_are_declared.py` now requires
+every state-changing call spelled in shipped Lua to have its row in
+`docs/GAME_API_VERIFICATION.md`. It cannot judge whether a mutating call
+fabricates an effect — that stays a review question — but it makes adding one
+impossible to do quietly.
+
 **The LLM is not a privileged caller.** It may emit a typed plan and nothing
 else. No Lua, no Python, no shell, no keystrokes, no file paths, no raw refs it
 invented. All in-game text (chat, radio, books, server and mod names) is
