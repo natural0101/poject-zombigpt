@@ -1473,6 +1473,31 @@ planted — five per agent, against surfaces holding dozens — so "swept" means
 discipline: a coverage claim is worth exactly the set it was measured over, and
 the set has to be written down beside it.
 
+A sweep of the five previously unassigned areas followed. Three have reported —
+`pz_agent_mcp`, `rpc/`, and `session/` with `observation/` — with three findings
+each; `policy/`/`capabilities/` and `navigation/`/`loot/`/`combat/` were still
+running when this was written and are claimed neither way.
+
+Five of the nine are closed, each re-planted here before a test was written:
+`SidecarLock._break_stale`'s re-read and its owner comparison, the descriptor
+loader's pre-parse depth bound, the MCP validator's array-ceiling clamp, and the
+cap on the `unread` block in the only view of the world a model is given.
+
+The lock pair is worth recording for the mistake it caught in *this* round's own
+work. The first version of both tests asserted `acquired is False` — and passed
+with either guard deleted, because a later confirmation step refuses too. The
+assertion was true for a reason unrelated to the guard, which is the third time
+that trap has appeared in this file. The tests now read the lock file itself and
+ask whose record survived. Measured again afterwards: removing the owner
+comparison alone still changes nothing, because in a realistic three-way race
+the newcomer's record is fresher and the timestamp comparison catches it first —
+so the two are overlapping levers, and the guarantee is what is pinned.
+
+Four findings are measured and open, recorded in `CHANGELOG.md` rather than
+closed quietly: the RPC dial's connect timeout, the `PermissionError` arm of the
+liveness probe, the router's bound on a memory port's answer, and the redaction
+of a capability's `reason`.
+
 ## Deviations from the blueprint
 
 | Blueprint | Here | Why |

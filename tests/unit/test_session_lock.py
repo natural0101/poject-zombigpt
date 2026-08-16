@@ -222,6 +222,102 @@ def test_a_lock_that_becomes_readable_while_being_broken_is_left_alone(tmp_path:
     assert outcome.blocked_by.owner_id == "somebody-else"
 
 
+def _stored_owner(layout: IpcLayout) -> str | None:
+    """Whoever the lock file on disk actually names, read past :meth:`read`."""
+    if not layout.sidecar_lock.exists():
+        return None
+    raw = layout.sidecar_lock.read_text(encoding="utf-8")
+    if not raw.strip():
+        return ""
+    owner: str = json.loads(raw)["owner_id"]
+    return owner
+
+
+def test_a_stale_holder_that_wakes_up_mid_break_keeps_its_lock(tmp_path: Path) -> None:
+    """The time-of-check/time-of-use window, which is the whole reason for the re-read.
+
+    ``acquire`` reads the holder, judges it stale and calls ``_break_stale``. In
+    between, a holder that was merely stalled — a long GC pause, a save hitch —
+    can wake and ``refresh()``. The re-read is what notices, by comparing
+    ``refreshed_at_ms``. Deleting that comparison left the whole suite green
+    while the woken holder's lock was unlinked under it: two sidecars on one
+    exchange directory, which is the failure this file exists to prevent.
+
+    A later lever does exist and is not this one: the dispossessed holder finds
+    out on its *next* refresh, which raises. By then both have been writing.
+    """
+    layout = make_layout(tmp_path)
+    clock = FakeClock()
+    stale_at = clock.now
+    layout.sidecar_lock.write_text(json.dumps(_foreign(stale_at).to_dict()), encoding="utf-8")
+    clock.advance(60_000)
+
+    class _WakesUpMidBreak(SidecarLock):
+        calls = 0
+
+        def read(self) -> LockInfo | None:
+            _WakesUpMidBreak.calls += 1
+            # The first look is the one that judges it stale; by the second the
+            # holder has refreshed and is plainly alive.
+            return _foreign(stale_at) if _WakesUpMidBreak.calls == 1 else _foreign(clock.now)
+
+    outcome = _WakesUpMidBreak(layout, session_id=IPC_SESSION_ID, clock=clock).acquire()
+
+    assert not outcome.acquired
+    # The decisive observable is the file, not the outcome: a later confirmation
+    # step also refuses, so ``acquired is False`` holds whether or not the lock
+    # was unlinked. Measured by planting — asserting only the outcome passed
+    # with the guard deleted.
+    assert _stored_owner(layout) == "somebody-else", (
+        "the woken holder's lock was deleted under it; two sidecars now share the directory"
+    )
+
+
+def test_a_lock_a_third_process_claimed_mid_break_is_left_alone(tmp_path: Path) -> None:
+    """The three-way startup race, which the refresh comparison does not cover.
+
+    A holds a stale lock; B and C both start. B reads A's record, decides to
+    break it, and C wins the claim in between. The ``owner_id`` comparison is
+    what stops B unlinking C's brand-new lock and taking the directory — and
+    unlike the case above, the timestamps here are no help: C's record is fresh
+    and B never saw it, so only the owner tells them apart.
+
+    Measured, not assumed: deleting the ``owner_id`` comparison alone leaves
+    this test passing, because in any realistic three-way race C's record is
+    also *fresher* than A's and the ``refreshed_at_ms`` comparison above catches
+    it first. Deleting both fails this test. So the two are overlapping levers
+    rather than independent ones, and what is pinned here is the guarantee —
+    a lock this process never judged is not the lock it deletes — rather than
+    whichever comparison happens to deliver it.
+    """
+    layout = make_layout(tmp_path)
+    clock = FakeClock()
+    stale_at = clock.now
+    layout.sidecar_lock.write_text(json.dumps(_foreign(stale_at).to_dict()), encoding="utf-8")
+    clock.advance(60_000)
+    newcomer = LockInfo(
+        owner_id="a-third-sidecar",
+        pid=9999,
+        session_id=IPC_SESSION_ID,
+        acquired_at_ms=clock.now,
+        refreshed_at_ms=clock.now,
+    )
+
+    class _OvertakenMidBreak(SidecarLock):
+        calls = 0
+
+        def read(self) -> LockInfo | None:
+            _OvertakenMidBreak.calls += 1
+            return _foreign(stale_at) if _OvertakenMidBreak.calls == 1 else newcomer
+
+    outcome = _OvertakenMidBreak(layout, session_id=IPC_SESSION_ID, clock=clock).acquire()
+
+    assert not outcome.acquired
+    assert _stored_owner(layout) == "somebody-else", (
+        "the breaker unlinked a lock whose record it had never judged"
+    )
+
+
 def test_a_permanently_unreadable_lock_is_still_broken(tmp_path: Path) -> None:
     """The other half of the rule: a lock nobody can refresh must not wedge the
     directory forever."""

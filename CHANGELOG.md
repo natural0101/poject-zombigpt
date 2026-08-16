@@ -12,6 +12,48 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **Five unguarded refusals in the packages the sweep had never been given —
+  the sidecar lock, the RPC descriptor, the MCP argument validator and the
+  planner's view of the world** (`dev`). Each was re-planted here and each guard
+  shown to fail under its plant.
+
+  - **`SidecarLock._break_stale`'s re-read.** The classic time-of-check /
+    time-of-use window: `acquire` reads a holder, judges it stale, and in the
+    gap before the unlink a merely-stalled holder can wake and `refresh()`. The
+    comparison of `refreshed_at_ms` is what notices. Without it the woken
+    holder's lock is deleted under it and two sidecars share one exchange
+    directory — the failure this file exists to prevent.
+  - **The neighbouring owner comparison**, for the three-way race where a third
+    process claims the lock while a second is breaking it. Measured rather than
+    assumed: removing it alone changes nothing, because in any realistic race
+    the newcomer's record is also *fresher* and the check above catches it
+    first. Removing both fails the new test, so the guarantee is pinned rather
+    than whichever comparison delivers it.
+  - **`load_descriptor`'s pre-parse depth bound.** `json.loads` recurses once
+    per nesting level, so a file of three thousand open brackets — well inside
+    the 8 KiB byte cap — spends the interpreter's stack and raises
+    `RecursionError`, which is not the `DescriptorError` the loader promises and
+    cannot safely be caught after the fact.
+  - **The MCP validator's array ceiling clamp.** `MAX_ARRAY_ITEMS` is one of
+    three process-protecting bounds on caller-supplied input; the clamp is what
+    makes a schema's `maxItems` a narrowing rather than a raise. The existing
+    test exercised only the default branch, where no `maxItems` is declared at
+    all, so it passed with the clamp gone.
+  - **`_unread`'s cap in `compact_for_planner`.** The keys come from
+    `player.stats`, an open map the mod fills and grows. Names were
+    token-checked; how many there were was not, in the one payload a model ever
+    sees.
+
+### Measured and open
+
+- Four findings from the same sweep are **not yet guarded**: the RPC client's
+  connect timeout on the dial (the one wait that happens before the watchdog
+  exists), the `PermissionError` arm of the POSIX liveness probe, the MCP
+  router's `islice` bound on a memory port's answer, and the redaction of a
+  capability's `reason` in the `pz://capabilities` resource. Two areas of that
+  sweep — `policy/` with `capabilities/`, and `navigation/`/`loot/`/`combat/` —
+  were still running when this was written.
+
 - **A coverage claim that named nine areas and read as though it named the
   tree** (`dev`). `docs/PROGRESS.md` recorded the refusal-plant sweep as having
   covered "every area of shipped code". It had covered every area it was

@@ -587,3 +587,29 @@ class TestTheOtherAnswersSurvive:
 
         assert not isinstance(caught.value, OversizeDescriptor)
         assert "cannot be read" in str(caught.value)
+
+    def test_a_deeply_nested_file_is_refused_by_name_not_by_recursion_error(
+        self, state: Path
+    ) -> None:
+        """Depth is measured on the bytes, before ``json.loads`` recurses on them.
+
+        ``json.loads`` recurses once per nesting level, so a file of a few
+        thousand open brackets — comfortably inside the 8 KiB byte cap — spends
+        the interpreter's stack and raises ``RecursionError``. That is not a
+        ``DescriptorError``, so it escapes the loader's stated contract, and
+        catching it afterwards is not safe: the stack is already gone when it
+        fires. Deleting the pre-parse depth check left the whole suite green.
+
+        Both halves are asserted, because the point is not that it fails but
+        that it fails *as this module's own error*.
+        """
+        issue_token(runtime_dir(state))
+        _write_raw(state, b"[" * 3_000 + b"]" * 3_000)
+
+        assert descriptor_path(state).stat().st_size < MAX_DESCRIPTOR_BYTES
+
+        with pytest.raises(DescriptorError) as caught:
+            load_descriptor(state)
+
+        assert not isinstance(caught.value, RecursionError)
+        assert "nests deeper" in str(caught.value)

@@ -13,6 +13,7 @@ from pz_agent_core.observation.compact import (
     MAX_MOODLES,
     MAX_OBJECTS,
     MAX_TEXT_CHARS,
+    MAX_UNREAD,
     MAX_ZOMBIES,
     REDACTED_PATH,
     UNTRUSTED_TEXT_KEY,
@@ -357,6 +358,29 @@ def test_every_reading_the_mod_could_not_take_reaches_the_planner() -> None:
     assert unread["containers_truncated"] is True
     assert unread["items_omitted"] == 12
     assert "hunger" not in unread, "an ordinary stat is not a limit declaration"
+
+
+def test_the_unread_block_is_capped_like_every_other_open_map() -> None:
+    """``player.stats`` is the mod's own vocabulary and it grows; this bounds it.
+
+    ``_unread`` is part of the only view of the world a model is ever given, and
+    its keys come from an open map the mod fills. Names are token-checked, which
+    bounds each key's shape but not how many there are. The slice is the count,
+    and deleting it left the whole suite green — the block would then be as long
+    as the mod cared to make it, in the one payload that goes to a planner.
+
+    The test above declares three limits and so never reaches the cap; that is
+    why it could not see the slice go.
+    """
+    view = _compact(
+        player=make_player(
+            stats={f"observe.limit_{index:03d}": True for index in range(MAX_UNREAD * 3)}
+        )
+    )
+
+    assert len(view["unread"]) == MAX_UNREAD, (
+        f"the unread block carried {len(view['unread'])} entries; the cap is {MAX_UNREAD}"
+    )
 
 
 def test_the_container_list_is_capped_and_says_so() -> None:

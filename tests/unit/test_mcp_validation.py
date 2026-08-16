@@ -153,6 +153,33 @@ def test_array_item_ceiling_applies_even_when_the_schema_forgot_one() -> None:
     assert f"at most {MAX_ARRAY_ITEMS}" in caught.value.message
 
 
+def test_a_schema_cannot_raise_the_ceiling_above_the_module_s_own() -> None:
+    """The ceiling is the module's, and a schema may only lower it.
+
+    ``MAX_ARRAY_ITEMS`` is one of the three process-protecting bounds on
+    caller-supplied input, applied at the one place tool arguments are checked.
+    The clamp is what makes a schema's ``maxItems`` a *narrowing*: without it a
+    schema — ours today, a generated or edited one tomorrow — sets the ceiling
+    itself, and nothing downstream re-checks array lengths.
+
+    The test above passes either way, because it exercises the *default* branch
+    where the schema declares no ``maxItems`` at all. This one declares a larger
+    one, which is the only case the clamp exists for, and deleting the clamp
+    left the whole suite green.
+    """
+    generous = MAX_ARRAY_ITEMS * 10
+    schema = object_schema(
+        {"types": {"type": "array", "items": {"type": "string"}, "maxItems": generous}}
+    )
+
+    with pytest.raises(ToolFailure) as caught:
+        validate_arguments(schema, {"types": ["a"] * (MAX_ARRAY_ITEMS + 1)})
+
+    assert f"at most {MAX_ARRAY_ITEMS}" in caught.value.message, (
+        "a schema was allowed to raise the ceiling this module sets on every caller"
+    )
+
+
 def test_array_elements_are_validated_and_the_path_names_the_index() -> None:
     schema = object_schema({"types": {"type": "array", "items": {"type": "string"}}})
 
