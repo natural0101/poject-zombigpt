@@ -1088,6 +1088,33 @@ capability-honesty rule forbids. And every `policy/*.py` module has shipped
 importers, so none of the deterministic selectors is a subsystem nobody
 connected.
 
+The architectural line in the repository map — `pz_agent_cli` is the only
+package allowed to `print` — turned out to be load-bearing in a way the map does
+not say. An MCP client parses `pz-agent-mcp`'s stdout as JSON-RPC, and
+`pz_agent_mcp/__main__.py` imports `pz_agent_cli.context` on purpose, so the
+state directory is derived once rather than by two copies that drift. Measured:
+that import loads 36 CLI modules into the serving process, `output` and `status`
+among them — every `print` in the repository. `redirect_stdout` there wraps only
+argparse; the serving path writes to the real descriptor, as it must. Nothing on
+the crossed path prints today (zero bytes, measured in a real child process) and
+nothing but discipline kept it so. `check_forbidden.py` now refuses a terminal
+write outside the CLI, and
+`tests/contract/test_mcp_stdout_belongs_to_the_protocol.py` crosses the boundary
+in a subprocess and reads the pipe. Planting shows they are complementary: the
+static rule catches a `print` in core, mcp or voice and a `sys.stdout.write` in
+the entry point; a `print` added to `pz_agent_cli.context` is invisible to it and
+fails the subprocess test.
+
+Checked in the same pass and found sound, reported rather than changed. The rest
+of "bounded memory" holds after last iteration's leak: the reflex event list and
+the state-problem list are `deque`s with `maxlen`, `_fresh_problems` is emptied
+every tick, the memory store has hard ceilings with eviction and a refusal past
+`max_preferences`, the sequence tracker is keyed by a four-value enum, and
+journal rotation deletes the oldest generation rather than accumulating on disk.
+The scan that found these also produced 35 candidates, most of them false: a
+container evicted through a helper that takes it as an argument does not look
+shrunk from the call site.
+
 ## Deviations from the blueprint
 
 | Blueprint | Here | Why |

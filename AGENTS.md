@@ -17,7 +17,7 @@ file, this file wins.
 | --- | --- | --- |
 | `packages/pz_agent_core/` | Domain types, policy, action engine | **Zero third-party runtime dependencies.** No MCP SDK, no LLM SDK, no UI. |
 | `packages/pz_agent_mcp/` | stdio MCP server | Thin adapter. Translates and serialises; never re-implements policy. |
-| `packages/pz_agent_cli/` | `pz-agent` command | The only package allowed to `print`. |
+| `packages/pz_agent_cli/` | `pz-agent` command | The only package allowed to `print` — and the boundary does not enforce itself; see below. |
 | `packages/pz_agent_voice/` | `VoiceAdapter` protocol, TeamON plugin, fake | Core must not import this. |
 | `pz-mod/` | Lua for Build 42 | Pure functions extracted so they are testable outside the game. |
 | `schemas/` | JSON Schema, the wire source of truth | Changing one is a protocol change; update `version.py` and the sync test. |
@@ -38,6 +38,24 @@ check into `__post_init__` looks like hardening and is not: the ack is dropped
 as unusable and the answer degrades to `ACTION_TIMEOUT`, which says the mod went
 quiet when in fact it lied. `tests/unit/test_a_success_claim_without_evidence_is_named.py`
 holds that line.
+
+**stdout belongs to the protocol.** An MCP client launches `pz-agent-mcp` and
+parses its stdout as JSON-RPC, so a stray line there is a parse error the client
+reports as this server being broken. "The CLI is the only package allowed to
+print" is what prevents it, and package boundaries do *not* enforce that on
+their own: `pz_agent_mcp/__main__.py` imports `pz_agent_cli.context` on purpose
+— one derivation of the state directory rather than two that drift — and that
+import loads 36 CLI modules into the serving process, `output` and `status`
+among them. Measured, not assumed. So the printing half of the CLI is already
+inside the process whose stdout is the protocol.
+
+Two checks, deliberately complementary. `scripts/check_forbidden.py` refuses
+`print` and `<stream>.write` outside `pz_agent_cli` — a write to a stream the
+*caller* named is the sanctioned pattern and is untouched.
+`tests/contract/test_mcp_stdout_belongs_to_the_protocol.py` crosses the boundary
+in a real child process and reads the pipe a client would parse, which is the
+only way to catch a print inside the CLI on that path — where the static rule
+cannot help, because printing is what the CLI is for.
 
 **No stubs on the critical path.** No `TODO`/`FIXME`, no bare `pass` body, no
 `NotImplementedError`, no `except:` without an exception type, no fabricated

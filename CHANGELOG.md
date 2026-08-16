@@ -10,6 +10,38 @@ drift out of sync with `pz_agent_core.version`.
 
 ## [Unreleased]
 
+### Added
+
+- **A write to the terminal outside the CLI is now refused, and the MCP
+  process's stdout is checked to stay clean across the one boundary it crosses**
+  (`dev`). An MCP client launches `pz-agent-mcp` and parses its stdout as
+  JSON-RPC, so a stray line is a parse error the client reports as this server
+  being broken. The repository map's one line — `pz_agent_cli` is the only
+  package allowed to `print` — reads as though package boundaries enforce it.
+  They do not.
+
+  Measured: `pz_agent_mcp/__main__.py` imports `pz_agent_cli.context`
+  deliberately, so the state directory is derived once instead of by two copies
+  that drift, and that import loads 36 CLI modules into the serving process —
+  including `pz_agent_cli.output` and `pz_agent_cli.status`, which hold every
+  `print` in the repository. `redirect_stdout` in that module wraps only
+  argparse; the serving path writes to the real descriptor, as it must. Nothing
+  on the crossed path prints today — the import and both calls put zero bytes on
+  stdout in a real child process — and nothing but discipline kept it that way.
+
+  Two checks, complementary by design. `scripts/check_forbidden.py` gains a
+  `terminal-write` rule refusing `print` and `<stream>.write` outside the CLI;
+  writing to a stream the *caller* named is the sanctioned pattern in
+  `__main__.py` and is untouched. `tests/contract/test_mcp_stdout_belongs_to_the_protocol.py`
+  crosses the boundary in a real subprocess and reads the pipe a client would
+  parse.
+
+  Each catches what the other cannot, shown by planting: a `print` in
+  `pz_agent_core`, in `pz_agent_mcp`, in `pz_agent_voice`, and a
+  `sys.stdout.write` in the entry point are all caught by the static rule; a
+  `print` added to `pz_agent_cli.context` is invisible to it — printing is what
+  the CLI is for — and fails the subprocess test instead.
+
 ### Fixed
 
 - **The command sink's progress table grew without bound for the life of a

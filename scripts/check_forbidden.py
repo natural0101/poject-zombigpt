@@ -95,6 +95,27 @@ SECRET_PATTERNS = (
 #: ``TODO`` in prose is fine; ``TODO`` in shipped code is a stub marker.
 STUB_MARKER = re.compile(r"\b(TODO|FIXME|XXX|HACK)\b")
 
+#: The one package the repository map lets write to the terminal. Everything
+#: else must stay silent, and in one process that is not a style rule: an MCP
+#: client launches ``pz-agent-mcp`` and parses its **stdout** as JSON-RPC, so a
+#: single stray line is a parse error the client reports as this server being
+#: broken.
+#:
+#: Package boundaries do not enforce it on their own, which is why this check
+#: exists. ``pz_agent_mcp/__main__.py`` imports ``pz_agent_cli.context`` on
+#: purpose — one derivation of the state directory rather than two that drift —
+#: and that import pulls in 36 CLI modules, ``pz_agent_cli.output`` and
+#: ``pz_agent_cli.status`` among them. Measured: the printing half of the CLI is
+#: loaded inside the process whose stdout is the protocol. Nothing on that path
+#: prints today; nothing but this stops the next line from being added.
+PRINTING_PACKAGE = "pz_agent_cli"
+
+#: Attributes of ``sys`` (or any alias) that a write would go through. Checked
+#: as well as ``print`` because ``sys.stdout.write`` reaches the same stream by
+#: a different spelling, and a rule that names only one of them invites the
+#: other.
+WRITABLE_STREAMS = {"stdout", "stderr"}
+
 LUA_STUB = re.compile(r"--\s*(TODO|FIXME|XXX)\b", re.IGNORECASE)
 
 
@@ -181,6 +202,46 @@ def _abstract_decorated(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     return False
 
 
+def _writes_to_the_terminal(node: ast.Call) -> str | None:
+    """What this call would put on a stream, if anything.
+
+    ``print(...)`` and ``<anything>.stdout.write(...)``. The receiver is not
+    required to be ``sys``: ``from sys import stdout`` is not what this project
+    writes, but an alias would slip a rule that insisted on the name, and the
+    attribute chain is what actually identifies the stream.
+    """
+    func = node.func
+    if isinstance(func, ast.Name) and func.id == "print":
+        return "print()"
+    if (
+        isinstance(func, ast.Attribute)
+        and func.attr in {"write", "writelines"}
+        and isinstance(func.value, ast.Attribute)
+        and func.value.attr in WRITABLE_STREAMS
+    ):
+        return f"{func.value.attr}.{func.attr}()"
+    return None
+
+
+def _terminal_writes(path: Path, node: ast.Call) -> list[Finding]:
+    """Refuse a write to the terminal outside the one package allowed one."""
+    if f"/{PRINTING_PACKAGE}/" in path.as_posix():
+        return []
+    what = _writes_to_the_terminal(node)
+    if what is None:
+        return []
+    return [
+        Finding(
+            path,
+            node.lineno,
+            "terminal-write",
+            f"{what} outside {PRINTING_PACKAGE}; an MCP client parses this process's "
+            "stdout as JSON-RPC, and the CLI's printing modules are already loaded "
+            "in it — write to a stream the caller named instead",
+        )
+    ]
+
+
 def check_python(path: Path) -> list[Finding]:
     findings: list[Finding] = []
     text = path.read_text(encoding="utf-8")
@@ -229,6 +290,7 @@ def check_python(path: Path) -> list[Finding]:
             if isinstance(func, ast.Name) and func.id in BANNED_CALLS:
                 detail = f"{func.id}(): {BANNED_CALLS[func.id]}"
                 findings.append(Finding(path, node.lineno, "banned-call", detail))
+            findings.extend(_terminal_writes(path, node))
             if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
                 key = (func.value.id, func.attr)
                 if key in BANNED_ATTR_CALLS:
