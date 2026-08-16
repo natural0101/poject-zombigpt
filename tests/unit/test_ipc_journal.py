@@ -9,15 +9,18 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from pz_agent_core.ipc.atomic import IpcPathError
 from pz_agent_core.ipc.journal import (
     MAX_LINE_BYTES,
+    MAX_READ_BYTES,
     JournalError,
     JournalReader,
     JournalWriter,
+    probe_header,
     probe_truncation,
     read_header,
     rotated_path,
@@ -142,6 +145,101 @@ def test_unterminated_oversized_line_is_skipped_rather_than_awaited(tmp_path: Pa
     assert read.records == ()
     assert "unterminated line" in read.diagnostics[0].detail
     assert reader.offset == MAX_LINE_BYTES + 10 + read.diagnostics[0].offset
+
+
+def test_an_oversized_header_is_a_diagnostic_not_a_quiet_empty_poll(tmp_path: Path) -> None:
+    """A stream that cannot be read must never look like a stream with nothing in it.
+
+    ``probe_header``'s second tuple element is this module's honesty contract:
+    ``None`` means "nothing to report, poll again", a string means "this file
+    cannot be used at all". A first line that is complete but longer than
+    ``MAX_LINE_BYTES`` is permanently unreadable — every record behind it is
+    unattributable to a generation — so it takes the string.
+
+    Deleting that branch left the full suite green (9471 passed). The reader
+    then answers zero records and zero diagnostics for ever, and the sidecar
+    polls a dead ack stream while reporting a quiet, healthy exchange: the
+    FALSE SUCCESS family, on the path that carries the game's answers.
+    """
+    layout = make_layout(tmp_path)
+    layout.command_ack.write_bytes(b"x" * (MAX_LINE_BYTES + 1) + b"\n")
+
+    header, problem = probe_header(layout.command_ack)
+
+    assert header is None
+    assert problem is not None, (
+        "an unreadable journal was reported as nothing-to-report, so a reader over "
+        "it returns an empty healthy poll for a stream it cannot read at all"
+    )
+    assert str(MAX_LINE_BYTES) in problem
+
+    # And the reader carries it: the diagnostic is what a caller ever sees.
+    read = JournalReader(layout, layout.command_ack).read()
+    assert read.records == ()
+    assert read.diagnostics, "the reader swallowed the problem probe_header reported"
+
+
+def test_one_poll_reads_a_bounded_number_of_bytes(tmp_path: Path) -> None:
+    """The only bound on how much of a journal one poll pulls into memory.
+
+    These files are written by the mod, so their size is not this side's to
+    assume, and ``_consume`` runs per segment per poll — including on rotated
+    generations, where the *record* budget is deliberately ``None``. Removing
+    ``MAX_READ_BYTES`` from the read call left the suite green (9471 passed)
+    while a single poll would slurp a whole generation into one ``bytes`` and
+    then copy it again with ``splitlines``. AGENTS.md: anything unbounded is a bug.
+
+    Measured through the file handle rather than through memory: the assertion
+    is on the largest single read the poll performed, which is the property the
+    bound actually names.
+    """
+    layout = make_layout(tmp_path)
+    JournalWriter(layout, layout.command_ack).close()  # the header, and nothing else
+    # Appended straight to the file rather than through the writer: the writer
+    # rotates at its own max_bytes, so it can never produce the oversized
+    # segment this bound exists for. The mod's writer is not this one.
+    line = json.dumps({"blob": "x" * 4096}) + "\n"
+    with layout.command_ack.open("a", encoding="utf-8") as handle:
+        while layout.command_ack.stat().st_size <= MAX_READ_BYTES * 2:
+            handle.write(line * 64)
+            handle.flush()
+
+    largest = 0
+    real_open: Any = Path.open
+
+    class _Watched:
+        """Passes everything through, and remembers the largest read."""
+
+        def __init__(self, handle: Any) -> None:
+            self._handle = handle
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._handle, name)
+
+        def read(self, size: int = -1) -> bytes:
+            nonlocal largest
+            data: bytes = self._handle.read(size)
+            largest = max(largest, len(data))
+            return data
+
+        def __enter__(self) -> _Watched:
+            self._handle.__enter__()
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            self._handle.__exit__(*exc)
+
+    def watched_open(self: Path, *args: Any, **kwargs: Any) -> Any:
+        return _Watched(real_open(self, *args, **kwargs))
+
+    reader = JournalReader(layout, layout.command_ack)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(Path, "open", watched_open)
+        reader.read()
+
+    assert 0 < largest <= MAX_READ_BYTES, (
+        f"one poll pulled {largest} bytes into memory; the cap is {MAX_READ_BYTES}"
+    )
 
 
 def test_byte_offset_can_be_persisted_and_resumed(tmp_path: Path) -> None:

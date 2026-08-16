@@ -15,6 +15,7 @@ pass against a client the shipped code could never use.
 
 from __future__ import annotations
 
+import http.client
 import json
 import socket
 import threading
@@ -105,7 +106,7 @@ class Reply:
     body: bytes = b"{}"
     #: What to put in ``Content-Length``. None omits the header entirely, which
     #: is how a chunked or close-delimited body reaches the ceiling check.
-    announce: int | None = -1
+    announce: int | str | None = -1
     delay_s: float = 0.0
 
 
@@ -253,6 +254,94 @@ def test_an_announced_length_over_the_ceiling_is_refused_before_reading(
         transport.send(HttpRequest(url=url_of(server)))
 
     assert caught.value.announced == 9_000_000
+
+
+def test_the_body_is_read_bounded_not_buffered_whole_then_measured(server: _Server) -> None:
+    """The ceiling has to bound the *read*, not be checked after it.
+
+    ``test_a_body_over_the_ceiling_is_refused`` above passes either way:
+    replacing ``response.read(limit + 1)`` with ``response.read()`` leaves the
+    ``len(body) > limit`` check two lines below firing exactly as before, so the
+    refusal still happens — after the whole body is on the heap. That is the
+    thing the bound exists to prevent, and the suite could not see it going away
+    (9471 passed under the plant).
+
+    Asserted on the size passed to the read, because that is what the bound
+    names. The peer decides how much it sends and the peer is untrusted.
+    """
+    server.reply = Reply(body=b"x" * 5_000, announce=None)
+    limit = 1_000
+    transport = StdlibHttpTransport(TransportConfig(max_response_bytes=limit))
+    sizes: list[int | None] = []
+    real_read = http.client.HTTPResponse.read
+
+    def recording_read(self: http.client.HTTPResponse, amt: int | None = None) -> bytes:
+        sizes.append(amt)
+        return real_read(self, amt)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(http.client.HTTPResponse, "read", recording_read)
+        with pytest.raises(ResponseTooLarge):
+            transport.send(HttpRequest(url=url_of(server)))
+
+    assert sizes, "the body was never read through HTTPResponse.read"
+    assert all(size is not None and size <= limit + 1 for size in sizes), (
+        f"a read asked for {sizes}; an unbounded read buffers whatever the peer sends "
+        "before the ceiling is ever consulted"
+    )
+
+
+def test_a_malformed_content_length_is_ignored_rather_than_parsed(server: _Server) -> None:
+    """The peer does not get to decide what kind of failure this process has.
+
+    ``_announced_length`` answers ``None`` for a header that is missing *or*
+    unparseable, and the shape check is the second half. Without it, a peer
+    sending ``Content-Length: banana`` turns into a bare ``ValueError`` — which
+    ``_exchange`` does not catch (it handles ``TimeoutError``, ``OSError`` and
+    ``HTTPException``), so it escapes ``send``, escapes both providers, which
+    catch only ``TransportError``, and surfaces as a traceback instead of a
+    named transport failure. The suite did not notice: nothing sent a malformed
+    header (9471 passed under the plant).
+    """
+    server.reply = Reply(body=b'{"ok": true}', announce="banana")
+    transport = StdlibHttpTransport(TransportConfig(max_response_bytes=1_000))
+
+    response = transport.send(HttpRequest(url=url_of(server)))
+
+    assert response.status == 200
+    assert response.body == b'{"ok": true}'
+
+
+def test_the_live_socket_carries_the_read_timeout_not_the_connect_one() -> None:
+    """The two timeouts answer different questions, and only this line separates them.
+
+    ``http.client`` builds the connection with ``connect_timeout_s``, and the
+    re-arm afterwards is what puts ``read_timeout_s`` on the live socket.
+    Deleting it leaves every read running under the connect budget — with the
+    shipped defaults, 5s instead of 60s, which aborts exactly the case the 60s
+    exists for: a local 7B model generating a plan. The suite stayed green
+    (9471 passed) because the timeout test sets both numbers small.
+
+    Reaches for ``_connect`` on purpose: the socket's own timeout is the fact,
+    and observing it through a request would mean measuring wall-clock, which
+    is how a test becomes flaky on a loaded machine.
+    """
+    connect_s, read_s = 2.5, 7.5
+    transport = StdlibHttpTransport(
+        TransportConfig(connect_timeout_s=connect_s, read_timeout_s=read_s)
+    )
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        endpoint = parse_endpoint(f"http://127.0.0.1:{listener.getsockname()[1]}/v1")
+        connection = transport._connect(endpoint)
+        try:
+            assert connection.sock is not None
+            assert connection.sock.gettimeout() == read_s, (
+                "the live socket kept the connect budget, so read_timeout_s governs nothing"
+            )
+        finally:
+            connection.close()
 
 
 def test_a_body_exactly_at_the_ceiling_is_kept(server: _Server) -> None:

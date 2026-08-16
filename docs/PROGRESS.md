@@ -1406,6 +1406,38 @@ finding it made afterwards. A checker that accuses correct work is argued with
 once and then switched off — this repository has written that sentence about its
 own gates twice, and this time it was a unit test doing the accusing.
 
+The sweep then covered the five areas it had not reached — `goals/`,
+`planner/`, `ipc/`, `memory/` and the voice surface — with one instruction added
+after the last round's mistakes: before calling a refusal unguarded, look for a
+*second lever* that delivers the same protection, and say so. That instruction
+paid for itself. `memory/` came back sound (five plants, five caught), and of
+the twelve findings the other four returned, the reports themselves narrowed
+three by naming the lever that covers them.
+
+Nine are closed here, each re-planted in the main tree before a test was written
+and each guard shown to fail under its own plant: the journal's oversized-header
+diagnostic (a stream that cannot be read was reported as a stream with nothing
+in it), the per-poll read bound, the queue's uncommitted-tail damage signal —
+which is half of the live Build 42.20.2 second-producer finding — both
+cross-record checks in `GoalQueue.restore`, the stored terminal cap, and the
+transport's response ceiling, read-timeout re-arm and `Content-Length` shape
+check.
+
+Two of those deserve recording for *why* the suite could not see them. The
+transport's byte ceiling had a test that passed with the bound deleted, because
+the size check two lines below it still fires — after the whole body is on the
+heap, which is the thing the bound exists to prevent. And the read timeout is
+only distinct from the connect timeout because the live socket is re-armed; the
+existing timeout test sets both numbers small, so it could not tell them apart.
+Neither was a missing test. Both were tests that asserted the outcome and not
+the bound.
+
+Three findings in `pz_agent_cli/voice.py` are measured and **open**, recorded in
+`CHANGELOG.md` under *Measured and open* rather than closed quietly: the panic
+latch's post-write size check, `_log_safely`, and the redaction of the
+companion's closing sentence on the printed path. The sweep's own lever analysis
+narrows all three, which is why they are stated as open rather than as holes.
+
 ## Deviations from the blueprint
 
 | Blueprint | Here | Why |

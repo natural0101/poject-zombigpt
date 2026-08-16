@@ -17,6 +17,7 @@ file arrives in production — from outside the writer.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +36,7 @@ from pz_agent_core.goals import (
     GoalQueue,
     GoalRecord,
     GoalRequest,
+    GoalSnapshot,
     GoalState,
     GoalStore,
     GoalStoreError,
@@ -178,6 +180,35 @@ class TestRoundTrip:
 
         assert len(document["terminal"]) == MAX_PERSISTED_TERMINAL
         assert document["terminal"][-1]["goal_id"] == newest.goal_id
+
+    def test_a_stored_channel_over_that_cap_is_refused_on_the_way_back_in(self) -> None:
+        """The reader half of the same cap, so the two cannot drift apart.
+
+        The writer truncates to :data:`MAX_PERSISTED_TERMINAL` — the test above
+        — and this refusal is what stops a document that was not written by
+        this build from validating an arbitrary number of records through the
+        full ``GoalRecord`` path. The cap exists so restart history "does not
+        compound across restarts", and only the pair enforces that.
+
+        Honest about its size: ``GoalStore.load`` also refuses the *file* at
+        ``MAX_GOAL_FILE_BYTES``, so the store path stays bounded either way —
+        at roughly thirty times this cap, and only for callers who come through
+        the store. ``snapshot_from_document`` is public and this is its only
+        per-list bound. Deleting it left the suite green (9471 passed).
+        """
+        clock = FakeClock(1_000)
+        queue = GoalQueue(clock=clock, max_remembered=MAX_PERSISTED_TERMINAL + 8)
+        for index in range(MAX_PERSISTED_TERMINAL + 1):
+            record = submitted(queue, eat(f"over-cap-{index}"))
+            activated(queue)
+            queue.fail(record.goal_id, ReasonCode.PATH_NOT_FOUND, f"loss {index}")
+        document = snapshot_to_document(queue.snapshot())
+        # Written by hand past the cap, which is exactly how such a file
+        # arrives: from outside this writer.
+        document["terminal"] = [dict(entry) for entry in document["terminal"]] * 2
+
+        with pytest.raises(GoalDocumentError, match="over the cap"):
+            snapshot_from_document(document)
 
 
 # --------------------------------------------------------------------------
@@ -329,6 +360,65 @@ class TestRestore:
         with pytest.raises(ValueError, match="refusing to guess"):
             narrow.restore(snapshot, now_ms=clock.now)
         assert narrow.snapshot().records == (), "a refused restore leaves the queue fresh"
+
+    def test_restore_refuses_a_snapshot_that_names_one_goal_id_twice(self) -> None:
+        """Nothing is dropped quietly at the restart boundary.
+
+        ``goals.json`` is on the user's disk and this module treats it as
+        untrusted. A file naming one id twice restores as a channel one goal
+        short: the earlier record — perhaps the user's PENDING goal, perhaps an
+        ACTIVE one owed back as ``FAILED``/``SESSION_TERMINATED`` so a polling
+        client learns the sidecar died under it — is overwritten and never
+        mentioned, and ``restore``'s ``lost`` tuple is the caller's only account
+        of what the restart cost.
+
+        Nothing else on the load path compares records to each other:
+        ``snapshot_from_document`` validates each independently and
+        ``GoalRecord.__post_init__`` checks an id's shape, not its uniqueness.
+        Deleting this guard left the whole suite green (9471 passed).
+        """
+        clock = FakeClock(1_000)
+        queue = GoalQueue(clock=clock)
+        first = submitted(queue, eat("twice-a"))
+        submitted(queue, eat("twice-b"))
+        records = queue.snapshot().records
+        collided = GoalSnapshot(
+            records=(records[0], replace(records[1], goal_id=first.goal_id)),
+            revision=0,
+        )
+
+        fresh = GoalQueue(clock=clock)
+        with pytest.raises(ValueError, match="names one goal id twice"):
+            fresh.restore(collided, now_ms=clock.now)
+        assert fresh.snapshot().records == ()
+
+    def test_restore_refuses_a_snapshot_that_reuses_one_idempotency_digest(self) -> None:
+        """The digest index is the queue's memory of what it has already done.
+
+        It is what makes a retried submission resolve to the goal it already
+        created instead of starting a second one — the module's own "a second
+        goal that would eat a second sandwich". A snapshot naming one digest
+        twice would restore with the last record winning the index, so a client
+        retrying the first goal's key is answered with the second goal.
+
+        Its sibling two lines above catches duplicate *ids*; a file can reuse a
+        digest under two perfectly distinct ids, so neither covers the other.
+        Planted separately, and each left the suite green on its own.
+        """
+        clock = FakeClock(1_000)
+        queue = GoalQueue(clock=clock)
+        submitted(queue, eat("digest-a"))
+        submitted(queue, eat("digest-b"))
+        records = queue.snapshot().records
+        collided = GoalSnapshot(
+            records=(records[0], replace(records[1], key_digest=records[0].key_digest)),
+            revision=0,
+        )
+
+        fresh = GoalQueue(clock=clock)
+        with pytest.raises(ValueError, match="reuses one idempotency digest"):
+            fresh.restore(collided, now_ms=clock.now)
+        assert fresh.snapshot().records == ()
 
 
 # --------------------------------------------------------------------------

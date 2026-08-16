@@ -12,6 +12,55 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **Nine more unguarded refusals — the IPC journal and queue, the goal channel's
+  restore, and the planner's HTTP transport** (`dev`), from a five-area plant
+  sweep. Each was re-planted here and each new test shown to fail under its own
+  plant. `memory/` was swept the same way and is reported **sound** — five
+  plants, all five caught.
+
+  *IPC.* `probe_header` reported an oversized header as "nothing to report"
+  rather than as a problem, so a permanently unreadable journal would poll
+  empty and healthy for ever — FALSE SUCCESS on the path carrying the game's
+  answers. `_consume`'s `MAX_READ_BYTES` was the only bound on how much of a
+  journal one poll pulls into memory, and it runs on rotated segments where the
+  record budget is deliberately `None`. And `_highest_committed_seq`'s
+  `pending_bytes > 0` is the signal for exactly how a process dies — mid-write,
+  bytes after the header with no committed newline; without it recovery answers
+  "nothing here", the restarted queue seeds the command stream at zero, and the
+  sidecar becomes a second producer of numbers the mod accepts because it dedups
+  by `command_id` rather than `seq`. That is the live Build 42.20.2 finding,
+  half of it unguarded.
+
+  *Goals.* `GoalQueue.restore` refuses a snapshot naming one goal id twice and
+  one reusing an idempotency digest; nothing else on the load path compares
+  records to each other. Without the first, a restore silently drops a goal —
+  perhaps the pending one, perhaps an active one owed back as
+  `SESSION_TERMINATED` — and `lost` is the caller's only account of the restart.
+  Without the second, a retried submission resolves to the wrong goal. Also
+  `snapshot_from_document`'s cap on the stored terminal history, which is the
+  reader half of the writer's truncation.
+
+  *Planner transport.* The body ceiling bounded the *read* — and the existing
+  test passed either way, because the `len(body) > limit` check two lines below
+  still fires once the whole body is on the heap. The read timeout is separate
+  from the connect timeout only because the live socket is re-armed after
+  connecting; with that line gone, the shipped 60s read budget silently becomes
+  5s, aborting exactly the slow local model it exists for. And a peer sending
+  `Content-Length: banana` produced a bare `ValueError` that no handler in the
+  transport or either provider catches — a traceback where a named transport
+  failure belongs.
+
+### Measured and open
+
+- Three refusals in `pz_agent_cli/voice.py` came back from the same sweep and
+  are **not yet guarded**: the panic latch's post-write size check, `_log_safely`'s
+  refusal to let logging be why the companion stops, and the redaction of the
+  companion's closing sentence on the printed path. The sweep's own analysis
+  narrows the first two — `Path.write_text` already fails loudly for every
+  ordinary cause, and the third is redacted on the record and log sinks
+  regardless — so they are recorded here rather than claimed as holes, and the
+  next round settles them.
+
 - **The section that answers "what still needs the game" named the smaller of
   the two scenario catalogues and not the one the release stands on** (`dev`).
   `docs/PROGRESS.md`'s *Requires a live game session* listed the 16 definitions

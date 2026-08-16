@@ -579,6 +579,38 @@ def test_a_restarted_queue_continues_the_sequence_it_left_off(tmp_path: Path) ->
     restarted.close()
 
 
+def test_a_predecessor_that_died_mid_write_is_refused_not_resumed_from_zero(
+    tmp_path: Path,
+) -> None:
+    """The uncommitted tail is the signal for exactly how a previous process dies.
+
+    Same live finding as above and the other half of it: recovery must not
+    answer "nothing here" for a journal it could not read. A process killed
+    mid-append leaves bytes after the header with no committed newline — no
+    diagnostic, because an unterminated line short of ``MAX_LINE_BYTES`` is
+    "the producer is mid-write", which is true and is the wrong reading once
+    that producer is gone. ``pending_bytes > 0`` is what tells the two apart.
+
+    Without it recovery returns ``None``, the restarted queue seeds the command
+    stream at zero, and it becomes a second producer of numbers the mod will
+    accept — it dedups by ``command_id``, not by ``seq`` — with gap detection
+    on both sides quietly meaningless. Deleting that conjunct left the whole
+    suite green (9471 passed).
+    """
+    layout = make_layout(tmp_path)
+    JournalWriter(layout, layout.command_queue).close()  # a header, nothing more
+    with layout.command_queue.open("a", encoding="utf-8") as handle:
+        handle.write('{"seq": 0, "command_id": "half-writ')  # killed mid-append
+
+    with pytest.raises(JournalError) as caught:
+        CommandQueue(layout, session_id=IPC_SESSION_ID, clock=FakeClock())
+
+    assert "no record could be parsed for a seq" in str(caught.value), (
+        "recovery accepted a journal whose tail it could not read, so the restarted "
+        "queue would seed the command stream at zero beside the numbers already on disk"
+    )
+
+
 def test_recovery_reads_the_newest_rotated_generation_when_the_live_file_is_fresh(
     tmp_path: Path,
 ) -> None:
