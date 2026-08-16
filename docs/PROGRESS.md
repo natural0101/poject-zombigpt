@@ -987,6 +987,28 @@ unlabelled with nothing to notice.
 sentinel, runs the real compaction and walks the result, so an unlabelled path
 fails. No defect found — a guard over a rule that was being kept by hand.
 
+Asking it a third time, of the rule the whole protocol rests on — "`succeeded`
+means a postcondition was *observed*" — nearly produced the defect instead of
+finding one. `ActionResult.succeeded()` refuses to build a success without
+evidence; `ActionResult.from_dict` does not, and the mod's `Handle:ack` writes
+the `evidence` key only when the bag has entries, so an evidence-free success
+claim is a shape that can actually arrive. Every consumer turned out to be
+defended, each checked rather than assumed: the engine treats a `succeeded` ack
+as grace, never as the answer, and ends at `POSTCONDITION_FAILED`; `_sink_refusal`
+refuses a replayed success outright; the MCP `ActionRecord` refuses the
+combination (measured); arming needs the game's own heartbeat as well as the ack.
+
+The right-looking fix — move the check into `__post_init__` — is the wrong one,
+and planting it showed why: the claim is then dropped as an unusable ack and the
+answer degrades to `ACTION_TIMEOUT`, which says the mod went quiet when it
+actually lied. The decoder has to be able to transcribe a claim it cannot
+verify, or the receiver has nothing to name. Nothing pinned that asymmetry —
+the plant left the engine and queue suites entirely green, because both build
+their acks through the constructor that carries evidence.
+`tests/unit/test_a_success_claim_without_evidence_is_named.py` now covers the
+path an ack really travels (journal bytes → decoder → engine), and AGENTS.md
+says which half of the rule binds the decoder.
+
 ## Deviations from the blueprint
 
 | Blueprint | Here | Why |

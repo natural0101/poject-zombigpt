@@ -29,6 +29,16 @@ file, this file wins.
 `accepted`. Started is `started`. `ActionResult.succeeded()` requires evidence
 and will raise without it — do not route around that constructor.
 
+That rule binds what this code *claims*, not what it can *read*.
+`ActionResult.from_dict` deliberately accepts a peer's `succeeded` carrying no
+evidence, because the engine's job is to name that claim
+(`POSTCONDITION_FAILED`, "the mod reported success but the postcondition was
+never observed") and it cannot name what the decoder threw away. Moving the
+check into `__post_init__` looks like hardening and is not: the ack is dropped
+as unusable and the answer degrades to `ACTION_TIMEOUT`, which says the mod went
+quiet when in fact it lied. `tests/unit/test_a_success_claim_without_evidence_is_named.py`
+holds that line.
+
 **No stubs on the critical path.** No `TODO`/`FIXME`, no bare `pass` body, no
 `NotImplementedError`, no `except:` without an exception type, no fabricated
 success. `scripts/check_forbidden.py` enforces those and runs in CI.
