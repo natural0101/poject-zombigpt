@@ -545,14 +545,33 @@ def test_a_fresh_arm_request_is_applied(tmp_path: Path) -> None:
 
 
 def test_an_arm_request_racing_a_disarming_event_is_refused(tmp_path: Path) -> None:
+    """The guard wins the tie, and ``armed`` alone cannot show that it did.
+
+    Since the arm became two-phase, ``armed is False`` one tick after a request
+    is true whether the guard refused it or the loop merely submitted
+    ``session.arm`` and is waiting — so this test passed with the arbitration
+    deleted, which is how a sweep found it. What distinguishes the two is
+    whether anything was asked of the game at all: a refused request leaves the
+    command journal empty and publishes a decision saying why.
+    """
     with attached_world(tmp_path) as world:
         world.clock.advance(1)
-        world.control.write(ControlKind.ARM, mode=SessionMode.ASSISTED)
+        request = world.control.write(ControlKind.ARM, mode=SessionMode.ASSISTED)
         world.observe(player=make_player(alive=False))
 
         world.loop.tick()
 
         assert world.loop.armed is False
+        assert world.loop.pending_arm is None, (
+            "the arm was submitted to the game on the tick the guard demanded a disarm"
+        )
+        assert ScriptedMod(world).commands(ActionName.SESSION_ARM) == [], (
+            "a session.arm reached the mod on a tick the guard was forcing a disarm"
+        )
+        decision = world.loop.control_decision
+        assert decision is not None and decision.nonce == request.nonce
+        assert decision.applied is False
+        assert "the guard demanded a disarm" in decision.detail
 
 
 def test_a_disarm_request_is_applied(tmp_path: Path) -> None:

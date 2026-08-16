@@ -499,6 +499,67 @@ def test_drinking_from_a_source_declares_the_capability_it_needs() -> None:
     assert DrinkSourceAdapter().risk is RiskClass.P2
 
 
+def _source_drink_from(bottle: ItemView) -> None:
+    """The same world as ``_square_holding``, with the vessel swapped."""
+    observation = a_world(
+        items=[bottle],
+        containers=[main_container()],
+        stats={"hunger": 0.5, "thirst": 0.5},
+        objects=[_a_thing("sink", "water_source")],
+    )
+    DrinkSourceAdapter().validate(
+        a_command(
+            ActionName.CONSUME_DRINK_SOURCE,
+            {"item_ref": bottle.ref, "source_ref": WATER_SQUARE},
+        ),
+        observation,
+    )
+
+
+@pytest.mark.parametrize("unsafe", ["tainted", "poisonous"])
+def test_filling_a_vessel_that_already_holds_something_unsafe_is_refused(unsafe: str) -> None:
+    """Drink safety on the path where nothing selects the bottle.
+
+    ``policy.drink`` refuses tainted and poisonous water when it *chooses* a
+    vessel, and that is tested. ``consume.drink_source`` chooses nothing: the
+    bottle arrives named in the command, the character walks to a sink, tops it
+    up and drinks the result. This refusal is the only thing in the adapter
+    layer standing on that path, and planting it — the whole guard deleted —
+    left the suite green (9459 passed, the one failure being an unrelated
+    path-sensitive test since fixed).
+
+    What makes it worth its own test rather than trust in the mod: topping up
+    does not empty the vessel, so the mod's own checks, which read the
+    *source*, can pass over residue the source never contributed. The action
+    would then come back succeeded.
+    """
+    bottle = (
+        drink_item("43", tainted=True) if unsafe == "tainted" else drink_item("43", poisonous=True)
+    )
+
+    with pytest.raises(PreconditionFailed) as caught:
+        _source_drink_from(bottle)
+
+    assert caught.value.reason_code is ReasonCode.NO_SAFE_DRINK
+    assert caught.value.evidence[unsafe] is True
+
+
+def test_filling_a_destroyed_vessel_is_refused_before_the_walk() -> None:
+    """``consume.drink`` refuses a destroyed item and is tested; this copy was not.
+
+    The cost of the omission is not a wrong drink but a wasted trip with no
+    explanation: this action's postcondition is thirst alone — a refill raises
+    the vessel's contents and the drink lowers them again, so the counter
+    witnesses nothing — and the only possible end is an ``ACTION_TIMEOUT`` with
+    the character standing at the sink, still thirsty.
+    """
+    with pytest.raises(PreconditionFailed) as caught:
+        _source_drink_from(drink_item("43", destroyed=True))
+
+    assert caught.value.reason_code is ReasonCode.PRECONDITION_FAILED
+    assert caught.value.evidence["destroyed"] is True
+
+
 def test_a_square_with_nothing_watery_on_it_is_still_refused() -> None:
     """The fix must not turn the check into a formality."""
     with pytest.raises(PreconditionFailed) as caught:

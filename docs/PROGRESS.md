@@ -1351,9 +1351,35 @@ process's own assessment. `platform/` returned three findings, each re-planted
 here in the main tree before any test was written for it: the verify-side
 traversal bound (suite green at 9484 passed under the plant), `_plan`'s "not a
 regular file" refusal (9463), and `restore`'s postcondition (9464). All three are
-now guarded, and each guard was shown to fail under its plant. The two remaining
-areas — the action adapters and the CLI outside `livetest/` — were still running
-when this was written and are not claimed either way.
+now guarded, and each guard was shown to fail under its plant. A fourth followed
+— `create`'s check that the manifest is where the backup was moved to, whose
+absence lets `create` return a record naming a directory that is not there,
+which `live-test prepare` then reads as its licence to arm twenty destructive
+scenarios.
+
+The two remaining areas came back with three findings each. The adapters: the
+generation half of `find_by_identity`, which is the recogniser every
+postcondition in that layer runs on and whose loss makes a pre-save/load
+reference match whatever object now holds that runtime id; and two refusals on
+`consume.drink_source`, one of them the only thing in the adapter layer standing
+between the character and drinking out of a vessel that already holds tainted or
+poisonous fluid. The CLI loop: the freshness bound on the arm-confirming
+heartbeat, an arm request racing a disarming safety event, and a panic stop
+arriving while an arm is in flight.
+
+Two of those are worth recording for what the *measurement* said rather than the
+finding. The racing-arm refusal already had a test, and that test passed with the
+arbitration deleted: since the arm became two-phase, `armed is False` one tick
+after a request is true whether the guard refused it or the loop merely submitted
+`session.arm` and is waiting, so the assertion had been passing for the wrong
+reason. And the panic-during-arm case turned out to be genuinely doubled — the
+panic level's disarm and a branch in `_watch_pending_arm` each suffice, so
+planting them one at a time made each look unguarded while the protection was
+never absent. Planting both together does break it, and now fails a test. The
+sweep's report was taken as a lead, not as a verdict; one of its suspicions
+(`create`'s staging cleanup, thought unguarded because the tests glob for `*`
+and staging directories start with a dot) was refuted outright — `pathlib`
+globbing is not shell globbing and does match leading dots.
 
 The sweep also found a defect in the *tests* rather than the code, and it is the
 more interesting one. `test_the_records_own_message_does_not_survive_into_the_traceback[-1]`

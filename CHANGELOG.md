@@ -12,6 +12,58 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **Seven more unguarded refusals, across the adapters, the CLI loop and the
+  backup subsystem** (`dev`), from the same multi-agent plant sweep. Each was
+  re-planted here before a test was written for it, and each new test was shown
+  to fail under its plant.
+
+  - **`find_by_identity` compared runtime ids and generations, and only the
+    runtime id was ever tested.** This is the recogniser every postcondition in
+    the adapter layer runs on — transfers, batch transfers, wearing, eating,
+    bandaging. Project Zomboid reuses runtime ids; the generation is in the
+    identity because a bump means a save/load boundary, after which equal
+    runtime ids say nothing. With that half dropped, a reference minted before a
+    save/load matches whatever object now holds the id, and the adapter reports
+    success about an object it never touched. `tests/unit/test_adapter_identity.py`
+    now pins both directions: the same object is still found after it changes
+    container, and a pre-bump reference matches nothing after it.
+  - **`consume.drink_source` refused a vessel already holding tainted or
+    poisonous fluid, untested.** `policy.drink` refuses unsafe water when it
+    *selects* a bottle and that is tested; this path selects nothing — the
+    vessel is named in the command, topped up at a sink and drunk. Topping up
+    does not empty it, so the mod's own checks, which read the source, can pass
+    over residue the source never contributed.
+  - **`consume.drink_source` refused a destroyed vessel, untested.** Its
+    postcondition is thirst alone, so the only possible end was a timeout with
+    the character standing at the sink.
+  - **`_arm_confirmed_by_heartbeat` required the heartbeat to be no older than
+    the request, untested.** Session and mode were pinned; the freshness bound
+    was not. It is what stops an `armed=true` heartbeat left on disk from before
+    a crash from confirming an arm the current game process never granted.
+  - **`_apply_control` refused an arm that landed on the same tick as a
+    disarming safety event — and the test for it passed with the arbitration
+    deleted.** Since the arm became two-phase, `armed is False` one tick after a
+    request is true whether the guard refused it or the loop merely submitted
+    `session.arm` and is waiting. The test now asserts what distinguishes them:
+    an empty command journal and a decision saying why.
+  - **A panic stop during a pending arm.** Measured rather than assumed, and the
+    measurement corrected the finding: two levers cover this — the panic level's
+    disarm and a branch in `_watch_pending_arm` — and removing *either* alone
+    changes nothing observable, which is why planting them one at a time made
+    each look unguarded. Removing both does break it, and now fails a test. The
+    guarantee is pinned, not whichever line delivers it on a given tick.
+  - **`create`'s post-landing check** that the manifest is where the backup was
+    moved to. Without it `create` returns a `BackupRecord` naming a directory
+    that is not there — and the caller that matters is `live-test prepare`,
+    which takes "a backup exists" as its licence to arm twenty destructive
+    scenarios.
+
+  One suspicion from the sweep was **refuted** by measuring it: `create`'s
+  staging-cleanup path was reported as probably unguarded because the tests
+  assert `list(root.glob("*")) == []` and a staging directory is named
+  `.staging-…`. `pathlib` globbing is not shell globbing and does match leading
+  dots; the plant was duly caught by two tests.
+
 - **Three unguarded refusals in the save-backup subsystem, found by a
   multi-agent plant sweep** (`dev`). The sweep gave four agents a disjoint area
   of shipped code each, in its own git worktree, with one rule: a refusal counts

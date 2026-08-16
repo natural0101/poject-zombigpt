@@ -227,6 +227,83 @@ class TestTheWaysConfirmationFails:
     def test_the_default_confirmation_window_is_the_documented_bound(self) -> None:
         assert TEST_LIMITS.arm_confirm_timeout_ms == DEFAULT_ARM_CONFIRM_TIMEOUT_MS
 
+    def test_a_heartbeat_older_than_the_request_confirms_nothing(self, tmp_path: Path) -> None:
+        """The freshness half of the confirmation, which had no test of its own.
+
+        ``_arm_confirmed_by_heartbeat`` requires the beat to be no older than
+        the request, and its docstring says why: an ``armed=true`` heartbeat
+        left on disk from before a crash would otherwise confirm an arm the
+        current game process never granted. Session and mode are checked
+        elsewhere in this file; the timestamp was not, and deleting that one
+        conjunct left the whole suite green (9460 passed).
+
+        The stale beat is written *before* the request and the clock advanced,
+        which is the shape the real one has: same session, same mode, armed —
+        and older than the ask.
+        """
+        with attached_world(tmp_path) as world:
+            mod = ScriptedMod(world)
+            world.beat_game(armed=True, mode=SessionMode.ASSISTED)
+            world.clock.advance(1)
+
+            assert world.loop.arm(SessionMode.ASSISTED).pending
+            mod.ack_success(mod.only_arm_command(), mode=SessionMode.ASSISTED)
+            world.loop.tick()
+
+            assert world.loop.armed is False, (
+                "a heartbeat written before the request was taken as the game's answer to it"
+            )
+            pending: PendingArm | None = world.loop.pending_arm
+            assert pending is not None and pending.acked is True, "still waiting, honestly"
+
+    def test_a_panic_stop_during_a_pending_arm_abandons_it(self, tmp_path: Path) -> None:
+        """User input always wins — including in the window the two-phase arm opens.
+
+        ``arm`` refuses outright while the sentinel is present, but the
+        confirmation takes up to ``arm_confirm_timeout_ms``, and the sentinel
+        can appear inside that window. Nothing tested what happens then, and
+        the game answering anyway is the ordinary case: the mod acked the
+        request before the user's hand reached the key.
+
+        **Two levers, either one sufficient, so this asserts the property.**
+        The panic level's disarm resolves any pending arm as superseded, and a
+        branch in ``_watch_pending_arm`` abandons it by name; ``_apply_events``
+        runs first in the tick, so the disarm normally gets there and the
+        branch returns on an empty pending. Measured, not assumed: deleting
+        either one alone leaves this test passing, because the other covers it
+        — which is why a sweep that planted them one at a time read each as an
+        unguarded refusal. Deleting *both* fails this test. That is the shape
+        of real defence in depth, and the reason to pin the guarantee a user
+        has — a panic stop is not followed by the agent arming — rather than
+        whichever line happens to deliver it on a given tick.
+        """
+        with attached_world(tmp_path) as world:
+            mod = ScriptedMod(world)
+            assert world.loop.arm(SessionMode.ASSISTED).pending
+
+            world.panic()
+            mod.confirm_arm(SessionMode.ASSISTED)  # the game answers anyway
+            world.loop.tick()
+
+            assert world.loop.armed is False
+            resolved: PendingArm | None = world.loop.pending_arm
+            assert resolved is None, "the arm survived a panic stop and could still be granted"
+            resolution = world.loop.arm_resolution
+            assert resolution is not None and resolution.armed is False
+            assert "superseded the arm" in resolution.detail or "panic" in resolution.detail, (
+                f"the arm was resolved for an unrelated reason: {resolution.detail}"
+            )
+
+            # And it stays gone: the sentinel is cleared, the game keeps
+            # confirming, and nothing re-judges the abandoned request.
+            world.clear_panic()
+            mod.beat(armed=True, mode=SessionMode.ASSISTED)
+            world.loop.tick()
+            world.loop.tick()
+            assert world.loop.armed is False, (
+                "a panic stop was followed by the agent arming, which is the rule inverted"
+            )
+
 
 class TestTheControlChannelSeesOnlyTheOutcome:
     def test_the_decision_for_an_arm_request_waits_for_the_confirmation(

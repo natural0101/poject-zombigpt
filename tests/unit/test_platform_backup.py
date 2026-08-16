@@ -331,6 +331,41 @@ def test_create_verifies_the_backup_before_returning(
     assert list((tmp_path / "backups").glob("*")) == []
 
 
+def test_a_create_whose_final_move_lands_nothing_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``create``'s last line is a postcondition, and it had no test either.
+
+    Everything before it proves the *staged* copy is good: the manifest parses,
+    the data re-hashes. Then one ``os.replace`` moves the staging directory to
+    its final name, and ``if not (final / MANIFEST_NAME).is_file()`` is the only
+    thing that looks at the result. Without it ``create`` returns a
+    ``BackupRecord`` naming a directory that is not there — and the caller that
+    matters is ``live-test prepare``, which takes "a backup exists" as its
+    licence to arm twenty destructive scenarios.
+
+    Measured by planting: deleting the check left the suite green at 9464
+    passed. The move here is made to report success and do nothing, which is the
+    one failure the check exists for; every other ``os.replace`` in the module
+    still runs for real, so nothing else about the create path is disturbed.
+    """
+    manager, user_dir = _manager(tmp_path)
+    make_save(user_dir, SAVE_ID, SAVE_FILES)
+    real_replace = os.replace
+
+    def replace_that_lands_nothing(src: str | Path, dst: str | Path) -> None:
+        if Path(src).name.startswith(".staging-"):
+            return
+        real_replace(src, dst)
+
+    # ``backup`` calls ``os.replace`` through the module, so the module object
+    # is what gets patched; monkeypatch puts the real one back.
+    monkeypatch.setattr(os, "replace", replace_that_lands_nothing)
+
+    with pytest.raises(BackupCorruptError, match="did not land"):
+        manager.create(SAVE_ID)
+
+
 def test_backup_id_allocation_is_bounded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A clock stuck at one instant must fail loudly, not spin."""
     monkeypatch.setattr(backup_module, "_MAX_ID_ATTEMPTS", 2)
