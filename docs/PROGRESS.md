@@ -1162,6 +1162,31 @@ reported rather than acted on. Rewriting the rule so that past commits stop
 looking like violations is the same move as editing the blueprint to match what
 was built, and it is the user's call, not mine.
 
+Turning back to the blocked work itself, the 84 open tasks were re-counted from
+the plan rather than from memory: 64 in E14 (live validation) and 20 in E15
+(endurance and release), every one `owner: local`, every one verified by running
+the game or by reading a workflow the live evidence has to exist for. That
+standing report is accurate.
+
+What is preparable is the surface the operator meets when they finally run them.
+The plan puts a `verify_command` on all 484 tasks, 150 distinct, and nothing
+checked that those commands exist — a renamed test or a removed flag would
+surface after a two-hour endurance run, on a machine this repository cannot
+reach. Measured: all 150 resolve, all 33 `pz-agent` lines parse against the real
+parser with their flags, and the 22 scenario ids the plan names are exactly the
+22 the catalogue defines.
+`tests/contract/test_the_plan_names_things_that_exist.py` now holds that, and
+its own classification check caught the first version dropping eight `grep`
+commands whose paths were globs or bare directory names.
+
+Checked and sound, reported rather than changed: `pz_agent_mcp` names
+`pz_agent_core.policy` only in prose — it imports no policy module, which is the
+"thin adapter, never re-implements policy" rule in its checkable form — and the
+catalogue's specific claims about policy are already pinned (`MODE_LIMITS` in
+`test_policy_permissions.py`, the P4 tier by name in `test_mcp_catalog_actions.py`,
+`allow_windows` in `test_mcp_catalog.py`). Both hold: no mode carries a P4
+ceiling, and `BuildingBuildAdapter` declares P4 flat with no `risk_for`.
+
 ## Deviations from the blueprint
 
 | Blueprint | Here | Why |

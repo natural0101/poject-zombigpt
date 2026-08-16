@@ -12,6 +12,34 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Added
 
+- **The plan's verify commands are now checked to name things that exist**
+  (`dev`). `docs/control/MASTER_PLAN.yaml` puts a `verify_command` on all 484
+  tasks — 150 distinct — and 84 of those are the live validation someone runs on
+  a Windows machine with the game open. A renamed test file or a removed flag
+  would surface there: after a two-hour endurance run, on a machine this
+  repository cannot reach, with the session spent. Nothing checked it, and the
+  surface moves in almost every commit that adds a test.
+
+  Measured over the tree, all 150 resolve: every pytest target, script,
+  document and grep path is on disk, all 33 `pz-agent` lines parse against the
+  real parser with their flags, and the 22 scenario ids the plan names are
+  exactly the 22 the catalogue defines, in both directions. So
+  `tests/contract/test_the_plan_names_things_that_exist.py` is a guard over a
+  correct surface rather than a fix.
+
+  The CLI lines go through `build_parser()` instead of being compared against a
+  list of names, because that is the operator's real question — would this line
+  run — and it catches a removed flag, which a name comparison cannot. Every
+  command must also be *classified*: an unrecognised shape fails rather than
+  being skipped, since a classifier that ignores what it cannot parse reports a
+  clean plan for a broken one. That check caught the first version of this file
+  dropping eight `grep` commands whose paths were globs or bare directory
+  names.
+
+  Planted and confirmed: a test file renamed on disk fails by name and command;
+  a removed flag, a deleted script and a glob matching nothing each fail their
+  own checker.
+
 - **The requirement baseline is now held in place** (`dev`).
   `docs/blueprint/` is marked read-only in the repository map: it is what every
   claim of conformance is measured against. A yardstick that can be adjusted to
