@@ -12,6 +12,40 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **Three of `live-test prepare`'s six refusals had no test, including the one
+  that tells a backup that exists from a backup that restores** (`dev`).
+  `prepare` is the subcommand that proves a world is safe to experiment on
+  before twenty scenarios wound the character, interrupt actions and end in
+  restores. Each of its refusals was neutralised in turn and the full suite
+  re-run — 9 400 tests, seven times — and three of the seven plants passed
+  unnoticed:
+
+  - `manager.verify(...)` replaced by `pass`. This is the distinction both the
+    prose and `_unprepared`'s docstring draw — a backup that *reads back* rather
+    than merely existing — and it was the one refusal in `prepare` with nothing
+    behind it. The new test corrupts one backed-up file in place, same length,
+    different bytes: the file exists, the listing is unchanged, and only the
+    SHA-256 in the manifest disagrees. That is the damage an existence check
+    cannot see and the reason `verify` re-hashes.
+  - the missing-save-directory refusal. A backup record outlives the save it was
+    taken from, so a world renamed after the backup leaves a machine where the
+    backup verifies perfectly and the save it describes is not there. Without
+    the refusal `prepare` writes `ready`, `run` unlocks, and the record names a
+    backup as if it covered a save id that resolves to nothing.
+  - the no-Zomboid-directory refusal. Neutralised, the next line raises
+    `TypeError: unsupported operand type(s) for /: 'NoneType' and 'str'` — an
+    operator whose game was never found where discovery looks would meet a
+    traceback instead of the refusal that names `pz-agent doctor`.
+
+  No product behaviour changed: all three refusals were correct and unguarded,
+  which is a defect in the suite rather than in the CLI. `tests/contract/`
+  `test_operator_loop.py` now drives each through the real CLI over a synthetic
+  Zomboid directory, and each plant fails one of them.
+
+  The other four were already guarded — the missing schema, the absent `--save`,
+  the save name without "test", and the absence of any backup — so this is
+  measured coverage of the subcommand's refusals, not a claim about the rest.
+
 - **The instruction that keeps a live session from having to be repeated existed
   in one document of three, and nothing checked it there either** (`dev`).
   `finalize` requires the declared logs of every scenario, passes included, and
@@ -39,6 +73,20 @@ drift out of sync with `pz_agent_core.version`.
 
   Four plants, four failures: the flag removed from each document in turn, and
   the wrapper's own flag renamed.
+
+  Those four plants were the convenient kind — every occurrence of the string
+  replaced — and they flattered the guard. Deleting the *section* instead, which
+  is what a rewrite actually does, left it green: `LOCAL_AGENT_PROMPT.md` spells
+  the command twice, once in the timing rule and once in "what to do after a
+  FAIL", so cutting the timing rule left the other occurrence behind. A sweep
+  that deleted each section of the two long documents in turn found 24 of 28
+  removable without a single test noticing, `## 4a` among them. The guard now
+  also requires the half the command alone cannot carry — that the scenarios
+  which *passed* owe their logs too — through a per-document phrase table whose
+  completeness is asserted against the derived instruction set rather than
+  trusted. Most of the remaining 23 sections are prose that should not be
+  pinned to a magic string; that is a judgement recorded here, not a claim of
+  coverage.
 
 - **The version warning reached two of the three documents an operator follows,
   and the guard for it was too weak to notice either problem** (`dev`). The

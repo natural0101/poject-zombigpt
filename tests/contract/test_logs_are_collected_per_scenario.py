@@ -47,6 +47,32 @@ INSTRUCTIONS: Final = handoff_tests.INSTRUCTIONS
 #: flag in another has not told anybody to run them together.
 PER_SCENARIO: Final = "collect-evidence.bat --scenario"
 
+#: The phrase each document uses for the half of the rule that the command alone
+#: cannot carry: logs are owed by the scenarios that *passed*, not only by the
+#: ones that failed.
+#:
+#: A per-document table because the three documents are not in one language, and
+#: its completeness is asserted against the derived instruction set below rather
+#: than trusted — a mapping that silently missed a document would be this
+#: guard's third scoping failure.
+#:
+#: The first version of this file checked only :data:`PER_SCENARIO`, and that was
+#: not enough: ``LOCAL_AGENT_PROMPT.md`` spells the command twice, once in the
+#: timing rule and once in "what to do after a FAIL". Deleting the timing rule
+#: left the other occurrence, and the guard stayed green — found by deleting the
+#: section rather than by replacing every occurrence of the string, which is what
+#: the original plant did and why it looked convincing.
+ALSO_FOR_PASSES: Final = {
+    "LOCAL_AGENT_PROMPT.md": "включая прошедшие",
+    "LIVE_TEST_PLAYBOOK.md": "passes included",
+    "LOCAL_GAME_HANDOFF.md": "passes included",
+}
+
+
+def test_the_phrase_table_covers_every_instruction_document() -> None:
+    """A document with no entry would be checked for the command and nothing else."""
+    assert {path.name for path in INSTRUCTIONS} == set(ALSO_FOR_PASSES)
+
 
 @pytest.mark.parametrize("document", INSTRUCTIONS, ids=lambda path: path.name)
 def test_every_instruction_document_shows_the_per_scenario_collect(document: Path) -> None:
@@ -56,6 +82,13 @@ def test_every_instruction_document_shows_the_per_scenario_collect(document: Pat
         f"{document.name} never shows `{PER_SCENARIO}`, so an operator following it "
         "has no reason to collect before the end of the day — and by then "
         "console.txt has been rewritten and the early scenarios have to be run again"
+    )
+    owed = ALSO_FOR_PASSES[document.name]
+    assert owed in text, (
+        f"{document.name} shows the per-scenario command without saying that the "
+        f"scenarios which passed owe their logs too («{owed}»). Collecting "
+        "only after a failure loses every passing scenario's console.txt, and "
+        "finalize refuses the run for exactly those"
     )
 
 

@@ -28,7 +28,7 @@ from typing import Final
 
 import pytest
 
-from pz_agent_cli.context import EXIT_FAILURE, EXIT_OK
+from pz_agent_cli.context import BACKUP_DIR_NAME, EXIT_FAILURE, EXIT_OK, STATE_DIR_NAME
 from pz_agent_cli.livetest.evidence import EvidenceLayout
 from pz_agent_cli.livetest.scenarios import SCENARIO_IDS
 from tests.fixtures.cli_worlds import CliWorld, make_world
@@ -50,12 +50,17 @@ def operator(tmp_path: Path) -> tuple[CliWorld, Path, Path]:
     (saves / "map_p.bin").write_text("map", encoding="utf-8")
     (saves / "players.db").write_text("player", encoding="utf-8")
 
-    evidence = tmp_path / "evidence"
+    return world, tmp_path / "Zomboid", _evidence_tree(tmp_path)
+
+
+def _evidence_tree(base: Path) -> Path:
+    """An evidence directory with the schemas prepare insists on."""
+    evidence = base / "evidence"
     layout = EvidenceLayout(evidence)
     layout.ensure_tree(SCENARIO_IDS)
     for schema in SCHEMA_SOURCE.glob("*.json"):
         shutil.copyfile(schema, layout.schema_dir / schema.name)
-    return world, tmp_path / "Zomboid", evidence
+    return evidence
 
 
 def _live(world: CliWorld, zomboid: Path, evidence: Path, *argv: str) -> int:
@@ -129,6 +134,132 @@ def test_prepare_refuses_when_no_backup_covers_the_save(
 
     assert exit_code == EXIT_FAILURE
     assert "no backup" in world.stdout + world.stderr
+    assert not EvidenceLayout(evidence).prepare_path.exists()
+
+
+def test_prepare_refuses_when_the_save_directory_is_gone(
+    operator: tuple[CliWorld, Path, Path],
+) -> None:
+    """A backup that covers a save says nothing about the save still being there.
+
+    The order of the checks is the point: ``prepare`` looks for the save
+    directory before it looks for a backup, because a backup record survives the
+    save it was taken from. Renaming or deleting the test world after taking the
+    backup leaves a machine where the backup verifies perfectly and the world it
+    describes does not exist. Without this refusal ``prepare`` writes ``ready``,
+    ``run`` unlocks, and twenty scenarios drive against a save id that resolves
+    to nothing — with the record naming a backup as if it covered them.
+
+    Found by planting: neutralising the refusal left the whole suite green.
+    """
+    world, zomboid, evidence = operator
+
+    world.reset_streams()
+    assert world.run("--zomboid-dir", str(zomboid), "backup-save", TEST_SAVE) == EXIT_OK
+
+    shutil.rmtree(zomboid / "Saves" / "Muldraugh, KY" / "testworld")
+
+    world.reset_streams()
+    exit_code = _live(world, zomboid, evidence, "prepare", "--save", TEST_SAVE)
+
+    said = world.stdout + world.stderr
+    assert exit_code == EXIT_FAILURE, said
+    assert "no save directory" in said, (
+        "prepare armed against a save that is not on disk; the backup it found "
+        "covers a world that no longer exists"
+    )
+    assert not EvidenceLayout(evidence).prepare_path.exists()
+
+
+def test_prepare_refuses_a_backup_that_does_not_read_back(
+    operator: tuple[CliWorld, Path, Path],
+) -> None:
+    """A backup that exists and a backup that restores are different facts.
+
+    Both this repository's prose and ``_unprepared``'s docstring draw exactly
+    this distinction — a backup that *reads back* rather than merely existing —
+    and nothing tested it: replacing ``manager.verify(...)`` with ``pass`` left
+    every one of the suite's tests green. The refusal that stands between a
+    batch of deliberately destructive scenarios and an unrestorable save was the
+    one refusal in ``prepare`` with no guard.
+
+    The damage planted here is the kind that actually happens and the kind an
+    existence check cannot see: the file is present, its size is unchanged, its
+    contents are not what was written. Only re-hashing finds it, which is what
+    ``verify`` does and what ``prepare`` must not skip.
+    """
+    world, zomboid, evidence = operator
+
+    world.reset_streams()
+    assert world.run("--zomboid-dir", str(zomboid), "backup-save", TEST_SAVE) == EXIT_OK
+
+    rotted = _rot_one_file(zomboid / STATE_DIR_NAME / BACKUP_DIR_NAME)
+
+    world.reset_streams()
+    exit_code = _live(world, zomboid, evidence, "prepare", "--save", TEST_SAVE)
+
+    said = world.stdout + world.stderr
+    assert exit_code == EXIT_FAILURE, said
+    assert "does not verify" in said, (
+        f"prepare accepted a backup whose {rotted.name} no longer matches its manifest, "
+        "so the restore every destructive scenario ends with would fail when it is "
+        "the only thing left"
+    )
+    assert "take another one" in said, "the refusal must name its remedy"
+    assert not EvidenceLayout(evidence).prepare_path.exists()
+
+
+def _rot_one_file(backup_root: Path) -> Path:
+    """Corrupt one backed-up file in place, keeping its length.
+
+    Same size, different bytes: the file still exists, the directory listing is
+    unchanged, and only the SHA-256 in the manifest disagrees. Anything that
+    changed the size would also be caught by a cheaper check, which would make
+    this test pass for a weaker reason than the one it is about.
+    """
+    candidates = sorted(
+        path
+        for directory in backup_root.iterdir()
+        if directory.is_dir()
+        for path in (directory / "data").rglob("*")
+        if path.is_file()
+    )
+    assert candidates, f"no backed-up files under {backup_root}; the fixture took no backup"
+    target = candidates[0]
+    original = target.read_bytes()
+    assert original, f"{target} is empty, so flipping a byte would not change its digest"
+    target.write_bytes(bytes((original[0] ^ 0xFF,)) + original[1:])
+    assert len(target.read_bytes()) == len(original)
+    return target
+
+
+def test_prepare_refuses_when_no_zomboid_directory_was_found(tmp_path: Path) -> None:
+    """Without a game directory there is no save to check, and no check to trust.
+
+    ``prepare``'s answer to this is a refusal naming ``pz-agent doctor``, which
+    is the subcommand that explains *why* discovery failed. It was unguarded,
+    and the alternative to a refusal here is not a helpful error: every later
+    line of ``_verify_test_save`` assumes a user directory, so the operator
+    would meet a traceback instead of the one command that diagnoses this.
+
+    The machine is built without a Zomboid directory rather than pointed at a
+    missing one: ``--zomboid-dir`` is taken as the answer whether or not the
+    path exists, so an override reaches the *save* check, not this one. That is
+    the honest way to reproduce a game that was never installed where discovery
+    looks.
+    """
+    world = make_world(tmp_path, with_user_dir=False)
+    evidence = _evidence_tree(tmp_path)
+
+    world.reset_streams()
+    exit_code = world.run(
+        "live-test", "--evidence-dir", str(evidence), "prepare", "--save", TEST_SAVE
+    )
+
+    said = world.stdout + world.stderr
+    assert exit_code == EXIT_FAILURE, said
+    assert "no Zomboid directory" in said, said
+    assert "doctor" in said, "the refusal must name the subcommand that explains discovery"
     assert not EvidenceLayout(evidence).prepare_path.exists()
 
 

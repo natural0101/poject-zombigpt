@@ -1294,6 +1294,47 @@ limits stated: it proves the call is shown, not that the prose explains it. A
 second check confirms the wrapper accepts the flag, so the documents cannot
 agree on a spelling that fails. Four plants, four failures.
 
+Those four plants were the convenient kind — replace every occurrence of the
+string — and the next pass showed how much they flattered the guard. Deleting a
+*section*, which is what a rewrite does, left it green: `LOCAL_AGENT_PROMPT.md`
+spells the command twice, in the timing rule and again in "what to do after a
+FAIL". A sweep that deleted each section of the two long documents in turn found
+**24 of 28 removable with the suite still green**, `## 4a` among them. The guard
+now also requires the half a command cannot carry — that the scenarios which
+*passed* owe their logs too — through a per-document phrase table whose
+completeness is asserted against the imported instruction set rather than
+trusted, since a mapping that silently missed a document would be this guard's
+third scoping failure. Most of the other 23 sections are prose that should not
+be pinned to a magic string; that is a judgement, recorded as one, not coverage.
+
+The same method was then turned on code rather than documents.
+`live-test prepare` is the subcommand that proves a world is safe to experiment
+on before twenty scenarios wound the character and end in restores, and it makes
+six refusals. Each was neutralised in turn and the **full** suite re-run — seven
+runs of about 9 400 tests, twenty-three minutes — and three passed unnoticed:
+
+- `manager.verify(...)` replaced by `pass`. This is the distinction the prose
+  and `_unprepared`'s docstring both draw — a backup that *reads back* rather
+  than merely existing — and it was the one refusal in `prepare` with nothing
+  behind it. The new test corrupts one backed-up file in place at the same
+  length: the file exists, the listing is unchanged, only the manifest's SHA-256
+  disagrees. That is the damage an existence check cannot see.
+- the missing-save-directory refusal. A backup record outlives the save it came
+  from, so a world renamed after the backup leaves a machine where the backup
+  verifies and the save does not exist — and `prepare` would write `ready`,
+  unlock `run`, and name that backup as if it covered a save id resolving to
+  nothing.
+- the no-Zomboid-directory refusal, whose absence is not a worse message but a
+  `TypeError` two lines later, where a refusal naming `pz-agent doctor` belongs.
+
+No product behaviour changed: all three refusals were correct and unguarded,
+which is a defect in the suite rather than in the CLI. The other three refusals
+— the missing schema, the absent `--save`, the save name without "test" — and
+the absence of any backup were already guarded, and are reported sound. What
+this iteration measured is the coverage of one subcommand's refusals; the same
+sweep over the 1 179 refusal sites in `packages/` has not been run, and no claim
+is made about them.
+
 ## Deviations from the blueprint
 
 | Blueprint | Here | Why |
