@@ -5,8 +5,12 @@ report" section lists nine things this document must state. They are §1 to §9
 below, in that order.
 
 **Base commit:** `c4320f0`, which `main`, `dev` and
-`claude/workflows-routines-docs-l294qp` all point at — the three branches were
-brought onto one commit here, with no divergence between them. `c4320f0` is a
+`claude/workflows-routines-docs-l294qp` all pointed at **when this report was
+measured** — the three branches were brought onto one commit there, with no
+divergence between them. They have moved on since, together and in that order,
+and the sentence is left in the past tense rather than refreshed: a report is a
+snapshot, and a branch position written in the present tense is a claim that
+goes quietly false the next time anyone commits. `c4320f0` is a
 control-plane-only commit over `f397d21` (it touches `docs/control/STATUS.json`
 and `docs/control/EVIDENCE_INDEX.md` and nothing else), so `f397d21` is the code
 tree every CI verdict below names.
