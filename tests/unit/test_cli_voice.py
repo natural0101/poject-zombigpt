@@ -33,7 +33,7 @@ import uuid
 from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final
+from typing import Final, cast
 
 import pytest
 
@@ -47,6 +47,7 @@ from pz_agent_cli.voice import (
     VoiceRecord,
     VoiceRecordError,
     VoiceRefused,
+    _log_safely,
     adapter_name,
     collect_voice_status,
     probe_goal_channel,
@@ -57,6 +58,7 @@ from pz_agent_cli.voice import (
     select_adapter,
     voice_services,
 )
+from pz_agent_core.diagnostics import DiagnosticLog, LogLevel
 from pz_agent_core.ipc.layout import IpcLayout
 from pz_agent_core.planner.providers import DEFAULT_TEAMON_KEY_ENV
 from pz_agent_core.protocol import DangerLevel, JsonDict, SessionMode
@@ -261,6 +263,104 @@ def test_a_latch_that_cannot_be_written_raises_rather_than_reporting_a_stop(
 
     with pytest.raises(OSError):
         port.stop()
+
+
+def test_a_latch_that_lands_empty_is_not_reported_as_a_stop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A write that reports success and leaves nothing is still not a stop.
+
+    The mod reads the latch as "any non-empty content stops, empty does not", so
+    an empty file is indistinguishable from no file at all. Every *ordinary* way
+    the write fails already raises — a directory in its place, a read-only
+    exchange, a full disk — and the test above covers that. This check is for
+    the case those cannot produce: the write returned and the file is empty
+    anyway. Deleting it left the full suite green (9471 passed), and the
+    companion would answer «Остановился.» while the agent kept acting, which is
+    the fabricated success AGENTS.md's honest-state rule exists to forbid.
+
+    The write is made to report success and land nothing, because that is the
+    one failure this line is about; nothing else on the stop path is disturbed.
+    """
+    clock = FakeClock()
+    port = a_port(tmp_path, clock=clock)
+    real_write_text = Path.write_text
+
+    def write_that_lands_nothing(self: Path, *args: object, **kwargs: object) -> int:
+        if self.name == port.layout.panic_stop.name:
+            self.touch()
+            return 0
+        return real_write_text(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "write_text", write_that_lands_nothing)
+
+    with pytest.raises(OSError, match="stops nothing"):
+        port.stop()
+
+
+def test_logging_that_fails_mid_session_is_not_why_the_companion_stops(
+    tmp_path: Path,
+) -> None:
+    """The handler is live code, and nothing else covers what it covers.
+
+    ``_companion_log`` catches ``OSError`` when the log is *built*, so a logs
+    directory that is unwritable at start is handled. This one is for the tenth
+    record: a directory that fills or becomes unwritable mid-session. The
+    diagnostic log writes through a real rotating file and lets ``OSError`` out,
+    and both call sites that matter run outside ``_serve``'s only ``try`` — so
+    without the handler the user gets a traceback instead of the ending
+    sentence, from a failure that has nothing to do with the agent.
+
+    Deleting it left the suite green (9471 passed): nothing made a log raise.
+    """
+
+    class FailingLog:
+        def log(self, *args: object, **kwargs: object) -> None:
+            raise OSError("the logs directory filled up")
+
+    _log_safely(cast(DiagnosticLog, FailingLog()), LogLevel.INFO, "voice.test", detail="x")
+
+
+def test_the_line_voice_run_prints_goes_through_the_redactor(tmp_path: Path) -> None:
+    """Everything this command prints is pasted into bug reports, this line too.
+
+    On the failure branch the ending sentence embeds the backend exception
+    verbatim, and an ``OSError`` or an SDK error routinely carries an absolute
+    path. The redactor is built from exactly those tokens — the Zomboid user
+    directory, the home and install directories, the account name — so dropping
+    the one call on the printed message is what puts them on the terminal and
+    in the ``--json`` payload.
+
+    The record and the log keep their own redaction calls and the support
+    bundle redacts every member, so the archive stayed covered; stdout is what
+    nothing else protects. ``test_voice_privacy.py`` did not catch it because it
+    scans for a *transcript* canary, not for paths.
+    """
+    world = make_world(tmp_path)
+    workspace = resolve_workspace(world.ctx)
+    workspace.state_dir.mkdir(parents=True, exist_ok=True)
+    workspace.config_path.write_text(
+        f'[voice]\nenabled = true\nadapter = "{ADAPTER_TEAMON}"\n', encoding="utf-8"
+    )
+    world.ctx.env[DEFAULT_TEAMON_KEY_ENV] = KEY  # type: ignore[index]
+    secret = str(workspace.user_dir)
+    assert secret, "the world has no user directory, so this test would prove nothing"
+
+    class LeakingClient(FakeTeamONClient):
+        """A backend whose failure carries a path, which is the ordinary case."""
+
+        async def transcripts(self) -> AsyncIterator[TeamONTranscript]:
+            raise RuntimeError(f"cannot read {secret}/Lua/pz_agent: permission denied")
+
+    code = run_voice_run(world.ctx, as_json=False, client=LeakingClient())
+
+    assert code == EXIT_FAILURE
+    printed = world.stdout + world.stderr
+    assert "permission denied" in printed, "the failure never reached the terminal"
+    assert secret not in printed, (
+        "voice run printed the user directory verbatim; every line this command "
+        "prints goes through the redactor for the reason this one just showed"
+    )
 
 
 def test_arming_is_refused_because_a_room_cannot_grant_authority(tmp_path: Path) -> None:

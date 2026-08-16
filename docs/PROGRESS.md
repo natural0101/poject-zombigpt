@@ -1432,11 +1432,26 @@ existing timeout test sets both numbers small, so it could not tell them apart.
 Neither was a missing test. Both were tests that asserted the outcome and not
 the bound.
 
-Three findings in `pz_agent_cli/voice.py` are measured and **open**, recorded in
-`CHANGELOG.md` under *Measured and open* rather than closed quietly: the panic
-latch's post-write size check, `_log_safely`, and the redaction of the
-companion's closing sentence on the printed path. The sweep's own lever analysis
-narrows all three, which is why they are stated as open rather than as holes.
+The three findings in `pz_agent_cli/voice.py` that were carried as open — the
+panic latch's post-write size check, `_log_safely`, and the redaction of the
+line `voice run` prints — are now closed, and all three turned out to be real
+even after the lever analysis had narrowed them. The latch check covers the one
+failure `Path.write_text` cannot produce: a write that returns while the file
+stays empty, which the mod reads as no stop at all. `_log_safely` is the only
+thing standing between a logs directory that fills mid-session and a traceback
+in place of the companion's ending sentence, since `_companion_log` catches only
+at construction. And the printed line was the one sink nothing redacted: the
+record, the log and the support bundle each keep their own redaction, so a path
+in a backend exception reached the terminal and the `--json` payload and nowhere
+else. That last one is why `test_voice_privacy.py` did not see it — it scans for
+a transcript canary, not for paths.
+
+With those closed, the sweep has covered every area of shipped code it set out
+to: `platform/`, `safety/`, `actions/adapters/`, the CLI, `goals/`, `planner/`,
+`ipc/`, `memory/` and the voice surface. What it did not cover is stated rather
+than implied: within each area only a handful of refusal sites were planted —
+five per agent, against surfaces holding dozens — so "swept" here means "sampled
+under a stated budget", never "exhausted".
 
 ## Deviations from the blueprint
 

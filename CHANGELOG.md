@@ -12,6 +12,33 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **The three voice refusals recorded as open last round are settled, and all
+  three were real** (`dev`). Each was re-planted here and each new test shown to
+  fail under its own plant.
+
+  - **The panic latch's post-write size check.** Every ordinary way the write
+    fails already raises — a directory in its place, a read-only exchange, a
+    full disk — and both the raise and the companion's `STOP_FAILED` sentence
+    were already tested. What this check adds is the case those cannot produce:
+    the write returns and the file is empty anyway. The mod reads any non-empty
+    content as a stop and empty as nothing, so the user would be told
+    «Остановился.» while the agent kept acting. The new test makes the write
+    report success and land nothing, which is precisely the case the line is for.
+  - **`_log_safely`'s `OSError` handler.** `_companion_log` catches only at
+    *construction*, so an unwritable logs directory at start is handled; this is
+    for the tenth record, when a directory fills mid-session. The diagnostic log
+    writes through a real rotating file and lets `OSError` out, and both call
+    sites that matter run outside `_serve`'s only `try` — so without the handler
+    the user gets a traceback instead of the ending sentence, from a failure
+    that has nothing to do with the agent.
+  - **Redaction of the line `voice run` prints.** On the failure branch the
+    ending sentence embeds the backend exception verbatim, and an `OSError` or
+    SDK error routinely carries an absolute path — while the redactor is built
+    from exactly those tokens. The record and the log keep their own redaction
+    and the support bundle redacts every member, so the archive was covered;
+    stdout was what nothing protected. `test_voice_privacy.py` missed it because
+    it scans for a *transcript* canary, not for paths.
+
 - **Nine more unguarded refusals — the IPC journal and queue, the goal channel's
   restore, and the planner's HTTP transport** (`dev`), from a five-area plant
   sweep. Each was re-planted here and each new test shown to fail under its own
@@ -49,17 +76,6 @@ drift out of sync with `pz_agent_core.version`.
   `Content-Length: banana` produced a bare `ValueError` that no handler in the
   transport or either provider catches — a traceback where a named transport
   failure belongs.
-
-### Measured and open
-
-- Three refusals in `pz_agent_cli/voice.py` came back from the same sweep and
-  are **not yet guarded**: the panic latch's post-write size check, `_log_safely`'s
-  refusal to let logging be why the companion stops, and the redaction of the
-  companion's closing sentence on the printed path. The sweep's own analysis
-  narrows the first two — `Path.write_text` already fails loudly for every
-  ordinary cause, and the third is redacted on the record and log sinks
-  regardless — so they are recorded here rather than claimed as holes, and the
-  next round settles them.
 
 - **The section that answers "what still needs the game" named the smaller of
   the two scenario catalogues and not the one the release stands on** (`dev`).
