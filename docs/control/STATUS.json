@@ -13,11 +13,11 @@
     "NOT_STARTED": 84,
     "PASS": 400
   },
-  "head_commit": "11d3dc5ed73a910986be0d464a7418ac1bf74aef",
+  "head_commit": "47928c4cc4603e3001a1b7db3550629c94658205",
   "linux_ci": {
     "commit": "58873785e627f2e8082236920fbfd38582bed4ae",
     "describes_current_head": false,
-    "status": "STALE:PENDING"
+    "status": "STALE:GREEN"
   },
   "live_scenarios": {
     "failed": 0,
@@ -77,6 +77,6 @@
   "windows_ci": {
     "commit": "58873785e627f2e8082236920fbfd38582bed4ae",
     "describes_current_head": false,
-    "status": "STALE:PENDING"
+    "status": "STALE:GREEN"
   }
 }
