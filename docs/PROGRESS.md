@@ -1138,6 +1138,30 @@ hidden imports; the MCP process only compacts an observation for the planner.
 Chasing that to a conclusion is what kept it from becoming a false accusation
 against the packaging.
 
+The last unguarded line of the repository map was the one that matters most to
+every claim in this file: `docs/blueprint/` is read-only, and it is what
+conformance is measured against. Measured — 22 files, one commit, zero
+modifications, deletions or renames since — so the discipline has held perfectly
+and nothing enforced it. `tests/contract/test_the_blueprint_is_the_baseline.py`
+now does, at both moments that matter: history, which CI judges and whose
+failure names the offending commit, and the working tree, which `git log` cannot
+see and where an edit still costs nothing to undo. Both planted, both fired. It
+also pins that the directory still holds its files, because an emptied baseline
+would satisfy the history check forever.
+
+**Open for the user, not decided here.** AGENTS.md says of `schemas/`:
+"Changing one is a protocol change; update `version.py` and the sync test."
+Read strictly, roughly fourteen commits break it — every one that added a name
+to the wire (`Two crafting names join the wire`, `Doors observed, addressed and
+operated`, and so on) touched a schema and left `version.py` alone. The practice
+those commits follow is coherent: `SCHEMA_VERSION` stays at `1.0` for additive
+changes, `PROTOCOL_VERSION` has moved once to `1.1`, an old peer refuses an
+unknown name by its own enum check rather than misreading it, and
+`check_versions.py` keeps every restatement of the constants in step. So this is
+reported rather than acted on. Rewriting the rule so that past commits stop
+looking like violations is the same move as editing the blueprint to match what
+was built, and it is the user's call, not mine.
+
 ## Deviations from the blueprint
 
 | Blueprint | Here | Why |

@@ -21,7 +21,7 @@ file, this file wins.
 | `packages/pz_agent_voice/` | `VoiceAdapter` protocol, TeamON plugin, fake | Core must not import this. |
 | `pz-mod/` | Lua for Build 42 | Pure functions extracted so they are testable outside the game. |
 | `schemas/` | JSON Schema, the wire source of truth | Changing one is a protocol change; update `version.py` and the sync test. |
-| `docs/blueprint/` | The original specification | **Read-only.** Never edit; it is the requirement baseline. |
+| `docs/blueprint/` | The original specification | **Read-only.** Never edit; it is the requirement baseline. Held by `tests/contract/test_the_blueprint_is_the_baseline.py`. |
 
 ## Non-negotiable engineering rules
 

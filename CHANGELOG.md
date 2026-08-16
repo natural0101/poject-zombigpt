@@ -12,6 +12,30 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Added
 
+- **The requirement baseline is now held in place** (`dev`).
+  `docs/blueprint/` is marked read-only in the repository map: it is what every
+  claim of conformance is measured against. A yardstick that can be adjusted to
+  match the thing being measured is not a yardstick, and the adjustment is the
+  kind nobody notices — a clarified sentence, a scope line softened to match
+  what was built. Nothing enforced it.
+
+  Measured: 22 files, introduced by exactly one commit, with zero
+  modifications, deletions or renames since. The rule has never been broken, so
+  this is a guard over a discipline rather than a fix for a defect.
+
+  `tests/contract/test_the_blueprint_is_the_baseline.py` checks two moments,
+  because they catch different things. History — no commit beyond the one that
+  created it — is what CI judges, and the failure names the offending commit.
+  The working tree catches an edit while it is still uncommitted, which `git
+  log` cannot see at all and which is when undoing it costs nothing. Both were
+  planted and both fired. A third test pins that the directory still holds its
+  22 files, since an emptied baseline would satisfy the other two forever. A
+  fourth runs the history query against a file that does change, so a query that
+  silently matched nothing could not report every path as pristine.
+
+  On a shallow clone the historical halves skip with that reason rather than
+  pass, the same answer `scripts/audit_pass.py` gives.
+
 - **The domain layer's two architectural rules now have a check** (`dev`).
   The repository map's strongest claim — `pz_agent_core` carries zero
   third-party runtime dependencies, no MCP SDK, no LLM SDK, no UI — had nothing
