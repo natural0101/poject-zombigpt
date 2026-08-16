@@ -1271,6 +1271,29 @@ and neutralising it in any of the three fails that document's case. A guard
 whose plant does not fail is not a guard, and only planting says which one it
 is.
 
+Having learned that a guard whose plant does not fail is not a guard, the next
+pass planted against the guards themselves rather than reasoning about them. The
+first proxy — "does this assertion's literal occur elsewhere in the document" —
+produced 342 hits, nearly all noise, and was abandoned; planting found the real
+one in three tries.
+
+Cutting section `## 4a` out of `LOCAL_AGENT_PROMPT.md` left the whole contract
+suite green. That section is the instruction that decides whether a live session
+has to be repeated: `finalize` requires every scenario's declared logs, and
+`console.txt` is rewritten on each game launch while the session trace rotates,
+so logs gathered at the end of the day are missing the early scenarios'
+entirely. Worse than unguarded — the playbook and the handoff named
+`collect-evidence.bat` only in a command table and never said when to run it, so
+two of the three instruction documents did not carry the rule at all.
+
+All three now show the per-scenario form and the reason.
+`tests/contract/test_logs_are_collected_per_scenario.py` holds it over the
+imported instruction set, anchored on `collect-evidence.bat --scenario` —
+mechanical and language-independent, since one document is in Russian — with its
+limits stated: it proves the call is shown, not that the prose explains it. A
+second check confirms the wrapper accepts the flag, so the documents cannot
+agree on a spelling that fails. Four plants, four failures.
+
 ## Deviations from the blueprint
 
 | Blueprint | Here | Why |

@@ -63,9 +63,16 @@ run-live-tests.bat --scenario S07_NESTED_INVENTORY  one of them, with nothing to
 run-live-tests.bat                                  every pending scenario, in order
 resume-live-tests.bat                               continue from the first that is not PASS
 pz-agent live-test status                           the table
-collect-evidence.bat                                gather logs into the scenario folders
+collect-evidence.bat --scenario S07_NESTED_INVENTORY  gather one scenario's logs, now
+collect-evidence.bat                                every scenario that has run
 finalize-release.bat                                build the manifest, refusing if anything is missing
 ```
+
+**Collect after each scenario, not at the end of the day.** `finalize` requires
+the declared logs of *every* scenario, passes included, and the files do not
+survive waiting: `console.txt` is rewritten each time the game launches and the
+session trace rotates, so by evening the early scenarios' logs no longer exist.
+The only remedy then is to run those scenarios again.
 
 **Only the first form can produce a PASS**, and it is the one each scenario's
 own section repeats. A run with no `--observations` has nothing to observe, so

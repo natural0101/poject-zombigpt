@@ -465,8 +465,15 @@ A file you put inside the mod directory yourself survives an uninstall.
 | Stop | `stop.bat` | `pz-agent stop` |
 | Run the scenarios | `run-live-tests.bat` | `pz-agent live-test run` |
 | Continue a run | `resume-live-tests.bat` | `pz-agent live-test resume` |
-| Gather evidence | `collect-evidence.bat` | `pz-agent live-test collect` |
+| Gather evidence | `collect-evidence.bat --scenario S<nn>_<NAME>` | `pz-agent live-test collect` |
 | Build the manifest | `finalize-release.bat` | `pz-agent live-test finalize` |
+
+Collect after **each** scenario, not at the end of the day — which is why the
+row above carries `--scenario`. `finalize` requires the declared logs of every
+scenario, passes included, and the files do not survive waiting: `console.txt`
+is rewritten each time the game launches and the session trace rotates, so by
+evening the early scenarios' logs no longer exist. The only remedy then is to
+run those scenarios again.
 
 The sidecar attaches in **OBSERVE** mode. It watches and plans but cannot act
 until `arm`, and `arm` is deliberately not wired to a double-clickable BAT.

@@ -12,6 +12,34 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **The instruction that keeps a live session from having to be repeated existed
+  in one document of three, and nothing checked it there either** (`dev`).
+  `finalize` requires the declared logs of every scenario, passes included, and
+  those files do not survive the day: `console.txt` is rewritten each time the
+  game launches and the session trace rotates, so logs gathered in the evening
+  are missing the early scenarios' entirely. The only remedy is to run those
+  scenarios again.
+
+  Found by planting rather than by reading: cutting section `## 4a` out of
+  `LOCAL_AGENT_PROMPT.md` left the entire contract suite green. The playbook and
+  the handoff each named `collect-evidence.bat` only in a command table, with no
+  word about when to run it — so two of the three documents an operator follows
+  never gave the instruction at all.
+
+  All three now show the per-scenario form and say why waiting loses the logs,
+  and `tests/contract/test_logs_are_collected_per_scenario.py` holds it over the
+  set imported from `test_handoff_instructions_match_the_run.INSTRUCTIONS`. The
+  anchor is `collect-evidence.bat --scenario`: mechanical, language-independent
+  — one of the three documents is in Russian — and the form the instruction is
+  actionable in. It proves each document shows that call, not that it explains
+  the reason; anchoring on the explanation would mean inventing a phrase in two
+  languages that only the test looks for. A separate check confirms the wrapper
+  really accepts the flag, so the three documents cannot agree on a spelling
+  that produces a usage error.
+
+  Four plants, four failures: the flag removed from each document in turn, and
+  the wrapper's own flag renamed.
+
 - **The version warning reached two of the three documents an operator follows,
   and the guard for it was too weak to notice either problem** (`dev`). The
   warning added last time — bump `version.py` before the live run or the
