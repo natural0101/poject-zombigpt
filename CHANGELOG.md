@@ -10,6 +10,42 @@ drift out of sync with `pz_agent_core.version`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A live session run against this tree would have produced evidence the
+  release bar refuses, and nothing said so beforehand** (`dev`). Every existing
+  test of `scripts/check_release.py` asserts that some particular check is
+  absent from the failures; none asked whether a complete, correct evidence tree
+  *certifies*. It does not.
+
+  Measured by running the real gate over the release tests' own passing fixture:
+  fifteen of sixteen checks pass, and the sixteenth is `evidence.version` —
+  "the evidence names product version 1.0.0, this checkout declares 0.1.0, and
+  the release is v1.0.0". `finalize` stamps `PRODUCT_VERSION` into the manifest,
+  the gate requires that number to be the version being released, and
+  `PRODUCT_VERSION` is still `0.1.0`. The gate's own remediation is "bump
+  version.py … **then re-run the scenarios**" — after twenty-two scenarios, a
+  thirty-minute run and a two-hour run, on a machine this repository cannot
+  reach.
+
+  The hazard is the ordering, and the documents an operator follows said nothing
+  about it: `docs/LIVE_TEST_PLAYBOOK.md` and `docs/LOCAL_AGENT_PROMPT.md` did
+  not mention the version at all, and the 84 open tasks say "follow the
+  playbook". Both now carry the rule and its cost before the first scenario, and
+  `pz-agent live-test prepare` — the one command every live session passes
+  through, since `run` refuses without its record — prints the number it will
+  stamp.
+
+  Named, not refused: whether this tree should declare the release version is a
+  product decision, and a live run made for some other reason is legitimate. For
+  the same reason the version was not bumped here.
+  `tests/contract/test_the_release_bar_is_reachable.py` pins both halves — that
+  the bar is otherwise reachable, so a new check a real run cannot satisfy fails
+  here rather than on the operator's machine, and that the warning is in both
+  documents. It also fails deliberately once `PRODUCT_VERSION` becomes the
+  release version, so the person doing the bump rewrites it rather than leaving
+  a green test outliving its reason.
+
 ### Added
 
 - **The plan's verify commands are now checked to name things that exist**

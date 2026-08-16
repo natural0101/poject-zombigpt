@@ -1187,6 +1187,37 @@ catalogue's specific claims about policy are already pinned (`MODE_LIMITS` in
 `allow_windows` in `test_mcp_catalog.py`). Both hold: no mode carries a P4
 ceiling, and `BuildingBuildAdapter` declares P4 flat with no `risk_for`.
 
+Continuing outward along the same path — what the operator meets when they
+finally run the 84 blocked tasks — the next question was whether the evidence
+they produce can clear the release bar at all. It cannot, and the reason is not
+the evidence. Running the real gate over the release tests' own passing fixture:
+fifteen of sixteen checks pass; the sixteenth is `evidence.version`, because
+`finalize` stamps `PRODUCT_VERSION` (`0.1.0`) into the manifest and the gate
+requires the version being released (`1.0.0`). The gate's remediation says "bump
+version.py … then re-run the scenarios" — the whole session, twenty-two
+scenarios plus a thirty-minute and a two-hour run.
+
+The defect is the ordering and the silence around it: neither
+`LIVE_TEST_PLAYBOOK.md` nor `LOCAL_AGENT_PROMPT.md` mentioned the version, and
+the open tasks say "follow the playbook". Both now state the rule and its cost
+before the first scenario, and `live-test prepare` prints the number it will
+stamp — the last cheap moment, and the one command every session passes through
+because `run` refuses without its record.
+
+The version was deliberately **not** bumped. What this repository declares
+itself to be is a product decision; taking it inside a test would be the same
+yardstick-moving the blueprint guard exists to prevent.
+`tests/contract/test_the_release_bar_is_reachable.py` holds that the bar is
+otherwise reachable — so a future check no real run could satisfy fails here
+rather than on the operator's machine — and fails on purpose once the bump
+happens, so whoever does it rewrites the file rather than inheriting a green
+test that has outlived its reason.
+
+**Requires live session, and now also requires a decision first:** bump
+`PRODUCT_VERSION` and everything `scripts/check_versions.py` lists to the
+release version *before* the live run, or accept that the session's evidence
+cannot certify v1.0.0.
+
 ## Deviations from the blueprint
 
 | Blueprint | Here | Why |

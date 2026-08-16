@@ -30,6 +30,7 @@ from typing import Final
 
 from pz_agent_core.platform.backup import BackupError, BackupManager
 from pz_agent_core.protocol import JsonDict
+from pz_agent_core.version import PRODUCT_VERSION
 
 from ..context import (
     EXIT_FAILURE,
@@ -280,6 +281,16 @@ def _prepare(
         "ledgers_initialised": list(initialised),
         "save_id": save_id or "",
         "backup_id": "" if backup is None else backup,
+        # Said here because this is the last cheap moment to hear it. `finalize`
+        # stamps this number into the manifest and `scripts/check_release.py
+        # --release` refuses evidence whose product version is not the version
+        # being released — with the remediation "bump version.py … then re-run
+        # the scenarios". After twenty-two scenarios and a two-hour endurance
+        # run, on a machine this repository cannot reach, that is the whole
+        # session. Not a refusal: whether the tree should declare the release
+        # version is a product decision, and a live run made for any other
+        # reason is legitimate.
+        "product_version": PRODUCT_VERSION,
         "problems": problems,
         "ready": not problems,
     }
@@ -293,6 +304,13 @@ def _prepare(
     printer.field("scenarios", f"{len(SCENARIO_IDS)} ledgers, {len(initialised)} newly created")
     printer.field("test save", save_id or "not established")
     printer.field("verified backup", backup or "none")
+    printer.field(
+        "product version",
+        f"{PRODUCT_VERSION} — finalize stamps this into the manifest, and the release "
+        "gate refuses evidence produced by a version other than the one being "
+        "released. Bump version.py first if this run is meant to certify a release; "
+        "evidence from a different build is evidence about that build",
+    )
     for problem in problems:
         printer.error(problem)
     if problems:

@@ -24,6 +24,24 @@ This file is generated from `pz_agent_cli.livetest.scenarios`, which is also
 what the runner executes. If the two ever disagree, the runner is right and this
 file is stale — regenerate it rather than editing it.
 
+## Decide the version before the first scenario
+
+`finalize` stamps `version.PRODUCT_VERSION` into the evidence manifest, and
+`scripts/check_release.py --release` refuses evidence whose product version is
+not the version being released. That check is the last one a release passes, and
+its remediation is *"bump version.py and everything that restates it … then
+**re-run the scenarios**"*.
+
+So the order matters and the cost of getting it wrong is the whole session:
+twenty-two scenarios, a thirty-minute run and a two-hour run. If this run is
+meant to certify a release, bump `version.py` and everything
+`scripts/check_versions.py` lists **first**, and confirm with
+`.venv/bin/python scripts/check_versions.py`. `pz-agent live-test prepare` prints
+the number it will stamp, which is the last cheap moment to notice.
+
+A live run made for any other reason needs none of this — the evidence simply
+cannot certify a release, which is the honest answer rather than an obstacle.
+
 ## Before the first scenario
 
 ```
