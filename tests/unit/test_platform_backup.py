@@ -216,6 +216,67 @@ def test_the_walk_stops_at_the_cap_instead_of_listing_the_whole_tree(
     assert visited <= 4, f"walked {visited} entries before honouring a cap of 3"
 
 
+def test_a_file_that_vanishes_between_the_walk_and_the_plan_is_a_backup_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A live game rotates its files, and the plan must survive one going away.
+
+    This module's contract is that every way the disk can disagree with the walk
+    surfaces as a ``BackupError`` and never as a raw ``OSError``: the CLI renders
+    refusals from this subsystem and would let anything else escape as a
+    traceback. The line that keeps that promise is ``_plan``'s ``if not
+    entry.is_file()`` — a path that no longer exists is not a file, so it is
+    refused before ``entry.stat()`` can raise ``FileNotFoundError``.
+
+    Measured by planting: deleting that check left the whole suite green (9463
+    passed). Its neighbour one line above, the symlink refusal, has had a test
+    since the beginning; this one had none.
+
+    The vanishing is staged by handing the walk one extra path rather than by
+    racing a real deletion, because a race that reproduces once in a hundred
+    runs is not a regression test.
+    """
+    manager, user_dir = _manager(tmp_path)
+    source = make_save(user_dir, SAVE_ID, SAVE_FILES)
+    real_rglob = Path.rglob
+
+    def rglob_with_a_ghost(self: Path, pattern: str) -> object:
+        def generate() -> object:
+            yield from real_rglob(self, pattern)
+            yield self / "rotated-away.bin"
+
+        return generate()
+
+    monkeypatch.setattr(Path, "rglob", rglob_with_a_ghost)
+
+    with pytest.raises(BackupError, match="not a regular file") as excinfo:
+        manager.create(SAVE_ID)
+
+    assert not isinstance(excinfo.value, OSError), (
+        "a vanished file escaped as an OSError, which the CLI renders as a traceback"
+    )
+    assert source.is_dir()
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="named pipes are POSIX-only")
+def test_a_named_pipe_inside_a_save_is_refused_rather_than_opened(tmp_path: Path) -> None:
+    """The other half of the same refusal, and the reason it must precede the copy.
+
+    A FIFO is not a regular file, and ``_copy_and_hash`` would *open* it — a
+    backup that blocks forever instead of refusing in one sentence. Kept beside
+    the test above because the two failures look nothing alike and only one
+    line stands between the user and either of them.
+    """
+    manager, user_dir = _manager(tmp_path)
+    source = make_save(user_dir, SAVE_ID, SAVE_FILES)
+    os.mkfifo(source / "pipe")
+
+    with pytest.raises(BackupError, match="not a regular file"):
+        manager.create(SAVE_ID)
+
+    assert list((tmp_path / "backups").glob("*")) == []
+
+
 def test_symlink_inside_a_save_is_refused(tmp_path: Path) -> None:
     manager, user_dir = _manager(tmp_path)
     save_dir = make_save(user_dir, SAVE_ID, SAVE_FILES)
@@ -472,6 +533,83 @@ def test_corrupt_manifests_are_rejected(
         manager.get(record.backup_id)
 
 
+def _fill_backup_with_unmanifested_files(record: BackupRecord, count: int) -> None:
+    """Grow a backup's data directory past its manifest, the way a wrong root does.
+
+    Pointing ``--backup-dir`` at a directory that already held something, or a
+    backup root that grew, is how a verification walk meets far more entries
+    than the manifest describes. Nothing about the manifest is touched: the
+    extra files are exactly what the bound exists for.
+    """
+    for index in range(count):
+        (record.data_dir / f"extra{index:04d}.bin").write_bytes(b"y")
+
+
+def test_verification_stops_at_the_cap_instead_of_listing_the_whole_backup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The verify-side twin of the create-side traversal cap, and it had no test.
+
+    ``_verify_record`` bounds its walk of the backup's data directory the same
+    way ``_plan`` bounds its walk of the save. Measured by planting: deleting
+    the check and keeping the accumulation left the entire suite green — 9484
+    passed — so the one operation a user runs *because* they are worried about a
+    save could materialise a path for every entry under the backup root before
+    any refusal was possible, and fail as exhausted memory rather than as a
+    named refusal. AGENTS.md: anything unbounded is a bug.
+
+    Asserted on the traversal, not on the exception, for the same reason the
+    create-side test is: a cap applied to an already-materialised listing
+    protects nothing, and only counting what was visited tells the two apart.
+    """
+    manager, user_dir = _manager(tmp_path, max_files=3)
+    make_save(user_dir, SAVE_ID, {f"f{index}.bin": b"x" for index in range(3)})
+    record = manager.create(SAVE_ID)
+    _fill_backup_with_unmanifested_files(record, 200)
+
+    visited = 0
+    real_rglob = Path.rglob
+
+    def counting_rglob(self: Path, pattern: str) -> object:
+        def generate() -> object:
+            nonlocal visited
+            for entry in real_rglob(self, pattern):
+                visited += 1
+                yield entry
+
+        return generate()
+
+    monkeypatch.setattr(Path, "rglob", counting_rglob)
+
+    with pytest.raises(BackupCorruptError, match="contains more than 3 files"):
+        manager.verify(record.backup_id)
+
+    assert visited <= 5, f"walked {visited} entries of 203 before honouring a cap of 3"
+
+
+def test_restore_is_bounded_by_the_same_cap_before_it_touches_the_save(
+    tmp_path: Path,
+) -> None:
+    """The bound above is what protects ``restore``, which is the dangerous one.
+
+    ``restore`` re-verifies the whole backup before a byte of the save is
+    touched, so the walk it is about to run is the same walk. Pinned separately
+    because the pre-flight call and the bound are different lines: one could be
+    removed while the other still had a test, and the operation left unbounded
+    would be the one performed on somebody's only copy.
+    """
+    manager, user_dir = _manager(tmp_path, max_files=3)
+    save_dir = make_save(user_dir, SAVE_ID, {f"f{index}.bin": b"x" for index in range(3)})
+    record = manager.create(SAVE_ID)
+    before = read_save(save_dir)
+    _fill_backup_with_unmanifested_files(record, 200)
+
+    with pytest.raises(BackupCorruptError, match="contains more than 3 files"):
+        manager.restore(record.backup_id, game_running=False)
+
+    assert read_save(save_dir) == before, "the save was touched by a refused restore"
+
+
 # ---------------------------------------------------------------------------
 # restore
 # ---------------------------------------------------------------------------
@@ -617,6 +755,44 @@ def test_a_backup_that_changes_after_verification_never_reaches_the_save(
 
     assert read_save(save_dir) == before
     assert [path.name for path in save_dir.parent.iterdir() if path.name.startswith(".")] == []
+
+
+def test_a_restore_that_reports_no_error_still_has_to_show_the_save(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The only place the restore path observes its own postcondition.
+
+    ``_swap`` moves the old save aside and the staged copy into place. If it
+    ever returned without the second move having landed — the window between the
+    two ``os.replace`` calls is real, and so is anything else removing the
+    directory in it — every remaining line of ``restore`` still runs and hands
+    back a fully populated ``RestoreResult`` naming a file count and a byte
+    total. The CLI prints a successful restore, and the user, told their save is
+    back, is now free to prune the backup that was the last copy of it.
+
+    AGENTS.md is explicit that ``succeeded`` means a postcondition was
+    *observed*. Measured by planting: deleting the ``if not target.is_dir()``
+    check left the whole suite green (9464 passed), so the one line that makes
+    this restore an observation rather than an assumption was unguarded.
+
+    ``_swap`` is replaced by a stand-in that reports no error and lands nothing,
+    which is precisely the failure the check exists for; nothing else about the
+    restore is disturbed.
+    """
+    manager, user_dir = _manager(tmp_path)
+    make_save(user_dir, SAVE_ID, SAVE_FILES)
+    record = manager.create(SAVE_ID)
+
+    def swap_that_reports_no_error(
+        self: BackupManager, *, staging: Path, target: Path, replaced: Path
+    ) -> None:
+        if target.is_dir():
+            shutil.rmtree(target)
+
+    monkeypatch.setattr(BackupManager, "_swap", swap_that_reports_no_error)
+
+    with pytest.raises(BackupError, match="the save is not there"):
+        manager.restore(record.backup_id, game_running=False)
 
 
 def test_a_failed_swap_puts_the_previous_save_back(

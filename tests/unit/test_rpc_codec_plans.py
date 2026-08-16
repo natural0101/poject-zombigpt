@@ -17,9 +17,10 @@ unique, and an empty one survives.
 from __future__ import annotations
 
 import json
+import re
 import traceback
 from dataclasses import fields
-from typing import Any
+from typing import Any, Final
 
 import pytest
 
@@ -751,11 +752,64 @@ def test_the_records_own_message_does_not_survive_into_the_traceback(step_index:
     with pytest.raises(CodecError) as excinfo:
         decode_plan_record(payload)
     error = excinfo.value
-    rendered = "".join(traceback.format_exception(type(error), error, error.__traceback__))
+    rendered = _rendered_without_frame_paths(error)
     assert str(step_index) not in rendered
     assert "got" not in rendered.split("plan.record:")[-1]
     assert error.__cause__ is None
     assert error.__suppress_context__ is True
+
+
+#: The ``File "…", line N`` header of a traceback frame, with the path captured.
+_FRAME_HEADER: Final = re.compile(r'^(\s*File ")(?P<path>[^"]*)(", line \d+)', re.MULTILINE)
+
+
+def _rendered_without_frame_paths(error: BaseException) -> str:
+    """The traceback as Python renders it, minus the filesystem paths.
+
+    The assertion above searches the rendered traceback for the *number*, and a
+    rendered traceback quotes the path of every frame. So the test failed in any
+    checkout whose path happened to contain ``-1`` — which a git worktree named
+    ``…-1`` does, and which is exactly how it fired: an agent measuring an
+    unrelated defect had to stash its work to prove the failure was not its own.
+    A checker that accuses correct work is argued with once and then switched
+    off, so the paths are removed before the search rather than the search
+    weakened.
+
+    Only the paths go. The messages, the echoed source lines and the "During
+    handling of the above exception" chaining preamble — the whole reason this
+    test renders a traceback instead of reading ``__cause__`` — are untouched,
+    which is what the control below pins.
+    """
+    rendered = "".join(traceback.format_exception(type(error), error, error.__traceback__))
+    return _FRAME_HEADER.sub(lambda match: f"{match.group(1)}<path>{match.group(3)}", rendered)
+
+
+@pytest.mark.parametrize("step_index", [-1, -99])
+def test_the_path_scrubber_hides_paths_and_nothing_else(step_index: int) -> None:
+    """The control: a number in a *message* must still be found after scrubbing.
+
+    Without this, a substitution that ate too much would make the test above
+    pass for the worst possible reason — the leak it exists to catch would be
+    scrubbed away with the paths, and the ``from None`` clause could be deleted
+    unnoticed. So the same helper is handed exactly that regression: the raise
+    below omits ``from None``, which is what leaves ``__context__`` set and
+    drags the original message into the rendering.
+    """
+    try:
+        try:
+            raise ValueError(f"step_index must be non-negative, got {step_index}")
+        except ValueError:
+            raise CodecError("plan.record: step_index must be non-negative")  # noqa: B904
+    except CodecError as leaking:
+        rendered = _rendered_without_frame_paths(leaking)
+
+    assert str(step_index) in rendered, (
+        "the scrubber removed a number that was in an exception message, not in a path; "
+        "the assertion it serves would then pass however badly the codec leaked"
+    )
+    assert "During handling of the above exception" in rendered, (
+        "the chaining preamble is the mechanism this test renders a traceback to see"
+    )
 
 
 def test_a_zero_step_index_is_a_real_answer_not_a_refusal() -> None:

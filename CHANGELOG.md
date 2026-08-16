@@ -12,6 +12,59 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **Three unguarded refusals in the save-backup subsystem, found by a
+  multi-agent plant sweep** (`dev`). The sweep gave four agents a disjoint area
+  of shipped code each, in its own git worktree, with one rule: a refusal counts
+  as unguarded only when its plant leaves the *full* suite green. `platform/`
+  returned three, each re-planted in the main tree here before a line of test
+  was written:
+
+  - **`_verify_record`'s traversal bound.** The verify-side twin of the
+    create-side cap, and the create-side one has had a test since the beginning.
+    Deleting it left the suite green at 9484 passed. Verification and restore
+    both walk the backup's data directory, so without the bound the operation a
+    user runs *because* they are worried about a save is the one that
+    materialises a path per entry and dies as exhausted memory rather than as a
+    named refusal. Now pinned by counting what the walk visits — a cap checked
+    after the listing protects nothing — and separately for `restore`, whose
+    pre-flight verification is a different line from the bound itself.
+  - **`_plan`'s "not a regular file".** Its neighbour one line above, the
+    symlink refusal, was tested; this one was not. It carries two failures: a
+    named pipe in a save directory would be *opened* by the copy — a backup that
+    blocks forever instead of refusing in a sentence (planted, and the test
+    duly hung until the timeout) — and, far likelier, a file the live game
+    rotated away between the walk and the plan would escape as a raw
+    `FileNotFoundError`, which this module's contract says must never happen
+    because the CLI renders its refusals and lets anything else through as a
+    traceback.
+  - **`restore`'s postcondition.** The only place the restore path observes its
+    own result. With it deleted the suite stayed green at 9464 passed, and a
+    restore whose swap landed nothing still returns a populated `RestoreResult`
+    naming a file count and a byte total — the CLI prints success, and the user,
+    told the save is back, is free to prune the backup that was the last copy of
+    it. AGENTS.md: `succeeded` means a postcondition was *observed*.
+
+  No product behaviour changed; all three refusals were correct and unwatched.
+  `safety/` was swept the same way — five plants, all five caught — and is
+  reported sound.
+
+- **A test that failed because of where the repository was checked out**
+  (`dev`). `test_the_records_own_message_does_not_survive_into_the_traceback`
+  renders a traceback and asserts the parametrised number does not appear in it.
+  A rendered traceback quotes the path of every frame, so the `[-1]` case failed
+  in any checkout whose path contains `-1` — which a git worktree named `…-1`
+  does. It cost a real measurement: an agent sweeping an unrelated area had to
+  stash its work to prove the failure was not its own, and every finding it
+  reported carried a caveat about it.
+
+  The paths are now removed from the rendering before the search, rather than
+  the search weakened: messages, echoed source lines and the "During handling of
+  the above exception" preamble all stay, which is the whole reason the test
+  renders a traceback instead of reading `__cause__`. A control hands the same
+  helper the exact regression it guards against — a raise with the `from None`
+  dropped — and asserts the number is still found, so a substitution that ate
+  too much cannot make the test pass for the worst possible reason.
+
 - **Three of `live-test prepare`'s six refusals had no test, including the one
   that tells a backup that exists from a backup that restores** (`dev`).
   `prepare` is the subcommand that proves a world is safe to experiment on

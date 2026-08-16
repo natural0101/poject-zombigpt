@@ -1335,6 +1335,36 @@ this iteration measured is the coverage of one subcommand's refusals; the same
 sweep over the 1 179 refusal sites in `packages/` has not been run, and no claim
 is made about them.
 
+That sweep was then run, as a multi-agent fan-out: four agents, a disjoint area
+of shipped code each, every one in its own git worktree so the plants could not
+collide. The rule they were held to is the one this file has been learning all
+month — a refusal counts as unguarded only when its plant leaves the **full**
+suite green, a scoped run being enough to prove the opposite and nothing more.
+Isolation was verified before the fan-out started rather than assumed: pytest's
+`pythonpath` is relative to the rootdir, so a worktree run imports the
+worktree's sources, and a plant made in one was shown to fail a test there while
+the main checkout stayed clean.
+
+`safety/` came back sound — five plants, five caught, including the panic-stop
+path and the rung that lets the mod's reported danger raise but never lower this
+process's own assessment. `platform/` returned three findings, each re-planted
+here in the main tree before any test was written for it: the verify-side
+traversal bound (suite green at 9484 passed under the plant), `_plan`'s "not a
+regular file" refusal (9463), and `restore`'s postcondition (9464). All three are
+now guarded, and each guard was shown to fail under its plant. The two remaining
+areas — the action adapters and the CLI outside `livetest/` — were still running
+when this was written and are not claimed either way.
+
+The sweep also found a defect in the *tests* rather than the code, and it is the
+more interesting one. `test_the_records_own_message_does_not_survive_into_the_traceback[-1]`
+asserts that `-1` does not appear in a rendered traceback; a rendered traceback
+quotes every frame's file path; a git worktree is named `…-1`. So the agent
+working in it opened with a failure that was neither its own nor the
+repository's, had to stash its work to establish that, and qualified every
+finding it made afterwards. A checker that accuses correct work is argued with
+once and then switched off — this repository has written that sentence about its
+own gates twice, and this time it was a unit test doing the accusing.
+
 ## Deviations from the blueprint
 
 | Blueprint | Here | Why |
