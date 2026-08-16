@@ -10,6 +10,35 @@ drift out of sync with `pz_agent_core.version`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The command sink's progress table grew without bound for the life of a
+  session** (`dev`). `QueueCommandSink` records when each shipped command was
+  last heard from, so the reflex guard can tell a command that is working from
+  one that has stopped. Entries went in on every send and every ack, and came
+  out on exactly one event — a terminal ack — so a command that never got one
+  stayed forever.
+
+  The queue guarantees there are such commands. `CommandQueue._track` sheds the
+  oldest evictable entry once `pending_limit` is reached, and a shed command's
+  terminal ack is filed against nothing. Measured with the real classes at
+  `pending_limit=8`: two hundred accepted commands left the queue tracking eight
+  and the sink holding two hundred — 192 entries for commands the queue had
+  already forgotten, which nothing could read and no ack could remove. AGENTS.md
+  requires bounded memory and calls anything unbounded a bug.
+
+  The sink now prunes to the queue's own pending set rather than to a second
+  limit of its own, because a duplicate bound is one that drifts. Nothing is
+  lost: `AgentRuntime._in_flight` is the only caller of `last_progress_ms` and
+  iterates exactly that set, and the in-flight command is the one entry
+  `_evictable_command_id` refuses to shed. `progress_command_ids` publishes the
+  table's keys so the bound is asserted against the queue instead of by reaching
+  into a private attribute.
+
+  `tests/unit/test_sink_progress_is_bounded.py` fails in both directions:
+  removing the pruning restores the growth, and pruning greedily (clearing the
+  table) drops the entry the guard actually reads.
+
 ### Added
 
 - **A state-changing engine call can no longer enter the mod unnamed** (`dev`).

@@ -536,14 +536,47 @@ class QueueCommandSink:
     def cancellations(self) -> int:
         return self._cancelled
 
+    @property
+    def progress_command_ids(self) -> tuple[str, ...]:
+        """Which commands this sink is holding progress for.
+
+        Published so the bound on that table can be asserted against the
+        queue's own pending set rather than by reaching into a private
+        attribute — a test that reads `_progress_ms` would keep passing if the
+        table were renamed and left unbounded somewhere else.
+        """
+        return tuple(self._progress_ms)
+
     def last_progress_ms(self, command: Command) -> int:
         """When this command was last heard from; its issue time until then."""
         return self._progress_ms.get(command.command_id, command.issued_at_ms)
+
+    def _forget_what_the_queue_forgot(self) -> None:
+        """Drop progress for commands the queue no longer tracks.
+
+        ``_progress_ms`` used to be removed from on a terminal ack and nowhere
+        else, so a command that never got one stayed for the life of the
+        session — and the queue's ``pending_limit`` guarantees there are such
+        commands: ``_track`` sheds the oldest evictable entry once the bound is
+        reached, and a shed command's terminal ack is filed against nothing.
+        Measured with the real classes at ``pending_limit=8``: 200 accepted
+        commands left the queue tracking 8 and this dictionary holding 200.
+
+        Pruning to the queue's own pending set cannot lose anything a reader
+        wants. :meth:`AgentRuntime._in_flight` — the only caller of
+        :meth:`last_progress_ms` — iterates exactly that set, and the in-flight
+        command is the one entry ``_evictable_command_id`` refuses to shed, so
+        the engine's no-progress detection sees what it always did.
+        """
+        tracked = {command.command_id for command in self.queue.pending}
+        for command_id in [key for key in self._progress_ms if key not in tracked]:
+            del self._progress_ms[command_id]
 
     def send(self, command: Command) -> Dispatch:
         outcome = self.queue.submit(command)
         if outcome.accepted:
             self._progress_ms[outcome.command.command_id] = self.clock()
+            self._forget_what_the_queue_forgot()
             return Dispatch(command=outcome.command)
         return Dispatch(command=outcome.command, rejection=outcome.terminal_result)
 
@@ -554,6 +587,7 @@ class QueueCommandSink:
             self._progress_ms[result.command_id] = now
             if result.is_terminal:
                 self._progress_ms.pop(result.command_id, None)
+        self._forget_what_the_queue_forgot()
         return poll.results
 
     def cancel(self, command: Command, reason: ReasonCode) -> None:

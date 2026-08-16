@@ -1061,6 +1061,33 @@ row. The one real defect found this pass was in the guard itself: compiled with
 `re.IGNORECASE`, its pattern also relaxed the required capital and accused
 `settings` and `address`. Its own control test caught that.
 
+Asking the same enumeration question of "bounded everything" found a real leak
+on the session-long path. `QueueCommandSink` remembers when each shipped command
+was last heard from; entries went in on every send and every ack and came out
+only on a terminal ack, so a command that never got one stayed for the whole
+session. The queue guarantees there are such commands — its `pending_limit`
+sheds the oldest evictable entry, and a shed command's terminal ack is filed
+against nothing. Measured with the real classes at `pending_limit=8`: two
+hundred accepted commands left the queue tracking eight and the sink holding two
+hundred, 192 of them unreadable and unremovable. The sink now prunes to the
+queue's own pending set — not to a second limit of its own, since a duplicate
+bound drifts — and `tests/unit/test_sink_progress_is_bounded.py` fails both when
+the pruning is removed and when it is made greedy enough to drop the entry the
+reflex guard reads.
+
+Two rules were checked in the same pass and found sound, reported rather than
+changed. "The model never picks the sandwich": the goal path runs `select_food`
+/ `select_drink` in the provider and in the consume mission, and although
+`consume.eat` is plannable — so a model may name any *observed* item — the mod
+refuses rotten, burnt and poisonous items in `Consumption.lua` before acting,
+which is defence in depth and is pinned by Lua tests (removing those lines fails
+two of them). No claim is made here about whether the mod's boolean gate and the
+policy's richer freshness model agree; those symbols are `requires_live`, and
+inventing a defect out of unverified engine semantics is the same error the
+capability-honesty rule forbids. And every `policy/*.py` module has shipped
+importers, so none of the deterministic selectors is a subsystem nobody
+connected.
+
 ## Deviations from the blueprint
 
 | Blueprint | Here | Why |
