@@ -10,6 +10,29 @@ drift out of sync with `pz_agent_core.version`.
 
 ## [Unreleased]
 
+### Added
+
+- **Every `SuccessKind` is now classified, so a new one cannot reopen the
+  invented-reference hole quietly** (`dev`). The critic gates `ITEM_CONSUMED`
+  because that criterion is satisfied by the item's *absence*; closing that
+  instance is not closing the class. A seventh kind phrased as a disappearance —
+  `item_dropped`, `container_emptied` — would be satisfied the same way and
+  would not be in `_ITEM_READING_CRITERIA`.
+
+  `tests/unit/test_success_kinds_are_classified.py` does not compare two lists.
+  For every kind the enum declares it runs the real `SuccessCriterion.holds`
+  twice — once with a reference the observation carries, once with one it does
+  not — and requires that a kind answering **True only for the unobserved
+  reference** is gated at the critic. That cannot be satisfied by editing a
+  literal.
+
+  Which kinds are in scope is measured rather than declared, and that mattered:
+  the first version declared the scope by hand and accused `position_reached`,
+  which reads the player's position and no reference at all. It was a false
+  accusation of exactly the kind this repository has been taught to avoid, and
+  the fix was to let the measurement decide — a kind is reference-reading when
+  its answer changes with the reference it is given.
+
 ### Fixed
 
 - **A reference the model invented produced a finished plan and a silent

@@ -968,6 +968,15 @@ anything not in the `FILES` table, so the lookup table *is* the guard.
 `diagnostics/bundle.py` is clean too, by a character allowlist that excludes the
 backslash, and it never extracts.
 
+That gate covers one criterion, so the next step was to close the class rather
+than the case: `tests/unit/test_success_kinds_are_classified.py` runs every
+`SuccessKind` through the real `holds` with an observed and an unobserved
+reference, and requires any kind that answers True *only* for the unobserved one
+to be gated. A criterion added later and phrased as a disappearance fails it
+until someone decides which way to classify it. The scope is measured, not
+declared — the first version declared it and falsely accused `position_reached`,
+which reads no reference at all.
+
 ## Deviations from the blueprint
 
 | Blueprint | Here | Why |
