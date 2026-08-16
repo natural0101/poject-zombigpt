@@ -1446,12 +1446,32 @@ in a backend exception reached the terminal and the `--json` payload and nowhere
 else. That last one is why `test_voice_privacy.py` did not see it — it scans for
 a transcript canary, not for paths.
 
-With those closed, the sweep has covered every area of shipped code it set out
-to: `platform/`, `safety/`, `actions/adapters/`, the CLI, `goals/`, `planner/`,
-`ipc/`, `memory/` and the voice surface. What it did not cover is stated rather
-than implied: within each area only a handful of refusal sites were planted —
-five per agent, against surfaces holding dozens — so "swept" here means "sampled
-under a stated budget", never "exhausted".
+With those closed, the sweep has covered every area it was *given*. In
+`pz_agent_core`: `platform/`, `safety/`, `actions/` (its `adapters/`),
+`goals/`, `planner/`, `ipc/` and `memory/`. In `pz_agent_cli`: the package
+itself including `livetest/`, and `voice.py`. And `pz_agent_voice` with its
+`adapters/`.
+
+That sentence was first written as "every area of shipped code", which is the
+kind of claim this file exists to stop. **The list was not the code.** Never
+assigned, and therefore never measured at the time: the whole of `pz_agent_mcp`
+including its `remote/`, and `rpc/`, `session/`, `observation/`, `policy/`,
+`capabilities/`, `navigation/`, `loot/`, `combat/`, `knowledge/`,
+`diagnostics/` and `protocol/` inside the core. Eleven subpackages and a whole
+package, in a sentence that read as though the tree were finished.
+
+`tests/contract/test_the_sweep_coverage_claim_names_the_tree.py` now derives the
+subpackage set from `packages/` and requires this claim to name every member,
+in whichever of the two lists is true. It cannot tell swept from unswept — that
+is a fact about work done, not about the tree — but it catches the case that
+actually happened, a package the paragraph never mentions. On its first run it
+found five more names missing from the corrected list above.
+
+And within each area that *was* given, only a handful of refusal sites were
+planted — five per agent, against surfaces holding dozens — so "swept" means
+"sampled under a stated budget", never "exhausted". Both halves are the same
+discipline: a coverage claim is worth exactly the set it was measured over, and
+the set has to be written down beside it.
 
 ## Deviations from the blueprint
 

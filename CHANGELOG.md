@@ -12,6 +12,23 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **A coverage claim that named nine areas and read as though it named the
+  tree** (`dev`). `docs/PROGRESS.md` recorded the refusal-plant sweep as having
+  covered "every area of shipped code". It had covered every area it was
+  *given* — nine — and the tree holds twenty-one: the whole of `pz_agent_mcp`
+  and eleven more subpackages inside the core had never been assigned to an
+  agent, so they had never been measured while the sentence implied they had.
+
+  The claim is corrected to name each one, in the swept list or the not-yet
+  list, and `tests/contract/test_the_sweep_coverage_claim_names_the_tree.py`
+  derives the subpackage set from `packages/` and requires every member to
+  appear. It deliberately cannot tell swept from unswept — that is a fact about
+  work done, not about the tree, and a test that tried to decide it would be
+  asserting the document against itself — but it catches the case that
+  happened, a package the paragraph never mentions. It earned itself on the
+  first run by finding five more names the corrected paragraph was still
+  missing.
+
 - **The three voice refusals recorded as open last round are settled, and all
   three were real** (`dev`). Each was re-planted here and each new test shown to
   fail under its own plant.
