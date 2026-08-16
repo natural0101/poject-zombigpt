@@ -1500,11 +1500,16 @@ character in. That test also had to be corrected before it was worth anything:
 its first version used an open window, where the fill leaves through the first
 edge square and the missing guard never bites. It seals the ring now.
 
-Nine are measured and open, listed in `CHANGELOG.md` rather than closed quietly:
-two in `rpc/`, two in `pz_agent_mcp`, two in `policy/` and three in the mission
-packages — among them `Journey._check_stuck`'s second counter, which the sweep
-itself narrowed by noting that `max_legs` still bounds the journey, so what is
-lost is the honest STUCK ending rather than termination.
+The three mission findings are closed too: `_safe_weight`'s refusal of a
+non-finite item weight, `NavigationTarget`'s arrival-radius bound, and the
+no-net-progress half of `Journey._check_stuck`. The first of those is the
+round's second lesson in assertions that do not discriminate — a first version
+checked only that every item was still decided, which is true whether or not the
+weight poisoned the budget. Two assertions were needed because the three kinds
+of rubbish fail in opposite directions.
+
+Six are measured and open, listed in `CHANGELOG.md` rather than closed quietly:
+two in `rpc/`, two in `pz_agent_mcp` and two in `policy/`.
 
 ## Deviations from the blueprint
 

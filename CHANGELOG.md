@@ -59,16 +59,40 @@ drift out of sync with `pz_agent_core.version`.
   non-terminating loop caught by a three-hundred-second timeout is a worse
   failure report than one caught at a stated ceiling.
 
+- **The three mission refusals: a poisoned weight, an unbounded arrival radius,
+  and half of the stuck detector** (`dev`).
+
+  `_safe_weight` reads an item weight that is not a finite non-negative number
+  as weightless. Weights come off the wire and `_as_float` checks only the JSON
+  type, so NaN, infinity and negatives all reach the selection — where one of
+  them destroys the total order the weight-ascending sort depends on *and*
+  poisons the running capacity budget for every later item. The new test needed
+  two assertions before it caught anything: the three kinds of rubbish fail in
+  opposite directions, NaN and a negative making the budget accept an item that
+  does not fit while infinity makes it reject one that does.
+
+  `NavigationTarget.__post_init__` bounds the arrival radius. The radius is the
+  only thing that turns an observed position into `Arrived`, and
+  `_check_arrived` runs before any action is emitted — so an oversized one
+  declares arrival from an arbitrary distance without the character moving and
+  without the mod being asked.
+
+  `Journey._check_stuck` counts two things, and only one was tested. The mod
+  acks `movement.move_to` as SUCCEEDED when the queue entry completed, not when
+  the character arrived, so an oscillating route or a shoved character produces
+  a run of *successful* legs that get no closer — invisible to the failure
+  counter, which never leaves zero. Honest about the size of it:
+  `max_legs` still stops the journey, so termination survives; what is lost is
+  the honest STUCK diagnosis in place of "ran out of legs".
+
 ### Measured and open
 
-- Nine findings from the sweep are **not yet guarded**: the RPC client's connect
+- Six findings from the sweep are **not yet guarded**: the RPC client's connect
   timeout on the dial (the one wait that happens before the watchdog exists) and
   the `PermissionError` arm of the POSIX liveness probe; the MCP router's
   `islice` bound on a memory port's answer and the redaction of a capability's
-  `reason` in `pz://capabilities`; `DrinkChoice`'s portioned/fraction invariant
-  and `load_report`'s typed read failure; and in the missions, `_safe_weight`'s
-  refusal of a non-finite item weight, `NavigationTarget`'s arrival-radius
-  bound, and the second counter in `Journey._check_stuck`. Each has a full-suite
+  `reason` in `pz://capabilities`; and `DrinkChoice`'s portioned/fraction
+  invariant with `load_report`'s typed read failure. Each has a full-suite
   measurement behind it; none has a test yet.
 
 - **A coverage claim that named nine areas and read as though it named the

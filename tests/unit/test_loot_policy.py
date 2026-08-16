@@ -280,6 +280,53 @@ def test_capacity_greedy_boundary_exact_fit_taken_next_over_capacity() -> None:
     assert (left.item_ref, left.reason) == ("item:c", LeaveReason.OVER_CAPACITY)
 
 
+@pytest.mark.parametrize("poison", [float("nan"), float("inf"), -1.0])
+def test_a_weight_that_is_not_a_number_cannot_poison_the_whole_selection(
+    poison: float,
+) -> None:
+    """Item weights come off the wire and the wire is untrusted.
+
+    ``protocol/messages.py::_as_float`` checks the JSON type and nothing else,
+    so NaN, infinity and negatives all reach here. One of them does two things
+    at once inside ``select``: NaN compares false against everything, which
+    destroys the total order the weight-ascending sort depends on, and it
+    poisons the running capacity budget for every later item — a whole
+    selection corrupted by one broken entry.
+
+    The policy's answer is to read such a weight as weightless, which is the
+    smaller loss and is what the docstring promises. Deleting the guard left the
+    whole suite green.
+
+    What is pinned is that the *other* items are still decided correctly, not
+    the fate of the broken one: over-taking one item is the accepted cost.
+    """
+    contents = [
+        _item("item:light", weight=0.6),
+        _item("item:broken", weight=poison),
+        _item("item:heavy", weight=0.7),
+    ]
+
+    result = select(
+        contents,
+        policy=DEFAULT_LOOT_POLICY,
+        free_capacity=1.0,
+        is_reserved=_nothing_reserved,
+    )
+
+    # Two assertions, because the three kinds of rubbish fail differently and
+    # neither alone catches all of them: NaN and a negative make the budget
+    # accept an item that does not fit, infinity makes it reject one that does.
+    # Measured — a first version asserted only that every item was decided, and
+    # passed with the guard deleted.
+    assert "item:broken" in result.take_refs, (
+        "an unusable weight was allowed into the capacity arithmetic instead of "
+        "being read as weightless"
+    )
+    assert "item:heavy" in {entry.item_ref for entry in result.leave}, (
+        "0.6 + 0.7 does not fit in 1.0, but one broken weight made the budget say it did"
+    )
+
+
 def test_uncarriable_is_distinct_from_over_capacity() -> None:
     contents = [
         _item("item:light", weight=0.6),

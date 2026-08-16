@@ -11,6 +11,9 @@ from __future__ import annotations
 
 import uuid
 
+import pytest
+
+from pz_agent_core.actions.adapters.movement import MAX_ARRIVAL_RADIUS
 from pz_agent_core.navigation import (
     Arrived,
     Journey,
@@ -168,6 +171,32 @@ def plane_route(step: Step) -> set[tuple[int, int, int]]:
 # ---------------------------------------------------------------------------
 # the happy path
 # ---------------------------------------------------------------------------
+
+
+class TestTheArrivalRadius:
+    """The radius is the only thing that turns a position into ``Arrived``."""
+
+    def test_a_radius_outside_the_bound_is_refused_at_construction(self) -> None:
+        """An oversized radius declares arrival from an arbitrary distance.
+
+        ``Journey._check_arrived`` compares squared plane distance against
+        ``radius ** 2`` before any action is emitted, so a target built with a
+        radius of a hundred is "arrived" the moment the journey starts —
+        without the character having moved and without the mod ever being asked.
+        The bound is borrowed from the movement adapter so the executor and the
+        mod cannot disagree about what "close enough" means.
+
+        The partial lever does not cover this direction: ``_emit_leg`` passes
+        the radius into ``movement.move_to``, where the adapter validates it,
+        but an arrival declared here emits no leg at all.
+
+        Deleting the validator left the whole suite green.
+        """
+        with pytest.raises(ValueError, match="radius must be within"):
+            NavigationTarget(5, 0, 0, radius=MAX_ARRIVAL_RADIUS + 1.0)
+
+        with pytest.raises(ValueError, match="radius must be within"):
+            NavigationTarget(5, 0, 0, radius=0.0)
 
 
 class TestStraightLine:
@@ -388,6 +417,43 @@ class TestBounds:
         assert refused.error.reason_code is ReasonCode.PATH_STUCK
         assert refused.error.square == first.leg_target
         assert "PATH_STUCK" in refused.error.message
+
+    def test_legs_that_succeed_without_approaching_are_also_stuck(self) -> None:
+        """The other counter, and the case the failure counter cannot see.
+
+        The mod acks ``movement.move_to`` as SUCCEEDED when the queue entry
+        completed, not when the character reached the square. So an oscillating
+        route, a repeatedly re-observed obstruction or a character being shoved
+        back produces a run of *successful* legs that get no closer — the
+        NEVER TERMINAL family in its purest form, and invisible to
+        ``_consecutive_failures``, which never leaves zero here.
+
+        The test above drives failures; this one drives successes and moves the
+        player nowhere. Deleting the ``_legs_without_progress`` conjunct left
+        the whole suite green.
+
+        Honest about what is lost: ``max_legs`` still stops the journey after
+        sixty-four legs, so termination survives. What does not is the honest
+        STUCK ending — the caller would be told the journey ran out of legs
+        rather than that it was getting nowhere, which is a different diagnosis
+        and a worse one.
+        """
+        limits = JourneyLimits(max_consecutive_failures=2)
+        journey = Journey(LocalMap(), NavigationTarget(20, 0, 0), limits=limits)
+        expect_step(journey.next_step(observed(1)))
+        journey.note_result(succeeded(ActionName.MOVEMENT_MOVE_TO))
+        expect_step(journey.next_step(observed(2)))
+        journey.note_result(succeeded(ActionName.MOVEMENT_MOVE_TO))
+
+        refused = expect_refused(journey.next_step(observed(3)))
+
+        assert refused.error.failure is NavigationFailure.STUCK, (
+            "two legs completed with no net progress and the journey kept walking"
+        )
+        assert journey.legs_used < limits.max_legs, (
+            "the journey only stopped because it ran out of legs, which is a "
+            "different answer from 'this is getting nowhere'"
+        )
 
     def test_progress_resets_the_stuck_counter(self) -> None:
         limits = JourneyLimits(max_consecutive_failures=2, leg_distance=5)
