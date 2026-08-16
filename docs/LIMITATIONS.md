@@ -14,7 +14,8 @@ running game — see [`PROGRESS.md`](PROGRESS.md).
 **1. Live game validation has never run.** Not once. No probe in
 `pz_agent_core.capabilities` has ever been confirmed against a running Project
 Zomboid; every row in `docs/GAME_API_VERIFICATION.md` is `requires_live` with an
-empty "Actual" column, 168 symbol rows in total; all twenty-two scenarios in
+empty "Actual" column, and that document states how many there are; all
+twenty-two scenarios in
 `pz_agent_cli.livetest` are `NOT_RUN`; the sixteen files under
 `tests/game-smoke/` have never been executed against a game. That includes
 `ISTakeWaterAction`, whose argument order the document flags as unconfirmed and

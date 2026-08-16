@@ -52,14 +52,45 @@ REPO_ROOT: Final = Path(__file__).resolve().parents[2]
 INVENTORY: Final = REPO_ROOT / "docs" / "GAME_API_VERIFICATION.md"
 MOD_ROOT: Final = REPO_ROOT / "pz-mod"
 
-#: The satellite documents. Each used to state its own figure; each now points
-#: at the inventory. Named rather than globbed so widening the rule is a
-#: deliberate act, and so the historical records stay out of it.
-SATELLITES: Final = (
-    REPO_ROOT / "docs" / "LOCAL_DEBUG_MAP.md",
-    REPO_ROOT / "docs" / "LIVE_TEST_PLAYBOOK.md",
-    REPO_ROOT / "docs" / "LOCAL_AGENT_PROMPT.md",
-)
+#: Documents that may name the inventory without being held to the rule, each
+#: for a stated reason. Everything else under ``docs/`` that names it is a
+#: satellite, derived below rather than listed — because listing them is how
+#: this guard failed.
+SATELLITE_EXEMPTIONS: Final = {
+    # The defect record. It has to be able to quote the wrong figures — "four
+    # documents said 52 against a real 167" is the sentence that keeps the
+    # mistake from being made again, and a rule that forbade it would erase the
+    # history that justifies the rule.
+    "PROGRESS.md": "the record of this very defect, which must quote the wrong numbers",
+}
+
+
+def _satellites() -> tuple[Path, ...]:
+    """Every document that points at the inventory, found rather than remembered.
+
+    This list used to be three paths written by hand — the three the original
+    defect was found in. Two more were carrying stale figures the whole time:
+    ``LOCAL_GAME_HANDOFF.md`` still said "the 52 engine symbols" and "finds six
+    of them", and ``LIMITATIONS.md`` said "168 symbol rows" against the
+    inventory's 167, which is the legend-row miscount corrected in the inventory
+    and never propagated. Both are documents whose job is to size the risk
+    before a live session; one understated it threefold.
+
+    So the set is derived from the fact — a document that names the inventory is
+    a satellite — and the exemptions are named with their reasons.
+    """
+    found = []
+    for path in sorted((REPO_ROOT / "docs").rglob("*.md")):
+        if "blueprint" in path.parts or path.name == INVENTORY.name:
+            continue
+        if path.name in SATELLITE_EXEMPTIONS:
+            continue
+        if INVENTORY.name in path.read_text(encoding="utf-8"):
+            found.append(path)
+    return tuple(found)
+
+
+SATELLITES: Final = _satellites()
 
 #: The comment the documents tell the operator to grep for.
 MARKER: Final = "Build 42:"
@@ -213,7 +244,13 @@ def test_no_satellite_states_a_size_of_its_own(document: Path) -> None:
     text = document.read_text(encoding="utf-8")
     claims = re.findall(
         r"\b(?:\d+|" + "|".join(_WORDS) + r"|сто\s+\w+|двадцать\s+\w+)\s+"
-        r"(?:symbols|символов|symbol rows|`requires_live`)",
+        # One optional qualifier between the number and the noun. Without it
+        # "52 engine symbols" walked straight through: the pattern had been
+        # written against the exact phrasings the first sweep happened to find,
+        # which is the same mistake as listing the satellites instead of
+        # deriving them. Planting that sentence is what showed it.
+        r"(?:\w+\s+)?"
+        r"(?:symbols?|символов|symbol rows|`requires_live`)",
         text,
         re.IGNORECASE,
     )

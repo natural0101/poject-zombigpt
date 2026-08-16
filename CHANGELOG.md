@@ -12,6 +12,33 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **Two more documents were still understating the unverified engine surface,
+  and my own guard could not see either** (`dev`). The rule is that
+  `docs/GAME_API_VERIFICATION.md` states the size and every other document
+  points at it. When that was first fixed, the guard was written around the
+  three documents the defect had been found in.
+
+  Measured now: ten documents name the inventory, and two of the seven outside
+  that list carried stale figures the whole time. `LOCAL_GAME_HANDOFF.md` still
+  said "the 52 engine symbols" and "finds six of them" — the original wrong
+  numbers, against a real 167 rows and 10 marker lines in 3 files — and
+  `LIMITATIONS.md` said "168 symbol rows", the legend-row miscount that was
+  corrected in the inventory and never propagated. Both are documents whose job
+  is to size the risk before a live session; one understated it threefold.
+
+  Two separate scoping failures, both mine. The document set was *listed*
+  instead of derived, so five satellites were never checked; and the pattern
+  required the noun immediately after the number, so "52 engine symbols" walked
+  through even once the document was in scope — proved by planting it, which is
+  how the second failure surfaced at all.
+
+  Both are fixed at the fact rather than at the files: the satellite set is now
+  derived from "names the inventory", with `PROGRESS.md` exempt by name because
+  it is the record of this defect and has to be able to quote the wrong figures;
+  and the pattern allows one qualifier between the number and the noun. Nine
+  satellites are now checked, with no false accusation among them, and both
+  stale sentences fail the guard when planted back.
+
 - **A live session run against this tree would have produced evidence the
   release bar refuses, and nothing said so beforehand** (`dev`). Every existing
   test of `scripts/check_release.py` asserts that some particular check is

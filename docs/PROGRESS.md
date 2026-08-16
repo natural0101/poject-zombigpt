@@ -1218,6 +1218,39 @@ test that has outlived its reason.
 release version *before* the live run, or accept that the session's evidence
 cannot certify v1.0.0.
 
+The same lesson arrived again, about the same defect, and this time the fault
+was in the guard I wrote for it. The rule — the inventory states the size of the
+unverified engine surface, everything else points at it — was enforced over
+three documents, the three the original sweep had found. Measured now: ten
+documents name the inventory, and two outside that list had been carrying the
+wrong figures ever since. `LOCAL_GAME_HANDOFF.md` still said "the 52 engine
+symbols" and "finds six of them" against a real 167 rows and 10 marker lines in
+3 files; `LIMITATIONS.md` said "168 symbol rows", the legend-row miscount fixed
+in the inventory and never propagated outward. Both size the risk an operator
+takes on before the first live session.
+
+Two failures, not one. The set was listed rather than derived — the same
+guard-scoping mistake recorded here before — and the pattern demanded the noun
+immediately after the number, so "52 engine symbols" passed even once the
+document was in scope. The second only surfaced because the first plant was
+tried and did *not* fail.
+
+Both fixed at the fact: the satellite set is derived from "names the inventory",
+`PROGRESS.md` is exempt by name because it is this record and must be able to
+quote the wrong numbers, and one qualifier is allowed between the number and the
+noun. Nine satellites checked, no false accusation among them, both stale
+sentences fail when planted back.
+
+Sound and reported rather than changed: the seam between the runner's manifest
+and the release gate is already covered by
+`tests/contract/test_evidence_manifest_round_trip.py`, which states its own
+scope honestly — two scenarios, because observations for the other twenty would
+have to be invented, and an invented observation is what this project refuses on
+the critical path. The gap that leaves — a manifest `finalize` wrote for all
+twenty-two, read by the gate — cannot be closed without inventing that evidence,
+so it stays open and named rather than filled. `docs/VOICE.md`'s self-check
+(`UnroutedPlanPort` absent, `services_over_core_rpc` present) holds: 0 and 4.
+
 ## Deviations from the blueprint
 
 | Blueprint | Here | Why |

@@ -296,7 +296,8 @@ and `tests/contract/test_item_domain_vocabularies.py` measures the item blocks;
 **So what is worth doing with a live session?** Almost everything, and one thing
 above all others:
 
-1. **Confirm the 52 engine symbols in `docs/GAME_API_VERIFICATION.md`.** This is
+1. **Confirm the engine symbols in `docs/GAME_API_VERIFICATION.md`** — that
+   document states how many, and is the one place that does. This is
    the highest-information hour available, because almost every remaining
    unknown is downstream of it. The square tier is now built and published — the
    round-trip test proves the two sides agree about it — but that agreement says
@@ -345,9 +346,11 @@ following was done, and none of it is claimed:
 - **The 30-minute and 2-hour endurance runs.**
 - **Measured p50/p95 latencies.** Any number here would have been invented.
 - **Build 42.20 API signatures.** Every engine symbol is *declared* and probed;
-  none is confirmed. `docs/GAME_API_VERIFICATION.md` lists all 52; the grep
-  `grep -rn "Build 42:" pz-mod/` finds six of them and was described here as the
-  whole list, which would have left about forty unchecked.
+  none is confirmed. `docs/GAME_API_VERIFICATION.md` is the list, and states its
+  own size; this file deliberately does not restate it. The grep
+  `grep -rn "Build 42:" pz-mod/` finds only the handful of symbols carrying that
+  comment and was once described here as the whole list, which understated the
+  surface by a factor of three.
   **Start with `ISTakeWaterAction`.** Three places in this repository once
   stated three different argument orders for it; `docs/GAME_API_VERIFICATION.md`
   now records the one the mod actually calls —
