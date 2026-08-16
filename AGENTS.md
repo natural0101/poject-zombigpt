@@ -15,7 +15,7 @@ file, this file wins.
 
 | Path | Contains | Rule |
 | --- | --- | --- |
-| `packages/pz_agent_core/` | Domain types, policy, action engine | **Zero third-party runtime dependencies.** No MCP SDK, no LLM SDK, no UI. |
+| `packages/pz_agent_core/` | Domain types, policy, action engine | **Zero third-party runtime dependencies.** No MCP SDK, no LLM SDK, no UI. One optional parser, guarded; see below. |
 | `packages/pz_agent_mcp/` | stdio MCP server | Thin adapter. Translates and serialises; never re-implements policy. |
 | `packages/pz_agent_cli/` | `pz-agent` command | The only package allowed to `print` — and the boundary does not enforce itself; see below. |
 | `packages/pz_agent_voice/` | `VoiceAdapter` protocol, TeamON plugin, fake | Core must not import this. |
@@ -56,6 +56,25 @@ Two checks, deliberately complementary. `scripts/check_forbidden.py` refuses
 in a real child process and reads the pipe a client would parse, which is the
 only way to catch a print inside the CLI on that path — where the static rule
 cannot help, because printing is what the CLI is for.
+
+**Core carries nothing, and imports downward.** "Zero third-party runtime
+dependencies" is what makes the domain layer embeddable and testable without an
+environment, and it is not literally true: `knowledge/loader.py` names `yaml`,
+inside a function, inside a `try` whose `ImportError` handler raises
+`CorpusError(YAML_UNAVAILABLE)` and stops planning rather than continuing
+without the rules the user configured. That is an optional parser honestly
+refused, and core still runs with nothing installed. The rule, then, is the one
+that is true: a third-party name may appear only behind a guard that turns its
+absence into a typed refusal, and only when
+`tests/contract/test_core_carries_no_dependency.py` lists it with that reason.
+The same file holds the layering — core must not name `pz_agent_cli`,
+`pz_agent_mcp` or `pz_agent_voice`.
+
+It checks the source rather than the process on purpose. Importing all 109 core
+modules pulls in nothing outside the standard library, and would have reported
+"zero" while missing `yaml`, because a deferred import inside a function does
+not run at import time — the same shape `pz_agent_mcp/__main__.py` uses to reach
+the CLI. A runtime probe cannot see either.
 
 **No stubs on the critical path.** No `TODO`/`FIXME`, no bare `pass` body, no
 `NotImplementedError`, no `except:` without an exception type, no fabricated

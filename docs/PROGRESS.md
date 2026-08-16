@@ -1115,6 +1115,29 @@ The scan that found these also produced 35 candidates, most of them false: a
 container evicted through a helper that takes it as an argument does not look
 shrunk from the call site.
 
+The repository map's two rules about the domain layer — zero third-party runtime
+dependencies, and core at the bottom of the stack — had no check either, and
+measuring them changed what the check should say. Importing all 109 core modules
+in one process pulls in nothing outside the standard library; a static scan of
+the same source finds `yaml` in `knowledge/loader.py`, imported inside a
+function, which never runs at import time. The runtime probe would have
+confirmed "zero" and been wrong. The import itself is handled well — inside a
+`try` whose `ImportError` handler raises `CorpusError(YAML_UNAVAILABLE)` and
+stops planning rather than continuing without the configured rules — so
+`tests/contract/test_core_carries_no_dependency.py` encodes the true rule: a
+third-party name only when listed with its reason *and* guarded so its absence
+is a typed refusal, plus no import of `pz_agent_cli`, `pz_agent_mcp` or
+`pz_agent_voice`. Three plants fail it: a deferred `import httpx` in a provider,
+the guard removed from around `yaml`, and `import pz_agent_cli` in the action
+engine.
+
+Sound and reported rather than changed: `pz-agent-mcp.exe` does not bundle
+PyYAML and does not need to. The provider that loads the corpus is built in
+`pz_agent_cli` and runs in `pz-agent.exe`, whose spec does list `yaml` among its
+hidden imports; the MCP process only compacts an observation for the planner.
+Chasing that to a conclusion is what kept it from becoming a false accusation
+against the packaging.
+
 ## Deviations from the blueprint
 
 | Blueprint | Here | Why |

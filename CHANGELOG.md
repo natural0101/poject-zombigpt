@@ -12,6 +12,41 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Added
 
+- **The domain layer's two architectural rules now have a check** (`dev`).
+  The repository map's strongest claim — `pz_agent_core` carries zero
+  third-party runtime dependencies, no MCP SDK, no LLM SDK, no UI — had nothing
+  enforcing it, nor did the layering line that puts core at the bottom.
+
+  Measured, and the measurement changed the rule rather than confirming it.
+  Importing all 109 core modules in one process pulls in nothing outside the
+  standard library — and that answer is wrong: a static scan of the source finds
+  `yaml` in `knowledge/loader.py`, imported inside a function, which never runs
+  at import time. It is handled well, and that is why the check now encodes what
+  is actually true instead of what the map said. The import sits inside a `try`
+  whose `ImportError` handler raises `CorpusError(YAML_UNAVAILABLE)`, which stops
+  planning rather than continuing without the rules the user configured, so core
+  still runs with nothing installed.
+
+  `tests/contract/test_core_carries_no_dependency.py` therefore allows a
+  third-party name only when it is listed with its reason *and* is reached
+  through a guard that turns absence into a typed refusal — an allowance that
+  did not check the guard would be a way to smuggle in a hard dependency. It
+  also holds the layering: core must not name `pz_agent_cli`, `pz_agent_mcp` or
+  `pz_agent_voice`. The scan is static because the runtime one cannot see a
+  deferred import, which is the shape both real cases use — `yaml` here, and
+  `pz_agent_mcp/__main__.py`'s deliberate import of the CLI.
+
+  Three plants, three failures: `import httpx` deferred inside a provider
+  method; the `try`/`except ImportError` removed from around `yaml`, turning the
+  optional parser into a hard dependency; and `import pz_agent_cli` added to the
+  action engine.
+
+  Checked in the same pass and found sound, reported rather than changed:
+  `pz-agent-mcp.exe` does not bundle PyYAML and does not need to — the planner
+  provider that loads the corpus is built in `pz_agent_cli`, which runs in
+  `pz-agent.exe`, and that spec does list `yaml` as a hidden import. The MCP
+  process only compacts an observation for the planner.
+
 - **A write to the terminal outside the CLI is now refused, and the MCP
   process's stdout is checked to stay clean across the one boundary it crosses**
   (`dev`). An MCP client launches `pz-agent-mcp` and parses its stdout as
