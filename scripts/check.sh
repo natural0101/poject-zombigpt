@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Full local gate. CI runs exactly these steps, in this order, so a green run
-# here means a green run there.
+# Full local gate. CI runs exactly these steps, in this order, over the commit
+# it checked out. This script runs them over whatever is on disk, which is the
+# same thing only when the tree is clean — so every run says which tree it
+# judged, first and last. See scripts/check_tree_identity.py.
 #
 #   scripts/check.sh          run everything
 #   scripts/check.sh fast     skip the slow integration tests
@@ -16,6 +18,10 @@ fi
 
 MODE="${1:-full}"
 FAILED=()
+
+# Said before the four minutes of tests as well as after them, because a run
+# started against the wrong tree is worth abandoning early.
+"$PY" scripts/check_tree_identity.py --prefix "about to check"
 
 step() {
   local name="$1"; shift
@@ -84,4 +90,6 @@ if (( ${#FAILED[@]} )); then
   echo "FAILED: ${FAILED[*]}"
   exit 1
 fi
-echo "All checks passed."
+# Not a bare "All checks passed": a verdict with no subject was read as one
+# about the commit that followed, and the commit went red on CI.
+"$PY" scripts/check_tree_identity.py --prefix "All checks passed"

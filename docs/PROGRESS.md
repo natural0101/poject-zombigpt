@@ -1009,6 +1009,29 @@ their acks through the constructor that carries evidence.
 path an ack really travels (journal bytes → decoder → engine), and AGENTS.md
 says which half of the rule binds the decoder.
 
+That commit then went red on CI, and the cause was the gate's own wording. The
+commit was pushed on its own, before its STATUS commit; at `c4b08ef`
+`docs/control/STATUS.json` still described the previous commit, and
+`check_master_plan.py` refuses exactly that. Reproduced from the commit rather
+than read off the log, and then measured across history: *every* code commit
+here is inadmissible to its own gate — 12 of the last 25 on `dev`, precisely the
+code ones — because a commit cannot carry a STATUS describing itself. The design
+accepts that and compensates by pushing the code commit and its STATUS commit
+together; nothing had ever said so, and nothing had needed to, because until now
+they always travelled as a pair.
+
+What let the push feel safe was `scripts/check.sh` ending in a bare `All checks
+passed.`, over a working tree that still had uncommitted work. The checks did
+pass — on a tree that never became a commit. The header claimed a green run here
+means a green run on CI, which holds only for a clean tree.
+`scripts/check_tree_identity.py` now names the subject of every verdict, first
+and last: the commit, or the pending STATUS commit whose tree this is, or no
+commit at all. It never fails the gate; running checks over uncommitted work is
+ordinary, and calling that a verdict about a commit was the defect. Its own
+test found a defect in it — `git status` collapses untracked directories, so a
+new file under `docs/control/` read as `?? docs/` and landed in the wrong
+branch; `--untracked-files=all` fixes it.
+
 ## Deviations from the blueprint
 
 | Blueprint | Here | Why |

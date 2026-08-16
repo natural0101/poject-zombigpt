@@ -112,7 +112,20 @@ The sequence:
 4. Commit STATUS **alone**. The gate allows a later verdict-recording commit
    only when nothing outside `docs/control/` changed, so anything else in that
    commit turns the allowance off.
-5. Push.
+5. Push — **both commits, never the code commit alone.** The two are one unit.
+   A code commit cannot carry a STATUS describing itself (writing the file
+   changes the tree, which changes the SHA), so *every* code commit here is
+   inadmissible to its own gate: measured, 12 of the last 25 commits on `dev`
+   fail `check_master_plan.py` against their own tree, and they are exactly the
+   code ones. That is harmless while the pair travels together and permanent
+   the moment it does not — pushing the code commit alone on 2026-08-16 put a
+   red CI run on `c4b08ef` for a tree that was never meant to be judged.
+
+Step 3 is not optional and its order is not cosmetic. Run the gate *before* the
+code commit and it reports on a tree that will never be a commit — which is why
+it now says which tree it judged, first and last, instead of a bare "All checks
+passed" (`scripts/check_tree_identity.py`). A green line with no subject is what
+the 2026-08-16 push was read off.
 
 Pass the RC's identity (`--rc-sha`, `--rc-run`, `--rc-sha256`) on every
 reconcile that keeps an archive, `STALE` ones included. `STALE` describes the

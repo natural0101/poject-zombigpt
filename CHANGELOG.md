@@ -10,6 +10,43 @@ drift out of sync with `pz_agent_core.version`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The local gate no longer claims success without saying which tree it
+  judged** (`dev`). `scripts/check.sh` ended with a bare `All checks passed.`
+  and its header claimed "CI runs exactly these steps, in this order, so a green
+  run here means a green run there". CI judges a commit; this script judges
+  whatever is on disk. Those are the same thing only when the tree is clean, and
+  the unqualified line said nothing about which case it was.
+
+  That produced a real red build, not a hypothetical one. On 2026-08-16 the gate
+  printed the success line over a working tree with uncommitted work, the commit
+  made from that tree was pushed, and CI went red on `c4b08ef`: at that commit
+  `docs/control/STATUS.json` still described the previous one, which
+  `scripts/check_master_plan.py` refuses. Reproduced from the commit itself, not
+  inferred from the log.
+
+  `scripts/check_tree_identity.py` now names the subject of the verdict, before
+  the run and after it, in three states and only three: a clean tree (the
+  verdict is about that commit, which is what CI will judge); a tree differing
+  only inside `docs/control/` (the prescribed state between the code commit and
+  the STATUS commit, whose tree is this one, so the verdict carries); anything
+  else (the verdict is about no commit). It never fails the gate — running the
+  checks over uncommitted work is ordinary, and a checker that refuses ordinary
+  work gets switched off. Calling such a run a verdict about a commit was the
+  defect.
+
+  Measured while fixing it: every code commit in this repository is inadmissible
+  to its own gate, because a commit cannot carry a STATUS describing itself —
+  12 of the last 25 commits on `dev`, exactly the code ones. That is harmless
+  while the code commit and its STATUS commit are pushed together and permanent
+  the moment they are not, so AGENTS.md now says the pair is one unit.
+
+  A test caught a defect in the fix itself: `git status --porcelain` collapses a
+  wholly untracked directory to the directory, so a new file under
+  `docs/control/` printed as `?? docs/` and the prescribed state was classified
+  as a verdict about no commit. `--untracked-files=all` reports each path.
+
 ### Added
 
 - **A mod that claims success without evidence is now pinned to be quoted rather
