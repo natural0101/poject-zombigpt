@@ -1493,10 +1493,18 @@ comparison alone still changes nothing, because in a realistic three-way race
 the newcomer's record is fresher and the timestamp comparison catches it first —
 so the two are overlapping levers, and the guarantee is what is pinned.
 
-Four findings are measured and open, recorded in `CHANGELOG.md` rather than
-closed quietly: the RPC dial's connect timeout, the `PermissionError` arm of the
-liveness probe, the router's bound on a memory port's answer, and the redaction
-of a capability's `reason`.
+All five areas have now reported: fifteen findings. A sixth is closed here —
+`enclosure_after`'s flood fill, which does not terminate at all without its
+`visited` guard, in the check that decides whether a wall would seal the
+character in. That test also had to be corrected before it was worth anything:
+its first version used an open window, where the fill leaves through the first
+edge square and the missing guard never bites. It seals the ring now.
+
+Nine are measured and open, listed in `CHANGELOG.md` rather than closed quietly:
+two in `rpc/`, two in `pz_agent_mcp`, two in `policy/` and three in the mission
+packages — among them `Journey._check_stuck`'s second counter, which the sweep
+itself narrowed by noting that `max_legs` still bounds the journey, so what is
+lost is the honest STUCK ending rather than termination.
 
 ## Deviations from the blueprint
 

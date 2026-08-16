@@ -620,6 +620,56 @@ def test_a_search_that_runs_out_of_budget_has_proven_nothing(
     assert MAX_FLOOD_SQUARES == 1024  # the shipped bound, unchanged by the patch
 
 
+def test_the_fill_never_walks_a_square_twice(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The flood fill terminates because it remembers where it has been.
+
+    ``visited`` is a set, so it stops growing once every reachable square is in
+    it — which means ``MAX_FLOOD_SQUARES`` is checked against a number that has
+    stopped moving, and the queue is what grows instead. Delete the
+    ``if step in visited: continue`` guard and ``enclosure_after`` does not
+    return at all for a window with a cycle in it. Nothing in the suite noticed.
+
+    Two things about the shape of this test, both learned by planting against it.
+    The window's outer ring is sealed, because an *open* window lets the fill
+    leave through the first edge square it reaches — the first version of this
+    test used one and passed with the guard deleted. And the bound is asserted
+    as work done rather than by waiting: a non-terminating loop caught by a
+    three-hundred-second timeout is a worse failure report than one caught at a
+    stated ceiling.
+    """
+    # A sealed pocket: the outer ring of the window is blocked, so the fill can
+    # never reach a passable edge square and must exhaust the inside instead.
+    ring = tuple(
+        (dx, dy) for dx in range(-2, 3) for dy in range(-2, 3) if max(abs(dx), abs(dy)) == 2
+    )
+    observation = world(plank("m1"), objects=block(radius=2, blocked=ring))
+    window = read_window(observation, HOME_Z)
+    assert window is not None
+    ceiling = MAX_FLOOD_SQUARES * 8
+    examined = 0
+    real_is_passable = type(window).is_passable
+
+    def counting_is_passable(self: Any, square: tuple[int, int, int]) -> bool:
+        nonlocal examined
+        examined += 1
+        if examined > ceiling:
+            raise AssertionError(
+                f"the fill examined more than {ceiling} squares, so it is walking "
+                "ground it has already walked and will not terminate"
+            )
+        result: bool = real_is_passable(self, square)
+        return result
+
+    monkeypatch.setattr(type(window), "is_passable", counting_is_passable)
+
+    check = enclosure_after(observation, window, TARGET, blocks=True)
+
+    # Returning at all is half the assertion; the other half is the wrapper
+    # above, which fails the moment the fill exceeds its ceiling.
+    assert check.visited <= check.window_squares
+    assert examined <= ceiling
+
+
 def test_a_diagonal_gap_is_not_an_exit() -> None:
     """Whether a character may cut a wall's corner is not this side's to guess.
 

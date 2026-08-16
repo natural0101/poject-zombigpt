@@ -44,15 +44,32 @@ drift out of sync with `pz_agent_core.version`.
     token-checked; how many there were was not, in the one payload a model ever
     sees.
 
+- **A flood fill that does not terminate without its `visited` guard** (`dev`).
+  `enclosure_after` is the check that decides whether placing a wall would seal
+  the character in. Its breadth-first fill remembers where it has been; delete
+  that and `visited` — a set — stops growing while the queue does not, so
+  `MAX_FLOOD_SQUARES` is compared against a number that has stopped moving and
+  the search never returns. The module docstring calls the fill bounded and
+  nothing tested it.
+
+  The first version of this test used an *open* window and passed under the
+  plant: the fill leaves through the first edge square it reaches, long before a
+  cycle could bite. It now seals the window's outer ring, which is the case the
+  guard exists for, and asserts the work done rather than waiting — a
+  non-terminating loop caught by a three-hundred-second timeout is a worse
+  failure report than one caught at a stated ceiling.
+
 ### Measured and open
 
-- Four findings from the same sweep are **not yet guarded**: the RPC client's
-  connect timeout on the dial (the one wait that happens before the watchdog
-  exists), the `PermissionError` arm of the POSIX liveness probe, the MCP
-  router's `islice` bound on a memory port's answer, and the redaction of a
-  capability's `reason` in the `pz://capabilities` resource. Two areas of that
-  sweep — `policy/` with `capabilities/`, and `navigation/`/`loot/`/`combat/` —
-  were still running when this was written.
+- Nine findings from the sweep are **not yet guarded**: the RPC client's connect
+  timeout on the dial (the one wait that happens before the watchdog exists) and
+  the `PermissionError` arm of the POSIX liveness probe; the MCP router's
+  `islice` bound on a memory port's answer and the redaction of a capability's
+  `reason` in `pz://capabilities`; `DrinkChoice`'s portioned/fraction invariant
+  and `load_report`'s typed read failure; and in the missions, `_safe_weight`'s
+  refusal of a non-finite item weight, `NavigationTarget`'s arrival-radius
+  bound, and the second counter in `Journey._check_stuck`. Each has a full-suite
+  measurement behind it; none has a test yet.
 
 - **A coverage claim that named nine areas and read as though it named the
   tree** (`dev`). `docs/PROGRESS.md` recorded the refusal-plant sweep as having
