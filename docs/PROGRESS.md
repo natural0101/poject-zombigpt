@@ -1251,6 +1251,26 @@ twenty-two, read by the gate — cannot be closed without inventing that evidenc
 so it stays open and named rather than filled. `docs/VOICE.md`'s self-check
 (`UnroutedPlanPort` absent, `services_over_core_rpc` present) holds: 0 and 4.
 
+Having found the same guard-scoping mistake twice, the next pass asked it of the
+guards written since — and found it a third time, in the newest one. The version
+warning had reached `LIVE_TEST_PLAYBOOK.md` and `LOCAL_AGENT_PROMPT.md`, the two
+documents open when the defect was found, while this repository already defines
+the operator's instruction set in
+`test_handoff_instructions_match_the_run.INSTRUCTIONS` — and it has three.
+`LOCAL_GAME_HANDOFF.md`, the document that hands the whole job over, said nothing
+about the version; its one mention of `version.py` described a `check.sh` step.
+The set is now imported from that definition rather than re-listed.
+
+Planting then found something worse than the omission. Cutting the entire
+warning out of `LOCAL_GAME_HANDOFF.md` left the test green: it asked for the
+substrings `version.py` and `re-run`, and both appear in these documents for
+unrelated reasons, so the assertion had been passing for the wrong reason from
+the start. The anchors are now `PRODUCT_VERSION` and the gate's own remediation
+phrase — measured to occur exactly once per document, only inside the warning —
+and neutralising it in any of the three fails that document's case. A guard
+whose plant does not fail is not a guard, and only planting says which one it
+is.
+
 ## Deviations from the blueprint
 
 | Blueprint | Here | Why |

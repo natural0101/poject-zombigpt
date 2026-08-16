@@ -12,6 +12,30 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **The version warning reached two of the three documents an operator follows,
+  and the guard for it was too weak to notice either problem** (`dev`). The
+  warning added last time — bump `version.py` before the live run or the
+  evidence cannot certify a release — went into `LIVE_TEST_PLAYBOOK.md` and
+  `LOCAL_AGENT_PROMPT.md`, the two documents that were open at the time. This
+  repository already defines which documents an operator follows as
+  instructions, in `test_handoff_instructions_match_the_run.INSTRUCTIONS`, and
+  there are three: `LOCAL_GAME_HANDOFF.md` — the one that hands the whole job
+  over — was missing. Its only mention of `version.py` was a description of what
+  `check.sh` verifies.
+
+  That is the same guard-scoping mistake as the surface-count guard fixed in the
+  previous entry: a scope listed beside an existing definition of the same
+  scope. The set is now imported from that definition rather than re-listed, so
+  the two cannot disagree.
+
+  Planting found a second, worse problem. Cutting the whole warning out of
+  `LOCAL_GAME_HANDOFF.md` left the test **green**: it asked only for the
+  substrings `version.py` and `re-run`, and both occur in these documents for
+  unrelated reasons. The assertions now anchor on `PRODUCT_VERSION` and the
+  gate's own remediation phrase "re-run the scenarios" — measured to occur
+  exactly once in each of the three documents, and only in this warning.
+  Neutralising the warning in any one of them now fails that document's case.
+
 - **Two more documents were still understating the unverified engine surface,
   and my own guard could not see either** (`dev`). The rule is that
   `docs/GAME_API_VERIFICATION.md` states the size and every other document

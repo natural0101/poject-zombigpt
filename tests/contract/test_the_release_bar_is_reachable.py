@@ -55,6 +55,10 @@ check_release = importlib.import_module("check_release")
 #: its own idea of a passing run.
 release_tests = importlib.import_module("tests.unit.test_check_release")
 
+#: The one place that defines which documents an operator follows as
+#: instructions. Imported so this file cannot disagree with it.
+handoff_tests = importlib.import_module("tests.contract.test_handoff_instructions_match_the_run")
+
 
 def _full_release_run(tmp_path: Path) -> list[Any]:
     manifest, evidence = release_tests._evidence(tmp_path / "evidence")
@@ -123,14 +127,19 @@ def test_prepare_tells_the_operator_the_version_it_will_stamp() -> None:
     assert "finalize stamps this into the manifest" in source
 
 
-@pytest.mark.parametrize(
-    "document",
-    [
-        REPO_ROOT / "docs" / "LIVE_TEST_PLAYBOOK.md",
-        REPO_ROOT / "docs" / "LOCAL_AGENT_PROMPT.md",
-    ],
-    ids=lambda path: path.name,
-)
+#: Imported rather than re-listed. This file first named two documents — the two
+#: that were edited when the defect was found — while the repository already had
+#: a definition of "the documents an operator follows as instructions", and it
+#: has three. ``LOCAL_GAME_HANDOFF.md``, the one that hands the whole job over,
+#: was the missing one: its only mention of ``version.py`` was a description of
+#: what ``check.sh`` verifies. Listing a scope beside an existing definition of
+#: the same scope is how a guard ends up covering the files a defect was found
+#: in rather than the fact it is about — twice now, in this file and in
+#: ``test_unverified_surface_is_counted.py``.
+INSTRUCTION_DOCUMENTS: Final = handoff_tests.INSTRUCTIONS
+
+
+@pytest.mark.parametrize("document", INSTRUCTION_DOCUMENTS, ids=lambda path: path.name)
 def test_the_handoff_documents_warn_before_the_session_is_spent(document: Path) -> None:
     """Neither of these mentioned the version at all, which is how it stays lost.
 
@@ -140,9 +149,19 @@ def test_the_handoff_documents_warn_before_the_session_is_spent(document: Path) 
     """
     text = document.read_text(encoding="utf-8")
 
-    assert "version.py" in text, f"{document.name} does not mention the version bump at all"
-    assert "re-run" in text or "run again" in text, (
-        f"{document.name} names the bump without naming its cost — the scenarios "
-        "have to be run again, and that is the part that decides whether an "
-        "operator does it first"
+    # Anchored on the constant and on the gate's own remediation phrase, each of
+    # which occurs exactly once per document and only in this warning. The first
+    # version asked for "version.py" and "re-run", and both appear in these
+    # documents for unrelated reasons — `check.sh` verifies version sync, and
+    # "re-run" turns up in half a dozen sentences about workflows. Cutting the
+    # whole warning out of LOCAL_GAME_HANDOFF.md left that version green, which
+    # is how the weakness was found: the plant did not fail.
+    assert "PRODUCT_VERSION" in text, (
+        f"{document.name} does not name the constant `finalize` stamps into the "
+        "manifest, so an operator cannot tell which number the gate will compare"
+    )
+    assert "re-run the scenarios" in text, (
+        f"{document.name} names the bump without naming its cost — the gate's own "
+        "remediation is to run the scenarios again, and that is the part that "
+        "decides whether an operator bumps first"
     )

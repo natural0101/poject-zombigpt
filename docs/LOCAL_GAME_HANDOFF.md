@@ -368,6 +368,22 @@ following was done, and none of it is claimed:
 The RC ZIP is built and its SHA-256 is printed by the build. That hash covers
 the artefact, not any claim about it having been run in a game.
 
+### Decide the version before the session, not after it
+
+`pz-agent live-test finalize` stamps `version.PRODUCT_VERSION` into the evidence
+manifest, and `scripts/check_release.py --release` refuses evidence whose
+product version is not the version being released. That is the last check a
+release passes, and its remediation reads *"bump version.py and everything that
+restates it … then **re-run the scenarios**"*.
+
+So the order decides whether a session counts. If this run is meant to certify a
+release, bump `version.py` and everything `scripts/check_versions.py` lists
+**first**, and confirm with `.venv/bin/python scripts/check_versions.py`.
+`pz-agent live-test prepare` prints the number it will stamp — the last cheap
+moment to notice. A live run made for any other reason needs none of this; its
+evidence simply cannot certify a release, which is the honest answer rather than
+an obstacle.
+
 ## 5. Installing
 
 ### Getting the ZIP, and checking it is the one
