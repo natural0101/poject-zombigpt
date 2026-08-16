@@ -57,10 +57,10 @@ suite green. The artefact id is the one field with nothing to check it against:
 
 | Field | Value |
 | --- | --- |
-| archive | `pz-agent-windows-rc` (artifact 9262374882), `pz-agent-windows-v1.0.0-rc1.zip`, 77 entries |
-| archive sha256 | `b94db5f0068cd314dc5a10036000dca7891fa410261dd6cf5f0d02436ca8f377` |
-| source commit | `f6709ed3d6047b6ea8ab45e9c8e7488eb37b9e2a` |
-| workflow run | https://github.com/natural0101/poject-zombigpt/actions/runs/31941384490 |
-| certified by | `check_release.py --rc` printing `CERTIFIED v1.0.0-rc1: 9 check(s) passed` — archive complete, the archive declaring the release this checkout builds, all 11 wrappers at the root, **both executables in `bin/`**, 76 file digests matching, 9376 of 9444 tests passed with no failures, 31 MCP end-to-end testcases green, and the archive claiming no live-test evidence. The packaged pair also completed an MCP `initialize` over the RPC link with `PATH` reduced to the system directories |
+| archive | `pz-agent-windows-rc` (artifact 9262992417), `pz-agent-windows-v1.0.0-rc1.zip`, 77 entries |
+| archive sha256 | `e9c6ee2e1b19aa306f65851c8d95b5d2fb07d18c498ba42ec665276e0cfa7968` |
+| source commit | `0081838677b02c543d248579ba05d8857140e327` |
+| workflow run | https://github.com/natural0101/poject-zombigpt/actions/runs/31943793560 |
+| certified by | `check_release.py --rc` printing `CERTIFIED v1.0.0-rc1: 9 check(s) passed` — archive complete, the archive declaring the release this checkout builds, all 11 wrappers at the root, **both executables in `bin/`**, 76 file digests matching, 9388 of 9456 tests passed with no failures, 31 MCP end-to-end testcases green, and the archive claiming no live-test evidence. The packaged pair also completed an MCP `initialize` over the RPC link with `PATH` reduced to the system directories |
 | what this RC does *not* certify | skips moved 49 → 63 → 68 and have held at 68 since. All nineteen added are seam checks that run the mod's Lua and find no interpreter on this runner — fourteen for the protocol tables at `1a5feb4`, five for the action-ack round trip at `8a803c2`. Everything added after them needs no interpreter and runs here: the mod-identity agreement at `e2b8978`, the evidence-manifest round trip at `0433a4b`. The nineteen join `test_adapter_args_agreement`, `test_capability_declaration_agreement` and the observation round trip, so **no seam check that needs Lua has ever been part of RC certification** — the count moves when such a seam gains coverage, never because something stopped working. All of them run on Linux CI and locally; each verifies a contract between the mod and the sidecar that has nothing to do with the host OS, and putting Lua on the release runner would add a dependency to the release path for coverage already taken elsewhere. Stated here so the skip count is read as what it is |
 | current? | `docs/control/STATUS.json` → `release_candidate.status`; any code commit after the source commit makes it STALE until the workflow rebuilds it |
