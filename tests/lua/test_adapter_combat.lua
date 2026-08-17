@@ -546,6 +546,83 @@ do
   equal(clean.no_zombie_observed, true, "stated as the observation it is")
 end
 
+Harness.group("the zombie scan stops at its own bound")
+do
+  -- `Combat.MAX_ZOMBIE_SCAN` is 256, and its comment ties it to the cap the
+  -- observation uses, so the mod and what it publishes agree on how far they
+  -- looked. `findZombie` runs on every `combat.shove` and `combat.engage` poll,
+  -- at a 150 ms interval, over a list whose length is a horde -- precisely the
+  -- moment a main-thread stall is most expensive. AGENTS.md: anything unbounded
+  -- is a bug.
+  --
+  -- The constant appears nowhere in `tests/`, and every combat scene installs a
+  -- handful of zombies, so the clamp is never the thing that ends a loop.
+  --
+  -- The bound is observable in what it costs: a target past index 256 reads as
+  -- `false` -- "the bounded scan finished without it" -- which the adapters turn
+  -- into an honest refusal rather than a hang. That is the trade, and it is the
+  -- right way round.
+  local horde = {}
+  for index = 1, Combat.MAX_ZOMBIE_SCAN do
+    horde[index] = Support.zombie({ id = 1000 + index, x = 130, y = 200 })
+  end
+  local hidden = Support.zombie({ id = 71, x = 101.5, y = 200 })
+  horde[#horde + 1] = hidden
+  scene({ zombies = horde })
+
+  equal(Combat.findZombie(71), false,
+    "a zombie past the bound is reported not-found rather than walked to")
+  equal(Combat.findZombie(1000 + Combat.MAX_ZOMBIE_SCAN), horde[Combat.MAX_ZOMBIE_SCAN],
+    "while the last one inside the bound is still found")
+end
+
+Harness.group("a retreat that gained less than the epsilon is not a retreat")
+do
+  -- `Combat.RETREAT_EPSILON` is 0.5, and its comment says why: below it the
+  -- reading is noise, not ground gained. The group above has a success at more
+  -- than ten squares and a failure at 0.8 against 3.0 -- nothing anywhere near
+  -- the 0.0-to-0.5 band the constant exists to reject, so dropping the term
+  -- from the comparison leaves both of its assertions holding.
+  --
+  -- combat.retreat is the flight action. Its ack is what tells the mission the
+  -- character got away, and a success minted on sub-tick jitter is planned on:
+  -- the next command is chosen as though the ground were gained, while the
+  -- zombie is where it was. The two branches above this comparison do not
+  -- overlap with it -- one is "nothing observed at all", the other the
+  -- unreadable world -- and `retreatProgress` measures something else entirely
+  -- (distance to the goal square), so this comparison is the whole
+  -- postcondition.
+  local squares = {}
+  for x = 90, 110 do
+    squares[Support.squareKey(x, 200, 0)] = Support.square(x, 200, 0, {})
+  end
+  local s = scene({ squares = squares, zombies = { Support.zombie({ id = 71, x = 103, y = 200 }) } })
+  ok(Retreat:validate({}, s.ctx), "the retreat validates")
+  ok(Retreat:begin({}, s.ctx), "and starts")
+
+  -- The character shuffled a fifth of a square and the zombie stood still: the
+  -- gap goes 3.00 -> 3.20, which is movement no planner should act on.
+  s.player.state.x = 99.8
+  Support.drainQueue(s.queue)
+  local evidence, code, detail = Retreat:verify(nil, nil, {}, s.ctx)
+  isNil(evidence, "a fifth of a square is jitter, not ground gained")
+  equal(code, REASON.POSTCONDITION_FAILED, "so the retreat failed honestly")
+  contains(detail, "3.20", "with the reading that was actually taken")
+  contains(detail, "3.00", "beside the one it started from")
+
+  -- The control, at the other side of the same threshold: a gap that grew past
+  -- the epsilon is the success this comparison exists to admit. Without it the
+  -- assertions above would hold for a function that refused everything.
+  local moved = scene({ squares = squares, zombies = { Support.zombie({ id = 71, x = 103, y = 200 }) } })
+  ok(Retreat:validate({}, moved.ctx), "a second retreat validates")
+  ok(Retreat:begin({}, moved.ctx), "and starts")
+  moved.player.state.x = 99
+  Support.drainQueue(moved.queue)
+  local proof = Retreat:verify(nil, nil, {}, moved.ctx)
+  ok(proof ~= nil, "a whole square of ground is a retreat")
+  equal(proof.nearest_after, 4, "carrying the gap that was measured")
+end
+
 Harness.group("a stalled retreat opens one readable door, and only with permission")
 do
   local squares = {}
