@@ -142,6 +142,40 @@ do
   equal(Toolkit.state(seated.ctx).seated, "chair", "the posture is recorded from what was queued")
 end
 
+Harness.group("the seat scan stops at the toolkit's bound")
+do
+  -- AGENTS.md makes this a rule rather than a preference: anything unbounded is
+  -- a bug. A grid square's object list includes an entry per dropped item, so
+  -- its length is something the player sets, and each turn of this loop is a
+  -- pcall'd engine call plus up to three guarded accessor reads -- a loot pile
+  -- turns `seat_ref` into a main-thread stall inside `prepare`.
+  --
+  -- Every seat scene in this file puts exactly one object on the square, so
+  -- `math.min` never binds and dropping the cap is invisible here. The two
+  -- suites that do pin `MAX_SQUARE_OBJECTS` pin it at other call sites, in
+  -- other adapters: the constant is proven to work while three copies of this
+  -- loop are not proven to use it. This group covers Rest's copy; the sleep and
+  -- consumption suites cover theirs.
+  local crowd = {}
+  for index = 1, Toolkit.MAX_SQUARE_OBJECTS do
+    crowd[index] = Support.worldObject({ name = "Crate " .. index })
+  end
+  crowd[#crowd + 1] = Support.worldObject({ name = "chair", sprite = "furniture_seating_indoor_chair_01" })
+  local crowded = Support.square(SEAT_SQUARE.x, SEAT_SQUARE.y, SEAT_SQUARE.z, crowd)
+
+  isNil(Rest.seatOn(crowded), "a chair past the bound is not reached, so no seat is reported")
+
+  -- The negative control: the same chair inside the bound is found, so the
+  -- assertion above is about the bound and not about the chair being unreadable.
+  local reachable = {}
+  for index = 1, Toolkit.MAX_SQUARE_OBJECTS - 1 do
+    reachable[index] = Support.worldObject({ name = "Crate " .. index })
+  end
+  reachable[#reachable + 1] = crowd[#crowd]
+  local near = Support.square(SEAT_SQUARE.x, SEAT_SQUARE.y, SEAT_SQUARE.z, reachable)
+  equal(Rest.seatOn(near), crowd[#crowd], "while the last object inside the bound still is")
+end
+
 Harness.group("the ground is a preference, and standing is the fallback")
 do
   local s = scene()

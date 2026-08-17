@@ -224,6 +224,31 @@ do
   contains(asleepDetail, "IsoPlayer.isAsleep", "naming that accessor too")
 end
 
+Harness.group("the bed scan stops at the toolkit's bound")
+do
+  -- The sleep adapter's copy of the square walk `Rest.seatOn` and
+  -- `Consumption.waterSourceOn` also carry. Three call sites, one constant, and
+  -- until now none of the three was exercised past its cap: every bed scene in
+  -- this file puts one object on the square, so `math.min` never binds and
+  -- dropping the cap left the whole suite green.
+  local crowd = {}
+  for index = 1, Toolkit.MAX_SQUARE_OBJECTS do
+    crowd[index] = Support.worldObject({ name = "Crate " .. index })
+  end
+  crowd[#crowd + 1] = Support.worldObject({ name = "bed", can_sleep = true })
+  local crowded = Support.square(BED_SQUARE.x, BED_SQUARE.y, BED_SQUARE.z, crowd)
+
+  isNil(Sleep.bedOn(crowded), "a bed past the bound is not reached, so no bed is reported")
+
+  local reachable = {}
+  for index = 1, Toolkit.MAX_SQUARE_OBJECTS - 1 do
+    reachable[index] = Support.worldObject({ name = "Crate " .. index })
+  end
+  reachable[#reachable + 1] = crowd[#crowd]
+  local near = Support.square(BED_SQUARE.x, BED_SQUARE.y, BED_SQUARE.z, reachable)
+  equal(Sleep.bedOn(near), crowd[#crowd], "while the last object inside the bound still is")
+end
+
 Harness.group("starting calls the entry point and nothing else")
 do
   local s = scene()

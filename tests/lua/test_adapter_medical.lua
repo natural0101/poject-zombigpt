@@ -318,6 +318,54 @@ do
   isNil(proof.bleeding_after, "with no invented bleeding reading")
 end
 
+Harness.group("a dressing with no reading from before separates nothing")
+do
+  -- The two groups above are the pair this one sits between: a dressing that
+  -- *was* there before is refused, and a dressing that was *not* there before
+  -- is the evidence. Both have a reading from before. This is the third case --
+  -- no reading at all -- and it is the one nothing covered.
+  --
+  -- `snapshotBody` answers an empty table when `getBodyDamage` will not answer,
+  -- exactly as coded, so a Kahlua gap at the instant the before-snapshot was
+  -- taken produces a snapshot with no entry for the part. Collapse the two
+  -- before-branches into `was ~= nil and was.bandaged == true` -- the nil-safety
+  -- tidy-up a reviewer waves through -- and the same soaked bandage that the
+  -- group above refuses is returned as `wound_dressed` on a character who is
+  -- still losing blood.
+  --
+  -- The runtime cannot catch it: `observedPairs` counts `X_before`/`X_after`
+  -- pairs, and with `bleeding_before` nil and no `bandaged_before` at all it
+  -- counts zero, so the all-readings-unchanged refusal never fires and the
+  -- evidence bag is not empty.
+  local s = scene()
+  local args = { body_part = "ForeArm_L" }
+  ok(Bandage:validate(args, s.ctx), "the command validates")
+  ok(Bandage:prepare(args, s.ctx), "and prepares")
+
+  local reader = s.player.getBodyDamage
+  s.player.getBodyDamage = function()
+    error("kahlua gap", 0)
+  end
+  local before = Toolkit.observe(s.player)
+  s.player.getBodyDamage = reader
+  isNil(before.body["ForeArm_L"], "the before snapshot holds no reading for the part")
+
+  ok(Bandage:begin(args, s.ctx), "and starts")
+  Support.drainQueue(s.queue)
+  -- The soaked bandage the character was already wearing: the part reads
+  -- dressed and is still bleeding.
+  s.parts[2].state.bandaged = true
+
+  local after = Toolkit.observe(s.player)
+  equal(after.body["ForeArm_L"].bandaged, true, "while the after snapshot reports a dressing")
+  equal(after.body["ForeArm_L"].bleeding, true, "over a wound that is still bleeding")
+
+  local evidence, code, detail = Bandage:verify(before, after, args, s.ctx)
+  isNil(evidence, "a dressing nobody can date is not this command's own effect")
+  equal(code, REASON.POSTCONDITION_FAILED, "so the command failed its postcondition")
+  contains(detail, "no reading from before", "and the detail says which reading is missing")
+end
+
 Harness.group("bandage stops for the player and for a horde")
 do
   local taken = scene({ safety = Support.takenOver() })

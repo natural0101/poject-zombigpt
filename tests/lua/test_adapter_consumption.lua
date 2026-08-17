@@ -53,6 +53,8 @@ local function scene(options)
     name = "Apple",
     hunger_change = -15,
     rotten = options.rotten,
+    burnt = options.burnt,
+    poison = options.poison,
   })
   local bottle = Support.item({
     id = 5,
@@ -64,9 +66,21 @@ local function scene(options)
     tainted = options.tainted_bottle,
   })
   local rock = Support.item({ id = 9, full_type = "Base.Rock", name = "Rock" })
+  -- A drainable vessel: a thirst effect and uses, and no fluid container at
+  -- all, which is the shape the item-level taint and poison readers are the
+  -- only guard for.
+  local flask = Support.item({
+    id = 6,
+    full_type = "Base.WaterBottleFull",
+    name = "Flask",
+    thirst_change = -20,
+    uses = 4,
+    poison = options.poison_drink,
+    tainted_water = options.tainted_flask,
+  })
   local biscuit = Support.item({ id = 3, full_type = "Base.Biscuit", name = "Biscuit", hunger_change = -8 })
   local satchel = Support.item({ id = 99, full_type = "Base.Bag_Satchel", name = "Satchel", contents = { biscuit } })
-  local main = Support.container({ apple, bottle, rock, satchel })
+  local main = Support.container({ apple, bottle, rock, flask, satchel })
   local stats
   if not options.no_stats then
     stats = Support.stats({ hunger = 0.6, thirst = 0.5 })
@@ -95,6 +109,7 @@ local function scene(options)
     queue = queue,
     apple = apple,
     bottle = bottle,
+    flask = flask,
     main = main,
     stats = stats,
   }
@@ -104,6 +119,7 @@ local APPLE = Support.itemRef("player-main", 1)
 local BOTTLE = Support.itemRef("player-main", 5)
 local ROCK = Support.itemRef("player-main", 9)
 local BISCUIT = Support.itemRef("carried:99", 3)
+local FLASK = Support.itemRef("player-main", 6)
 local SINK = Support.squareRef(101, 200, 0)
 
 Harness.group("eat refuses a command it cannot act on")
@@ -137,6 +153,28 @@ do
   local rottenCode, rottenDetail = select(2, Eat:validate({ item_ref = APPLE }, rotten.ctx))
   equal(rottenCode, REASON.NO_SAFE_FOOD, "spoiled food is refused as unsafe, not merely unwanted")
   contains(rottenDetail, "rotten", "and the detail says why")
+
+  -- The other half of the same loop. Only the rotten probe was ever driven, so
+  -- un-rolling the loop to `isRotten` alone -- the tidy-up a reviewer waves
+  -- through -- deleted the burnt refusal with every suite still green.
+  local burnt = scene({ burnt = true })
+  local burntCode, burntDetail = select(2, Eat:validate({ item_ref = APPLE }, burnt.ctx))
+  equal(burntCode, REASON.NO_SAFE_FOOD, "and burnt food is refused by the same rule")
+  contains(burntDetail, "burnt", "naming the state it was refused for")
+
+  -- The sharpest of the three, and the one nothing could reach: `Support.item`
+  -- granted no `isPoison` reader at all, so the branch was structurally absent
+  -- from this harness. There is no second lever -- `policy.food`'s filters run
+  -- only when the *planner* picks the item, and `EatAdapter.validate` on the
+  -- Python side says in so many words that rot, poison and reserves are
+  -- policy.food's decision and already made by the time a reference reaches it.
+  -- A directly-issued consume.eat with an arbitrary item_ref meets this line
+  -- and nothing else, and what it costs is harm to the character.
+  local poisoned = scene({ poison = true })
+  local poisonCode, poisonDetail = select(2, Eat:validate({ item_ref = APPLE }, poisoned.ctx))
+  equal(poisonCode, REASON.NO_SAFE_FOOD, "poisoned food is refused before anything is queued")
+  contains(poisonDetail, "poisonous", "and the detail says what it is")
+  equal(#poisoned.queue.added, 0, "with nothing in the game's queue")
 end
 
 Harness.group("a missing eat action costs a capability, not a crash")
@@ -261,6 +299,42 @@ do
   equal(drinkCode, REASON.CAPABILITY_UNAVAILABLE, "a container nobody could look at was not drained")
 end
 
+Harness.group("an item in neither snapshot was not eaten to nothing")
+do
+  -- The group above covers the case where the *walk failed outright* and
+  -- `unread.items` is set. This is the other one: the walk succeeded and simply
+  -- did not reach the item. `Toolkit.observe` bounds its inventory walk by
+  -- depth and by item budget, while `Toolkit.resolveItem` walks the named
+  -- container directly -- so an item in a bag inside a bag inside a bag
+  -- resolves and validates fine and is in neither snapshot.
+  --
+  -- `itemShrank`'s floor is the only thing between that and
+  -- `item_consumed = true`. Delete the two-line `was == nil` return and control
+  -- falls to the `now == nil` branch, which reads an absence nobody observed as
+  -- the item having been eaten. The runtime cannot catch it either: the
+  -- evidence bag carries no before/after pair, so the unchanged-readings gate
+  -- counts zero pairs and lets it through.
+  local s = scene({ no_stats = true })
+  local deep = Support.item({ id = 21, full_type = "Base.Biscuit", name = "Biscuit", hunger_change = -8 })
+  local inner = Support.item({ id = 22, full_type = "Base.Bag_Satchel", name = "Inner", contents = { deep } })
+  local middle = Support.item({ id = 23, full_type = "Base.Bag_Satchel", name = "Middle", contents = { inner } })
+  local outer = Support.item({ id = 24, full_type = "Base.Bag_Satchel", name = "Outer", contents = { middle } })
+  table.insert(s.main.entries, outer)
+
+  local args = { item_ref = Support.itemRef("carried:22", 21), fraction = 1.0 }
+  ok(Eat:validate(args, s.ctx), "the biscuit resolves through the named bag, so the command validates")
+
+  local before = Toolkit.observe(s.player)
+  isNil(before.items[21], "yet the bounded snapshot never reached it")
+  isNil(Toolkit.unread(before, "items"), "and the walk itself did not fail -- it simply stopped short")
+
+  local after = Toolkit.observe(s.player)
+  local evidence, code, detail = Eat:verify(before, after, args, s.ctx)
+  isNil(evidence, "an item absent from both snapshots proves nothing about eating")
+  equal(code, REASON.POSTCONDITION_FAILED, "so the command fails its postcondition")
+  contains(detail, "unchanged", "on the reading that did not move")
+end
+
 Harness.group("eat stops for the player and for a horde")
 do
   local taken = scene({ safety = Support.takenOver() })
@@ -300,6 +374,61 @@ do
     Drink:validate({ item_ref = BOTTLE, source_ref = SINK }, mixed.ctx)
   equal(mixedCode, REASON.INVALID_ARGUMENT, "consume.drink cannot be talked onto the source path")
   contains(mixedDetail, "source_ref", "and says which argument it does not take")
+end
+
+Harness.group("taint and poison read off the item, not only off the fluid inside it")
+do
+  -- The group above reads like coverage of the item-level check and is not.
+  -- The mock bottle carries both `tainted` and `fluid`, and `Support.item` hung
+  -- `isTainted` on the *fluid container* it builds -- so the whole assertion was
+  -- satisfied by the fluid check three lines further down, and deleting the
+  -- item-level refusal left it green. A test can name the right property,
+  -- assert the right code, and never touch the line that makes it true.
+  --
+  -- The flask is the shape that separates them: a drainable vessel with a
+  -- thirst effect and uses and no `getFluidContainer` at all. For tainted water
+  -- in a fluid container the two checks are genuinely redundant; here, and for
+  -- `isPoison` in any shape, this line is the only one there is.
+  local tainted = scene({ tainted_flask = true })
+  local accepted, code, detail = Drink:validate({ item_ref = FLASK }, tainted.ctx)
+  isNil(accepted, "a vessel that reports taint on itself is not a drink")
+  equal(code, REASON.NO_SAFE_DRINK, "which is the domain's own refusal")
+  contains(detail, "tainted", "and the detail says why")
+  equal(#tainted.queue.added, 0, "with nothing queued")
+
+  local poisoned = scene({ poison_drink = true })
+  local _, poisonCode, poisonDetail = Drink:validate({ item_ref = FLASK }, poisoned.ctx)
+  equal(poisonCode, REASON.NO_SAFE_DRINK, "and a poisoned one is refused by the same line")
+  contains(poisonDetail, "tainted", "under the refusal it shares")
+
+  local clean = scene()
+  ok(Drink:validate({ item_ref = FLASK }, clean.ctx), "while the same flask untainted still drinks")
+end
+
+Harness.group("the water-source scan stops at the toolkit's bound")
+do
+  -- The third copy of the same square walk, after `Rest.seatOn` and
+  -- `Sleep.bedOn`. Each sink scene in this file puts one object on the square,
+  -- so the cap never binds and its deletion is invisible; the two suites that
+  -- do pin `MAX_SQUARE_OBJECTS` pin it in other adapters. A square's object
+  -- list carries an entry per dropped item, which makes its length the
+  -- player's, and each turn is a pcall'd engine call.
+  local crowd = {}
+  for index = 1, Toolkit.MAX_SQUARE_OBJECTS do
+    crowd[index] = Support.worldObject({ name = "Crate " .. index })
+  end
+  crowd[#crowd + 1] = Support.worldObject({ name = "sink", water = 40 })
+  local crowded = Support.square(101, 200, 0, crowd)
+
+  isNil(Consumption.waterSourceOn(crowded), "a source past the bound is not reached")
+
+  local reachable = {}
+  for index = 1, Toolkit.MAX_SQUARE_OBJECTS - 1 do
+    reachable[index] = Support.worldObject({ name = "Crate " .. index })
+  end
+  reachable[#reachable + 1] = crowd[#crowd]
+  local near = Support.square(101, 200, 0, reachable)
+  equal(Consumption.waterSourceOn(near), crowd[#crowd], "while the last object inside the bound still is")
 end
 
 Harness.group("drink verifies against thirst, and falls back to the container")

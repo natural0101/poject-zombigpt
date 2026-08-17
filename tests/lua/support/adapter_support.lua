@@ -133,6 +133,22 @@ function Support.item(fields)
       return fields.thirst_change
     end
   end
+  -- Poison and taint read off the *item*, which is a different surface from the
+  -- fluid container's `isTainted` below. Granted only when the case names them,
+  -- for the usual reason: a build that does not report poison at all has to
+  -- stay distinguishable from one that reports false. Their absence here is
+  -- what made the mod's poison refusals structurally unreachable from this
+  -- harness -- branches no test could enter, so their deletion was invisible.
+  if fields.poison ~= nil then
+    item.isPoison = function()
+      return fields.poison == true
+    end
+  end
+  if fields.tainted_water ~= nil then
+    item.isTaintedWater = function()
+      return fields.tainted_water == true
+    end
+  end
   if fields.uses ~= nil then
     item.getDrainableUsesInt = function()
       return fields.uses
