@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pz-agent"
-version = "0.1.0"
+version = "1.0.0"
 description = "Local AI agent for Project Zomboid Build 42.20: structured observation, verified action engine, MCP boundary, voice companion."
 readme = "README.md"
 license = { file = "LICENSE" }

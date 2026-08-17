@@ -10,6 +10,8 @@ drift out of sync with `pz_agent_core.version`.
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-08-17
+
 ### Fixed
 
 - **The mod's two safety gates had no test, and one of them is the whole

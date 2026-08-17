@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Final
 
 #: Version of the shipped product as a whole (matches ``pyproject.toml``).
-PRODUCT_VERSION: Final = "0.1.0"
+PRODUCT_VERSION: Final = "1.0.0"
 
 #: Wire protocol spoken between the Lua mod and the sidecar. Major bumps break
 #: compatibility; the mod refuses a session whose major differs.
@@ -22,7 +22,7 @@ PROTOCOL_VERSION: Final = "1.1"
 SCHEMA_VERSION: Final = "1.0"
 
 #: Version of the Lua mod (matches ``pz-mod/42/mod.info``).
-MOD_VERSION: Final = "0.1.0"
+MOD_VERSION: Final = "1.0.0"
 
 #: Wire protocol spoken between the sidecar's RPC server and a local client —
 #: today the MCP executable, which runs as a separate process because an MCP

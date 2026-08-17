@@ -1,32 +1,14 @@
-"""A correct live run must be able to clear the release bar, and one thing stops it.
+"""A correct live run must be able to clear the release bar.
 
 Every test of ``scripts/check_release.py`` asserts that some particular check is
 absent from the failures. None asked the question an operator's whole session
 depends on: given a complete, correct evidence tree, does the gate *certify*?
 
-Measured over the tree, it does not — and the reason is not the evidence. Fifteen
-of sixteen checks pass; the sixteenth is ``evidence.version``:
-
-    the evidence names product version 1.0.0, this checkout declares 0.1.0,
-    and the release is v1.0.0
-
-``finalize`` stamps ``PRODUCT_VERSION`` into the manifest, and the gate requires
-that number to be the version being released. ``PRODUCT_VERSION`` is ``0.1.0``.
-So a live session run against this tree produces evidence the release bar refuses,
-and the gate's own remediation is *"bump version.py … then re-run the scenarios"*
-— after twenty-two scenarios, a thirty-minute run and a two-hour run, on a machine
-this repository cannot reach.
-
-Nothing said so before the session. The playbook and the local-agent prompt did
-not mention the version at all; the operator met it at the end or not at all.
-``live-test prepare`` now names the number it will stamp, and this file pins the
-two halves of the fact: the bar is otherwise reachable, and the one thing between
-a correct run and certification is a version bump that has to happen *first*.
-
-Deliberately not fixed by bumping the version here. What this repository declares
-itself to be is a product decision, and taking it inside a test would be exactly
-the yardstick-moving that
-``tests/contract/test_the_blueprint_is_the_baseline.py`` exists to prevent.
+``finalize`` stamps ``PRODUCT_VERSION`` into the manifest, and the release gate
+requires that number to equal ``build_rc.RELEASE_VERSION``.  The product decision
+to certify v1.0.0 has now been made, so this file pins the resulting invariant:
+a complete evidence tree clears every release check and the checkout declares
+the same version as the release candidate.
 """
 
 from __future__ import annotations
@@ -66,42 +48,21 @@ def _full_release_run(tmp_path: Path) -> list[Any]:
     return list(findings)
 
 
-def test_a_complete_evidence_tree_clears_every_check_but_the_version(tmp_path: Path) -> None:
+def test_a_complete_evidence_tree_clears_every_check(tmp_path: Path) -> None:
     findings = _full_release_run(tmp_path)
     failed = sorted(f.check for f in findings if not f.ok)
 
     assert len(findings) >= 16, f"only {len(findings)} checks ran; the gate is not being exercised"
-    assert failed == ["evidence.version"], (
-        "a complete, correct evidence tree should clear every check except the "
-        f"version bump, and instead these failed: {failed}. If a new check has "
+    assert failed == [], (
+        "a complete, correct evidence tree should clear every check, and instead "
+        f"these failed: {failed}. If a new check has "
         "landed that a real live run cannot satisfy, the operator's session is "
         "spent before they learn of it."
     )
 
 
-def test_the_version_is_the_only_thing_between_a_live_run_and_v1(tmp_path: Path) -> None:
-    """Named as a fact, so that bumping the version has to update this file too.
-
-    When ``PRODUCT_VERSION`` becomes the release version this test fails, and
-    the person doing the bump is the right person to decide what it should then
-    say — rather than a green suite quietly outliving the reason it was written.
-    """
-    assert PRODUCT_VERSION != build_rc.RELEASE_VERSION, (
-        f"PRODUCT_VERSION is now {PRODUCT_VERSION}, the release version. The "
-        "obstacle this file documents is gone: re-run the release gate over a "
-        "complete evidence tree and rewrite this file around whatever it says now."
-    )
-
-    findings = _full_release_run(tmp_path)
-    version = next(f for f in findings if f.check == "evidence.version")
-
-    assert not version.ok
-    assert PRODUCT_VERSION in version.detail
-    assert build_rc.RELEASE_VERSION in version.detail
-    assert "re-run the scenarios" in (version.remediation or ""), (
-        "the remediation must say the scenarios have to be run again, because "
-        "that is the cost the operator is being asked to pay"
-    )
+def test_the_checkout_declares_the_release_version() -> None:
+    assert PRODUCT_VERSION == build_rc.RELEASE_VERSION
 
 
 def test_prepare_tells_the_operator_the_version_it_will_stamp() -> None:
