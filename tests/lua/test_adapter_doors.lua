@@ -375,6 +375,56 @@ do
   contains(detail, "locked", "naming the state that did not move")
 end
 
+Harness.group("a lock that stopped answering between the toggle and the re-read")
+do
+  -- The index-ordering caveat and the lock reader, together. `Doors.isDoor`
+  -- deliberately does not demand a lock reader -- that is what lets an
+  -- unreadable lock earn door.unlock's own precise reason instead of
+  -- INVALID_REF -- so `resolveDoor` can legitimately hand verify a door-shaped
+  -- object whose lock nobody can read. Verify's own re-read is the only thing
+  -- in the mod that notices.
+  --
+  -- The asymmetry with open/close is why this needed its own case: the toggle
+  -- verify compares `openAfter ~= desired`, which nil satisfies, so its nil
+  -- check is not load-bearing. The unlock compares `lockedAfter == true`, which
+  -- nil does *not* satisfy -- delete the check and control falls through to the
+  -- evidence table with `locked_after = nil`. `ActionRuntime.observedPairs`
+  -- skips a `_before` whose `_after` is nil, so it counts zero pairs and the
+  -- all-unchanged refusal never fires: the mod acks SUCCEEDED for a door nobody
+  -- observed unlocked.
+  --
+  -- What this does NOT claim, because an independent re-test refuted the
+  -- stronger version: the false ack does not reach the caller. The sidecar's
+  -- `DoorUnlockAdapter.verify` requires `door.locked is False` and treats an
+  -- absent reading as not-unlocked, so the run ends POSTCONDITION_FAILED after
+  -- the grace window instead of succeeding. This guard is the mod's own layer
+  -- of that defence -- and the layer nothing else in the mod pins.
+  local s = scene({ door = { locked = true, key_id = 42, toggle_unlocks = true }, x = 105 })
+  local key = Support.item({ id = 11, full_type = "Base.Key1", name = "Key" })
+  key.getKeyId = function()
+    return 42
+  end
+  s.main.entries[#s.main.entries + 1] = key
+  local args = { door_ref = DOOR }
+  ok(Unlock:validate(args, s.ctx), "the lock reads, the key is carried, so it validates")
+  ok(Unlock:prepare(args, s.ctx), "prepares")
+  equal(Unlock:begin(args, s.ctx), "done", "and the game's toggle turns the lock")
+  equal(s.door.state.locked, false, "which really did happen")
+
+  -- The square's object list shifts under the reference: index 0 is now a
+  -- door-shaped object on a build with no `isLockedByKey`. Nothing about the
+  -- reference changed; what it names did.
+  local blind = Support.door({ locked = false, no_lock_reader = true })
+  Support.installCell({
+    [Support.squareKey(105, 200, 0)] = Support.square(105, 200, 0, { blind, s.door }),
+  })
+
+  local unread, unreadCode, unreadDetail = Unlock:verify(nil, nil, args, s.ctx)
+  isNil(unread, "a lock that cannot be read proves nothing about the lock")
+  equal(unreadCode, REASON.PRECONDITION_FAILED, "it is a capability gap, not a failed postcondition")
+  contains(unreadDetail, "lock state could not be read", "and the detail says which reading is missing")
+end
+
 Harness.group("door work stops for the player and for a horde")
 do
   local taken = scene({ safety = Support.takenOver() })

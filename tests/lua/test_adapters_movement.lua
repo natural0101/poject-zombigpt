@@ -404,6 +404,83 @@ do
     "but the attempt is on the record, square and all")
 end
 
+Harness.group("a door behind the character is not opened for a walk leading away")
+do
+  -- The door rescue is the one exception this adapter grants to "the walk
+  -- action is the only mutation", and the dot product is what keeps the
+  -- exception narrow. Every door in the groups above stands either on the
+  -- character's own square or one square east -- exactly on the goal vector --
+  -- so the direction filter is never asked to reject anything, and deleting it
+  -- leaves all of them green. An independent re-test confirmed there is no
+  -- second lever: allow_doors, the attempt budget and the locked/barricaded
+  -- gates all constrain *whether* a door may be opened, never *which*.
+  --
+  -- Opening a door nobody asked about is a change to the save the player did
+  -- not request: it lets zombies through, changes line of sight and carries
+  -- sound. It also hides the failure, because the rescue spends one of the
+  -- three attempts, re-enqueues the walk and clears the stall mark, so the
+  -- character polls out another full stall window instead of reporting
+  -- PATH_STUCK now -- and a locked door behind them replaces an accurate
+  -- PATH_STUCK with a DOOR_LOCKED naming a square irrelevant to the route.
+  local behind = door({ open = false })
+  local _, ctx, _, queue = scene({
+    squares = { { 99, 200, 0, { behind } }, { 105, 200, 0 } },
+  })
+  local args = accept(MoveTo, { x = 105, y = 200, z = 0 })
+  MoveTo.start(ctx, args)
+  local outcome, code, detail = stallPoll(ctx, MoveTo, Support.NOW)
+  isNil(outcome, "a door behind the character rescues nothing")
+  equal(code, REASON.PATH_STUCK, "the walk fails with the code a doorless build reports")
+  contains(detail, "squares short", "and the same detail")
+  equal(behind.state.open, false, "the door west of a walk heading east was never touched")
+  equal(#queue.added, 1, "no second walk was queued off the back of it")
+  isNil(Toolkit.state(ctx).evidence.doors, "and nothing about door work reached the evidence")
+
+  -- Perpendicular is refused too: the dot product is zero, which is not
+  -- greater than zero. Named separately because ">= 0" is the plausible slip.
+  local beside = door({ open = false })
+  local _, sideCtx, _, sideQueue = scene({
+    squares = { { 100, 201, 0, { beside } }, { 105, 200, 0 } },
+  })
+  MoveTo.start(sideCtx, args)
+  local sideOutcome, sideCode = stallPoll(sideCtx, MoveTo, Support.NOW)
+  isNil(sideOutcome, "a door at right angles to the route rescues nothing either")
+  equal(sideCode, REASON.PATH_STUCK, "with the same honest code")
+  equal(beside.state.open, false, "and it stays shut")
+  equal(#sideQueue.added, 1, "with no second walk")
+end
+
+Harness.group("a door past the square-object bound is not reached at all")
+do
+  -- `Toolkit.MAX_SQUARE_OBJECTS` bounds the walk over one square's object
+  -- list, which the player fills by stacking. Every square in this file holds
+  -- zero or one object, so `math.min` never binds here and dropping the cap is
+  -- invisible: the two suites that do pin this constant pin it at other call
+  -- sites, against other readers.
+  --
+  -- The bound is observable exactly once: a door standing past it is not found,
+  -- and the walk then fails honestly instead of being rescued. That is the
+  -- trade the cap makes, and it is the right way round -- a bounded read that
+  -- misses a door costs one PATH_STUCK, an unbounded one runs on the game's
+  -- main thread over a list nobody here controls.
+  local buried = door({ open = false })
+  local objects = {}
+  for index = 1, Toolkit.MAX_SQUARE_OBJECTS do
+    objects[index] = Support.worldObject({ name = "Crate " .. index })
+  end
+  objects[#objects + 1] = buried
+  local _, ctx, _, queue = scene({
+    squares = { { 101, 200, 0, objects }, { 105, 200, 0 } },
+  })
+  local args = accept(MoveTo, { x = 105, y = 200, z = 0 })
+  MoveTo.start(ctx, args)
+  local outcome, code = stallPoll(ctx, MoveTo, Support.NOW)
+  isNil(outcome, "the door past the bound is never reached, so nothing rescues the walk")
+  equal(code, REASON.PATH_STUCK, "which fails with its own code")
+  equal(buried.state.open, false, "and the buried door was not toggled")
+  equal(#queue.added, 1, "with no second walk queued")
+end
+
 Harness.group("the door budget is three openings, then the walk fails honestly")
 do
   local doors = {
