@@ -282,6 +282,68 @@ do
   equal(slow.interrupts, 1, "and the adapter was given a chance to clean up")
 end
 
+Harness.group("work the mod does not own ends the command before the adapter is polled")
+do
+  -- The rule AGENTS.md puts immediately after safety: user input always wins.
+  -- `Handle:step` asks `interruptionFor` before it polls, and that reaches
+  -- `Safety.mayStart` -> `Ownership.blocksAutomation(agent.queue_description)`.
+  --
+  -- This group exists because of a refutation. Nine adapters carry their own
+  -- copy of the same refusal through `Toolkit.queueProgress`, and an adapter
+  -- copy looks like the thing to test -- but an independent re-test measured
+  -- the poll count and found it zero: `Handle:step` is the only caller of any
+  -- adapter's poll in the mod, and it pre-empts every one of those copies. The
+  -- refusal that actually protects the player is *this* one, and nothing pinned
+  -- it, for a reason worth naming: `command_support.lua` hardcodes
+  -- `agent.queue_description` to an empty, readable description and the runtime
+  -- suite never calls `Runtime.refresh`, so the harness structurally could not
+  -- let this gate fire. A green suite said nothing about it in either direction.
+  --
+  -- `poll_calls == 0` is the assertion that separates "the gate held" from "the
+  -- adapter refused for itself".
+  local slow = Support.spyAdapter("movement.move_to", { polls = 99, evidence = { position = "0,0,0" } })
+  local agent, fs, runtime = Support.runtime(Mock, { slow })
+  Support.publish(fs, { Support.command({ action = "movement.move_to", args = {}, lease_ms = 300000 }) })
+  runtime:tick(agent, NOW)
+  ok(runtime:inFlight() ~= nil, "the command is running")
+  local polledBefore = slow.poll_calls
+
+  -- What `Runtime.refresh` builds on a tick where the player queued something
+  -- of their own: an entry the mod's ownership tag does not claim.
+  agent.queue_description = PZ.Ownership.describe({ { Type = "ISPlayerQueuedAction" } }, agent.session:id())
+  runtime:tick(agent, NOW + 2)
+
+  -- Checked for existence first: every plant that neutralises this gate leaves
+  -- the command running, so an unguarded index here would report a crash rather
+  -- than a verdict -- and a crash is a catch nobody can read.
+  local terminal = lastTerminal(fs)
+  ok(terminal ~= nil, "the command reached a terminal rather than being polled on")
+  terminal = terminal or {}
+  equal(terminal.status, STATUS.CANCELLED, "the command ended")
+  equal(terminal.reason_code, REASON.PLAYER_BUSY_MANUAL_ACTION, "because the player is driving")
+  contains(terminal.message, "phase=interrupted", "as an interruption")
+  equal(slow.poll_calls, polledBefore, "and the adapter was never polled into the player's work")
+  equal(slow.interrupts, 1, "though it was given its chance to clean up")
+
+  -- The other fact the same gate carries: a queue nobody could read. An
+  -- unreadable queue is not an empty one, and automation may not run over it.
+  local second = Support.spyAdapter("movement.move_to", { polls = 99, evidence = { position = "0,0,0" } })
+  local blindAgent, blindFs, blindRuntime = Support.runtime(Mock, { second })
+  Support.publish(blindFs, { Support.command({ action = "movement.move_to", args = {}, lease_ms = 300000 }) })
+  blindRuntime:tick(blindAgent, NOW)
+  ok(blindRuntime:inFlight() ~= nil, "a second command is running")
+  local blindPolls = second.poll_calls
+
+  blindAgent.queue_description = PZ.Ownership.describe(nil, nil)
+  blindRuntime:tick(blindAgent, NOW + 2)
+
+  local blindTerminal = lastTerminal(blindFs)
+  ok(blindTerminal ~= nil, "the second command reached a terminal too")
+  blindTerminal = blindTerminal or {}
+  equal(blindTerminal.reason_code, REASON.PLAYER_BUSY_MANUAL_ACTION, "an unreadable queue blocks automation too")
+  equal(second.poll_calls, blindPolls, "with no poll made over a queue nobody read")
+end
+
 Harness.group("a lost sidecar heartbeat interrupts the running command")
 do
   local slow = Support.spyAdapter("movement.move_to", { polls = 99, evidence = { position = "0,0,0" } })
