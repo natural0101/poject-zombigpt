@@ -605,4 +605,33 @@ do
   Mock.removeActionQueue()
 end
 
+Harness.group("an engine that raises on the queue read is a refusal, not a crash")
+do
+  -- The third way the queue read can fail, and the one the shape check cannot
+  -- cover: the symbol exists and calling it throws. Build 42.20 is not this
+  -- mod's to control, and the module's own contract is that a read it cannot
+  -- perform reports UNSUPPORTED rather than escaping.
+  --
+  -- Where it escapes to is the point. `Runtime.stop` calls `describeQueue` as
+  -- its first statement, ahead of the disarm, and `PZAgent_Main` registers the
+  -- panic key with no pcall of its own — so a raise here takes the engine event
+  -- handler down and the agent stays armed. `Runtime.refresh` runs the same
+  -- call every tick, so the mod would also stop heartbeating.
+  --
+  -- Deleting the pcall left all 33 Lua files and the contract suite green: no
+  -- test in this tree had an engine that raised.
+  Mock.installRaisingActionQueue("Build 42 said no")
+  local player = Mock.newPlayer()
+
+  local survived, entries, capability, detail = pcall(Safety.describeQueue, player)
+
+  ok(survived, "the raise was converted to a refusal, not thrown at the caller (" ..
+    tostring(entries) .. ")")
+  isNil(entries, "no entry list was invented")
+  equal(capability, CAPABILITY.UNSUPPORTED, "the queue is reported as not readable")
+  contains(detail, "Build 42 said no", "and the detail carries what the engine said")
+
+  Mock.removeActionQueue()
+end
+
 Harness.finish("test_safety")

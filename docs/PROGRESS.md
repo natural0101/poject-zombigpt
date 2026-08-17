@@ -1493,7 +1493,21 @@ the API entirely, which trips a different refusal higher up and returns before
 this one is evaluated. A test can be about the right subject, assert the right
 thing, and still not touch the line that makes it true.
 
-Fourteen remain measured and open, listed in `CHANGELOG.md`.
+Four more are closed: the `pcall` around the engine's queue read, the built-in
+control adapter's precedence over anything dropped into `adapters/`, the refusal
+to record a failed capability write as published, and `checkNumber`'s refusal of
+the infinities.
+
+That last one cost a second attempt and is the round's lesson. Written against a
+spec carrying `integer` and `min`/`max`, the test passed under the plant: the
+other checks catch NaN and both infinities on their own. The shipped declaration
+where the guard stands alone is `movement.move_to`'s `x` and `y` — required
+integers with no bounds, since a square's coordinates are not bounded by
+anything the mod knows — and `math.floor(inf) == inf`, so an infinity passes the
+integer check and arrives as a coordinate. The test now says which half of the
+guard it is evidence for and which half it is not.
+
+Ten remain measured and open, listed in `CHANGELOG.md`.
 
 `tests/contract/test_the_sweep_coverage_claim_names_the_tree.py` now derives the
 subpackage set from `packages/` and requires this claim to name every member,

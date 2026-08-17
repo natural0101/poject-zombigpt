@@ -192,6 +192,20 @@ function Mock.installMalformedActionQueue(object)
   }
 end
 
+--- Install a fake ISTimedActionQueue whose getTimedActionQueue *raises*.
+---
+--- The other way a build can disagree with this mod: the symbol is there and
+--- calling it throws. Distinct from a malformed return value, and reached by a
+--- different guard — the `pcall` rather than the shape check.
+function Mock.installRaisingActionQueue(message)
+  ISTimedActionQueue = {
+    getTimedActionQueue = function()
+      error(message or "engine refused the queue", 0)
+    end,
+    clear = function() end,
+  }
+end
+
 --- Remove the fake queue, restoring the "this build has no such API" state.
 function Mock.removeActionQueue()
   ISTimedActionQueue = nil

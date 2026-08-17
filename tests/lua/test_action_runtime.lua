@@ -856,6 +856,41 @@ do
   contains(why, "movement.fly", "and the reason names it")
 end
 
+Harness.group("a capability report that could not be written is not recorded as published")
+do
+  -- Capability honesty is its own non-negotiable rule here, and this is the
+  -- seam where it is decided. `needsPublish()` is `published_revision ~=
+  -- revision`, so stamping the revision on a failed write makes it answer false
+  -- for ever: the report never goes out again, and the sidecar keeps serving
+  -- whatever stale document it last saw — or none at all — while the mod
+  -- believes it published.
+  --
+  -- Deleting the early return left the whole Lua set and the contract suite
+  -- green: no test in this tree ever had a write fail here.
+  local capabilities = CapabilityRuntime.new(PZ.CommandDispatcher.new())
+  local refusing = {
+    writeDocument = function()
+      return nil, "the exchange directory is read-only"
+    end,
+  }
+
+  local published, why = capabilities:publish(refusing, NOW)
+
+  isNil(published, "a write that failed did not produce a published report")
+  contains(why, "read-only", "and the caller is told what went wrong")
+  ok(capabilities:needsPublish(), "the report is still owed, so the next tick tries again")
+
+  local accepting = {
+    writes = 0,
+    writeDocument = function(self)
+      self.writes = self.writes + 1
+      return true
+    end,
+  }
+  ok(capabilities:publish(accepting, NOW) ~= nil, "and a working write does publish")
+  ok(not capabilities:needsPublish(), "which is what clears the debt")
+end
+
 -- ---------------------------------------------------------------------------
 -- the convention the game-facing adapters use
 -- ---------------------------------------------------------------------------
@@ -984,6 +1019,36 @@ do
   runtime:tick(agent, NOW)
   equal(published.starts, 1, "and a command for it reaches the adapter")
   equal(lastTerminal(fs).status, STATUS.SUCCEEDED, "which drives it to a terminal state")
+  PZ.Adapters = nil
+end
+
+Harness.group("a published adapter never takes over the control plane")
+do
+  -- The group above covers the ordinary collision: a published adapter wins for
+  -- anything that touches the world, and the built-in stands down. Four actions
+  -- are exempt, and the comment above the guard says why — "a stop that did not
+  -- cancel the in-flight command would be a stop in name only". Those four
+  -- drive this runtime's own state, so a file dropped into adapters/ must not
+  -- be able to serve them.
+  --
+  -- Nothing tested the exemption. Deleting `and not RUNTIME_OWNED[...]` left
+  -- the whole Lua set and the contract suite green, while `safety.stop` was
+  -- served by a stranger that cancels nothing.
+  local impostor = Support.spyAdapter("safety.stop", { evidence = { stopped = true } })
+  PZ.Adapters = { ALL = { impostor } }
+
+  local agent, fs = Support.agent(Mock)
+  local runtime, reason = ActionRuntime.install(agent, NOW)
+  ok(runtime ~= nil, "the runtime installed: " .. tostring(reason))
+  ok(agent.dispatcher:adapterFor("safety.stop") ~= impostor,
+    "the published adapter did not take over safety.stop")
+
+  Mock.installActionQueue({})
+  Support.publish(fs, { Support.command({ action = "safety.stop", args = {} }) })
+  runtime:tick(agent, NOW)
+
+  equal(impostor.starts, 0, "and no command for it ever reached the stranger")
+  equal(agent.safety.armed, false, "the built-in stop did what a stop means")
   PZ.Adapters = nil
 end
 

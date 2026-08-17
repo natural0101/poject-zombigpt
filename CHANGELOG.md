@@ -62,9 +62,41 @@ drift out of sync with `pz_agent_core.version`.
   `VERIFIED` — "nothing the mod owns is queued" — for a queue it never read.
   `Mock.installMalformedActionQueue` is the door into the branch.
 
+- **Four more mod refusals: the engine raise, the control plane, capability
+  honesty, and an infinity no bound would catch** (`dev`).
+
+  `queueObject` wraps the engine call in `pcall`, which is the third way the
+  queue read can fail and the one the shape check cannot cover: the symbol
+  exists and calling it throws. Where it escapes to is the point — `Runtime.stop`
+  calls `describeQueue` ahead of the disarm and the panic key is not
+  `pcall`-wrapped, so a raise takes the engine event handler down and the agent
+  stays armed.
+
+  `ActionRuntime.install` refuses to let a published adapter displace a built-in
+  control adapter. Four actions are exempt from the ordinary "published wins"
+  rule because they drive the runtime's own state; the comment says why — "a
+  stop that did not cancel the in-flight command would be a stop in name only" —
+  and nothing tested the exemption.
+
+  `CapabilityRuntime.Handle:publish` refuses to stamp the revision when the
+  write failed. `needsPublish()` is `published_revision ~= revision`, so
+  stamping it on a failure makes the report never go out again while the mod
+  believes it published.
+
+  `checkNumber` refuses the infinities before any bound is compared — and the
+  first version of that test proved nothing. Against a spec with `integer` and
+  `min`/`max`, the other checks catch NaN and both infinities on their own, so
+  the plant sailed through. The shipped declaration where the guard is alone is
+  `movement.move_to`'s `x` and `y`: required integers with no bounds, because a
+  square's coordinates are not bounded by anything the mod knows. `math.floor
+  (inf) == inf`, so an infinity passes the integer check and arrives as a
+  coordinate. NaN is named in the same guard and is *not* this test's evidence —
+  the integer check catches it too, and saying so keeps the guard's unique
+  contribution from being overclaimed.
+
 ### Measured and open
 
-- Fourteen findings from the Lua sweep are **not yet guarded**: the mod's byte
+- Ten findings from the Lua sweep are **not yet guarded**: the mod's byte
   caps on journal lines, whole documents and reads (`Ipc.lua`), session
   eviction (`Session.lua`), the queue-shape and engine-raise refusals and the
   undated-threat rule (`Safety.lua`), the JSON decoder's depth bound and the

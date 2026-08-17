@@ -228,6 +228,49 @@ do
   isNil(spy.last_args, "and never saw an argument table")
 end
 
+Harness.group("an infinity is refused even where no bound would catch it")
+do
+  -- The declaration here is the shipped one for `movement.move_to`: a required
+  -- integer coordinate with no min and no max, because a square's x and y are
+  -- not bounded by anything this mod knows. That shape is where the finite
+  -- check is load-bearing and alone.
+  --
+  -- `math.floor(inf) == inf`, so the integer check passes an infinity; with no
+  -- min or max there is nothing else, and it arrives at the adapter as a
+  -- coordinate. Measured: deleting the finite check lets it through here, while
+  -- the bounded declarations elsewhere in this file keep refusing it — which is
+  -- why a first version of this group, written against a bounded spec, passed
+  -- under the plant and proved nothing.
+  --
+  -- NaN is named in the same guard and is *not* this group's evidence: the
+  -- integer check catches it too (`math.floor(nan) ~= nan`). Stated so the
+  -- guard's unique contribution is not overclaimed.
+  local spy = Support.spyAdapter("movement.move_to", {
+    args = {
+      x = { type = ARG.NUMBER, required = true, integer = true },
+      y = { type = ARG.NUMBER, required = true, integer = true },
+    },
+  })
+  local registry = Dispatcher.new()
+  ok(registry:register(spy), "the adapter is registered")
+
+  local infinities = {
+    { name = "positive infinity", value = math.huge },
+    { name = "negative infinity", value = -math.huge },
+  }
+  for index = 1, #infinities do
+    local case = infinities[index]
+    local adapter, reasonCode = registry:resolve({
+      action = "movement.move_to",
+      args = { x = case.value, y = 0 },
+    }, SESSION)
+    isNil(adapter, case.name .. " as a coordinate resolves to no adapter")
+    equal(reasonCode, REASON.INVALID_ARGUMENT, case.name .. " is an invalid argument")
+  end
+  equal(spy.starts, 0, "the adapter was never called")
+  isNil(spy.last_args, "and never saw an infinite coordinate")
+end
+
 Harness.group("more arguments than the cap are refused before they are checked")
 do
   local spy = Support.spyAdapter("world.inspect", {
