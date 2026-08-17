@@ -298,6 +298,66 @@ class TestTheDeadline:
         with pytest.raises(ValueError, match="deadline"):
             RpcClient(descriptor, authkey=b"k" * 32, deadline=0)
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="the pipe family dials differently")
+    def test_the_connect_is_armed_with_the_deadline_before_it_is_attempted(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The dial is the one wait that happens before anything else bounds it.
+
+        ``call`` arms its watchdog and its poll guard on the connection
+        ``_dial`` hands back, so neither exists yet while the connect is in
+        progress. A sidecar that is alive — so the descriptor's liveness check
+        passes — but whose socket is not accepting leaves this connect to the
+        kernel's own timeout, which on some paths is minutes. Deleting the
+        ``settimeout`` line left the whole suite green: the test below observes
+        that an absent address fails fast, and it fails fast because nothing is
+        listening, not because the timeout was armed.
+
+        Observed as the order of calls on the socket, because that is what the
+        line is: the timeout must be on the socket *before* connect, not after.
+        Measuring wall-clock instead would need a peer that accepts and stalls,
+        which is a different failure and a flakier test.
+        """
+        deadline = 4.25
+        calls: list[tuple[str, object]] = []
+        real_socket = socket.socket
+
+        class _Watched:
+            def __init__(self, *args: object, **kwargs: object) -> None:
+                self._sock = real_socket(*args, **kwargs)  # type: ignore[arg-type]
+
+            def __getattr__(self, name: str) -> object:
+                return getattr(self._sock, name)
+
+            def settimeout(self, value: float | None) -> None:
+                calls.append(("settimeout", value))
+                self._sock.settimeout(value)
+
+            def connect(self, address: object) -> None:
+                calls.append(("connect", address))
+                raise ConnectionRefusedError(111, "Connection refused")
+
+            def close(self) -> None:
+                self._sock.close()
+
+        monkeypatch.setattr(socket, "socket", _Watched)
+        client = RpcClient(
+            RpcDescriptor(address=str(tmp_path / "absent.sock"), family=FAMILY_UNIX, pid=1),
+            authkey=b"k" * 32,
+            deadline=deadline,
+        )
+
+        with pytest.raises(RpcUnavailable):
+            client.call("x")
+
+        assert ("connect", str(tmp_path / "absent.sock")) in calls, "the dial never connected"
+        armed = calls[: calls.index(("connect", str(tmp_path / "absent.sock")))]
+        assert ("settimeout", deadline) in armed, (
+            f"the connect was attempted with the socket's timeout unset ({calls}); "
+            "nothing else bounds this wait, because the watchdog is armed on the "
+            "connection the dial has not returned yet"
+        )
+
     def test_an_address_nothing_is_listening_on_is_unavailable_not_a_hang(
         self, tmp_path: Path
     ) -> None:

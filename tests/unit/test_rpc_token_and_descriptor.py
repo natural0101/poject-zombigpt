@@ -311,6 +311,35 @@ class TestFindingAServer:
         with pytest.raises(StaleDescriptor, match="which is gone"):
             load_descriptor(state)
 
+    def test_a_pid_owned_by_another_account_is_read_as_alive(
+        self, state: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A process that exists and is not ours must not be walked over.
+
+        ``os.kill(pid, 0)`` answers three ways: it returns for our own live
+        process, raises ``ProcessLookupError`` for one that is gone, and raises
+        ``PermissionError`` for one that exists under another account — a
+        sidecar started by a service user, or by the same person from another
+        session. That last case is *alive*, and reading it as anything else
+        means overwriting a live address.
+
+        It also matters how it fails: ``PermissionError`` is an ``OSError``, and
+        ``load_descriptor``'s own ``except OSError`` sits around the file read
+        far above, not around this probe. Without the handler the exception
+        escapes the loader entirely — not a refusal, a traceback. Deleting it
+        left the whole suite green.
+        """
+        written = _running(state)
+
+        def refusing_kill(pid: int, signal: int) -> None:
+            raise PermissionError(1, "Operation not permitted")
+
+        monkeypatch.setattr(os, "kill", refusing_kill)
+
+        assert load_descriptor(state) == written, (
+            "a descriptor naming a live process under another account was not accepted"
+        )
+
     def test_a_descriptor_whose_token_is_gone_is_refused(self, state: Path) -> None:
         """Shutdown revokes the token first; the window between is not connectable."""
         _running(state)

@@ -1514,11 +1514,20 @@ port may return, and the redaction of a capability's `reason` on its way to a
 model through `pz://capabilities`. Each was re-planted here and each guard shown
 to fail under its plant.
 
-Two remain measured and open, both in `rpc/`: the connect timeout on the dial
-and the `PermissionError` arm of the liveness probe. They are the two whose
-tests need a socket stand rather than a value, and the sweep itself flagged the
-second as the one it was least sure of — so they are carried rather than
-hurried.
+The last two are closed as well, both in `rpc/`: the connect timeout on the
+dial and the `PermissionError` arm of the liveness probe. The dial is the one
+wait that happens before anything else bounds it — `call` arms its watchdog on
+the connection the dial has not returned yet — and the existing "an absent
+address fails fast" test passes with the timeout deleted, because it fails fast
+for an unrelated reason. The new test observes the order of calls on the socket
+instead.
+
+**All fifteen findings from the five-area sweep are now closed**, each
+re-planted in this tree before its test was written and each guard shown to fail
+under its own plant. Four of those tests had to be corrected first, all four for
+the same reason: they asserted something true for a reason other than the guard.
+That is the lesson this round is worth recording for — a guard whose plant does
+not fail is not a guard, and only planting says which one it is.
 
 ## Deviations from the blueprint
 

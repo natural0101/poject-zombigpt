@@ -111,13 +111,31 @@ drift out of sync with `pz_agent_core.version`.
   install paths; `Capability.__post_init__` bounds its length without redacting
   it, and the neighbouring `withheld_tools` scrub covers a different field.
 
-### Measured and open
+- **The last two, both in `rpc/`, and with them every finding the sweep
+  produced** (`dev`).
 
-- Two findings from the sweep are **not yet guarded**, both in `rpc/`: the
-  client's connect timeout on the dial — the one wait that happens before the
-  watchdog exists — and the `PermissionError` arm of the POSIX liveness probe,
-  which the sweep itself flagged as the one it was least certain about. Both
-  have a full-suite measurement behind them; neither has a test yet.
+  `RpcClient._dial` arms the socket with the call's deadline before connecting.
+  This is the one wait that happens before anything else bounds it: `call`
+  arms its watchdog and poll guard on the connection the dial *returns*, so
+  neither exists while the connect is in progress. A sidecar that is alive — so
+  the descriptor's liveness check passes — but whose socket is not accepting
+  leaves the connect to the kernel's own timeout. The existing test that an
+  absent address "fails fast" passes with the line deleted, because it fails
+  fast for an unrelated reason: nothing is listening. The new test observes the
+  order of calls on the socket, which is what the line actually is.
+
+  `_alive`'s `PermissionError` arm reads a pid owned by another account as
+  alive. `os.kill(pid, 0)` answers three ways and only two were tested; the
+  third is a sidecar started by a service user or another session, and reading
+  it as anything but alive means overwriting a live address. It also fails in
+  the wrong shape: `PermissionError` is an `OSError`, and `load_descriptor`'s
+  own `except OSError` sits around the file read far above, so without the arm
+  the exception escapes the loader as a traceback rather than a refusal.
+
+  That closes all fifteen findings from the five-area sweep. What remains
+  unmeasured is stated where it belongs, in `docs/PROGRESS.md`: within each area
+  only a handful of refusal sites were planted, so "swept" means "sampled under
+  a stated budget".
 
 - **A coverage claim that named nine areas and read as though it named the
   tree** (`dev`). `docs/PROGRESS.md` recorded the refusal-plant sweep as having
