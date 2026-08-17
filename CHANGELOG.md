@@ -12,6 +12,28 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **"The mod has since been swept" answered for fifteen files no sweep ever
+  touched — and the guard against exactly this class agreed with it** (`dev`).
+  Third instance of the same overstatement. `pz-mod/42/media/lua/client/PZAgent/
+  adapters/` holds `Building`, `Combat`, `Consumption`, `Containers`,
+  `Crafting`, `Doors`, `Equipment`, `Inventory`, `Literature`, `Medical`,
+  `Movement`, `Rest`, `Sleep`, `Toolkit` and `World` — the code that actually
+  touches the game world. The four-area mod sweep covered the files sitting
+  directly in `client/PZAgent/` and `shared/PZAgent/` and never reached the
+  adapters, while `docs/PROGRESS.md` recorded the mod as swept.
+
+  What makes this one worth its own entry is that
+  `tests/contract/test_the_sweep_coverage_claim_names_the_tree.py` — written to
+  stop precisely this — could not have caught it. Its derived set added `pz-mod`
+  as one opaque unit, so the word appearing anywhere in the paragraph satisfied
+  it whatever the directory held. The derivation now walks the mod down to each
+  directory containing Lua files, named by its path below `media/lua/`
+  (`client/PZAgent`, `client/PZAgent/adapters`, `shared/PZAgent`) rather than by
+  bare directory name, since a bare `adapters` is already a Python subpackage in
+  the same set and would have answered for this one too. Planted both ways: with
+  the corrected paragraph reverted the check fails naming
+  `client/PZAgent/adapters`. The claim now states the adapters as **unswept**.
+
 - **The mod's two safety gates had no test, and one of them is the whole
   meaning of «Остановился.»** (`dev`). The Lua half — the code that runs inside
   Project Zomboid, with no Python layer between it and the character — had never

@@ -1468,9 +1468,31 @@ Project Zomboid. It had never been swept, and no coverage claim in this file
 mentioned it either way. A guard is only as wide as the set it derives, and this
 one's set was "Python packages" when the question was "shipped code".
 
-The mod has since been swept: four areas, 299 refusal sites, **18 findings**
-against 27 refusals found properly guarded. That ratio is the point — the Lua
-half had never been planted against, and it shows.
+The mod has since been swept in part: four areas, 299 refusal sites, **18
+findings** against 27 refusals found properly guarded. That ratio is the point —
+the Lua half had never been planted against, and it shows. The four areas were
+the runtime and capability layer, the safety and session layer, the IPC and
+serialisation layer (`Ipc`, `Json`, `Refs`, `Sequence`, `Protocol`), and the
+observation layer (`Observe`, `ObserveModel`) — that is, the files sitting
+directly in `client/PZAgent/` and `shared/PZAgent/`.
+
+**`client/PZAgent/adapters/` was not among them, and this is the third time the
+same mistake has been made in this document.** Fifteen files —  `Building`,
+`Combat`, `Consumption`, `Containers`, `Crafting`, `Doors`, `Equipment`,
+`Inventory`, `Literature`, `Medical`, `Movement`, `Rest`, `Sleep`, `Toolkit`,
+`World` — the code that actually touches the game world, never assigned to a
+sweep and therefore never measured. "The mod has since been swept" read as
+though it had been.
+
+And once again **the guard could not have caught it**, for the same reason it
+could not catch the mod the time before: its derived set added `pz-mod` as a
+single opaque unit, so naming the mod anywhere in this paragraph satisfied it
+whatever was inside. The derivation now walks the mod down to each directory
+that holds Lua files — `client/PZAgent`, `client/PZAgent/adapters` and
+`shared/PZAgent` — so a directory this paragraph never mentions fails the check
+the way an unmentioned Python subpackage already did. The lesson is not "widen
+the set once more"; it is that a set derived one level above the work is a set
+that agrees with any claim.
 
 Three are closed: `ActionRuntime.verify`'s refusal to call an unmoved world a
 success — with a control pinning the `unchanged_is_success` exemption, so the
@@ -1546,12 +1568,15 @@ whether or not the budget was poisoned. None would have been found by reading.
 A guard whose plant does not fail is not a guard, and only planting says which
 one it is.
 
-`tests/contract/test_the_sweep_coverage_claim_names_the_tree.py` now derives the
-subpackage set from `packages/` and requires this claim to name every member,
-in whichever of the two lists is true. It cannot tell swept from unswept — that
-is a fact about work done, not about the tree — but it catches the case that
-actually happened, a package the paragraph never mentions. On its first run it
-found five more names missing from the corrected list above.
+`tests/contract/test_the_sweep_coverage_claim_names_the_tree.py` derives its set
+from the tree — the subpackages under `packages/`, and every directory under
+`pz-mod/*/media/lua/` that holds Lua files — and requires this claim to name
+every member, in whichever of the two lists is true. It cannot tell swept from
+unswept — that is a fact about work done, not about the tree — but it catches
+the case that actually happened, a unit the paragraph never mentions. On its
+first run it found five more names missing from the corrected list above; when
+the mod half was added it found the mod; when the mod half was taken down to
+directories it found `client/PZAgent/adapters`.
 
 And within each area that *was* given, only a handful of refusal sites were
 planted — five per agent, against surfaces holding dozens — so "swept" means
