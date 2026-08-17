@@ -37,9 +37,34 @@ drift out of sync with `pz_agent_core.version`.
     showed that: with a truncated one it crashed on the lines below instead,
     which is a catch for the wrong reason.
 
+- **The mod's refusal of an unreadable action queue, and the reason no test
+  could reach it** (`dev`). `queueObject` refuses a queue object whose entry
+  list is missing or is not a table. Nothing exercised it, and the cause was in
+  the harness rather than in anybody's attention: `Mock.installActionQueue`
+  always builds `{ queue = entries or {} }`, so every test that installed a
+  queue handed the mod an object whose entry list was already a table. The
+  branch was structurally unreachable, and deleting the refusal outright left
+  all 33 Lua files and the contract suite byte-identically green.
+
+  Three groups read as coverage of it and are not. The closest —
+  *"a queue that could not be read is never reported as clear"*, whose name is
+  precisely the property — calls `Mock.removeActionQueue()` first, which trips
+  the *API-absence* refusal above and returns before the shape check is ever
+  evaluated. Its assertions hold whether or not the guard exists.
+
+  The two shapes fail in opposite directions, so the new group drives both.
+  An entry list under another name makes `#queue.queue` raise — and nothing
+  catches it: `Runtime.stop` calls `describeQueue` as its *first* statement,
+  before the disarm, and the panic-key path is not `pcall`-wrapped, so the raise
+  would take the engine event handler down and leave the agent armed. A field
+  that is present, is not a table and still answers `#` raises nothing at all:
+  the mod reads zero entries, calls the queue readable, and `applyStop` reports
+  `VERIFIED` — "nothing the mod owns is queued" — for a queue it never read.
+  `Mock.installMalformedActionQueue` is the door into the branch.
+
 ### Measured and open
 
-- Fifteen findings from the Lua sweep are **not yet guarded**: the mod's byte
+- Fourteen findings from the Lua sweep are **not yet guarded**: the mod's byte
   caps on journal lines, whole documents and reads (`Ipc.lua`), session
   eviction (`Session.lua`), the queue-shape and engine-raise refusals and the
   undated-threat rule (`Safety.lua`), the JSON decoder's depth bound and the

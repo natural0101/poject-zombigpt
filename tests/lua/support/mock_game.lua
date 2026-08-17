@@ -173,6 +173,25 @@ function Mock.installActionQueue(entries, options)
   return queue
 end
 
+--- Install a fake ISTimedActionQueue whose getTimedActionQueue returns
+--- `object` verbatim, however malformed.
+---
+--- `installActionQueue` always builds `{ queue = entries or {} }`, so every
+--- test that used it handed the mod an object whose entry list was already a
+--- table. That made the "no readable entry list" refusal structurally
+--- unreachable from this harness: planting it changed nothing anywhere, and
+--- three groups that read as coverage of it are in fact satisfied by the
+--- *API-absence* refusal above it, which returns before that line is reached.
+--- This is the door into the branch.
+function Mock.installMalformedActionQueue(object)
+  ISTimedActionQueue = {
+    getTimedActionQueue = function()
+      return object
+    end,
+    clear = function() end,
+  }
+end
+
 --- Remove the fake queue, restoring the "this build has no such API" state.
 function Mock.removeActionQueue()
   ISTimedActionQueue = nil

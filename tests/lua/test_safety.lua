@@ -14,6 +14,7 @@ local REASON = Protocol.REASON
 local CAPABILITY = Protocol.CAPABILITY
 
 local equal, ok, isNil = Harness.equal, Harness.ok, Harness.isNil
+local contains = Harness.contains
 
 local NOW = 1700000000000
 local SESSION = "3f2b9c1e-0a4d-4c7b-9e21-8b6d5f0a1c33"
@@ -555,6 +556,53 @@ do
   isNil(shortRead.truncated, "a queue inside the bound is not marked truncated")
   equal(Safety.applyStop(player, Ownership.panicPlan(shortRead, SESSION), SESSION).cleared, 1, "and clears normally")
   equal(#shortQueue.queue, 0, "leaving the queue empty")
+end
+
+Harness.group("a queue object the mod cannot read is refused, whatever shape it arrives in")
+do
+  -- Found by planting, and the reason nothing caught it is worth recording:
+  -- `Mock.installActionQueue` always builds `{ queue = entries or {} }`, so no
+  -- test in this tree ever handed queueObject an object of another shape. The
+  -- group above ("a queue that could not be read is never reported as clear")
+  -- reads as coverage of exactly this refusal and is not: it removes the API
+  -- entirely, which trips the *first* refusal in queueObject and returns before
+  -- the shape check is evaluated. Deleting the shape check — or the whole
+  -- refusal — left all 33 Lua files and the contract suite byte-identically
+  -- green.
+  --
+  -- Two shapes, because they fail in opposite directions.
+  local player = Mock.newPlayer()
+
+  -- A. The entry list is under another name. Without the refusal, `#queue.queue`
+  -- raises. Nothing catches it: Runtime.stop calls describeQueue as its FIRST
+  -- statement, before the disarm, and the panic key path is not pcall-wrapped —
+  -- so the raise would take the whole engine event handler down and the agent
+  -- would stay armed. AGENTS.md invariant: stop always works.
+  Mock.installMalformedActionQueue({ actions = {} })
+  local raised, entriesA, capabilityA, detailA = pcall(Safety.describeQueue, player)
+  ok(raised, "a queue of an unexpected shape is refused, not raised through (" ..
+    tostring(entriesA) .. ")")
+  isNil(entriesA, "no entry list was invented for it")
+  equal(capabilityA, CAPABILITY.UNSUPPORTED, "and the capability says the queue is not readable")
+  contains(detailA, "readable entry list", "with the detail naming what was wrong")
+
+  -- B. The field is present and is not a table, but answers `#`. This one
+  -- raises nothing: without the refusal the mod reads zero entries, calls the
+  -- queue readable, and applyStop reports VERIFIED "nothing the mod owns is
+  -- queued" — an unread queue reported as an observed-empty one, which is the
+  -- fabricated success this file exists to prevent.
+  Mock.installMalformedActionQueue({ queue = "" })
+  local entriesB, capabilityB = Safety.describeQueue(player)
+  isNil(entriesB, "a non-table entry list is not an empty queue")
+  equal(capabilityB, CAPABILITY.UNSUPPORTED, "it is a queue that could not be read")
+
+  local plan = Ownership.panicPlan(entriesB, SESSION)
+  equal(plan.readable, false, "and the plan records that it never saw the queue")
+  local applied = Safety.applyStop(player, plan, SESSION)
+  ok(applied.capability ~= CAPABILITY.VERIFIED,
+    "a stop over an unreadable queue is never verified")
+
+  Mock.removeActionQueue()
 end
 
 Harness.finish("test_safety")

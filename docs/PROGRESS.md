@@ -1480,11 +1480,20 @@ second is worth stating plainly: under the plant the ack reads
 `POSTCONDITION_MET` for a stop that left the agent armed, while every operator
 document here tells the user that «Остановился.» means the agent stopped.
 
-Fifteen remain measured and open and are listed in `CHANGELOG.md`. The one to
-carry forward first is `Safety.applyStop`: it re-reads the queue after clearing
-it, and `Ownership.unreadable()` reports `mod_owned = 0` — deliberately
-identical to an observed-empty queue — so without the guard a stop over a queue
-the mod could not read claims the full count as cleared.
+A fourth is closed, and it is the one worth reading twice, because the reason
+nothing caught it was **the harness**. `queueObject` refuses a queue object
+whose entry list is missing or is not a table; `Mock.installActionQueue` always
+builds `{ queue = entries or {} }`, so no test in this tree ever handed the mod
+another shape. The branch was structurally unreachable and deleting the refusal
+outright left every Lua file and the contract suite byte-identically green.
+
+Three groups read as coverage of it. The closest is named for the exact property
+— *"a queue that could not be read is never reported as clear"* — and removes
+the API entirely, which trips a different refusal higher up and returns before
+this one is evaluated. A test can be about the right subject, assert the right
+thing, and still not touch the line that makes it true.
+
+Fourteen remain measured and open, listed in `CHANGELOG.md`.
 
 `tests/contract/test_the_sweep_coverage_claim_names_the_tree.py` now derives the
 subpackage set from `packages/` and requires this claim to name every member,
