@@ -746,17 +746,11 @@ def test_evidence_all_taken_against_one_commit_is_accepted(tmp_path: Path) -> No
     assert _MANIFEST_COMMIT[:8] in passing["evidence.commit"]
 
 
-def test_well_formed_evidence_leaves_only_the_version_to_answer_for(tmp_path: Path) -> None:
-    """Twenty passes with hashed artefacts satisfy every evidence check but one.
-
-    The version check is the one still failing, and legitimately: this checkout
-    declares a product version that is not the release being certified. It is
-    the last thing bumped before a tag, so a test that hid it would be hiding
-    the step it is there to enforce.
-    """
+def test_well_formed_evidence_satisfies_every_release_check(tmp_path: Path) -> None:
+    """Twenty-two passes with hashed artefacts satisfy every evidence check."""
     manifest, evidence = _evidence(tmp_path / "tree")
     findings = _run(tmp_path, release=True, manifest=manifest, evidence_dir=evidence)
-    assert list(_failures(findings)) == ["evidence.version"]
+    assert list(_failures(findings)) == []
     artefacts = next(f for f in findings if f.check == "evidence.artefacts")
     assert "re-hashed" in artefacts.detail
     assert next(f for f in findings if f.check == "evidence.scenarios").ok

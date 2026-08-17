@@ -19,6 +19,7 @@ from pathlib import Path
 from pz_agent_cli.app import main
 from pz_agent_cli.context import CliContext
 from pz_agent_core.platform.discovery import DiscoveryContext
+from pz_agent_core.version import MOD_VERSION
 
 from .capability_trees import full_lua_tree
 from .platform_trees import (
@@ -123,7 +124,7 @@ class CliWorld:
         return None if self.user_dir is None else self.user_dir / "Lua" / "pz_agent"
 
 
-def make_mod_source(base: Path, *, version: str = "0.1.0") -> Path:
+def make_mod_source(base: Path, *, version: str = MOD_VERSION) -> Path:
     """A minimal but structurally real mod source tree."""
     source = base / "pz-mod" / "42"
     (source / "media" / "lua" / "shared" / "PZAgent").mkdir(parents=True, exist_ok=True)

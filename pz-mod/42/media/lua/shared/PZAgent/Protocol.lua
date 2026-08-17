@@ -21,7 +21,7 @@ PZAgent.Protocol = Protocol
 --- Mirrors pz_agent_core.version.
 Protocol.PROTOCOL_VERSION = "1.1"
 Protocol.SCHEMA_VERSION = "1.0"
-Protocol.MOD_VERSION = "0.1.0"
+Protocol.MOD_VERSION = "1.0.0"
 Protocol.TARGET_BUILD = "42.20"
 Protocol.SUPPORTED_BUILDS = { "42.20" }
 
