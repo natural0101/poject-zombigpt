@@ -1326,4 +1326,102 @@ do
   isNil(emptyTerminal.evidence, "and no empty bag was attached to the ack")
 end
 
+Harness.group("an adapter whose own readings all match is not a success")
+do
+  -- FALSE SUCCESS at its single choke point. AGENTS.md: "succeeded means a
+  -- postcondition was *observed*". The empty-evidence half of this gate is
+  -- tested above; this is the other half, and it is the one that matters more,
+  -- because an adapter that carries a full, well-formed evidence bag looks
+  -- exactly like one that worked. Every before/after pair reading identical
+  -- means the adapter went through the motions and the world did not move.
+  --
+  -- Found by planting: deleting the check left the whole Lua set and the
+  -- contract suite green, so nothing anywhere noticed the mod calling a
+  -- no-op a success. The sidecar cannot re-derive it either -- ActionResult
+  -- .succeeded() refuses only an *empty* bag.
+  local stuck = {
+    action = "movement.move_to",
+    required_symbols = {},
+    start = function()
+      return {
+        done = true,
+        evidence = { position_before = "6,6,0", position_after = "6,6,0" },
+      }
+    end,
+  }
+  local agent, fs, runtime = Support.runtime(Mock, { stuck })
+  Support.publish(fs, { Support.command({ action = "movement.move_to", args = {} }) })
+
+  runtime:tick(agent, NOW)
+
+  local terminal = lastTerminal(fs)
+  equal(terminal.status, STATUS.FAILED, "an unmoved world is not a success")
+  equal(terminal.reason_code, REASON.POSTCONDITION_FAILED, "reported as the postcondition failure it is")
+  contains(terminal.message, "observed no change", "and the ack says which reading contradicted the claim")
+end
+
+Harness.group("an adapter may declare that no change is the point")
+do
+  -- The control the check above needs. Some actions legitimately end with the
+  -- world where it started -- a door already closed, an item already worn --
+  -- and `unchanged_is_success` is how an adapter says so. Without this, a gate
+  -- that refused every unchanged reading would be indistinguishable from one
+  -- that worked, and the first adapter to need the exemption would be told to
+  -- delete the gate instead.
+  local deliberate = {
+    action = "door.close",
+    required_symbols = {},
+    start = function()
+      return {
+        done = true,
+        unchanged_is_success = true,
+        evidence = { open_before = false, open_after = false },
+      }
+    end,
+  }
+  local agent, fs, runtime = Support.runtime(Mock, { deliberate })
+  Support.publish(fs, { Support.command({ action = "door.close", args = {} }) })
+
+  runtime:tick(agent, NOW)
+
+  local terminal = lastTerminal(fs)
+  equal(terminal.status, STATUS.SUCCEEDED, "an adapter that declared it still succeeds")
+end
+
+Harness.group("a stop that did not disarm is reported as a failure, not a stop")
+do
+  -- AGENTS.md priority 1 is user safety and `safety.stop` is the command that
+  -- delivers it. This re-read is the one place that checks the stop actually
+  -- landed rather than assuming the call worked; nothing downstream re-checks.
+  -- Removed, a stop that failed to disarm acks SUCCEEDED, and every operator
+  -- instruction in this repository tells the user that «Остановился.» means
+  -- the agent stopped.
+  --
+  -- The stop is made to report no error and leave the agent armed, which is
+  -- precisely the case the check exists for. Restored immediately: the module
+  -- is shared with every other group in this file.
+  local slow = Support.spyAdapter("movement.move_to", { polls = 99, evidence = { position = "0,0,0" } })
+  local agent, fs, runtime = Support.runtime(Mock, { slow }, { maxWorkPerTick = 8, controls = true })
+  Mock.installActionQueue({})
+  Support.publish(fs, { Support.command({ action = "safety.stop", args = {} }) })
+
+  local realStop = PZAgent.Runtime.stop
+  PZAgent.Runtime.stop = function()
+    -- A full, well-formed outcome: the point is a stop that *reports* fine and
+    -- leaves the agent armed, not one that returns rubbish. With a truncated
+    -- outcome the plant crashes on the lines below instead, which is a catch
+    -- for the wrong reason.
+    return { applied = { cleared = 0, remaining = 0 }, plan = { readable = true, mod_owned = 0 } }
+  end
+  local survived, tickError = pcall(runtime.tick, runtime, agent, NOW)
+  PZAgent.Runtime.stop = realStop
+
+  ok(survived, "the tick survived the stop that did nothing (" .. tostring(tickError) .. ")")
+  local terminal = lastTerminal(fs)
+  equal(terminal.action, "safety.stop", "the ack belongs to the stop")
+  equal(terminal.status, STATUS.FAILED, "a stop that left the agent armed is not a success")
+  equal(terminal.reason_code, REASON.POSTCONDITION_FAILED, "reported as the postcondition failure it is")
+  contains(terminal.message, "still armed", "and the ack says what it observed")
+end
+
 Harness.finish("test_action_runtime")

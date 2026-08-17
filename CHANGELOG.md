@@ -12,6 +12,50 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **The mod's two safety gates had no test, and one of them is the whole
+  meaning of «Остановился.»** (`dev`). The Lua half — the code that runs inside
+  Project Zomboid, with no Python layer between it and the character — had never
+  been swept. A four-area sweep of 299 refusal sites returned 18 findings against
+  27 refusals it found properly guarded; these are the first three closed, each
+  re-planted here and each guard shown to fail under its plant.
+
+  - **`ActionRuntime.verify` refusing POSTCONDITION_MET when every before/after
+    pair reads identical.** FALSE SUCCESS at its single choke point. The
+    empty-evidence half of this gate was tested; this half was not, and it is
+    the one that matters more, because an adapter carrying a full, well-formed
+    evidence bag looks exactly like one that worked. The sidecar cannot
+    re-derive it: `ActionResult.succeeded()` refuses only an *empty* bag. A
+    second test pins the `unchanged_is_success` exemption, without which the
+    first adapter that legitimately ends where it started would be told to
+    delete the gate.
+  - **`StopAdapter` re-reading the safety state and refusing to report success
+    unless it observes `armed == false`.** This is the one place that checks the
+    stop actually landed; nothing downstream re-checks. Under the plant the ack
+    is `POSTCONDITION_MET` for a stop that left the agent armed — while every
+    operator document in this repository tells the user that «Остановился.»
+    means the agent stopped. The stub needed a full outcome before the plant
+    showed that: with a truncated one it crashed on the lines below instead,
+    which is a catch for the wrong reason.
+
+### Measured and open
+
+- Fifteen findings from the Lua sweep are **not yet guarded**: the mod's byte
+  caps on journal lines, whole documents and reads (`Ipc.lua`), session
+  eviction (`Session.lua`), the queue-shape and engine-raise refusals and the
+  undated-threat rule (`Safety.lua`), the JSON decoder's depth bound and the
+  encoder's key cap (`Json.lua`), the zombie-scan cap (`Observe.lua`), the
+  reference byte cap (`Refs.lua`), the token-list cap (`ObserveModel.lua`), the
+  built-in control adapter's precedence and the capability-publish honesty rule
+  (`ActionRuntime.lua`, `CapabilityRuntime.lua`), and `checkNumber`'s refusal of
+  NaN and the infinities (`CommandDispatcher.lua`) — the same defect family as
+  the loot weight guard closed two rounds ago. Each has a measurement behind it.
+
+  One of them deserves naming now because it is the same shape as a defect this
+  project has already paid for: `Safety.applyStop` re-reads the queue after
+  clearing it, and an *unreadable* re-read is deliberately indistinguishable
+  from an observed-empty one — so without the guard a stop over a queue it could
+  not read reports the full count as cleared.
+
 - **The coverage guard was exactly as wide as its own set, and its set was
   "Python packages" when the question was "shipped code"** (`dev`). The check
   added last round derives the subpackage list from `packages/` and requires

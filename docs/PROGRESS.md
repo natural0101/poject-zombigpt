@@ -1466,9 +1466,25 @@ derives its set from `packages/`, so it knows nothing about `pz-mod/42/media/
 lua/` — the mod, twenty-odd Lua modules, the half that actually runs inside
 Project Zomboid. It had never been swept, and no coverage claim in this file
 mentioned it either way. A guard is only as wide as the set it derives, and this
-one's set was "Python packages" when the question was "shipped code". The mod is
-being swept now; until that reports, the honest status of the Lua half is
-*unmeasured*, which is different from both "sound" and "broken".
+one's set was "Python packages" when the question was "shipped code".
+
+The mod has since been swept: four areas, 299 refusal sites, **18 findings**
+against 27 refusals found properly guarded. That ratio is the point — the Lua
+half had never been planted against, and it shows.
+
+Three are closed: `ActionRuntime.verify`'s refusal to call an unmoved world a
+success — with a control pinning the `unchanged_is_success` exemption, so the
+gate cannot be deleted the first time an adapter legitimately ends where it
+started — and `StopAdapter`'s refusal to report a stop it did not observe. The
+second is worth stating plainly: under the plant the ack reads
+`POSTCONDITION_MET` for a stop that left the agent armed, while every operator
+document here tells the user that «Остановился.» means the agent stopped.
+
+Fifteen remain measured and open and are listed in `CHANGELOG.md`. The one to
+carry forward first is `Safety.applyStop`: it re-reads the queue after clearing
+it, and `Ownership.unreadable()` reports `mod_owned = 0` — deliberately
+identical to an observed-empty queue — so without the guard a stop over a queue
+the mod could not read claims the full count as cleared.
 
 `tests/contract/test_the_sweep_coverage_claim_names_the_tree.py` now derives the
 subpackage set from `packages/` and requires this claim to name every member,
