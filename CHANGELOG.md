@@ -136,9 +136,37 @@ drift out of sync with `pz_agent_core.version`.
   All three caps are now published on their modules so the tests derive the
   bound instead of copying the number.
 
+- **The last three mod findings, and with them every one the sweep produced**
+  (`dev`).
+
+  `Observe.nearbyZombies` stops its walk at `MAX_ZOMBIE_SCAN` and reports how
+  much it did not read. A horde is exactly when the game can least spare a frame
+  and exactly when this loop is longest; `ObserveModel.MAX_ZOMBIES` caps what
+  reaches the *document*, but only after the walk has already spent the tick.
+
+  `tokenList`'s `count >= limit` clause is the one cap behind both `MAX_TAGS`
+  and `MAX_SEMANTICS`. Both lists cross into a model's context — tags on every
+  item, semantics on every nearby object — so an unbounded per-entry list is a
+  memory bug and a prompt-flooding one at once, multiplied by the entry count.
+  No shipped reader fills either past its cap today, which is a fact about
+  today's producers and not a bound: the descriptor comes from the game side.
+
+  `Safety.setDanger` clears the date when it is not given one, so an undated
+  reading cannot inherit the previous one's. The staleness gate only means
+  something while the date on a danger floor belongs to the reading that
+  produced it. Reach is stated honestly in the test: the only shipped caller
+  always passes a timestamp, so this guards a future one rather than a live
+  path — guarded because the alternative is a rule that holds by coincidence.
+
+  **All eighteen findings from the four-area Lua sweep are now closed**, as are
+  all fifteen from the Python sweep before it. What remains unmeasured is stated
+  in `docs/PROGRESS.md`: within each area only a handful of refusal sites were
+  planted, so "swept" means "sampled under a stated budget", never "exhausted".
+
 ### Measured and open
 
-- Three findings from the Lua sweep are **not yet guarded**: the mod's byte
+- Nothing. Every finding from both sweeps is closed. Note that this is a
+  statement about the refusals that were *planted*: the mod's byte
   caps on journal lines, whole documents and reads (`Ipc.lua`), session
   eviction (`Session.lua`), the queue-shape and engine-raise refusals and the
   undated-threat rule (`Safety.lua`), the JSON decoder's depth bound and the

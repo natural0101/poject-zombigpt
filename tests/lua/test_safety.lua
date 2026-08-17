@@ -634,4 +634,29 @@ do
   Mock.removeActionQueue()
 end
 
+Harness.group("an undated threat reading never inherits the last one's date")
+do
+  -- The gate above refuses work whose danger floor is older than the allowance.
+  -- That only means anything while the date on the floor belongs to the reading
+  -- that produced it. `setDanger` therefore clears the date when it is not
+  -- given one, rather than leaving the previous reading's date in place.
+  --
+  -- Without the clear, a caller that measures the level but not the moment
+  -- hands the gate a fresh-looking calm taken from an old scan -- the exact
+  -- shape of the failure the age check exists to catch, arriving through the
+  -- setter instead of through silence.
+  --
+  -- Honest about reach: the only shipped caller always passes a timestamp, so
+  -- today this is defence against a future one rather than a live path. It is
+  -- guarded because the alternative is a rule that holds by coincidence.
+  local state = liveState()
+  ok(Safety.setDanger(state, Protocol.DANGER.HIGH, NOW), "a dated reading records its moment")
+  equal(state.danger_seen_ms, NOW, "which is the clock it was taken on")
+
+  ok(Safety.setDanger(state, Protocol.DANGER.NONE), "an undated reading is still accepted")
+  equal(state.danger_level, Protocol.DANGER.NONE, "and it does change the level")
+  isNil(state.danger_seen_ms, "but it carries no date, rather than borrowing the last one")
+  isNil(Safety.dangerAgeMs(state, NOW + 10000), "so nothing can call it freshly measured")
+end
+
 Harness.finish("test_safety")

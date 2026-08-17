@@ -1528,9 +1528,23 @@ had a test, and removing the call from `parseContainer` changed nothing anybody
 could see. The new group covers all six entry points rather than the one the
 defect was found in.
 
-Three remain measured and open, listed in `CHANGELOG.md`: the undated-threat
-rule in `Safety`, the zombie-scan cap in `Observe`, and the token-list cap in
-`ObserveModel`.
+The last three are closed too: the zombie-scan cap in `Observe`, the token-list
+cap behind `MAX_TAGS` and `MAX_SEMANTICS`, and `Safety.setDanger`'s refusal to
+let an undated threat reading inherit the previous one's date.
+
+**All thirty-three findings from both sweeps are closed** — fifteen in Python,
+eighteen in the mod. Every one was re-planted in this tree before its test was
+written, and every guard was shown to fail under its own plant.
+
+The number worth carrying is not thirty-three. It is that **six of those tests
+had to be corrected before they were worth anything**, each because the
+assertion was true for a reason unrelated to the guard: a later confirmation
+step, an open window the fill escaped through, a spec whose neighbouring checks
+caught the same input, a harness that made a branch structurally unreachable, a
+dispatcher that refused earlier for another reason, and an assertion that held
+whether or not the budget was poisoned. None would have been found by reading.
+A guard whose plant does not fail is not a guard, and only planting says which
+one it is.
 
 `tests/contract/test_the_sweep_coverage_claim_names_the_tree.py` now derives the
 subpackage set from `packages/` and requires this claim to name every member,

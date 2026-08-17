@@ -1241,4 +1241,68 @@ do
   ok(encoded:find('"crafting.known":1', 1, true) ~= nil, "and it survives encoding as a plain scalar")
 end
 
+Harness.group("the per-entry token lists are capped, tags and semantics alike")
+do
+  -- One cap serves both: `tokenList`'s `count >= limit` clause is what
+  -- `MAX_TAGS` and `MAX_SEMANTICS` are passed into. Both lists cross straight
+  -- into a model's context -- tags ride every item in `inventory.items`, and
+  -- semantics ride every entry in `nearby.objects` -- so an unbounded per-entry
+  -- list is a memory bug and a prompt-flooding one at the same time, multiplied
+  -- by however many entries there are.
+  --
+  -- Deleting the clause left the whole Lua set green, because no shipped reader
+  -- currently fills either list past its cap. That is a fact about today's
+  -- producers, not a bound: the descriptor comes from the game side, which is
+  -- exactly the input this module is written not to trust.
+  local manyTags = {}
+  for index = 1, Model.MAX_TAGS * 3 do
+    manyTags[index] = "tag_" .. index
+  end
+  local manySemantics = {}
+  for index = 1, Model.MAX_SEMANTICS * 3 do
+    manySemantics[index] = "semantic_" .. index
+  end
+
+  local document = built({
+    inventory = {
+      {
+        kind = "player_main",
+        name = "Inventory",
+        capacity = 8,
+        used_capacity = 1,
+        items = {
+          {
+            runtime_id = 1,
+            full_type = "Base.Apple",
+            display_name = "Apple",
+            category = "Food",
+            weight = 0.3,
+            tags = manyTags,
+          },
+        },
+      },
+    },
+    nearby = {
+      objects = {
+        {
+          kind = "fridge",
+          x = 110,
+          y = 200,
+          z = 0,
+          object_index = 2,
+          container_index = 0,
+          distance = 10,
+          semantics = manySemantics,
+        },
+      },
+    },
+  })
+
+  local item = document.inventory.items[1]
+  equal(#item.tags, Model.MAX_TAGS, "an item's tag list stops at its cap")
+
+  local object = document.nearby.objects[1]
+  equal(#object.semantics, Model.MAX_SEMANTICS, "and an object's semantics stop at theirs")
+end
+
 Harness.finish("observe_model")

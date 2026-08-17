@@ -1803,4 +1803,35 @@ do
   restore()
 end
 
+Harness.group("the zombie walk stops at its cap and says how much it did not read")
+do
+  -- This file's own header states the rule: "Everything walked here is
+  -- something the player controls the size of ... so every loop has a bound,
+  -- and reaching one is reported to ObserveModel rather than absorbed." The
+  -- zombie list is the sharpest case of that -- a horde is exactly when the
+  -- game is least able to spare a frame, and exactly when this loop is longest.
+  --
+  -- Nothing tested it. Deleting the `math.min` left the whole Lua set green
+  -- while the walk read the entire list and the document lost the flags that
+  -- say it was cut short. `ObserveModel.MAX_ZOMBIES` caps what reaches the
+  -- document, but only after this loop has already spent the tick.
+  local player = furnishedPlayer()
+  local position = { x = 100, y = 200, z = 0 }
+  local horde = {}
+  local extra = 5
+  for index = 1, Observe.MAX_ZOMBIE_SCAN + extra do
+    horde[index] = Support.zombie({ id = 1000 + index, x = 101, y = 200 })
+  end
+  local removeCell = Support.installCell({}, horde)
+
+  local seen = Observe.nearbyZombies(player, position)
+
+  equal(#seen.zombies, Observe.MAX_ZOMBIE_SCAN,
+    "the walk stops at the cap instead of reading the whole list")
+  equal(seen.truncated, true, "and the reading says it was cut short")
+  equal(seen.dropped, extra, "naming how many it did not look at")
+
+  removeCell()
+end
+
 Harness.finish("observe")
