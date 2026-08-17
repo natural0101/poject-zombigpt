@@ -12,6 +12,48 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **Fourteen refusals in the mod's fifteen action adapters, and the first sweep
+  whose findings were run past a refuter** (`dev`). The adapter directory — the
+  code that actually touches the game world — had never been planted against. A
+  four-area sweep of 361 refusal sites returned 20 findings; these fourteen are
+  closed, each re-planted in this tree and each guard shown to fail under its
+  own plant.
+
+  - `Doors.unlockVerify`'s re-read of the lock, which the index-ordering caveat
+    makes reachable: `isDoor` deliberately does not demand a lock reader, so
+    verify can be handed a door-shaped object whose lock nobody can read.
+  - `Movement`'s direction filter, so a stalled walk never opens a door behind
+    the character, and its square-object bound.
+  - Both halves of `inventory.transfer`'s postcondition (the origin half had no
+    test, four lines from the destination half that did), both halves of the
+    batch's terminal re-read, and `ensure_main`'s capacity gate.
+  - `consume.eat`'s poison and burnt refusals — the poison branch was
+    *structurally unreachable* from the harness, because `Support.item` granted
+    no `isPoison` reader at all — `consume.drink`'s item-level taint check, and
+    `itemShrank`'s floor, which is the difference between an item nobody saw and
+    an item eaten to nothing.
+  - `medical.bandage`'s refusal to date a dressing it has no reading from before
+    for, and the three copies of the square-walk bound in `Rest.seatOn`,
+    `Sleep.bedOn` and `Consumption.waterSourceOn`.
+
+- **The queue refusal is now guarded where it actually executes** (`dev`). An
+  independent refuter measured what the reported adapter-level refusal was worth
+  and found the poll count zero: `Handle:step` is the only caller of any
+  adapter's `poll` in the mod and it consults `Ownership.blocksAutomation` first,
+  so the branch — and the eight other copies of it — is unreachable in the
+  shipped wiring. The runtime's gate is the one that protects the player, and
+  nothing pinned it, because `command_support.lua` hardcodes
+  `agent.queue_description` and the runtime suite never calls `Runtime.refresh`.
+  `tests/lua/test_action_runtime.lua` now drives a foreign queue entry and an
+  unreadable queue through the runtime and asserts `poll_calls` did not move.
+  Fails under two independent plants.
+
+  The claim about `Doors.unlockVerify` above is stated as defence in depth
+  rather than as a route to a false success, for the same reason: the sidecar's
+  `DoorUnlockAdapter.verify` requires `locked is False` and is separately tested,
+  so a false mod ack lands as POSTCONDITION_FAILED. The guard is still the only
+  thing pinning that refusal inside the mod.
+
 - **"The mod has since been swept" answered for fifteen files no sweep ever
   touched — and the guard against exactly this class agreed with it** (`dev`).
   Third instance of the same overstatement. `pz-mod/42/media/lua/client/PZAgent/

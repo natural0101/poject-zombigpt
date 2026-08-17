@@ -1477,7 +1477,8 @@ observation layer (`Observe`, `ObserveModel`) — that is, the files sitting
 directly in `client/PZAgent/` and `shared/PZAgent/`.
 
 **`client/PZAgent/adapters/` was not among them, and this is the third time the
-same mistake has been made in this document.** Fifteen files —  `Building`,
+same mistake has been made in this document.** (It has since been swept in its
+own right — see below.) Fifteen files —  `Building`,
 `Combat`, `Consumption`, `Containers`, `Crafting`, `Doors`, `Equipment`,
 `Inventory`, `Literature`, `Medical`, `Movement`, `Rest`, `Sleep`, `Toolkit`,
 `World` — the code that actually touches the game world, never assigned to a
@@ -1567,6 +1568,58 @@ dispatcher that refused earlier for another reason, and an assertion that held
 whether or not the budget was poisoned. None would have been found by reading.
 A guard whose plant does not fail is not a guard, and only planting says which
 one it is.
+
+### The adapters, and the first sweep that ran its findings past a refuter
+
+The fifteen files under `client/PZAgent/adapters/` were then given to a sweep of
+their own: four areas, 361 refusal sites, **20 findings**. Fourteen are closed
+here — the unlock's lock re-read, Movement's direction filter and its
+square-object bound, both halves of `transfer`'s postcondition and both halves
+of the batch's, `ensure_main`'s capacity gate, eat's poison and burnt refusals,
+drink's item-level taint, `itemShrank`'s floor, the bandage with no reading from
+before, and the three copies of the square-walk cap in `Rest.seatOn`,
+`Sleep.bedOn` and `Consumption.waterSourceOn`. Each was re-planted in this tree
+and each guard shown to fail under its own plant.
+
+**This round added a step: every finding went to an independent agent whose
+instructions were to refute it.** Two came back refuted, and both refutations
+were right.
+
+The first: `Doors.unlockVerify`'s re-read really is the only lever *in the mod*,
+and the plant really does mint a `SUCCEEDED` ack for a door nobody observed
+unlocked — but the ack is not the answer. `ActionEngine` never promotes a mod
+ack; its one success exit requires evidence from the sidecar's own
+`DoorUnlockAdapter.verify`, which treats an absent `locked` reading as
+not-unlocked and is separately tested. So the run ends POSTCONDITION_FAILED, not
+succeeded. The guard is kept and the claim is downgraded: defence in depth that
+nothing in the mod pinned, not a route to a false success.
+
+The second is the one worth the round. `pollWalk`'s refusal on the queue's nil
+answer was reported as unguarded; the refuter measured the poll count and found
+it **zero**. `Handle:step` is the only caller of any adapter's `poll` in the
+mod, and it asks `interruptionFor` first — which reaches
+`Ownership.blocksAutomation` over a `queue_description` that `Runtime.refresh`
+rebuilds every tick, on exactly the two facts `Toolkit.queueProgress` reports.
+The adapter branch is unreachable in the shipped wiring, and so is every one of
+the nine copies of it. Writing an adapter-level test would have been testing
+dead code and calling it a defect closed.
+
+The refusal that does protect the player is the runtime's, and **nothing pinned
+it**, for a reason that is the harness trap again: `command_support.lua`
+hardcodes `agent.queue_description` to an empty readable description and the
+runtime suite never calls `Runtime.refresh`, so the gate structurally could not
+fire in any test. `tests/lua/test_action_runtime.lua` now drives it with a
+foreign entry and with an unreadable queue, and asserts `poll_calls` did not
+move — the assertion that separates "the gate held" from "the adapter refused
+for itself". It fails under two independent plants: deferring the queue verdict
+to the adapters, and flattening `blocksAutomation`'s busy branch.
+
+Six findings from the fourth area — `Crafting.recipeInputs`, `Building`'s
+`isFree` cross-check and its byte-identical `recipeInputs` twin, Combat's
+`RETREAT_EPSILON` and `MAX_ZOMBIE_SCAN`, and `Toolkit.inReach`'s floor
+comparison — are **open**, listed here rather than closed quietly. The verify
+pass for them never ran: the workflow hit its session limit with eight
+verifiers unstarted, so those six carry a sweep's word and no refuter's.
 
 `tests/contract/test_the_sweep_coverage_claim_names_the_tree.py` derives its set
 from the tree — the subpackages under `packages/`, and every directory under
