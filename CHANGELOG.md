@@ -12,6 +12,32 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **The last six adapter findings, none of which a refuter ever saw** (`dev`).
+  The sweep's verify phase hit its session limit with eight verifiers unstarted,
+  so these were re-planted here and nowhere else; each is stated with that
+  caveat in `docs/PROGRESS.md`. Each still fails under its own plant.
+
+  - `Toolkit.inReach` comparing floors before distance. Eight callers rest on
+    it and nothing drove it: the plane distance to the square one storey up is
+    identically 0.0, so without the comparison `building.build` raises a wall
+    through a ceiling and `Toolkit.approach` answers `in_reach` for something
+    the character would have to climb to. New file
+    `tests/lua/test_adapter_toolkit.lua`, because the shared floor was only ever
+    exercised incidentally.
+  - Combat's `RETREAT_EPSILON`, which is the retreat's whole postcondition, and
+    `MAX_ZOMBIE_SCAN`, which bounds a walk that runs every 150 ms inside a horde.
+  - `Crafting.recipeInputs` and `Building.blueprintInputs` — the same reader in
+    two files, so pinned twice. Both recipe doubles built every ingredient entry
+    complete, making the whole-recipe refusal unreachable; they now express an
+    entry that will not say what it takes.
+  - `Building.squareState`'s `isFree(false)` cross-check, the only mod-side
+    reading that sees a character standing on the tile. `Support.square` granted
+    no `isFree`, so the branch could not be entered from any suite and deleting
+    it changed nothing — including in the group named for that question.
+
+  Three of the six were unreachable from the harness rather than untested. The
+  doubles were widened; no assertion was loosened.
+
 - **Fourteen refusals in the mod's fifteen action adapters, and the first sweep
   whose findings were run past a refuter** (`dev`). The adapter directory — the
   code that actually touches the game world — had never been planted against. A

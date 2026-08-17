@@ -1614,12 +1614,43 @@ move — the assertion that separates "the gate held" from "the adapter refused
 for itself". It fails under two independent plants: deferring the queue verdict
 to the adapters, and flattening `blocksAutomation`'s busy branch.
 
-Six findings from the fourth area — `Crafting.recipeInputs`, `Building`'s
-`isFree` cross-check and its byte-identical `recipeInputs` twin, Combat's
-`RETREAT_EPSILON` and `MAX_ZOMBIE_SCAN`, and `Toolkit.inReach`'s floor
-comparison — are **open**, listed here rather than closed quietly. The verify
-pass for them never ran: the workflow hit its session limit with eight
-verifiers unstarted, so those six carry a sweep's word and no refuter's.
+The six findings from the fourth area are closed too, and they carry a caveat
+worth keeping: **no refuter ever saw them.** The workflow hit its session limit
+with eight verifiers unstarted, so unlike the fourteen above, these six were
+re-planted by me and by nobody else. Each was still shown to fail under its own
+plant, and for each the second-lever question was asked in the code rather than
+taken on the sweep's word.
+
+- `Toolkit.inReach`'s floor comparison — the reading that makes "directly above
+  me" different from "at my feet". The plane distance between a square and the
+  one a storey up is exactly 0.0, so eight callers inherit the defect at once:
+  `building.build` raises a wall through a ceiling, `Toolkit.approach` answers
+  `in_reach` and the adapter acts on something a storey away without moving.
+  Nothing anywhere drove it; the new `tests/lua/test_adapter_toolkit.lua` exists
+  because Toolkit is the shared floor and every suite touched it only
+  incidentally.
+- Combat's `RETREAT_EPSILON` — the retreat's whole postcondition. The existing
+  group has a success above ten squares and a failure at 0.8 against 3.0,
+  nothing in the 0.0–0.5 band the constant rejects, so dropping the term left
+  both assertions holding while a fifth of a square of jitter minted a success
+  for the flight action.
+- Combat's `MAX_ZOMBIE_SCAN`, on a walk that runs every 150 ms while the
+  character is inside a horde.
+- `Crafting.recipeInputs` **and `Building.blueprintInputs`** — the same reader,
+  copied rather than shared, so the refusal needed pinning twice. Both suites'
+  recipe doubles built every ingredient entry complete, which made the
+  whole-recipe refusal unreachable; the doubles now express an entry that will
+  not say what it takes.
+- `Building.squareState`'s `IsoGridSquare.isFree(false)` cross-check — the only
+  mod-side reading that sees a *body* on the tile, since movers are not in
+  `getObjects`. `Support.square` exposed no `isFree` at all, so the branch was
+  structurally unreachable and deleting the whole block left every suite green,
+  including the group named for that very question.
+
+Three of the six were unreachable from the harness rather than merely untested,
+which is now the most common shape in this file: **a mock's fixed shape, not a
+missing assertion.** The doubles have been widened in each case rather than the
+assertions loosened.
 
 `tests/contract/test_the_sweep_coverage_claim_names_the_tree.py` derives its set
 from the tree — the subpackages under `packages/`, and every directory under
