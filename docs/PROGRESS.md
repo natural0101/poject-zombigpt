@@ -1458,7 +1458,17 @@ assigned, and therefore never measured at the time: the whole of `pz_agent_mcp`
 including its `remote/`, and `rpc/`, `session/`, `observation/`, `policy/`,
 `capabilities/`, `navigation/`, `loot/`, `combat/`, `knowledge/`,
 `diagnostics/` and `protocol/` inside the core. Eleven subpackages and a whole
-package, in a sentence that read as though the tree were finished.
+package, in a sentence that read as though the tree were finished. Those have
+since been given to the sweep and reported; every finding is closed.
+
+**And the guard that caught that omission could not have caught this one.** It
+derives its set from `packages/`, so it knows nothing about `pz-mod/42/media/
+lua/` — the mod, twenty-odd Lua modules, the half that actually runs inside
+Project Zomboid. It had never been swept, and no coverage claim in this file
+mentioned it either way. A guard is only as wide as the set it derives, and this
+one's set was "Python packages" when the question was "shipped code". The mod is
+being swept now; until that reports, the honest status of the Lua half is
+*unmeasured*, which is different from both "sound" and "broken".
 
 `tests/contract/test_the_sweep_coverage_claim_names_the_tree.py` now derives the
 subpackage set from `packages/` and requires this claim to name every member,

@@ -38,11 +38,22 @@ CLAIM_ANCHOR: Final = "every area it was *given*"
 NOT_A_SUBPACKAGE: Final = frozenset({"__pycache__", "tests", "py.typed"})
 
 
-def _shipped_subpackages() -> set[str]:
-    """Every importable subpackage under ``packages/*/src/<package>/``.
+def _shipped_units() -> set[str]:
+    """Every unit of shipped code the sweep could be run against.
 
-    Derived, not listed. A new subpackage appears here the moment it exists,
-    which is the only way this check can outlive the person who wrote it.
+    Derived, not listed. Two kinds, because the tree has two kinds: the
+    importable subpackages under ``packages/*/src/<package>/``, and the Lua mod
+    under ``pz-mod/``.
+
+    The mod is here because leaving it out is the mistake this file exists to
+    catch, made a second time. The first version derived only from
+    ``packages/``, so it happily passed a claim that named every Python
+    subpackage and said nothing at all about the twenty-odd Lua modules that run
+    inside the game — a guard exactly as wide as its own set, asked a question
+    wider than that. It is named as one unit rather than module by module: the
+    claim this checks is "which areas has the sweep been run against", and the
+    mod is one area in that sense, while listing twenty file names in a
+    paragraph would be noise nobody reads.
     """
     found: set[str] = set()
     for source in (REPO_ROOT / "packages").glob("*/src/*/"):
@@ -52,7 +63,14 @@ def _shipped_subpackages() -> set[str]:
         for child in source.iterdir():
             if child.is_dir() and child.name not in NOT_A_SUBPACKAGE:
                 found.add(child.name)
+    if any((REPO_ROOT / "pz-mod").glob("*/media/lua")):
+        found.add("pz-mod")
     return found
+
+
+def _shipped_subpackages() -> set[str]:
+    """Kept as the old name for the derivation above."""
+    return _shipped_units()
 
 
 def _claim() -> str:
@@ -71,8 +89,12 @@ def test_the_derivation_finds_the_tree() -> None:
     """A glob that matched nothing would make the check below vacuous."""
     found = _shipped_subpackages()
 
-    assert len(found) > 15, f"only {len(found)} subpackage(s) found; the tree is larger"
+    assert len(found) > 15, f"only {len(found)} unit(s) found; the tree is larger"
     assert {"pz_agent_mcp", "safety", "ipc"} <= found
+    assert "pz-mod" in found, (
+        "the Lua mod is not in the derived set, so a claim that forgot the half "
+        "that runs inside the game would pass — which is how it passed once already"
+    )
 
 
 def test_every_shipped_subpackage_is_named_in_the_coverage_claim() -> None:

@@ -12,6 +12,24 @@ drift out of sync with `pz_agent_core.version`.
 
 ### Fixed
 
+- **The coverage guard was exactly as wide as its own set, and its set was
+  "Python packages" when the question was "shipped code"** (`dev`). The check
+  added last round derives the subpackage list from `packages/` and requires
+  `docs/PROGRESS.md`'s sweep claim to name every member. It did its job: it
+  caught five names the corrected paragraph was still missing.
+
+  It could not catch this one. `pz-mod/42/media/lua/` — the mod, the half that
+  actually runs inside Project Zomboid — is not under `packages/`, so the
+  derivation never saw it, no coverage claim mentioned it either way, and it had
+  never been swept. The guard passed a paragraph that named every Python
+  subpackage and said nothing about twenty-odd Lua modules.
+
+  The derivation now includes the mod, as one unit rather than module by module:
+  the claim being checked is which *areas* the sweep has been run against, and
+  listing twenty file names in a paragraph is noise nobody reads. The claim
+  itself records the Lua half as **unmeasured**, which is different from both
+  "sound" and "broken", until the sweep now running against it reports.
+
 - **Five unguarded refusals in the packages the sweep had never been given —
   the sidecar lock, the RPC descriptor, the MCP argument validator and the
   planner's view of the world** (`dev`). Each was re-planted here and each guard
