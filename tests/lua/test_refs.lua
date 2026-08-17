@@ -162,6 +162,43 @@ do
   isNil(Refs.parseObject("square:" .. SESSION .. ":1:2:0"), "a square ref is not an object ref")
 end
 
+Harness.group("every parser refuses an over-long reference, not just the item one")
+do
+  -- References arrive from outside the game: `container.open`, the transfer and
+  -- movement commands all carry them in journal records that the sidecar --
+  -- or anything else able to write to the exchange directory -- produces. The
+  -- length bound is what keeps a hand-written document from handing the mod a
+  -- megabyte to tokenise inside a game tick.
+  --
+  -- `checkRaw` is called separately by each parser, so a bound removed from one
+  -- leaves the other four intact and protects nothing there. Only the item
+  -- parser was tested; deleting the call from `parseContainer` left the whole
+  -- Lua set green. The list below is every parser, so the guard is on the fact
+  -- rather than on the file the defect was found in.
+  local oversized = string.rep("a", Refs.MAX_REF_BYTES + 1)
+  -- `Refs.parse` dispatches on the kind first, so it needs a reference that is
+  -- well formed at the front and too long at the back; the five parsers below
+  -- it check the length before anything else and take the plain string.
+  local oversizedContainer = "container:"
+    .. SESSION
+    .. ":"
+    .. string.rep("a", Refs.MAX_REF_BYTES)
+  local parsers = {
+    { name = "parseContainer", fn = Refs.parseContainer, raw = oversized },
+    { name = "parseItem", fn = Refs.parseItem, raw = oversized },
+    { name = "parseSquare", fn = Refs.parseSquare, raw = oversized },
+    { name = "parseZombie", fn = Refs.parseZombie, raw = oversized },
+    { name = "parseObject", fn = Refs.parseObject, raw = oversized },
+    { name = "parse", fn = Refs.parse, raw = oversizedContainer },
+  }
+  for index = 1, #parsers do
+    local case = parsers[index]
+    local parsed, why = case.fn(case.raw)
+    isNil(parsed, case.name .. " refuses a reference past the byte bound")
+    contains(why or "", "exceeds", case.name .. " says which bound it hit")
+  end
+end
+
 Harness.group("builders refuse what they cannot represent")
 do
   isNil(Refs.buildItem("bad session", "player-main", "x", 0), "an invalid session is refused")

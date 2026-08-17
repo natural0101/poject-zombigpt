@@ -1519,7 +1519,18 @@ three runs report a crash rather than a verdict — the tooling failing, not the
 guard. Restoring from a copy that keeps the export fixed it, and all three caps
 then failed under their own plants.
 
-Six remain measured and open, listed in `CHANGELOG.md`.
+Three more are closed — the JSON decoder's depth bound, the encoder's key cap,
+and the reference byte bound — which leaves three.
+
+The reference bound is the guard-scoping lesson again, in the mod this time:
+`checkRaw` is called separately by each of the five parsers, only `parseItem`
+had a test, and removing the call from `parseContainer` changed nothing anybody
+could see. The new group covers all six entry points rather than the one the
+defect was found in.
+
+Three remain measured and open, listed in `CHANGELOG.md`: the undated-threat
+rule in `Safety`, the zombie-scan cap in `Observe`, and the token-list cap in
+`ObserveModel`.
 
 `tests/contract/test_the_sweep_coverage_claim_names_the_tree.py` now derives the
 subpackage set from `packages/` and requires this claim to name every member,

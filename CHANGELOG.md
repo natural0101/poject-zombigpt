@@ -113,9 +113,32 @@ drift out of sync with `pz_agent_core.version`.
   module so the tests derive them instead of keeping a copy of the number,
   which is how a cap gets raised without its guard noticing.
 
+- **Three more mod bounds: the JSON decoder's depth, the encoder's key cap, and
+  the reference byte bound on every parser but the one that had a test**
+  (`dev`).
+
+  `Json`'s module header states the contract both bounds keep: errors are
+  returned as `nil, message`, never raised, because this code runs inside game
+  event handlers where an uncaught error takes the whole handler down. A
+  document nested past `MAX_DEPTH` would recurse until Lua's own stack gave out
+  — and that *is* a raise — from a document anything with write access to the
+  exchange directory can produce. The key cap is the abort that stops three
+  passes over a pathological table. A shallow twin is asserted beside the depth
+  case so the bound stays a limit rather than a blanket refusal.
+
+  `Refs.checkRaw` is called separately by each of the five parsers, so a bound
+  removed from one leaves the other four intact and protects nothing there.
+  Only `parseItem` was tested. The new group covers all six entry points,
+  including the `parse` dispatcher — which needed a reference well formed at the
+  front and over-long at the back, since it resolves the kind before it reaches
+  any length check.
+
+  All three caps are now published on their modules so the tests derive the
+  bound instead of copying the number.
+
 ### Measured and open
 
-- Six findings from the Lua sweep are **not yet guarded**: the mod's byte
+- Three findings from the Lua sweep are **not yet guarded**: the mod's byte
   caps on journal lines, whole documents and reads (`Ipc.lua`), session
   eviction (`Session.lua`), the queue-shape and engine-raise refusals and the
   undated-threat rule (`Safety.lua`), the JSON decoder's depth bound and the

@@ -84,6 +84,11 @@ local NULL = setmetatable({}, {
     return "null"
   end,
 })
+--- Published so a test derives the bound instead of copying the number, which
+--- is how a cap gets raised without its guard noticing.
+Json.MAX_DEPTH = MAX_DEPTH
+Json.MAX_TABLE_KEYS = MAX_TABLE_KEYS
+
 Json.null = NULL
 
 --- Marks a table as a JSON array. Needed because an empty Lua table is both a

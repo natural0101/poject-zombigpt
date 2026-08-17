@@ -151,6 +151,42 @@ do
   contains(select(2, Json.decode('{"a":1,"a":2}')), "duplicate", "the duplicate refusal says so")
 end
 
+Harness.group("the decoder and the encoder are bounded, and say so rather than raise")
+do
+  -- The module header states the contract these two keep: "Errors are returned
+  -- as `nil, message`, never raised: this code runs inside game event handlers
+  -- where an uncaught error takes the whole handler down." Both bounds were
+  -- unguarded, and deleting either left the whole Lua set green.
+  --
+  -- The bounds are read from the module rather than copied, so raising one
+  -- without meaning to still leaves this group honest.
+
+  -- Decode: a document nested past MAX_DEPTH. Without the check the recursion
+  -- goes on until Lua's own C stack gives out, and *that* is a raise, not a
+  -- refusal -- from a document the sidecar or anything else with write access
+  -- to the exchange directory can produce.
+  local deep = string.rep("[", Json.MAX_DEPTH + 8) .. string.rep("]", Json.MAX_DEPTH + 8)
+  local decoded, decodeError = Json.decode(deep)
+  isNil(decoded, "a document nested past the cap is refused")
+  contains(decodeError or "", "nesting deeper", "and the refusal names the bound")
+
+  -- The shallow twin, so the bound is a limit rather than a blanket refusal:
+  -- a document just inside it still decodes.
+  local shallow = string.rep("[", Json.MAX_DEPTH - 1) .. string.rep("]", Json.MAX_DEPTH - 1)
+  ok(Json.decode(shallow) ~= nil, "a document inside the cap still decodes")
+
+  -- Encode: a table with more entries than the encoder will walk. This is the
+  -- abort that stops three passes over a pathological table -- the classify
+  -- scan, the key collection plus sort, and the per-entry encode.
+  local wide = {}
+  for index = 1, Json.MAX_TABLE_KEYS + 1 do
+    wide["k" .. index] = index
+  end
+  local encoded, encodeError = Json.encode(wide)
+  isNil(encoded, "a table past the key cap is refused")
+  contains(encodeError or "", "entries", "and says which bound it hit")
+end
+
 Harness.group("decoder acceptance")
 do
   local value = Json.decode(' \t\n {"a" : [ 1 , 2.5 , true , false ] } \r\n ')

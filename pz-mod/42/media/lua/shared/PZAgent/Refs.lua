@@ -45,6 +45,10 @@ end
 --- loops below finite on input that arrived from the exchange directory.
 local MAX_REF_BYTES = 1024
 
+--- Published for the same reason the Json caps are: a test that copied the
+--- number would keep passing after the number moved.
+Refs.MAX_REF_BYTES = MAX_REF_BYTES
+
 --- Container and item segments use a restricted alphabet so a reference can
 --- never smuggle a path separator or a delimiter. Mirrors _SAFE_SEGMENT.
 local SEGMENT_PATTERN = "^[A-Za-z0-9_%.%-]+$"
