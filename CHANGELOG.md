@@ -94,9 +94,28 @@ drift out of sync with `pz_agent_core.version`.
   the integer check catches it too, and saying so keeps the guard's unique
   contribution from being overclaimed.
 
+- **Four bounds in the mod: the spent-identity memory and the three byte
+  caps** (`dev`).
+
+  `Session.spend` evicts oldest-first past `MAX_REMEMBERED_SESSIONS`. Every
+  accepted handshake adds one entry to `spent` and one key to each of two
+  indexes, and this eviction is the only thing that ever removes them — there is
+  no per-tick sweep, and terminating a session does not forget it. A sidecar
+  restarts far more often than a game session does. The test also pins what the
+  bound *costs*, so the number cannot be quietly raised to hide a leak: an
+  evicted identity can be offered again.
+
+  `Ipc` carries three byte caps and none was tested. A journal record past the
+  line cap matters twice over: the sidecar's reader refuses an oversized line,
+  so writing one produces a record nobody will ever read while the mod believes
+  it published. The document cap and the read cap bound what the mod writes and
+  pulls into memory *inside a game tick*. The caps are now published on the
+  module so the tests derive them instead of keeping a copy of the number,
+  which is how a cap gets raised without its guard noticing.
+
 ### Measured and open
 
-- Ten findings from the Lua sweep are **not yet guarded**: the mod's byte
+- Six findings from the Lua sweep are **not yet guarded**: the mod's byte
   caps on journal lines, whole documents and reads (`Ipc.lua`), session
   eviction (`Session.lua`), the queue-shape and engine-raise refusals and the
   undated-threat rule (`Safety.lua`), the JSON decoder's depth bound and the

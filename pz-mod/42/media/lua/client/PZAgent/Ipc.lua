@@ -86,6 +86,11 @@ local DEFAULT_MAX_LINES = 256
 --- else holds a sharing lock on the file; the holder is usually a reader
 --- already closing, so an immediate reopen -- sleeping inside a game tick is
 --- not an option -- wins the common race within a try or two.
+--- Published so a test can derive the bound instead of keeping a copy of the
+--- number, which is how a cap gets raised without its guard noticing.
+Ipc.MAX_LINE_BYTES = MAX_LINE_BYTES
+Ipc.MAX_DOCUMENT_BYTES = MAX_DOCUMENT_BYTES
+
 Ipc.WRITE_OPEN_ATTEMPTS = 3
 Ipc.READ_OPEN_ATTEMPTS = 3
 

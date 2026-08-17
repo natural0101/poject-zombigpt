@@ -1507,7 +1507,19 @@ anything the mod knows — and `math.floor(inf) == inf`, so an infinity passes t
 integer check and arrives as a coordinate. The test now says which half of the
 guard it is evidence for and which half it is not.
 
-Ten remain measured and open, listed in `CHANGELOG.md`.
+Four more are closed — the mod's spent-identity eviction and its three byte
+caps — which leaves six.
+
+The byte-cap group cost a detour worth recording. The caps were module-locals,
+so the tests would have had to copy the numbers; publishing them on `Ipc` is the
+same reasoning as `ActionRuntime.RUNTIME_OWNED`, and a copy is exactly how a cap
+gets raised without its guard noticing. Then the plant loop kept restoring the
+file with `git checkout`, which wiped the export along with the plant and made
+three runs report a crash rather than a verdict — the tooling failing, not the
+guard. Restoring from a copy that keeps the export fixed it, and all three caps
+then failed under their own plants.
+
+Six remain measured and open, listed in `CHANGELOG.md`.
 
 `tests/contract/test_the_sweep_coverage_claim_names_the_tree.py` now derives the
 subpackage set from `packages/` and requires this claim to name every member,

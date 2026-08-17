@@ -276,6 +276,47 @@ do
   equal(Json.decode(handle:readLines("command_queue", 1, 9)[1]).seq, 10, "skipping lands on the right record")
 end
 
+Harness.group("the byte caps bound a record, a document and a read")
+do
+  -- Three caps, all in this module and none of them tested. The mod writes and
+  -- reads these files inside a game tick, so an unbounded one is a frame-rate
+  -- bug at best and a Lua memory failure at worst -- and the sidecar's own
+  -- reader refuses an oversized line, so a record written past the cap is
+  -- accepted locally and rejected at the far end: the journal keeps a record
+  -- nobody will ever read, and the mod believes it published.
+  --
+  -- The bounds are read from the module rather than copied, so raising one
+  -- without meaning to still leaves this group honest.
+  local handle, fs = newHandle()
+
+  -- 1. A journal record past the line cap is refused, and nothing lands.
+  local before = #fs:lines(path("observation_events"))
+  local huge = string.rep("x", Ipc.MAX_LINE_BYTES)
+  local appended, appendError = handle:appendRecord("observation_events", {
+    type = "safety.stop",
+    blob = huge,
+  })
+  isNil(appended, "a record past the line cap is refused")
+  contains(appendError or "", "line limit", "and the refusal says which limit")
+  equal(#fs:lines(path("observation_events")), before,
+    "with nothing appended -- a line the sidecar would refuse is not written")
+
+  -- 2. A whole document past the document cap is refused.
+  local written, writeError = handle:writeDocument("capabilities", {
+    blob = string.rep("y", Ipc.MAX_DOCUMENT_BYTES),
+  })
+  isNil(written, "a document past the cap is refused")
+  contains(writeError or "", "byte limit", "and says so")
+
+  -- 3. A read stops at the cap rather than pulling the file into memory. The
+  -- file here is written past the bound directly, which is the only way it can
+  -- get there: the writer above refuses to produce one.
+  fs:put(path("command_queue"), string.rep("z", Ipc.MAX_DOCUMENT_BYTES + 1) .. "\n")
+  local lines, readError = handle:readLines("command_queue", 10)
+  ok(lines == nil or #lines == 0, "an oversized file yields no records")
+  contains(readError or "", "read limit", "and the read reports the bound it hit")
+end
+
 -- ---------------------------------------------------------------------------
 -- Windows sharing locks: a refused open is a race lost, not a lost publish.
 -- The wrappers below stand in for getFileWriter/getFileReader answering nil

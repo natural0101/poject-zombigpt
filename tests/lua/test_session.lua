@@ -195,6 +195,50 @@ do
   ok(not holder:terminate(), "terminating twice reports that there was nothing to close")
 end
 
+Harness.group("the spent-identity memory is bounded, oldest first")
+do
+  -- AGENTS.md: bounded memory, bounded logs, bounded retries; anything
+  -- unbounded is a bug. Every accepted handshake adds one entry to `spent` and
+  -- one key to each of `seenSessionIds` and `seenNonces`, and this eviction is
+  -- the only thing that ever removes them. Nothing else prunes: there is no
+  -- per-tick sweep, and terminating a session does not forget it.
+  --
+  -- A sidecar restarts more often than a game session does -- a crash, a
+  -- reconnect, an operator running `pz-agent start` again -- so this is not a
+  -- theoretical counter. Deleting the eviction left the whole Lua set green.
+  --
+  -- What the bound costs is stated too: a session id evicted from the memory
+  -- can be offered again. That is the deliberate trade, and the assertion below
+  -- pins it so the number cannot be quietly raised to hide a leak.
+  local holder = Session.new()
+  local overflow = Session.MAX_REMEMBERED_SESSIONS + 8
+  for index = 1, overflow do
+    local offered = holder:offer(
+      request({
+        session_id = string.format("%08d-1111-2222-3333-444444444444", index),
+        nonce = "nonce-" .. index,
+      }),
+      NOW + index,
+      { randomFn = function() return index end }
+    )
+    ok(offered.accepted, "handshake " .. index .. " was accepted")
+  end
+
+  equal(#holder.spent, Session.MAX_REMEMBERED_SESSIONS,
+    "the spent list stops at the bound instead of growing with every handshake")
+
+  local remembered = 0
+  for _ in pairs(holder.seenNonces) do
+    remembered = remembered + 1
+  end
+  equal(remembered, Session.MAX_REMEMBERED_SESSIONS,
+    "and the nonce index is trimmed with it, not left behind")
+
+  -- Oldest first: the newest handshake is still remembered, the first is not.
+  ok(holder.seenNonces["nonce-" .. overflow], "the newest identity is still spent")
+  ok(not holder.seenNonces["nonce-1"], "the oldest was the one evicted")
+end
+
 Harness.group("a session this run already closed cannot be reopened by its own document")
 do
   -- The one-deep `previous` memory is defeated by a single intervening
