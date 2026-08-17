@@ -85,15 +85,39 @@ drift out of sync with `pz_agent_core.version`.
   `max_legs` still stops the journey, so termination survives; what is lost is
   the honest STUCK diagnosis in place of "ran out of legs".
 
+- **Four more: a type invariant, a typed read failure, a bound on a foreign
+  port's answer, and a redaction on the way to a model** (`dev`).
+
+  `DrinkChoice`'s constructor refuses a choice that says "whole container" and
+  "half of it" at once. `_choose_fraction` returns a whole container precisely
+  when the build has no `drink_percentage` probe — such a build cannot pour half
+  a bottle — so the pairing is the capability-honesty rule as a type invariant.
+  The range check beside it is a different rule and 0.5 passes it happily.
+
+  `load_report`'s read handler turns an unreadable capability ledger into the
+  one typed failure its callers catch. `pz-agent doctor` and the runtime both
+  wrap the load in `except (ReportIOError, ScanError)`, so a bare `OSError`
+  becomes a traceback rather than a reported problem. The stat handler four
+  lines above is what makes this one look redundant, and is not: a file can be
+  stattable and still fail to read.
+
+  The MCP router's `islice` is the boundary's own ceiling on how much a foreign
+  memory port may put in one answer. In production the core honours the limit
+  that was sent — but "the peer behaved" is not a bound, and every record past
+  it would otherwise be scrubbed, encoded and handed to a model.
+
+  And a capability's `reason` is scrubbed before `pz://capabilities` serves it.
+  The reason is written by the probe layer, which is the layer that knows about
+  install paths; `Capability.__post_init__` bounds its length without redacting
+  it, and the neighbouring `withheld_tools` scrub covers a different field.
+
 ### Measured and open
 
-- Six findings from the sweep are **not yet guarded**: the RPC client's connect
-  timeout on the dial (the one wait that happens before the watchdog exists) and
-  the `PermissionError` arm of the POSIX liveness probe; the MCP router's
-  `islice` bound on a memory port's answer and the redaction of a capability's
-  `reason` in `pz://capabilities`; and `DrinkChoice`'s portioned/fraction
-  invariant with `load_report`'s typed read failure. Each has a full-suite
-  measurement behind it; none has a test yet.
+- Two findings from the sweep are **not yet guarded**, both in `rpc/`: the
+  client's connect timeout on the dial — the one wait that happens before the
+  watchdog exists — and the `PermissionError` arm of the POSIX liveness probe,
+  which the sweep itself flagged as the one it was least certain about. Both
+  have a full-suite measurement behind them; neither has a test yet.
 
 - **A coverage claim that named nine areas and read as though it named the
   tree** (`dev`). `docs/PROGRESS.md` recorded the refusal-plant sweep as having

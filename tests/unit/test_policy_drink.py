@@ -9,6 +9,7 @@ pour half a bottle, so both branches are covered.
 from __future__ import annotations
 
 import random
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -244,6 +245,34 @@ def test_the_last_container_is_emptied_when_thirst_is_critical() -> None:
     assert choice is not None
     assert choice.fraction == 1.0
     assert not choice.portioned
+
+
+def test_a_whole_container_choice_cannot_carry_a_partial_fraction() -> None:
+    """The capability-honesty rule, expressed as an invariant on the type.
+
+    ``_choose_fraction`` returns a whole container precisely when the build has
+    no ``drink_percentage`` probe: such a build cannot pour half a bottle, so a
+    choice that says "not portioned" and "half" at once describes a command the
+    mod cannot execute. The constructor is what stops any producer — this one or
+    a later one — from contradicting that.
+
+    The range check beside it is not the same rule and does not cover this: 0.5
+    is a perfectly good fraction, and the adapter's own clamp checks the range
+    too. What neither checks is the *pairing*. Deleting this half left the whole
+    suite green.
+
+    Built by taking a real portioned choice apart with ``replace``, which re-runs
+    ``__post_init__`` — so what is asserted is that the invariant holds for
+    anything anyone constructs, not only for what this module happens to return
+    today.
+    """
+    only = drink_item("only", thirst_change=-1.0)
+    selection = select_drink(inventory(only), thirsty_player(0.6), capabilities=PARTIAL)
+    choice = selection.choice
+    assert choice is not None and choice.portioned and choice.fraction < 1.0
+
+    with pytest.raises(ValueError, match=r"whole-container choice must have fraction 1\.0"):
+        replace(choice, portioned=False)
 
 
 def test_partial_drinking_caps_the_last_container_instead_of_refusing_it() -> None:

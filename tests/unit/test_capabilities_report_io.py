@@ -162,6 +162,38 @@ def test_load_or_empty_reports_a_path_it_cannot_even_inspect(
         load_or_empty(path, expected_build="42.20")
 
 
+def test_a_report_that_cannot_be_read_is_a_typed_failure_not_an_oserror(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """This is the capability ledger, and both its callers catch one type only.
+
+    ``pz_agent_cli.doctor`` and ``pz_agent_cli.runtime`` each wrap the load in
+    ``except (ReportIOError, ScanError)``. A bare ``OSError`` escaping the reader
+    therefore does not become a reported problem — it becomes a traceback out of
+    ``pz-agent doctor``, from the file that decides which write tools the agent
+    may publish as ready.
+
+    The stat above and this read are different failures and only one was tested:
+    a file can be perfectly stattable and still fail to read — a permission
+    change between the two calls, a device error, a directory swapped in. The
+    stat handler is what makes the read handler *look* redundant, which is the
+    shape of the cleanup that would delete it. Deleting it left the suite green.
+    """
+    path = tmp_path / "report.json"
+    path.write_text("{}", encoding="utf-8")
+    real_read_bytes = Path.read_bytes
+
+    def refusing(self: Path) -> bytes:
+        if self == path:
+            raise PermissionError(13, "Permission denied")
+        return real_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", refusing)
+
+    with pytest.raises(ReportIOError, match="cannot read report"):
+        load_report(path, expected_build="42.20")
+
+
 def test_load_or_empty_still_fails_on_a_corrupt_existing_file(tmp_path: Path) -> None:
     path = tmp_path / "report.json"
     path.write_text("{not json", encoding="utf-8")

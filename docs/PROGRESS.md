@@ -1508,8 +1508,17 @@ checked only that every item was still decided, which is true whether or not the
 weight poisoned the budget. Two assertions were needed because the three kinds
 of rubbish fail in opposite directions.
 
-Six are measured and open, listed in `CHANGELOG.md` rather than closed quietly:
-two in `rpc/`, two in `pz_agent_mcp` and two in `policy/`.
+Four more are closed: `DrinkChoice`'s portioned/fraction invariant,
+`load_report`'s typed read failure, the router's bound on what a foreign memory
+port may return, and the redaction of a capability's `reason` on its way to a
+model through `pz://capabilities`. Each was re-planted here and each guard shown
+to fail under its plant.
+
+Two remain measured and open, both in `rpc/`: the connect timeout on the dial
+and the `PermissionError` arm of the liveness probe. They are the two whose
+tests need a socket stand rather than a value, and the sweep itself flagged the
+second as the one it was least sure of — so they are carried rather than
+hurried.
 
 ## Deviations from the blueprint
 

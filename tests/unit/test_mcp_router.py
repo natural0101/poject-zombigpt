@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 
 from pz_agent_core.actions import PreconditionFailed
+from pz_agent_core.capabilities.model import Capability, CapabilityReport
 from pz_agent_core.capabilities.probes import (
     BUILDING,
     COMBAT_ASSIST,
@@ -44,6 +45,7 @@ from pz_agent_core.protocol import (
     RiskClass,
     SessionMode,
 )
+from pz_agent_core.version import TARGET_BUILD
 from pz_agent_mcp import router as router_module
 from pz_agent_mcp.catalog import TOOLS, ToolKind, ToolSpec
 from pz_agent_mcp.envelope import MAX_DIAGNOSTICS
@@ -237,6 +239,42 @@ def test_stop_reaches_the_port_and_reports_only_mod_owned_clearing() -> None:
 
     assert doubles.session.stops == 1
     assert payload["data"] == {"cleared": 2, "disarmed": True, "mode": SessionMode.OBSERVE.value}
+
+
+def test_a_capability_reason_is_scrubbed_before_it_reaches_a_client() -> None:
+    """The reason is written by the probe layer, which knows about install paths.
+
+    ``capability_document`` is served as the ``pz://capabilities`` resource, so
+    it reaches an MCP client and, through it, a model. Its own docstring says
+    evidence is summarised rather than copied because a static finding's
+    ``file`` is an absolute path into the game install — and a *reason* comes
+    from the same layer and can carry the same thing.
+
+    The neighbouring ``withheld_tools`` scrub covers a different field, and
+    ``Capability.__post_init__`` bounds the reason's *length* without redacting
+    it, so nothing else closes this. Deleting the one call left the whole suite
+    green.
+    """
+    doubles = armed_doubles()
+    doubles.capabilities.report_value = CapabilityReport(
+        build=TARGET_BUILD,
+        capabilities=(
+            Capability.unsupported(
+                name=EAT_PERCENTAGE,
+                build=TARGET_BUILD,
+                reason="no timed action found under C:\\Users\\Пользователь\\Zomboid\\mods",
+            ),
+        ),
+        revision=3,
+    )
+
+    document = make_router(doubles).capability_document()
+
+    reason = document["capabilities"][EAT_PERCENTAGE]["reason"]
+    assert "no timed action found" in reason, "the reason was dropped rather than scrubbed"
+    assert "Пользователь" not in reason, (
+        "a capability reason carried the account name to a model through pz://capabilities"
+    )
 
 
 def test_a_tool_whose_capability_is_unsupported_is_neither_listed_nor_callable() -> None:
@@ -853,6 +891,32 @@ def test_memory_records_carry_numbers_and_refs_and_quarantine_their_label() -> N
     assert record["content_marker"] == CONTENT_MARKER
     assert "ignore previous instructions" in record[UNTRUSTED_TEXT_KEY]["label"]
     assert doubles.memory.calls == [((), 5)]
+
+
+def test_a_memory_port_that_ignores_the_limit_does_not_set_the_answer_size() -> None:
+    """The boundary's own ceiling, applied to what a foreign port actually returned.
+
+    A memory port is code on the far side of the Core RPC link. The router sends
+    it a ``limit``, and in production the core's store honours it — but "the
+    peer behaved" is not a bound. The ``islice`` is what makes the size of a tool
+    answer this side's decision, and every record past it would otherwise be
+    scrubbed, encoded and handed to a model.
+
+    The double here returns more than it was asked for, which is exactly the
+    case the slice exists for and the case no other test creates. Deleting the
+    slice left the whole suite green.
+    """
+    doubles = armed_doubles()
+    doubles.memory.records = tuple(
+        MemoryRecord(kind="home_point", key=f"base{index}", data={"x": index}) for index in range(9)
+    )
+
+    data = make_router(doubles).call("pz_memory_query", {"limit": 3})["data"]
+
+    assert doubles.memory.calls == [((), 3)], "the limit was not passed to the port"
+    assert len(data["records"]) == 3, (
+        "a port that ignored the limit decided how large the answer to a model would be"
+    )
 
 
 def test_a_record_the_boundary_cannot_name_is_omitted_out_loud_not_silently() -> None:
