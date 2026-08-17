@@ -425,9 +425,15 @@ end
 -- ---------------------------------------------------------------------------
 
 --- A grid square holding `objects`.
-function Support.square(x, y, z, objects)
+---
+--- `free` is the engine's own `isFree(false)` answer, granted only when a case
+--- names it. Its absence used to be unconditional, which made
+--- `Building.squareState`'s cross-check -- the one reading that sees a *body*
+--- on the tile, since movers are not in `getObjects` -- structurally
+--- unreachable from every suite in this tree.
+function Support.square(x, y, z, objects, free)
   local entries = objects or {}
-  return {
+  local square = {
     objects = entries,
     getX = function()
       return x
@@ -442,6 +448,12 @@ function Support.square(x, y, z, objects)
       return Support.list(entries)
     end,
   }
+  if free ~= nil then
+    square.isFree = function()
+      return free == true
+    end
+  end
+  return square
 end
 
 --- A world object, optionally holding a container.

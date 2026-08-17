@@ -64,14 +64,20 @@ local function blueprint(fields)
     local entries = {}
     for index = 1, #fields.inputs do
       local input = fields.inputs[index]
+      -- `types = nil` is how "this entry will not say what item types it takes"
+      -- is expressed. Every entry used to be built complete, which made the
+      -- whole-blueprint refusal unreachable from this file -- the same gap the
+      -- crafting suite had, in the file that carries the same reader.
       entries[index] = {
-        getItems = function()
-          return Support.list(input.types)
-        end,
         getCount = function()
           return input.count
         end,
       }
+      if input.types ~= nil then
+        entries[index].getItems = function()
+          return Support.list(input.types)
+        end
+      end
     end
     object.getInputs = function()
       return Support.list(entries)
@@ -173,7 +179,7 @@ local function scene(options)
     removeScriptManager()
   end
 
-  local target = Support.square(TARGET.x, TARGET.y, TARGET.z, options.target_objects or {})
+  local target = Support.square(TARGET.x, TARGET.y, TARGET.z, options.target_objects or {}, options.free)
   if options.blind_square == true then
     -- A square that will not list what is on it: the reading a postcondition
     -- would have to be checked against simply is not there.
@@ -224,6 +230,67 @@ end
 -- ---------------------------------------------------------------------------
 -- the token
 -- ---------------------------------------------------------------------------
+
+Harness.group("the engine's own answer is asked when the object walk found nothing")
+do
+  -- Movers are not in `getObjects`. A character, an NPC or a zombie standing on
+  -- the tile is invisible to the walk above, and `IsoGridSquare.isFree(false)`
+  -- is the only mod-side reading that sees them.
+  --
+  -- Until now `Support.square` exposed no `isFree` at all, so
+  -- `Toolkit.call(square, "isFree", false)` always answered ok=false and the
+  -- branch was structurally unreachable: deleting the whole block left every
+  -- suite green, and the group named for this very question passed entirely on
+  -- the object walk and the truncation branch. That is the harness trap again,
+  -- and it is why the double now grants the reader when a case names it.
+  --
+  -- The sidecar's trap check is a real second lever, but it reads the square
+  -- descriptions `PZAgent.Observe` published and decides on a snapshot that is
+  -- by construction older than this re-read; and `buildVerify` is no lever at
+  -- all, because a wall that really did go up satisfies both its halves. The
+  -- mod ships no demolition action, so the wall stays.
+  local body = scene({ free = false })
+  local state = Building.squareState(body.target)
+  equal(state.occupied, true, "a square the engine does not call free is not a clear square")
+  contains(state.blocker, "does not read as free", "and the reason says which reading refused it")
+
+  local buildArgs = { blueprint = "WoodenWall", square = targetRef() }
+  local refused, code, detail = Build:validate(buildArgs, body.ctx)
+  isNil(refused, "so the build is refused before anything is queued")
+  equal(code, REASON.SQUARE_OCCUPIED, "with the occupied-square reason")
+  contains(detail, "free", "naming what stood in the way")
+  equal(#body.queue.added, 0, "and nothing reached the game's queue")
+
+  -- The control: the same square with the engine answering free is buildable,
+  -- so the assertions above are about the reading and not about the scene.
+  local clear = scene({ free = true })
+  equal(Building.squareState(clear.target).occupied, false, "a square the engine calls free reads clear")
+  ok(Build:validate(buildArgs, clear.ctx), "and the build validates on it")
+end
+
+Harness.group("a blueprint half of whose inputs answer is not a readable blueprint")
+do
+  -- `Building.blueprintInputs` is `Crafting.recipeInputs` copied, not shared --
+  -- the two files duplicate the reader -- so the refusal has to be pinned
+  -- twice. Here the cost is higher than a wasted craft: `building.build` raises
+  -- a structure, the mod ships no demolition action, and a build judged on a
+  -- subset of its requirements is one the character starts and cannot finish.
+  local partly = blueprint({
+    name = "WoodenWall",
+    sprite = WALL_SPRITE,
+    inputs = { { types = { PLANK }, count = 2 }, { count = 1 } },
+  })
+  isNil(Building.blueprintInputs(partly), "one unreadable input makes the whole blueprint unreadable")
+
+  local whole = blueprint({
+    name = "WoodenWall",
+    sprite = WALL_SPRITE,
+    inputs = { { types = { PLANK }, count = 2 }, { types = { NAILS }, count = 1 } },
+  })
+  local inputs = Building.blueprintInputs(whole)
+  ok(inputs ~= nil, "a blueprint every input of which answers is readable")
+  equal(#inputs, 2, "carrying both")
+end
 
 Harness.group("a blueprint is named by the same token on both sides of the wire")
 do

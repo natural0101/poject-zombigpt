@@ -44,14 +44,21 @@ local function recipe(fields)
     local entries = {}
     for index = 1, #fields.inputs do
       local input = fields.inputs[index]
+      -- `types = nil` is how "this entry will not say what item types it takes"
+      -- is expressed: the reader is simply absent, the way every other double
+      -- in this tree expresses a build that does not answer. Every entry used
+      -- to be built complete, which made the whole-recipe refusal below
+      -- unreachable from this file.
       entries[index] = {
-        getItems = function()
-          return Support.list(input.types)
-        end,
         getCount = function()
           return input.count
         end,
       }
+      if input.types ~= nil then
+        entries[index].getItems = function()
+          return Support.list(input.types)
+        end
+      end
     end
     object.getInputs = function()
       return Support.list(entries)
@@ -187,6 +194,39 @@ end
 -- ---------------------------------------------------------------------------
 -- the token
 -- ---------------------------------------------------------------------------
+
+Harness.group("a recipe half of whose ingredients answer is not a readable recipe")
+do
+  -- The refusal the file's own comment names: a verdict computed from the
+  -- ingredients that happened to answer would call a recipe ready on the
+  -- strength of requirements nobody read, and that is the one wrong answer
+  -- that spends materials for nothing.
+  --
+  -- Turn the `return nil` into a `break` -- the shape of a careless "be lenient
+  -- about odd scripts" regression -- and the walk stops at the unreadable
+  -- ingredient and hands back the partial list it had built. `crafting.craft`
+  -- then validates for a character carrying the planks and no nails at all, so
+  -- RECIPE_MATERIALS_MISSING never fires. The sidecar is not a second lever:
+  -- its materials view is computed from `crafting.inspect`'s report, which this
+  -- same reader produces.
+  local partly = recipe({
+    name = "WoodenWall",
+    inputs = { { types = { PLANK }, count = 2 }, { count = 1 } },
+    product = PLANK,
+  })
+  isNil(Crafting.recipeInputs(partly), "one unreadable ingredient makes the whole recipe unreadable")
+
+  -- The control: the same recipe with both entries readable answers, so the
+  -- assertion above is about the unreadable half and not about the double.
+  local whole = recipe({
+    name = "WoodenWall",
+    inputs = { { types = { PLANK }, count = 2 }, { types = { NAILS }, count = 1 } },
+    product = PLANK,
+  })
+  local inputs = Crafting.recipeInputs(whole)
+  ok(inputs ~= nil, "a recipe every ingredient of which answers is readable")
+  equal(#inputs, 2, "carrying both ingredients")
+end
 
 Harness.group("a recipe is named by the same token on both sides of the wire")
 do
