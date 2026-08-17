@@ -240,6 +240,39 @@ do
   contains(detail, "getItems", "naming what could not be read")
 end
 
+Harness.group("an origin that stopped answering is not an origin the item left")
+do
+  -- The mirror of the group above, on the half nothing covered. Both guards
+  -- read `countIdentity == nil` and both answer CAPABILITY_UNAVAILABLE, four
+  -- lines apart -- which is exactly why the destination's test says nothing
+  -- about this one. `countIdentity` answers nil for "I could not look", and the
+  -- file's own header says a transfer whose origin stopped answering must not
+  -- report the item as gone.
+  --
+  -- Collapse it to `or 0` and the ack carries `origin_count = 0` -- a number
+  -- nobody read -- which is what mints `verified` for the command. The planner
+  -- then believes the origin is empty and will not go back for the item. The
+  -- before/after snapshots cannot cover it: transferVerify deliberately does not
+  -- consult them, because a snapshot of the character cannot see a crate across
+  -- the room.
+  local s = scene()
+  local args = {
+    item_ref = Support.itemRef("carried:99", 5),
+    destination_container_ref = MAIN,
+  }
+  ok(Transfer:validate(args, s.ctx), "moving the bottle out of the satchel validates")
+  ok(Transfer:begin(args, s.ctx), "and starts")
+  s.transfer.actions[1]:perform()
+
+  -- The destination reads cleanly; the satchel does not. A Kahlua gap, a bag
+  -- destroyed mid-action, a container the world unloaded under it.
+  s.satchel.getItems = nil
+  local evidence, code, detail = Transfer:verify(nil, Toolkit.observe(s.player), args, s.ctx)
+  isNil(evidence, "an origin that cannot be read is not an origin the item left")
+  equal(code, REASON.CAPABILITY_UNAVAILABLE, "which is a capability gap, not a completed transfer")
+  contains(detail, "getItems", "naming what could not be read")
+end
+
 Harness.group("an inventory that was never walked did not match nothing")
 do
   -- The same rule as the group above, on the other side of the file: a search
@@ -304,6 +337,29 @@ do
   ok(proof ~= nil, "once it runs the bottle is observed in the main inventory")
   equal(proof.kind, "item_in_main_inventory", "named for that postcondition")
   equal(proof.container_ref, MAIN, "and the destination is the main container reference")
+
+  -- The capacity gate, on the command that pulls weight *onto* the character.
+  -- The capacity group earlier in this file drives `Transfer:validate` and the
+  -- batch's per-item check; nothing ever asked ensure_main for a destination
+  -- that is full, so removing its `checkCapacity` call -- the shape a trim of
+  -- what reads like a thin wrapper takes -- left every suite green while the
+  -- identical inventory.transfer still refused the identical move.
+  --
+  -- It is a guard *before* a timed action: without it the command validates,
+  -- prepares, begins and puts a real ISInventoryTransferAction in the queue.
+  -- ensureVerify still checks both halves afterwards, so this is a wasted and
+  -- unsafe action rather than a false success -- and overloading a character
+  -- mid-emergency is a movement-speed problem that gets them killed.
+  local full = scene({ main_capacity = 1 })
+  local sledge = Support.item({ id = 43, full_type = "Base.Sledgehammer", name = "Sledgehammer", weight = 12 })
+  table.insert(full.satchel.entries, sledge)
+  local heavyArgs = { item_ref = Support.itemRef("carried:99", 43) }
+  local accepted, fullCode, fullDetail = EnsureMain:validate(heavyArgs, full.ctx)
+  isNil(accepted, "a main inventory with no room is not a destination")
+  equal(fullCode, REASON.CONTAINER_FULL, "which is the same refusal inventory.transfer gives")
+  contains(fullDetail, "12", "carrying the weight that did not fit")
+  equal(#full.queue.added, 0, "and nothing reached the game's queue")
+  equal(#full.transfer.actions, 0, "no transfer action was even constructed")
 end
 
 Harness.group("bringToMain is the same transfer, tagged the same way")
@@ -669,6 +725,51 @@ do
   equal(code, REASON.CAPABILITY_UNAVAILABLE, "which is a capability gap, not an empty container")
   contains(detail, "getItems", "naming what could not be read")
   equal(#s.queue.added, 0, "with nothing queued")
+end
+
+Harness.group("the batch re-reads both halves at the moment it mints the evidence")
+do
+  -- Every batch group above performs each transfer and polls immediately, so
+  -- `arrived` is 1 by construction and the terminal re-read is asked nothing it
+  -- could refuse. It is the only evidence that exists at ack time: `batchProgress`
+  -- observed item *i* landing and then spent seconds queueing and waiting on
+  -- items i+1..n, and for an `already_there` item there was never a read at all
+  -- -- `advance` records it as transferred off the reference string.
+  local vanished = batchScene()
+  local args = { item_refs = BATCH_REFS, destination_container_ref = SATCHEL }
+  equal(TransferBatch.start(vanished.ctx, args), true, "the batch starts")
+  for index = 1, 3 do
+    vanished.transfer.actions[index]:perform()
+    if index < 3 then
+      TransferBatch.poll(vanished.ctx, args)
+    end
+  end
+  -- The player grabbed it back, or the bag spilled: it landed, and it is not
+  -- there now.
+  Support.moveItem(vanished.nails, vanished.satchel, nil)
+  Support.drainQueue(vanished.queue)
+  local outcome, code, detail = TransferBatch.poll(vanished.ctx, args)
+  isNil(outcome, "an item that left again is not a finished batch")
+  equal(code, REASON.POSTCONDITION_FAILED, "the postcondition is what did not hold")
+  contains(detail, "item_refs[1]", "naming the index whose item is not there")
+  contains(detail, "not 1", "and how many the destination actually holds")
+
+  -- The other half, per item: in the destination and still in the origin. The
+  -- single transfer has this rule tested; the batch had the code and no test.
+  local copied = batchScene()
+  equal(TransferBatch.start(copied.ctx, args), true, "a second batch starts")
+  for index = 1, 3 do
+    copied.transfer.actions[index]:perform()
+    if index < 3 then
+      TransferBatch.poll(copied.ctx, args)
+    end
+  end
+  table.insert(copied.main.entries, copied.nails)
+  Support.drainQueue(copied.queue)
+  local duplicated, copyCode, copyDetail = TransferBatch.poll(copied.ctx, args)
+  isNil(duplicated, "an item in two places at once is not a finished batch either")
+  equal(copyCode, REASON.POSTCONDITION_FAILED, "on the same postcondition")
+  contains(copyDetail, "remain in the origin", "naming the half that failed")
 end
 
 Harness.group("an interruption mid-batch leaves the honest partial record")
