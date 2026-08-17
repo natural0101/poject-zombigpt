@@ -45,7 +45,7 @@ do
 
   equal(document.protocol_version, "1.1", "protocol version")
   equal(document.schema_version, "1.0", "schema version")
-  equal(document.mod_version, "0.1.0", "mod version")
+  equal(document.mod_version, "1.0.0", "mod version")
   equal(document.build, "42.20", "game build")
   equal(document.session_id, SESSION, "session id")
   equal(document.nonce, "g1", "the mod's own nonce, as blueprint 3.3 requires")
@@ -69,7 +69,7 @@ do
   -- parse is a heartbeat that does not exist, and the sidecar concludes the game
   -- is gone while it is in fact running.
   equal(document.peer, "game", "the document names the peer that wrote it")
-  equal(document.version, "0.1.0", "and the version of that peer's software")
+  equal(document.version, "1.0.0", "and the version of that peer's software")
   for _, field in ipairs({ "peer", "session_id", "nonce", "seq", "timestamp_ms", "version", "protocol_version" }) do
     ok(document[field] ~= nil, "the sidecar's heartbeat reader requires " .. field)
   end

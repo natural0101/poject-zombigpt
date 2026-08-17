@@ -13,7 +13,7 @@ Harness.group("versions match the Python source of truth")
 do
   equal(Protocol.PROTOCOL_VERSION, "1.1", "protocol version")
   equal(Protocol.SCHEMA_VERSION, "1.0", "schema version")
-  equal(Protocol.MOD_VERSION, "0.1.0", "mod version")
+  equal(Protocol.MOD_VERSION, "1.0.0", "mod version")
   equal(Protocol.TARGET_BUILD, "42.20", "target build")
   ok(Protocol.isSupportedBuild("42.20"), "the target build is supported")
   ok(not Protocol.isSupportedBuild("41.78"), "an older build is not silently accepted")
